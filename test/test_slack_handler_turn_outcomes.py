@@ -292,7 +292,7 @@ class _SequencedProvider(FakeProvider):
     def _is_turn(self, message: str) -> bool:
         return "hello" in message and not message.startswith("You are a session naming agent")
 
-    async def stream(self, message, timeout=120.0):
+    async def stream(self, message, timeout=120.0, *, attachments=()):
         if not self._is_turn(message):
             async for event in super().stream(message, timeout):
                 yield event
@@ -683,6 +683,9 @@ class TestTransientCompactionRetry:
         slack = MockSlackClient()
         provider = _SequencedProvider([_abandoned()], transient=True)
         sessions = FakeSessionManager(provider)
+        from kiro_crew.prompt_attachments import image_attachments
+
+        atts = image_attachments(["/tmp/uploads/shot.png"])
 
         await real(
             slack,
@@ -699,6 +702,7 @@ class TestTransientCompactionRetry:
             channel_activation="review",
             from_trusted_bot=True,
             had_voice_input=True,
+            attachments=atts,
         )
 
         assert len(seen) == 1
@@ -711,6 +715,9 @@ class TestTransientCompactionRetry:
         assert call["channel_activation"] == "review"
         assert call["from_trusted_bot"] is True
         assert call["had_voice_input"] is True
+        # The picture is part of the message: a replay without its structured
+        # list would answer as if no image had been sent.
+        assert call["attachments"] == atts
         assert call["_compaction_replay"].attempt == 1
 
 

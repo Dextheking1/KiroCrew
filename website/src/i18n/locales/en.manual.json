@@ -1568,6 +1568,9 @@
       }
     },
     "mochi": {
+      "chat": {
+        "edit_pictures_unrecoverable": "Couldn't resend the edited message. Your text is still in the composer and the message keeps its pictures. Send again to retry."
+      },
       "chatPanel": {
         "open_in_file_explorer": "Open in File Explorer",
         "open_in_finder": "Open in Finder",
@@ -2241,7 +2244,8 @@
       "attachment_removed": "{{file}} removed from attachments",
       "attachment_restored": "{{file}} attached",
       "trusted_command_until": "Trusted “{{cmd}}” until {{time}}, then it asks again",
-      "trusted_base_until": "Trusted any “{{base}}” command until {{time}}, then it asks again"
+      "trusted_base_until": "Trusted any “{{base}}” command until {{time}}, then it asks again",
+      "remove_failed_picture": "Remove {{name}}: it couldn't be attached"
     },
     "chatPane": {
       "crewmate_quiet": "{{name}} hasn't said anything to you yet.",

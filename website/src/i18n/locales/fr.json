@@ -3716,6 +3716,7 @@
         "ask_placeholder": "Demander à {{name}}...",
         "edit_cancel": "Annuler",
         "edit_mode": "Modification — envoyez pour remplacer, ou annulez",
+        "edit_pictures_unrecoverable": "Impossible de renvoyer le message modifié. Ton texte est toujours dans le champ de saisie et le message conserve ses images. Renvoie-le pour réessayer.",
         "load_earlier": "Charger les messages précédents",
         "scroll_bottom": "Aller au plus récent",
         "send": "Envoyer",
@@ -6608,7 +6609,8 @@
       "attachment_removed": "{{file}} retiré des pièces jointes",
       "attachment_restored": "{{file}} joint",
       "trusted_command_until": "Confiance accordée à « {{cmd}} » jusqu’à {{time}}, puis la demande réapparaît",
-      "trusted_base_until": "Confiance accordée à toute commande « {{base}} » jusqu’à {{time}}, puis la demande réapparaît"
+      "trusted_base_until": "Confiance accordée à toute commande « {{base}} » jusqu’à {{time}}, puis la demande réapparaît",
+      "remove_failed_picture": "Retirer {{name}} : impossible de la joindre"
     },
     "chatPane": {
       "agent_list": "Liste des agents",

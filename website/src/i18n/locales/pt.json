@@ -3626,6 +3626,7 @@
         "ask_placeholder": "Pergunte ao {{name}}...",
         "edit_cancel": "Cancelar",
         "edit_mode": "Editando — envie para substituir ou cancele",
+        "edit_pictures_unrecoverable": "Não foi possível reenviar a mensagem editada. Seu texto ainda está no campo de mensagem e a mensagem mantém suas imagens. Envie novamente para tentar de novo.",
         "load_earlier": "Carregar mensagens anteriores",
         "scroll_bottom": "Ir para as mais recentes",
         "send": "Enviar",
@@ -6608,7 +6609,8 @@
       "attachment_removed": "{{file}} removido dos anexos",
       "attachment_restored": "{{file}} anexado",
       "trusted_command_until": "“{{cmd}}” é confiável até {{time}}; depois disso, pergunta novamente",
-      "trusted_base_until": "Qualquer comando “{{base}}” é confiável até {{time}}; depois disso, pergunta novamente"
+      "trusted_base_until": "Qualquer comando “{{base}}” é confiável até {{time}}; depois disso, pergunta novamente",
+      "remove_failed_picture": "Remover {{name}}: não foi possível anexar"
     },
     "chatPane": {
       "agent_list": "Lista de agentes",

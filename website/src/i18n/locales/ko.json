@@ -3572,6 +3572,7 @@
         "ask_placeholder": "{{name}}에게 질문…",
         "edit_cancel": "취소",
         "edit_mode": "편집 중 — 보내서 바꾸거나 취소하세요",
+        "edit_pictures_unrecoverable": "수정한 메시지를 다시 보내지 못했습니다. 입력한 텍스트는 아직 작성창에 있고 메시지의 이미지는 그대로 유지됩니다. 다시 보내서 재시도하세요.",
         "load_earlier": "이전 메시지 불러오기",
         "scroll_bottom": "최신으로 이동",
         "send": "보내기",
@@ -6386,7 +6387,8 @@
       "attachment_removed": "{{file}} 첨부에서 제거됨",
       "attachment_restored": "{{file}} 첨부됨",
       "trusted_command_until": "‘{{cmd}}’을(를) {{time}}까지 신뢰하며, 이후에는 다시 확인합니다",
-      "trusted_base_until": "모든 ‘{{base}}’ 명령을 {{time}}까지 신뢰하며, 이후에는 다시 확인합니다"
+      "trusted_base_until": "모든 ‘{{base}}’ 명령을 {{time}}까지 신뢰하며, 이후에는 다시 확인합니다",
+      "remove_failed_picture": "{{name}} 제거: 첨부할 수 없습니다"
     },
     "chatPane": {
       "agent_list": "에이전트 목록",

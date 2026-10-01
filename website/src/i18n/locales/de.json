@@ -3644,6 +3644,7 @@
         "ask_placeholder": "Frag {{name}}...",
         "edit_cancel": "Abbrechen",
         "edit_mode": "Bearbeiten — zum Ersetzen senden oder abbrechen",
+        "edit_pictures_unrecoverable": "Die bearbeitete Nachricht konnte nicht erneut gesendet werden. Dein Text steht noch im Eingabefeld und die Nachricht behält ihre Bilder. Sende sie erneut, um es noch einmal zu versuchen.",
         "load_earlier": "Ältere Nachrichten laden",
         "scroll_bottom": "Zum Neuesten springen",
         "send": "Senden",
@@ -6497,7 +6498,8 @@
       "attachment_removed": "{{file}} aus Anhängen entfernt",
       "attachment_restored": "{{file}} angehängt",
       "trusted_command_until": "„{{cmd}}“ ist bis {{time}} vertrauenswürdig, danach wird erneut gefragt",
-      "trusted_base_until": "Jedem „{{base}}“-Befehl wird bis {{time}} vertraut, danach wird erneut gefragt"
+      "trusted_base_until": "Jedem „{{base}}“-Befehl wird bis {{time}} vertraut, danach wird erneut gefragt",
+      "remove_failed_picture": "{{name}} entfernen: konnte nicht angehängt werden"
     },
     "chatPane": {
       "agent_list": "Agenten-Liste",

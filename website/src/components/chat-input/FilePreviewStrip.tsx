@@ -43,6 +43,8 @@ function ResizeBadge({ resize }: { resize: ResizeInfo }) {
 /** Stable default so an omitted `dirs` prop does not re-run the remeasure
  *  effect on every render (a fresh [] literal changes deps each time). */
 const NO_DIRS: string[] = []
+/** Pictures the gateway refused on the last send: their chips show the remove control at rest. */
+const NO_FAILED: readonly string[] = []
 
 /** Staged attachments and folder references above the composer.
  *
@@ -69,7 +71,7 @@ const NO_DIRS: string[] = []
  *  `docs/report.txt`). That disambiguates the visible text for EVERY user --
  *  pointer, keyboard and screen-reader -- with no focus-gated overlay, and the
  *  full path stays in `title`/`aria-label` as before. */
-export function FilePreviewStrip({ files, dirs = NO_DIRS, resizedInfo, onRemove, onRemoveDir, rootRef }: { files: string[]; dirs?: string[]; resizedInfo?: Record<string, ResizeInfo>; onRemove?: (path: string) => void; onRemoveDir?: (path: string) => void; rootRef?: (node: HTMLDivElement | null) => void }) {
+export function FilePreviewStrip({ files, dirs = NO_DIRS, resizedInfo, failed = NO_FAILED, onRemove, onRemoveDir, rootRef }: { files: string[]; dirs?: string[]; resizedInfo?: Record<string, ResizeInfo>; failed?: readonly string[]; onRemove?: (path: string) => void; onRemoveDir?: (path: string) => void; rootRef?: (node: HTMLDivElement | null) => void }) {
   const [attachScroller, edges, remeasure] = useScrollEdges<HTMLDivElement>()
   // Chips are added and removed while the strip stays mounted (a paste, a
   // remove), and the scroller keeps its own box through those changes, so the
@@ -115,6 +117,7 @@ export function FilePreviewStrip({ files, dirs = NO_DIRS, resizedInfo, onRemove,
       {imgs.map((path, i) => {
         const src = `/api/file-raw?path=${encodeURIComponent(path)}`
         const resize = resizedInfo?.[path]
+        const isFailed = failed.includes(path)
         return (
           <div key={path} role="group" aria-label={path} className="group/preview shrink-0 flex flex-col items-start gap-0.5" title={path}>
             {/* The corner controls anchor to the IMAGE, not to the chip: the chip
@@ -141,7 +144,7 @@ export function FilePreviewStrip({ files, dirs = NO_DIRS, resizedInfo, onRemove,
               {/* The listener refreshes the scroll cue; the image is inside the
                   actual preview button and is not itself interactive. */}
               {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
-              <img src={src} alt={path} className="w-16 h-16 rounded border border-border object-cover bg-bg-hover hover:opacity-80 transition-opacity"
+              <img src={src} alt={path} className={`w-16 h-16 rounded border object-cover bg-bg-hover hover:opacity-80 transition-opacity ${isFailed ? 'border-danger ring-2 ring-danger' : 'border-border'}`}
                 data-lightbox-image=""
                 // The tile's box is fixed, but chips mount before their bytes
                 // arrive and remove/add churns the strip's scrollWidth without
@@ -151,9 +154,12 @@ export function FilePreviewStrip({ files, dirs = NO_DIRS, resizedInfo, onRemove,
             </button>
             {onRemove && (
               <button
-                aria-label={i18nT('components.chatInput.remove')}
-                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-danger text-white text-[12px] flex items-center justify-center opacity-0 group-hover/preview:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity cursor-pointer"
-                onClick={() => onRemove(path)} title={i18nT('components.chatInput.remove')}
+                aria-label={isFailed ? i18nT('components.chatInput.remove_failed_picture', { name: labelOf(path) }) : i18nT('components.chatInput.remove')}
+                // A refused picture's control stays visible at rest: the refusal
+                // text tells the user to remove it, and a hover-only control is
+                // unreachable from the keyboard until the pointer finds it.
+                className={`absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-danger text-white text-[12px] flex items-center justify-center transition-opacity cursor-pointer ${isFailed ? 'opacity-100 ring-2 ring-white' : 'opacity-0 group-hover/preview:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100'}`}
+                onClick={() => onRemove(path)} title={isFailed ? i18nT('components.chatInput.remove_failed_picture', { name: labelOf(path) }) : i18nT('components.chatInput.remove')}
               ><X className="lucide-inline" /></button>
             )}
             </div>

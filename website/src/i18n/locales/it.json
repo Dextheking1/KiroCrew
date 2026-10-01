@@ -3626,6 +3626,7 @@
         "ask_placeholder": "Chiedi a {{name}}...",
         "edit_cancel": "Annulla",
         "edit_mode": "Modifica — invia per sostituire o annulla",
+        "edit_pictures_unrecoverable": "Non è stato possibile reinviare il messaggio modificato. Il tuo testo è ancora nel campo di scrittura e il messaggio conserva le sue immagini. Invialo di nuovo per riprovare.",
         "load_earlier": "Carica messaggi precedenti",
         "scroll_bottom": "Vai agli ultimi",
         "send": "Invia",
@@ -6608,7 +6609,8 @@
       "attachment_removed": "{{file}} rimosso dagli allegati",
       "attachment_restored": "{{file}} allegato",
       "trusted_command_until": "«{{cmd}}» è attendibile fino alle {{time}}, poi verrà chiesto di nuovo",
-      "trusted_base_until": "Qualsiasi comando «{{base}}» è attendibile fino alle {{time}}, poi verrà chiesto di nuovo"
+      "trusted_base_until": "Qualsiasi comando «{{base}}» è attendibile fino alle {{time}}, poi verrà chiesto di nuovo",
+      "remove_failed_picture": "Rimuovi {{name}}: non è stato possibile allegarla"
     },
     "chatPane": {
       "agent_list": "Elenco degli agenti",

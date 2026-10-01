@@ -99,6 +99,8 @@ export interface ChatInputProps {
   pendingFiles?: string[]
   /** Pending folder references for the preview strip: RELATIVE paths with trailing slash, derived from `@rel/` composer tokens (a path reference handed to the agent, not an upload) */
   pendingDirs?: string[]
+  /** Pictures the gateway refused on the last send; their chips keep the remove control visible. */
+  failedFiles?: readonly string[]
   /** Resize details keyed by pending-file path; renders a badge on the chip */
   resizedInfo?: Record<string, ResizeInfo>
   /** Remove a pending file by path */

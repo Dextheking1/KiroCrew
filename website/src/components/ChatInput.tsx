@@ -185,6 +185,7 @@ function ChatInput({
   holdSend = false,
   onCancelUpload,
   pendingFiles = [],
+  failedFiles,
   pendingDirs = [],
   resizedInfo,
   onRemoveFile,
@@ -1146,7 +1147,7 @@ function ChatInput({
           </div>
         )}
         <SessionRefStrip refs={pendingSessions} onRemove={onRemoveSessionRef} rootRef={sessionStripRef} />
-        <FilePreviewStrip files={pendingFiles} dirs={pendingDirs} resizedInfo={resizedInfo} onRemove={removeFileEndingUndoBurst} onRemoveDir={removeDirEndingUndoBurst} rootRef={fileStripRef} />
+        <FilePreviewStrip files={pendingFiles} dirs={pendingDirs} resizedInfo={resizedInfo} failed={failedFiles} onRemove={removeFileEndingUndoBurst} onRemoveDir={removeDirEndingUndoBurst} rootRef={fileStripRef} />
 
         {/* Why Send is dimmed, in words, while a draft waits on an attachment.
             The Send tooltip alone reaches no touch, keyboard or screen-reader

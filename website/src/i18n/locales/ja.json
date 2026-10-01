@@ -3572,6 +3572,7 @@
         "ask_placeholder": "{{name}}に質問…",
         "edit_cancel": "キャンセル",
         "edit_mode": "編集中 — 送信して置き換えるか、キャンセル",
+        "edit_pictures_unrecoverable": "編集したメッセージを再送信できませんでした。テキストは入力欄に残っており、メッセージの画像もそのまま残っています。もう一度送信すると再試行できます。",
         "load_earlier": "前のメッセージを読み込む",
         "scroll_bottom": "最新にスクロール",
         "send": "送信",
@@ -6386,7 +6387,8 @@
       "attachment_removed": "{{file}} を添付から削除しました",
       "attachment_restored": "{{file}} を添付しました",
       "trusted_command_until": "「{{cmd}}」を {{time}} まで信頼します。その後は再度確認します",
-      "trusted_base_until": "任意の「{{base}}」コマンドを {{time}} まで信頼します。その後は再度確認します"
+      "trusted_base_until": "任意の「{{base}}」コマンドを {{time}} まで信頼します。その後は再度確認します",
+      "remove_failed_picture": "{{name}} を削除: 添付できませんでした"
     },
     "chatPane": {
       "agent_list": "エージェントリスト",

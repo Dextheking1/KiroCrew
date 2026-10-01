@@ -112,6 +112,48 @@ class TestHandleMessage:
         assert any("42" in u[1]["text"] for u in updates)
 
     @pytest.mark.asyncio
+    async def test_image_attachments_reach_the_provider_as_a_structured_list(self, tmp_path):
+        """The prompt builder emits image blocks from the channel's attachment
+        list alone and never scans the text, so the handler must forward the
+        list ``process_slack_files`` produced -- the path in the text is for
+        agent tools only. A text-only message passes no keyword, so a provider
+        stand-in predating it still takes the turn."""
+        from kiro_crew.prompt_attachments import image_attachments
+
+        class _Recording(FakeProvider):
+            def __init__(self):
+                super().__init__()
+                self.calls: list[tuple[str, dict]] = []
+
+            async def stream(self, message, **kw):
+                self.calls.append((message, kw))
+                async for event in super().stream(message):
+                    yield event
+
+        shot = str(tmp_path / "shot.png")
+        atts = image_attachments([shot])
+        provider = _Recording()
+        slack = MockSlackClient()
+        await handle_message(
+            slack,
+            FakeSessionManager(provider),
+            "C1",
+            f"what is this?\n{shot}",
+            None,
+            "msg1",
+            "U1",
+            attachments=atts,
+        )
+        assert len(provider.calls) == 1
+        message, kw = provider.calls[0]
+        assert shot in message
+        assert kw == {"attachments": atts}
+
+        provider.calls.clear()
+        await handle_message(slack, FakeSessionManager(provider), "C1", "plain", None, "msg2", "U1")
+        assert provider.calls[0][1] == {}
+
+    @pytest.mark.asyncio
     async def test_channels_deny_drops_slack_inbound(self, tmp_path, monkeypatch):
         # Slack is a GOVERNED transport: a channels policy that allows only
         # non-slack members must drop a Slack inbound message before any turn
