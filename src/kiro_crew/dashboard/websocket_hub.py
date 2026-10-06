@@ -285,15 +285,17 @@ class WebSocketHub:
         )
 
         owners = getattr(self._owner, "_owner_ws_clients", None) or set()
-        # Only a dict frame can carry provenance (`project_bound`, or a
-        # `cron-` slot name), so only a dict frame is judged here. A list or
-        # scalar payload -- the `slots` array, a count -- is structural rather
-        # than cron output, and withholding it would deny every non-owner
-        # dashboard frame while protecting nothing.
+        # Only a dict frame can carry provenance (`project_bound`, or a slot
+        # that shows a cron transcript), so only a dict frame is judged here. A
+        # list or scalar payload -- the `slots` array, a count -- is structural
+        # rather than cron output, and withholding it would deny every
+        # non-owner dashboard frame while protecting nothing.
         if (
             ws not in owners
             and isinstance(data, dict)
-            and not project_output_visible_to_non_owner(data)
+            and not project_output_visible_to_non_owner(
+                data, slot_is_cron=getattr(self._owner, "slot_shows_cron_transcript", None)
+            )
         ):
             try:
                 from kiro_crew.dashboard.ws_event_scope import (

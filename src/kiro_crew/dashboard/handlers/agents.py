@@ -256,6 +256,7 @@ from kiro_crew.dashboard.agent_admin.roster import (  # noqa: F401
     _agent_roster_row,
     _carries_mask,
     _name_would_be_masked,
+    _query_project_dir,
     _roster_avatar,
     _roster_mask,
 )
@@ -346,7 +347,7 @@ from kiro_crew.sandbox import (
     scrub_agent_subprocess_env,
     wrap_argv,
 )
-from kiro_crew.security import resolve_project_path
+from kiro_crew.security import resolve_project_path  # noqa: F401  (roster reads it)
 from kiro_crew.user_json import loads_user_json  # noqa: F401
 from kiro_crew.validation import TEMPLATE_NAME_RE  # noqa: F401
 
@@ -1614,132 +1615,8 @@ async def api_kirocrew_agents(request: web.Request) -> web.Response:
     #      stale project_path.
     slot_project = requesting_slot_project(state, _read_session_key(request)) if state else None
     project_dir = str(slot_project) if slot_project else ""
-    if not project_dir and redact:
-        # A non-owner passing project_path gets no fallback and no error --
-        # audited here for the same reason the sensitive-path denial below
-        # is: a silently-ignored parameter on an owner-gated fallback is
-        # exactly the shape a probe for the gate's edges looks like.
-        raw_project_path = (request.query.get("project_path") or "").strip()
-        if raw_project_path:
-            try:
-                _sel().log_api_access(
-                    caller="dashboard",
-                    operation="api_kirocrew_agents.project_path",
-                    outcome="denied",
-                    source="dashboard",
-                    resources=raw_project_path,
-                    error="not owner",
-                )
-            except Exception:
-                logger.debug(
-                    "SEL logging failed for agents project_path non-owner denial",
-                    exc_info=True,
-                )
-    if not project_dir and not redact:
-        # Owner-gated: this fallback lets a caller with no live slot name an
-        # arbitrary absolute path, and the only checks on that path
-        # (realpath/is_sensitive_path/isdir) guard credential homes, not the
-        # multi-human authorization boundary. `redact` is already this
-        # function's one deny-by-default owner signal, so gating on it here
-        # keeps the read and write sides of this fallback agreeing on who the
-        # owner is.
-        raw_project_path = (request.query.get("project_path") or "").strip()
-        if raw_project_path:
-
-            def _resolve_agents_project_path(raw: str) -> tuple[str, bool]:
-                """Resolve+validate a raw ``project_path`` query value off the event loop.
-
-                Returns ``(resolved_path, denied)``: ``denied=True`` means the path was
-                rejected as sensitive (the caller logs the SEL denial itself, since this
-                function runs in a worker thread and must not touch ``sel()`` there).
-                ``resolved_path`` is ``""`` when the path is neither denied nor a valid
-                existing directory. The realpath/sensitivity/isdir core is
-                :func:`security.resolve_project_path`, shared with
-                :meth:`CronService._validate_project_path`; no ``~``/absolute-path gate
-                here, since a query param is not held to the cron create-time bar.
-
-                Nested rather than module-level: the agents facade is a patch surface
-                whose top-level definitions ``_FACADE_DEFS`` pins, and this helper has
-                exactly one caller.
-
-                ``resolve_project_path`` calls ``os.path.realpath(os.path.expanduser(raw))``
-                with no guard of its own, and ``os.path.realpath`` raises ``ValueError`` on
-                an embedded null byte (GPT 5.6 Review F3) -- an owner-authored
-                ``?project_path=`` value the legitimate caller (JobForm's ProjectPicker)
-                can never emit, but a raw query string can. Caught here so a malformed
-                value degrades to "not a usable directory" -- the same outcome an
-                ordinary nonexistent path already gets -- rather than an uncaught
-                exception escaping this executor call and turning into a bare 500.
-                """
-                try:
-                    verdict = resolve_project_path(raw)
-                except (ValueError, OSError):
-                    return "", False
-                if verdict.sensitive:
-                    return verdict.resolved, True
-                if verdict.is_dir:
-                    return verdict.resolved, False
-                return "", False
-
-            # Same off-loop treatment as CronService._validate_project_path_async:
-            # realpath/is_sensitive_path/isdir are real filesystem syscalls, and
-            # this handler runs on the gateway's sole event loop.
-            resolved, denied = await asyncio.get_running_loop().run_in_executor(
-                discovery_executor(),
-                _resolve_agents_project_path,
-                raw_project_path,
-            )
-            if denied:
-                try:
-                    _sel().log_api_access(
-                        caller="dashboard",
-                        operation="api_kirocrew_agents.project_path",
-                        outcome="denied",
-                        source="dashboard",
-                        resources=resolved,
-                        error="sensitive path",
-                    )
-                except Exception:
-                    logger.debug(
-                        "SEL logging failed for agents project_path sensitive-path denial",
-                        exc_info=True,
-                    )
-            elif resolved:
-                try:
-                    _sel().log_api_access(
-                        caller="dashboard",
-                        operation="api_kirocrew_agents.project_path",
-                        outcome="allowed",
-                        source="dashboard",
-                        resources=resolved,
-                    )
-                except Exception:
-                    logger.debug(
-                        "SEL logging failed for agents project_path allow",
-                        exc_info=True,
-                    )
-                # Outside the try: a best-effort audit blip must not silently
-                # drop the resolved project the caller is entitled to.
-                project_dir = resolved
-            else:
-                # Neither denied (sensitive) nor resolved (a valid existing
-                # directory): a nonexistent path, a non-directory, or a
-                # malformed value caught by _resolve_agents_project_path's own
-                # ValueError/OSError guard -- GPT 5.6 Review F1.
-                try:
-                    _sel().log_api_access(
-                        caller="dashboard",
-                        operation="api_kirocrew_agents.project_path",
-                        outcome="denied",
-                        source="dashboard",
-                        resources=raw_project_path,
-                        error="not a usable directory",
-                    )
-                except Exception:
-                    logger.debug(
-                        "SEL logging failed for agents project_path unusable-directory denial",
-                        exc_info=True,
-                    )
+    if not project_dir:
+        project_dir = await _query_project_dir(request, redact=redact)
     if project_dir:
         try:
             project_names = await asyncio.get_running_loop().run_in_executor(

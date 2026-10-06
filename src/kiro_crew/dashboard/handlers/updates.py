@@ -2614,7 +2614,9 @@ async def api_stream(request: web.Request) -> web.StreamResponse:
                 try:
                     note = client_q.get_nowait()
                     msg_type = note.get("_type", "")
-                    if not is_owner and not project_output_visible_to_non_owner(note):
+                    if not is_owner and not project_output_visible_to_non_owner(
+                        note, slot_is_cron=state.slot_shows_cron_transcript
+                    ):
                         continue
                     if msg_type == "slots":
                         payload = note["slots"]

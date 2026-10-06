@@ -199,7 +199,16 @@ def _make_gw_for_llm():
     return gw
 
 
-async def _run_llm_callback(gw, job, *, get_or_create_side_effect=None, fires=1, sel_factory=None):
+async def _run_llm_callback(
+    gw,
+    job,
+    *,
+    get_or_create_side_effect=None,
+    fires=1,
+    sel_factory=None,
+    real_session_context=False,
+    embed_calls=None,
+):
     """Run the cron callback for an LLM-based job through _init_cron.
 
     get_or_create_side_effect: if provided, set as the side_effect on
@@ -207,6 +216,10 @@ async def _run_llm_callback(gw, job, *, get_or_create_side_effect=None, fires=1,
     fires: how many times to run the ONE callback the gateway built, as one
     gateway process fires a job on successive schedule slots; the last result
     is returned.
+    real_session_context: build the prompt with the real
+    ``build_cron_session_context`` instead of the bare-message stub.
+    embed_calls: a list that receives the ``run_in_embed_pool`` mock, so a caller
+    can read the prompt and ``compressed_history`` the fire built.
     """
     captured_cb = None
 
@@ -232,7 +245,14 @@ async def _run_llm_callback(gw, job, *, get_or_create_side_effect=None, fires=1,
         patch("kiro_crew.slack.gateway.build_cron_session_context") as mock_ctx,
     ):
 
-        mock_ctx.return_value = (f"cron:{job.id}", job.message)
+        if real_session_context:
+            from kiro_crew.cron_service.identity import build_cron_session_context
+
+            mock_ctx.side_effect = build_cron_session_context
+        else:
+            mock_ctx.return_value = (f"cron:{job.id}", job.message)
+        if embed_calls is not None:
+            embed_calls.append(_embed_mock)
 
         def capture_cron(on_job=None, **kw):
             nonlocal captured_cb
