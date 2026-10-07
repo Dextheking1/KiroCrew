@@ -101,6 +101,32 @@ describe('SchedulePage — Last Error visibility', () => {
     expect(panel.className).toContain('font-mono')
   })
 
+  it("renders a command job's captured output with log styling too", async () => {
+    const { api } = await import('../api/client')
+    vi.mocked(api).crons.mockResolvedValue({
+      jobs: [mkJob({ command: 'make check', last_status: 'error', last_error: 'make: *** [check] Error 2' })],
+    })
+
+    renderWithProviders(<SchedulePage />)
+    fireEvent.click(await screen.findByText('Nightly report'))
+
+    const panel = await screen.findByTestId('schedule-job-last-error')
+    expect(panel.className).toContain('font-mono')
+  })
+
+  it("renders a message job's skip reason as prose, not log styling", async () => {
+    const { api } = await import('../api/client')
+    vi.mocked(api).crons.mockResolvedValue({
+      jobs: [mkJob({ last_status: 'error', last_error: SKIP_REASON })],
+    })
+
+    renderWithProviders(<SchedulePage />)
+    fireEvent.click(await screen.findByText('Nightly report'))
+
+    const panel = await screen.findByTestId('schedule-job-last-error')
+    expect(panel.className).not.toContain('font-mono')
+  })
+
   it('renders no Last Error panel when the job has no error', async () => {
     const { api } = await import('../api/client')
     vi.mocked(api).crons.mockResolvedValue({ jobs: [mkJob({ last_status: 'ok' })] })

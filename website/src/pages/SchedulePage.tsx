@@ -1653,7 +1653,7 @@ function JobDetailDialog({ job, prefill, prefillWrites, agents, defaultAgent, ro
                   // screenshot harness caught that; it renders its full height
                   // now and scrolls within its own 200px cap as intended.
                   className={
-                    job.script
+                    job.script || job.command
                       ? 'shrink-0 max-h-[200px] overflow-y-auto font-mono'
                       : 'shrink-0 max-h-[200px] overflow-y-auto'
                   }

@@ -4,6 +4,7 @@ import { renderWithProviders } from './helpers'
 import JobForm, { buildBody, parseJobDefaults } from '../components/JobForm'
 import type { CronJob } from '../types'
 import { api } from '../api/client'
+import { ApiError } from '../api/apiError'
 
 vi.mock('../api/client', () => ({
   api: {
@@ -194,5 +195,62 @@ describe('cron JobForm surfaces the real update error (not "Failed to save")', (
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
     expect(formWideAlerts()).toHaveLength(0)
+  })
+})
+
+/**
+ * An `unknown_agent` refusal names the Agent field, so the Schedule page's
+ * vertical form shows it under the agent picker instead of under Save, where a
+ * reader who had just switched directories found nothing near the Agent box to
+ * fix (UX Review). Routed on the response's `code`, not on its sentence.
+ */
+describe('an unknown_agent save refusal is shown at the Agent field', () => {
+  const refusal = (detail: string) =>
+    new ApiError(400, detail, JSON.stringify({ error: detail, code: 'unknown_agent' }))
+
+  it('renders under the agent picker and tells the reader what to pick', async () => {
+    const detail = "Agent 'repo-smoke' not found in project directory '/work/other'"
+    vi.mocked(api.updateCron).mockRejectedValue(refusal(detail))
+    renderWithProviders(
+      <JobForm job={messageJob({ project_path: '/work/other', agent: 'repo-smoke' })} agents={[]} defaultAgent="" onSaved={() => {}} layout="vertical" />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('jobform-agent-save-error')).toHaveTextContent(
+        `${detail}. Pick an agent from this folder.`,
+      )
+    })
+    expect(formWideAlerts()).toHaveLength(0)
+    expect(screen.queryByTestId('jobform-project-path-save-error')).not.toBeInTheDocument()
+  })
+
+  it('names no folder when the job has no directory', async () => {
+    const detail = "Agent 'ghost' is not a configured agent"
+    vi.mocked(api.updateCron).mockRejectedValue(refusal(detail))
+    renderWithProviders(
+      <JobForm job={messageJob({ agent: 'ghost' })} agents={[]} defaultAgent="" onSaved={() => {}} layout="vertical" />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('jobform-agent-save-error')).toHaveTextContent(detail)
+    })
+    expect(screen.getByTestId('jobform-agent-save-error')).not.toHaveTextContent('Pick an agent from this folder')
+  })
+
+  it('clears once a later save goes through', async () => {
+    const detail = "Agent 'repo-smoke' not found in project directory '/work/other'"
+    vi.mocked(api.updateCron).mockRejectedValueOnce(refusal(detail)).mockResolvedValueOnce({ ok: true } as never)
+    renderWithProviders(
+      <JobForm job={messageJob({ project_path: '/work/other', agent: 'repo-smoke' })} agents={[]} defaultAgent="" onSaved={() => {}} layout="vertical" />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.getByTestId('jobform-agent-save-error')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(screen.queryByTestId('jobform-agent-save-error')).not.toBeInTheDocument())
   })
 })
