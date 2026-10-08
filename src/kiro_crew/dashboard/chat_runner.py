@@ -128,6 +128,7 @@ from kiro_crew.context_blocks import (
 from kiro_crew.crew_log import emit as crew_log_emit
 from kiro_crew.dashboard import chat_turn as _chat_turn
 from kiro_crew.dashboard import directive_queue
+from kiro_crew.dashboard import git_repo_touches as _git_repo_touches
 from kiro_crew.dashboard.chat_delivery import (  # noqa: F401
     COMMANDS_OFF_META_KEY,
     STEER_STATE_CONSUMED,
@@ -13250,6 +13251,19 @@ async def _run_chat(
                     "tool_call",
                     _tool_payload,
                 )
+                # The Git tab lists every repository this session works in, not
+                # only its project directory. After the broadcast so the pill is
+                # not held behind the walk -- and not awaited: the walk runs on
+                # the slot's own walker task, so a stalled stat on a dead mount
+                # holds that task, never this event stream. Never raises.
+                _git_repo_touches.note_tool_call(
+                    slot,
+                    event.raw_tool_params,
+                    tool_kind=event.tool_kind or "",
+                    diff_path=event.diff_path or "",
+                    is_shell=bool(event.is_shell),
+                    background_tasks=getattr(state, "_background_tasks", None),
+                )
                 # AFTER the live ``tool_call`` broadcast above and BEFORE the
                 # row is appended: the pill the open tab draws is not delayed by
                 # the annotation, and the record reaches both doors -- the
@@ -13493,6 +13507,18 @@ async def _run_chat(
                             **({"purpose": _purpose_upd} if _purpose_upd else {}),
                             **_tool_identity_fields(event),
                         },
+                    )
+                    # The refinement may be the first event carrying the path
+                    # or the shell command (claude-agent-acp streams none first).
+                    # After the broadcast so the refined pill is not held behind
+                    # the walk, which runs on the slot's walker task, not here.
+                    _git_repo_touches.note_tool_call(
+                        slot,
+                        event.raw_tool_params,
+                        tool_kind=event.tool_kind or "",
+                        diff_path=event.diff_path or "",
+                        is_shell=bool(event.is_shell),
+                        background_tasks=getattr(state, "_background_tasks", None),
                     )
                     # Update the audit log so the SEL trail captures the
                     # refined title/kind, not just the "Terminal"/"grep" stub
