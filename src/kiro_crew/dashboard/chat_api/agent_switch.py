@@ -18,12 +18,14 @@ if TYPE_CHECKING:
         DashboardState,
         KiroCrewConfig,
         LLMProvider,
+        WorkspacePinFailed,
         _app_cancel_denied,
         _ChatSlot,
         _CommitToken,
         _default_template_stamp,
         _emit_agent_assignment,
         _history_key_for,
+        _project_dir_not_pinned_refusal,
         _record_explicit_agent_selection,
         _reset_slot_session_or_warn,
         _slot_replaced_while_queued,
@@ -35,6 +37,7 @@ if TYPE_CHECKING:
         default_project_dir,
         default_template,
         deny_app_slot_access,
+        directory_identity_pinned,
         drained_to_thread,
         effective_session_key,
         is_registered_agent_name,
@@ -43,6 +46,7 @@ if TYPE_CHECKING:
         person_priority,
         pin_private_agent_store,
         read_bounded_json,
+        record_project_identity,
         redact_credentials,
         redact_exfiltration_urls,
         relay_archive_refusal,
@@ -419,6 +423,12 @@ async def switch_slot_agent(
         new_workspace = slot.workspace
         new_project = slot.project
         new_memory_store = slot.memory_store
+        # The identity a NEW binding derived below records for the spawn (the
+        # folder's project: read off the descriptor that opens it, off-loop, as
+        # the create route records it); the sentinel keeps an unchanged
+        # project's existing record, and a default-workspace project records
+        # nothing (it is not examined).
+        new_project_identity: tuple[int, int] | None | bool = False
         # Compare-and-set baseline, captured BEFORE the first await in this
         # section: the resolution warm-up and the session reset both yield
         # the event loop, and the project/workspace endpoints do not take
@@ -568,6 +578,19 @@ async def switch_slot_agent(
                         folder_project = ""
                 if folder_project:
                     new_project = folder_project
+                    try:
+                        new_project_identity = await asyncio.to_thread(
+                            directory_identity_pinned, folder_project
+                        )
+                    except WorkspacePinFailed as exc:
+                        # A failed bind, surfaced: the switch is refused whole
+                        # (nothing below has committed) rather than landing a
+                        # project the spawn would never examine.
+                        if slot.agent is committed_agent:
+                            slot.agent = prior_agent
+                        return _project_dir_not_pinned_refusal(
+                            caller.scope, name, folder_project, exc, operation="chat_slot_agent"
+                        )
                 elif ws_name not in ("default", cfg.default_workspace):
                     # Only a workspace the agent RESOLVED TO DELIBERATELY may
                     # retarget the project. Two names fail that test and both
@@ -585,6 +608,7 @@ async def switch_slot_agent(
                     # and retargeting on a fallback discards the directory the
                     # user chose and runs the next turn's tools elsewhere.
                     new_project = default_project_dir(workspace)
+                    new_project_identity = None
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -678,12 +702,15 @@ async def switch_slot_agent(
         committed_workspace: str | None = None
         committed_project: str | None = None
         committed_memory_store: str | None = None
+        pre_await_identity = slot.project_identity
         if slot.workspace == pre_await_workspace:
             slot.workspace = _CommitToken(new_workspace)
             committed_workspace = slot.workspace
         if slot.project == pre_await_project:
             slot.project = _CommitToken(new_project)
             committed_project = slot.project
+            if not isinstance(new_project_identity, bool):
+                record_project_identity(slot, new_project_identity)
         # The store is the THIRD field of that binding, and leaving it behind
         # splits the slot in half: the turn resolves its store fresh from the new
         # agent's bindings while the consolidator writes to the store recorded at
@@ -737,6 +764,7 @@ async def switch_slot_agent(
                 slot.workspace = pre_await_workspace
             if committed_project is not None and slot.project is committed_project:
                 slot.project = pre_await_project
+                slot.project_identity = pre_await_identity
             if committed_memory_store is not None and slot.memory_store is committed_memory_store:
                 slot.memory_store = pre_await_memory_store
             # Re-mark unconditionally: the periodic flush writes a slot's

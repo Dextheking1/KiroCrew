@@ -120,6 +120,8 @@ from kiro_crew.dashboard.chat_api.resume import (  # noqa: F401
     resume_slot_from_history,
 )
 from kiro_crew.dashboard.chat_api.session_relaunch import (  # noqa: F401
+    _person_project_by_name,
+    _slot_project_sensitive_refusal,
     api_chat_slot_project,
     api_chat_slot_reload,
     api_chat_slot_workspace,
@@ -167,6 +169,7 @@ from kiro_crew.dashboard.chat_api.slot_effort import (  # noqa: F401
 )
 from kiro_crew.dashboard.chat_api.slot_guards import (  # noqa: F401
     _CommitToken,
+    _project_dir_not_pinned_refusal,
     _record_explicit_agent_selection,
     _reset_slot_session_or_warn,
     _slot_replaced_while_queued,
@@ -236,9 +239,19 @@ from kiro_crew.dashboard.chat_delivery import (  # noqa: F401
     start_queue_persist,
     steer_into_running_turn,
 )
-from kiro_crew.dashboard.chat_folders import (
+from kiro_crew.dashboard.chat_folders import (  # noqa: F401
+    PROJECT_DIR_LINK_REFUSAL,
+    PROJECT_DIR_MISSING_REFUSAL,
+    PROJECT_DIR_SENSITIVE_REFUSAL,
+    PROJECT_DIR_UNOPENABLE_REFUSAL,
+    _is_the_person,
     _unhide_folder,
+    file_slot_across_inheritance,
+    project_dir_sensitive_refusal,
+    project_dir_unc_refusal,
+    refuse_filing_across_inheritance,
     resolve_folder_project_dir_off_loop,
+    screen_and_resolve_project_dir,
 )
 from kiro_crew.dashboard.chat_persistence import (  # noqa: F401
     _FLUSH_SNAPSHOT_RETRIES,
@@ -338,6 +351,7 @@ from kiro_crew.dashboard.handlers.source_providers import is_owner_dashboard_req
 from kiro_crew.dashboard.relay_archive import relay_archive_refusal
 from kiro_crew.dashboard.request_priority import owner_start_priority
 from kiro_crew.dashboard.session_folders import SessionFolderError, create_session_folder
+from kiro_crew.dashboard.session_pulse_counter import increment_user_session_count_off_loop
 from kiro_crew.dashboard.slot_buffers import (  # noqa: F401
     MAX_DEFERRED_NOTE_CHARS,
     MAX_DEFERRED_NOTES,
@@ -377,6 +391,7 @@ from kiro_crew.dashboard.slot_retention import (  # noqa: F401
 from kiro_crew.dashboard.state import (  # noqa: F401
     _MAX_DISMISSED_SOURCE_LINKS,
     DashboardState,
+    SlotOrigin,
     _ChatSlot,
     _mark_permission_resolved,
     _normalize_slot_key,
@@ -388,6 +403,7 @@ from kiro_crew.dashboard.state import (  # noqa: F401
     load_window_off_loop,
     note_crew_log_class,
     parse_cls_meta,
+    record_project_identity,
     request_slot_origin,
     row_mid,
 )
@@ -418,9 +434,15 @@ from kiro_crew.safety_override import (  # noqa: F401
     safety_override,
     yolo_policy_permits,
 )
-from kiro_crew.sandbox import voice_runtime_workspace_conflict
-from kiro_crew.security import (
+from kiro_crew.sandbox import (  # noqa: F401
+    IDENTITY_UNAVAILABLE,
+    WorkspacePinFailed,
+    directory_identity_pinned,
+    voice_runtime_workspace_conflict,
+)
+from kiro_crew.security import (  # noqa: F401
     is_sensitive_path,
+    is_unverifiable_path_refusal,
     redact_credentials,
     redact_exfiltration_urls,
 )
@@ -2160,6 +2182,10 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
     # Ownership of a NAMED slot for an app caller, before any refusal below can
     # answer about it (get_or_create_slot's memory-mode 409 among them) and
     # before anything is written. The post-create check stays authoritative.
+    # It also runs ahead of the filing decision below, which reads the slot's
+    # placement (`existing_slot.folder_id`): a refusal shaped by that placement
+    # (403 for a filing that would cross inheritance) answered to an app token
+    # that does not own the slot would tell it where the slot is filed.
     acquisition_judged: Any = None
     if request_app and name:
         denied, acquisition_judged = await _app_slot_acquisition_denial(
@@ -2189,10 +2215,30 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
             status=409,
         )
     folder_project = ""
-    if folder_id and (existing_slot is None or not existing_slot.project):
+    folder_identity: tuple[int, int] | None = None
+    if folder_id:
+        # Filing at creation is how a session acquires a folder's binding and
+        # steering, so it goes through the one filing decision the PATCH folder
+        # route and the agent tools take (``refuse_filing_across_inheritance``):
+        # the person files anywhere; any other principal -- an app's own
+        # credential included -- may not place a session where it would inherit
+        # a binding or steering it does not have today. Decided over the
+        # committed tree before that binding is resolved or the slot is filed.
         folder_snapshot = await state.read_folders(
             lambda folders: [dict(folder) for folder in folders]
         )
+        refused = refuse_filing_across_inheritance(
+            state,
+            request,
+            folder_snapshot,
+            slot_key=str(name or ""),
+            from_folder_id=existing_slot.folder_id if existing_slot is not None else "",
+            to_folder_id=folder_id,
+            operation="chat.slot_create",
+        )
+        if refused is not None:
+            return refused
+    if folder_id and (existing_slot is None or not existing_slot.project):
         # The chain walk runs on the loop; only a declared project's ``stat``
         # hops to a worker thread (see `resolve_folder_project_dir_off_loop`).
         folder_project, folder_project_error = await resolve_folder_project_dir_off_loop(
@@ -2206,6 +2252,18 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
                 },
                 status=400,
             )
+        if folder_project:
+            # The inherited binding's identity, read off the descriptor that
+            # opened the directory, BEFORE anything is minted or counted: a
+            # directory that cannot be pinned is a failed bind, refused here in
+            # the folder-project shape -- never a chat bound without a record.
+            try:
+                folder_identity = await asyncio.to_thread(directory_identity_pinned, folder_project)
+            except WorkspacePinFailed as exc:
+                return web.json_response(
+                    {"error": f"invalid folder project: {exc}", "code": "folder_project_invalid"},
+                    status=400,
+                )
     # Binding resolution checks memory readiness. A fresh conversation gets
     # the same bounded recovery grace as its first turn, before any slot or
     # protected assignment is published.
@@ -2417,8 +2475,10 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
                 # Human request-layer path: the dashboard new-chat tab. The
                 # origin conjunct in state.py still excludes app-token callers.
                 # A slot an attested cron opens is not a person's and is not
-                # counted.
-                count_user_session=not cron_creator,
+                # counted. With a `folder_id` the survey count waits for the
+                # filing decision below: a refused filing retracts the mint, and
+                # a count taken here would survive it (review-caught).
+                count_user_session=not cron_creator and not folder_id,
             )
         except ValueError as exc:
             if request_app:
@@ -2475,39 +2535,21 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
         # binding gate up there needs the same value before the peer is touched.
         # One body for every reason on purpose: a distinct code per reason would
         # turn this 404 into an existence oracle for slots the caller may not
-        # know about. The reason stays in the audit row.
+        # know about. The reason stays in the audit row. The slot the name
+        # addressed at the top of the handler already passed the acquisition
+        # gate before anything read it; this run covers a slot minted under
+        # that name in between.
         denied = deny_app_slot_session_access(request_app, slot, slot.key, "chat_slot_create")
         if denied is not None:
             return denied
-        # Pin title if explicitly provided (prevents auto-title from overwriting).
-        # A cron caller uses this route as both create and reopen. Its title names
-        # the new session, but a later reopen must not undo a user's rename.
-        title = (body.get("title") or "").strip()[:200] if isinstance(body, dict) else ""
-        if cron_creator and (not is_new_slot or reopening_persisted_cron):
-            title = ""
-        if title:
-            title, _ = redact_exfiltration_urls(title)
-            title, _ = redact_credentials(title)
-            slot.title = title
-        if title:
-            # A pinned title is caller-explicit: record origin "user" so the
-            # background title refresh never rewrites it (this endpoint can
-            # address an ALREADY-auto-titled slot whose origin would otherwise
-            # stay "auto"), and bump the epoch so an in-flight background
-            # attempt stands down instead of clobbering the pin.
-            slot._titled = True
-            slot._title_origin = "user"
-            slot._title_epoch += 1
-        # Bind to an artifact if provided (companion chat). Validate
-        # against the artifact slug grammar so an injection-shaped value can never
-        # land on the slot; anything invalid is silently dropped. Uniqueness (≤1
-        # active bound session per slug) is a frontend-flow convention, not
-        # enforced here.
-        artifact_slug = body.get("artifact") if isinstance(body, dict) else None
-        if isinstance(artifact_slug, str) and ARTIFACT_SLUG_RE.match(artifact_slug):
-            slot._artifact = artifact_slug
         # File the slot before the coalesced broadcast, so its first appearance
-        # in every client is already inside the folder.
+        # in every client is already inside the folder -- and before ANY other
+        # write this route makes to the slot (title, artifact binding, below).
+        # The filing decision can still refuse here (review-caught): `name` can
+        # address an existing slot, and a 403 returned after the title and the
+        # artifact were written would leave those writes live on a session the
+        # request was refused to file. Deciding first means a refusal returns a
+        # slot exactly as it was found.
         folder_applied = False
         if folder_id:
             # Mirror PATCH /api/chat/slots/{slot}/folder: a CHANGED folder must
@@ -2519,9 +2561,42 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
             # breadcrumb fires regardless and the flag is consumed there.
             previous_folder = slot.folder_id
             previous_changed = slot._folder_changed
-            if folder_id != slot.folder_id:
-                slot._folder_changed = True
-            slot.folder_id = folder_id
+            # The filing decision again, HERE, in one section with the write
+            # (``file_slot_across_inheritance``): the early decision above ran
+            # before the peer round-trip, the mint and the other awaits of this
+            # route, and a folder mutation committing inside that window could
+            # change what the destination confers. Under the store lock nothing
+            # can. A refusal on a slot this request minted retracts the mint --
+            # not running, no messages, still the object registered under its
+            # key -- so no session is left behind; a peer slot already created
+            # for it is left to the crew, as the concurrent-create refusal above
+            # leaves it. An existing slot addressed by name stays as it was:
+            # nothing of this request has been written to it yet (the title and
+            # the artifact binding are written below, after the filing).
+            refused = await file_slot_across_inheritance(
+                state, request, slot, to_folder_id=folder_id, operation="chat.slot_create"
+            )
+            if refused is not None:
+                if (
+                    is_new_slot
+                    and not slot.running
+                    and not slot.messages
+                    and state._slots.get(slot.key) is slot
+                ):
+                    state._slots.pop(slot.key, None)
+                    state._restricted_keys.discard(f"dashboard:{slot.key}")
+                    state.push_slots_update()
+                return refused
+            if not _requested_key and slot._origin == SlotOrigin.USER:
+                # The survey count the mint deferred (see `count_user_session`
+                # above): the filing stood, so this is a genuine new user chat.
+                # Gated on the MINT-TIME fact the deferred gate stands in for --
+                # no caller-supplied key (`minted_new = not name` in the
+                # registry) -- not on `is_new_slot`, which is also true for a
+                # caller-named slot that is not currently open (an app's
+                # "Open session" follow-up posting its own key): that request
+                # is not counted without a folder and must not be with one.
+                increment_user_session_count_off_loop()
             # Existence is only reliable inside the store lock. If the folder
             # went away, abandon THIS assignment and leave the slot as it was —
             # `name` can address an already-used slot, so clearing outright would
@@ -2584,6 +2659,33 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
                         # the inherited list must not ship under that same one.
                         if appended:
                             _bump_slot_tags_revision(slot)
+        # Pin title if explicitly provided (prevents auto-title from overwriting).
+        # A cron caller uses this route as both create and reopen. Its title names
+        # the new session, but a later reopen must not undo a user's rename.
+        title = (body.get("title") or "").strip()[:200] if isinstance(body, dict) else ""
+        if cron_creator and (not is_new_slot or reopening_persisted_cron):
+            title = ""
+        if title:
+            title, _ = redact_exfiltration_urls(title)
+            title, _ = redact_credentials(title)
+            slot.title = title
+        if title:
+            # A pinned title is caller-explicit: record origin "user" so the
+            # background title refresh never rewrites it (this endpoint can
+            # address an ALREADY-auto-titled slot whose origin would otherwise
+            # stay "auto"), and bump the epoch so an in-flight background
+            # attempt stands down instead of clobbering the pin.
+            slot._titled = True
+            slot._title_origin = "user"
+            slot._title_epoch += 1
+        # Bind to an artifact if provided (companion chat). Validate
+        # against the artifact slug grammar so an injection-shaped value can never
+        # land on the slot; anything invalid is silently dropped. Uniqueness (≤1
+        # active bound session per slug) is a frontend-flow convention, not
+        # enforced here.
+        artifact_slug = body.get("artifact") if isinstance(body, dict) else None
+        if isinstance(artifact_slug, str) and ARTIFACT_SLUG_RE.match(artifact_slug):
+            slot._artifact = artifact_slug
         # A slot with no project filed into a project-linked folder inherits
         # from the nearest configured ancestor before its first broadcast. The
         # server owns this fallback because the client folder cache can be
@@ -2591,6 +2693,9 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
         # it and continue to use the project endpoint for scope changes.
         if folder_project and folder_applied and not slot.project:
             slot.project = folder_project
+            # The inherited binding's identity, read off the descriptor that
+            # opened the directory BEFORE the mint (never a by-name stat).
+            record_project_identity(slot, folder_identity)
         # A fresh folder per new chat, when the owner turned it on. Only for a
         # brand-new unnamed dashboard chat: a named create can reopen a saved
         # session, and apps, crons and ephemeral helpers keep their own rules. A

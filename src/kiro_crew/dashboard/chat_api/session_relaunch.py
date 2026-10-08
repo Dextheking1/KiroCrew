@@ -16,13 +16,21 @@ if TYPE_CHECKING:
     from kiro_crew.dashboard.chat_handlers import (
         _SESSION_RELOAD_NOTICE,
         _TEARDOWN_INCOMPLETE_WARNING,
+        IDENTITY_UNAVAILABLE,
+        PROJECT_DIR_LINK_REFUSAL,
+        PROJECT_DIR_MISSING_REFUSAL,
+        PROJECT_DIR_SENSITIVE_REFUSAL,
+        PROJECT_DIR_UNOPENABLE_REFUSAL,
         SESSION_RELOAD_KIND,
         AcpProvider,
         DashboardState,
         LLMProvider,
+        WorkspacePinFailed,
         _app_cancel_denied,
         _ChatSlot,
         _CommitToken,
+        _is_the_person,
+        _project_dir_not_pinned_refusal,
         _reset_slot_session,
         _reset_slot_session_or_warn,
         _save_recent_project,
@@ -34,13 +42,18 @@ if TYPE_CHECKING:
         _test_interleave,
         default_project_dir,
         deny_app_slot_access,
+        directory_identity_pinned,
         effective_session_key,
-        is_sensitive_path,
+        is_unverifiable_path_refusal,
         logger,
         owner_start_priority,
+        project_dir_sensitive_refusal,
+        project_dir_unc_refusal,
         read_bounded_json,
+        record_project_identity,
         relay_archive_refusal,
         schedule_eager_spawn,
+        screen_and_resolve_project_dir,
         sel,
         slot_not_found,
         voice_runtime_workspace_conflict,
@@ -577,6 +590,60 @@ async def api_chat_slot_workspace(request: web.Request) -> web.Response:
     return web.json_response(ws_resp)
 
 
+def _person_project_by_name(
+    project: str,
+) -> tuple[str, bool, str | None, tuple[int, int] | None]:
+    """main's own resolution of the PERSON's project spelling, on a worker thread.
+
+    ``expanduser`` then ``realpath``, by name -- the person's arm of the slot
+    project endpoint; every other principal's spelling goes through
+    ``screen_and_resolve_project_dir`` instead. Returns ``(real, is_dir,
+    sensitive)``: the sensitive verdict (``project_dir_sensitive_refusal``, a
+    match or the resolver's stall refusal, else ``None``) is taken on the
+    resolved path as it stands, on this thread, so nothing resolves the name a
+    second time after it was resolved here. The fourth value is the identity
+    the binding records for the spawn to verify against: the ``(st_dev,
+    st_ino)`` read off the descriptor that OPENED the resolved directory
+    (``directory_identity_pinned``: the leaf opened without following a link,
+    the identity off that handle) -- never a by-name ``stat`` after the resolve,
+    which would follow a swap planted in between; ``IDENTITY_UNAVAILABLE`` on a
+    volume that reports none, and ``WorkspacePinFailed`` raised when the
+    directory cannot be pinned (the route refuses the bind). A spelling no
+    filesystem can carry (an embedded NUL) resolves to ``""``, which is not a
+    directory.
+    """
+    try:
+        real = os.path.realpath(os.path.expanduser(project))
+    except ValueError:
+        return "", False, None, None
+    if not os.path.isdir(real):
+        return real, False, None, None
+    return real, True, project_dir_sensitive_refusal(real), directory_identity_pinned(real)
+
+
+def _slot_project_sensitive_refusal(
+    request: web.Request, name: str, project: str, verdict: str
+) -> web.Response:
+    """main's 403 for a project that is (or resolves to) a sensitive location, audited.
+
+    *verdict* is ``project_dir_sensitive_refusal``'s answer: a match, or the
+    resolver's stall refusal, which is refused the same way (fail closed) and
+    audited as such.
+    """
+    sel().log_api_access(
+        caller=request.get("user", "dashboard"),
+        operation="chat_slot_project",
+        outcome="denied",
+        resources=f"slot={name} project={project}",
+        error=(
+            "sensitive path (unverifiable)"
+            if is_unverifiable_path_refusal(verdict)
+            else "sensitive path"
+        ),
+    )
+    return web.json_response({"error": "Access denied"}, status=403)
+
+
 async def api_chat_slot_project(request: web.Request) -> web.Response:
     """POST /api/chat/slots/{slot}/project — set project directory for file search scoping."""
     state: DashboardState = request.app["state"]
@@ -607,26 +674,119 @@ async def api_chat_slot_project(request: web.Request) -> web.Response:
     denied = _app_cancel_denied(request, slot, "chat.slot_project", effective_session_key(slot))
     if denied is not None:
         return denied
-    if project:
-        project = os.path.realpath(os.path.expanduser(project))
-        if not os.path.isdir(project):
-            return web.json_response({"error": "Not a directory"}, status=400)
-        if is_sensitive_path(project):
+    # Both arms record the pinned identity of the directory they admit, against
+    # the spelling at the commit below, so the agent process's spawn can refuse a
+    # swap at that name: the non-person arm's fenced resolve fills
+    # ``agent_identity`` with the identity of the directory it HELD; the person's
+    # arm reads ``person_identity`` off the descriptor that opened the resolved
+    # directory (``directory_identity_pinned``).
+    agent_identity: list[tuple[int, int]] = []
+    person_identity: tuple[int, int] | None = None
+    if project and _is_the_person(request):
+        # The PERSON choosing a project for the person's own gateway is not the
+        # threat the UNC gate exists for (a caller other than the operator
+        # steering the gateway onto a host of that caller's choosing), so the
+        # person's request resolves exactly as it always did -- by name, a
+        # share by its UNC spelling included. Off the loop like the fenced arm:
+        # a stalled mapped drive stalls a worker thread, not every chat. The
+        # sensitive verdict comes back from the same worker call, decided on the
+        # resolved path -- no second resolve of the name on the loop.
+        try:
+            project, is_dir, sensitive, person_identity = await asyncio.to_thread(
+                _person_project_by_name, project
+            )
+        except WorkspacePinFailed as exc:
+            return _project_dir_not_pinned_refusal(
+                request, name, project, exc, operation="chat_slot_project"
+            )
+        if not is_dir:
+            return web.json_response(
+                {"error": "Not a directory", "code": "project_not_a_directory"}, status=400
+            )
+        if sensitive is not None:
+            return _slot_project_sensitive_refusal(request, name, project, sensitive)
+    elif project:
+        # Any other principal: before anything resolves it, a UNC-shaped project
+        # -- or a local link whose target names a share, read without following
+        # it -- makes a Windows gateway's ``realpath`` open an SMB connection to
+        # a host the caller named. The folder endpoint's own helpers decide --
+        # one rule for every site where a non-person request names path text
+        # (the folder routes, the scaffold's scan root, the set_project
+        # directive, this endpoint) -- in that validator's 400 shape, audited
+        # like the sensitive-path refusal below. The screen stats and reads
+        # links and the resolve opens every component
+        # (``pinned_fs.real_dir_path_pinned``: a descriptor- or handle-pinned
+        # walk that never follows a link, so a component swapped between the
+        # screen and the open is refused instead of traversed -- there is no
+        # by-name ``realpath`` on this arm), so both run off the loop like the
+        # overlap scan further down.
+        unc_err = project_dir_unc_refusal(project)
+        unc_audit = "UNC path"
+        resolved = ""
+        if not unc_err:
+            resolved, resolve_err = await asyncio.to_thread(
+                screen_and_resolve_project_dir,
+                os.path.expanduser(project),
+                identity_out=agent_identity,
+            )
+            if resolve_err == PROJECT_DIR_LINK_REFUSAL:
+                # A link (or a non-directory) at a component: the pinned walk
+                # refused it at the open and read nothing of where it points, so
+                # a link that names a share and an ordinary one are one case
+                # here -- its own code and its own SEL line (the UNC class stays
+                # the lexical text refusal above).
+                sel().log_api_access(
+                    caller=request.get("user", "dashboard"),
+                    operation="chat_slot_project",
+                    outcome="denied",
+                    resources=f"slot={name} project={project}",
+                    error="link on the way",
+                )
+                return web.json_response(
+                    {"error": resolve_err, "code": "project_dir_link"}, status=400
+                )
+            elif resolve_err == PROJECT_DIR_MISSING_REFUSAL:
+                return web.json_response(
+                    {"error": "Not a directory", "code": "project_not_a_directory"}, status=400
+                )
+            elif resolve_err == PROJECT_DIR_SENSITIVE_REFUSAL or (
+                resolve_err and is_unverifiable_path_refusal(resolve_err)
+            ):
+                # Decided inside the fenced resolve, on the pinned real path (or
+                # the link-free spelling when nothing was found), on the worker
+                # thread -- never by resolving the name again here. A resolver
+                # stall is the same 403, fail closed.
+                return _slot_project_sensitive_refusal(request, name, project, resolve_err)
+            elif resolve_err == PROJECT_DIR_UNOPENABLE_REFUSAL:
+                return web.json_response(
+                    {"error": resolve_err, "code": "project_dir_unopenable"}, status=400
+                )
+            elif resolve_err:
+                return web.json_response(
+                    {"error": resolve_err, "code": "project_dir_unverifiable"}, status=400
+                )
+        if unc_err:
             sel().log_api_access(
                 caller=request.get("user", "dashboard"),
                 operation="chat_slot_project",
                 outcome="denied",
                 resources=f"slot={name} project={project}",
-                error="sensitive path",
+                error=unc_audit,
             )
-            return web.json_response({"error": "Access denied"}, status=403)
+            return web.json_response({"error": unc_err, "code": "project_unc_path"}, status=400)
+        project = resolved
+    if project:
         # Pre-flight the voice-runtime workspace guard: a
         # workspace that contains (or sits inside) the Kiro Crew data home is
         # refused at agent spawn anyway, but only after the session exists and
         # with a spawn-time stack trace. Reject it here, at the moment of
         # choice, with the same actionable message. Off-loop: the check primes
-        # the runtime path cache (mkdir/realpath) on first use.
-        conflict = await asyncio.to_thread(voice_runtime_workspace_conflict, project)
+        # the runtime path cache (mkdir/realpath) on first use. ``project`` is
+        # the real path the resolve returned: compared as it stands, never
+        # re-walked by name after the verdict.
+        conflict = await asyncio.to_thread(
+            voice_runtime_workspace_conflict, project, pre_resolved=True
+        )
         if _slot_replaced_while_queued(state, slot, name, request, "chat.slot_project"):
             return _slot_not_found()
         if conflict is not None:
@@ -681,6 +841,20 @@ async def api_chat_slot_project(request: web.Request) -> web.Response:
         # would erase it; a per-request identity token can.
         committed_project = _CommitToken(project)
         slot.project = committed_project
+        # The binding's identity is the SLOT's, read off the descriptor that
+        # validated the directory on the worker thread: the fenced resolve's
+        # held directory for a non-person request, the pinned open of the
+        # resolved directory for the person's own choice (re-binding a
+        # recreated directory re-records it). Nothing is stat'ed by name here.
+        previous_identity = slot.project_identity
+        record_project_identity(
+            slot,
+            (
+                person_identity
+                if person_identity is not None
+                else (agent_identity[0] if agent_identity else IDENTITY_UNAVAILABLE)
+            ),
+        )
         logger.info("Slot %s project set to %r", name, project)
         sel().log_api_access(
             caller=request.get("user", "dashboard"),
@@ -702,11 +876,22 @@ async def api_chat_slot_project(request: web.Request) -> web.Response:
         # Reset the session so the next message cold-starts with the new CWD and
         # picks up project-level .kiro/steering/**/*.md (mirrors api_chat_slot_agent).
         # Only on an actual change — avoids a needless cold start on a no-op set.
+        # A change is a different SPELLING or a different recorded IDENTITY under
+        # the same spelling: re-binding a directory that was replaced at its name
+        # (an ``rm -rf`` and re-clone) records the new ``(st_dev, st_ino)`` above,
+        # and a live provider rooted in the old directory would otherwise keep
+        # serving turns there -- the identity is compared only at spawn, which a
+        # warm provider never reaches (review-caught). A re-pin that reads the
+        # same identity back stays quiet; a slot whose previous record is unknown
+        # (none in this process) is a first record, not a change.
         #
         # Deferred via a flag because this endpoint is reachable over loopback HTTP
         # from inside the kiro-cli process group (the set_project MCP tool); an
         # inline reset would killpg() the caller. Consumed in chat_runner.
-        if project != old_project:
+        identity_changed = (
+            previous_identity is not None and slot.project_identity != previous_identity
+        )
+        if project != old_project or identity_changed:
             if effective_session_key(slot) != session_key:
                 # The slot was bound to a different session while the
                 # recent-project save awaited: arming the flag with the key
@@ -722,6 +907,7 @@ async def api_chat_slot_project(request: web.Request) -> web.Response:
                 # same 409 the sibling switch handlers use.
                 if slot.project is committed_project:
                     slot.project = old_project
+                    slot.project_identity = previous_identity
                 return web.json_response(
                     {
                         "error": "slot session was rebound during the switch",

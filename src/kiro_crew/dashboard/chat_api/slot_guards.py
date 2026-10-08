@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         LLMProvider,
         ResolvedBindings,
         SelectionChange,
+        WorkspacePinFailed,
         _cancel_target,
         _ChatSlot,
         _reset_slot_session,
@@ -347,4 +348,36 @@ def _switch_target_busy(
         and not (own_turn and other is slot)
         and canonical_key(_cancel_target(other)) == target
         for other in list(state._slots.values())
+    )
+
+
+def _project_dir_not_pinned_refusal(
+    scope: web.Request | Mapping[str, Any],
+    name: str,
+    project: str,
+    exc: WorkspacePinFailed,
+    *,
+    operation: str,
+) -> web.Response:
+    """The governed answer to a binding whose directory could not be pinned.
+
+    A FAILED BIND, surfaced to the caller with the reason (missing, a link or
+    not a directory, unopenable) and the remedy, audited like the other
+    refusals of the route -- never a binding stored without an identity, which
+    the spawn could not examine. *scope* is the request, or for the in-turn
+    agent switch the caller's app scope (``SlotAgentSwitchCaller.scope``).
+    """
+    sel().log_api_access(
+        caller=scope.get("user", "dashboard"),
+        operation=operation,
+        outcome="denied",
+        resources=f"slot={name} project={project}",
+        error=str(exc),
+    )
+    return web.json_response(
+        {
+            "error": f"{exc} -- fix the directory and bind it again",
+            "code": "project_dir_not_pinned",
+        },
+        status=400,
     )
