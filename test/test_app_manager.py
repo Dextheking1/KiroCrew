@@ -4394,3 +4394,49 @@ class TestUninstallRevokesBackendProvenance:
         assert restored["count"] == 1, "the withdrawn grant must be restored on acquire failure"
         # ... and nothing was destroyed: the app is still installed, ready for retry.
         assert (app_home / "apps" / "prov-lockfail").is_dir()
+
+    def test_a_partial_rmtree_that_deleted_the_record_keeps_the_row_revoked(
+        self, tmp_path, app_home, monkeypatch
+    ) -> None:
+        """GPT (round 3): rmtree is not atomic, so a partial failure can delete
+        installed.json BEFORE it raises — and the surviving backend this revoke
+        guards against can itself cause that partial failure (open handles on
+        Windows). The uninstall's except arm must then NOT un-revoke the old spawn
+        row: with the record gone the uninstall effectively removed the app, so
+        restoring the row would re-arm it for whatever a same-name reinstall rebinds
+        the declared port with. The restore is gated on the SAME installed-state
+        check the trust-grant restore uses (``_read_installed(name) == meta``), so a
+        deleted/changed record leaves the row revoked (fail-closed). Fails without
+        the gate (the old code un-revoked on ``revoke_committed`` alone)."""
+        from kiro_crew.apps import manager as mgr
+        from kiro_crew.apps.backend_runtime import pidfile as pf
+        from kiro_crew.apps.manager import INSTALLED_META_FILENAME, app_dir
+
+        assert install_app(_make_app_source(tmp_path, name="prov-partial")).ok
+        row = self._seed_row("prov-partial")
+        app_root = app_dir("prov-partial")
+        meta_path = app_root / INSTALLED_META_FILENAME
+
+        real_rmtree = mgr.shutil.rmtree
+
+        def _rmtree_that_deletes_the_record_then_fails(path, *args, **kwargs):
+            # Model a non-atomic rmtree: installed.json is already gone when it
+            # raises partway (the real failure mode a surviving backend's open
+            # handle triggers mid-delete on Windows).
+            if str(path) == str(app_root):
+                meta_path.unlink(missing_ok=True)
+                raise OSError("simulated: deletion failed after removing installed.json")
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(mgr.shutil, "rmtree", _rmtree_that_deletes_the_record_then_fails)
+
+        result = uninstall_app("prov-partial")
+        assert not result.ok
+        # The record was deleted by the partial rmtree, so the row MUST stay revoked:
+        # un-revoking it would let a same-name reinstall adopt whatever rebinds the port.
+        live = pf._read_pidfile().get("prov-partial")
+        assert (
+            live is not None and live.get("revoked") is True
+        ), f"a partial uninstall that deleted installed.json must leave the row revoked: {live}"
+        attributed, _ = pf._adoption_provenance("prov-partial", [row["pid"]])
+        assert attributed is False

@@ -356,9 +356,7 @@ def _read_approved_grants(name: str) -> dict[str, list[str]] | None:
         return {family: [] for family in STAGED_GRANT_FAMILIES}
 
 
-def _effective_approved_grants(
-    name: str, meta: InstalledApp | None
-) -> dict[str, list[str]] | None:
+def _effective_approved_grants(name: str, meta: InstalledApp | None) -> dict[str, list[str]] | None:
     """*name*'s approved set as *meta* (its install record) qualifies it.
 
     A missing file approves what the manifest declares (``None``) only for a
@@ -2227,7 +2225,16 @@ def uninstall_app(name: str, *, keep_data: bool = True, retired_builtin: bool = 
             # case, so it cannot gate on that). Best-effort — a restore that cannot persist
             # only costs an extra adoption refusal on the still-installed app, never a
             # wrong adoption.
-            if revoke_committed:
+            #
+            # Gated on the SAME installed-state check _restore_trust_grant uses below
+            # (expected_app=meta): rmtree is not atomic, so a partial failure can delete
+            # installed.json BEFORE it raises, and the surviving backend this guard exists
+            # for can itself cause that partial failure (open handles on Windows). If the
+            # record no longer matches the app we revoked for, the uninstall effectively
+            # removed it, so un-revoking would re-arm the old row for whatever a same-name
+            # reinstall rebinds the port with — exactly the misattribution the revoke
+            # closed. Leave the row revoked (fail-closed) when the record is gone or changed.
+            if revoke_committed and _read_installed(name) == meta:
                 try:
                     _unrevoke_app_pid(name, revoked_row)
                 except Exception:  # noqa: BLE001 - report, never mask the real error
@@ -2822,9 +2829,7 @@ def enable_app(
             error_code="session_approval_consent_required",
         )
 
-    current_grants = (
-        _effective_approved_grants(name, meta) if grants_consent is not None else None
-    )
+    current_grants = _effective_approved_grants(name, meta) if grants_consent is not None else None
     approve_grants = grants_consent is not None and current_grants is not None
     if meta.enabled and not approve_grants:
         return AppResult(ok=True, name=name, message=f"{name} is already enabled")
@@ -3046,7 +3051,7 @@ def app_command_agent_refusal(owner: str, agent: str, *projects: str | None) -> 
     if agent.startswith(NATIVE_SKILL_ALIAS_PREFIX):
         return (
             f"{app} can't run: it has a setup problem its author needs to fix "
-            f"(its agent \"{agent}\" uses a name Kiro Crew reserves). "
+            f'(its agent "{agent}" uses a name Kiro Crew reserves). '
             f"Ask {app}'s author to rename that agent."
         )
     from kiro_crew.apps import bridges  # bridges imports this module
@@ -3070,22 +3075,22 @@ def app_command_agent_refusal(owner: str, agent: str, *projects: str | None) -> 
             return f"{app} can't run here: {claim.detail}"
         if project == projects[0]:
             return (
-                f"{app} can't run here: this project has its own agent named \"{agent}\". "
+                f'{app} can\'t run here: this project has its own agent named "{agent}". '
                 f"Run the command again from the command palette in another project, "
-                f"or rename \"{agent}\" in this project's .kiro/agents folder."
+                f'or rename "{agent}" in this project\'s .kiro/agents folder.'
             )
         return (
             f"{app} can't run here: this session's folder {project} has its own agent "
-            f"named \"{agent}\". Start the command again from the command palette in a "
-            f"project session, or rename \"{agent}\" in that folder's .kiro/agents."
+            f'named "{agent}". Start the command again from the command palette in a '
+            f'project session, or rename "{agent}" in that folder\'s .kiro/agents.'
         )
     registration, others = _app_agent_registration(owner, agent)
     if registration == "unverifiable":
         return f"{app} can't run: {others[0]}"
     if registration == "ambiguous":
-        where = ", ".join(others) if others else f"the other agent named \"{agent}\""
+        where = ", ".join(others) if others else f'the other agent named "{agent}"'
         return (
-            f"{app} can't run: another agent in ~/.kiro/agents is also named \"{agent}\", "
+            f'{app} can\'t run: another agent in ~/.kiro/agents is also named "{agent}", '
             f"so {app}'s agent can't be told apart from it. Rename or remove {where} "
             "in ~/.kiro/agents, then run the command again from the command palette."
         )
@@ -3694,9 +3699,7 @@ def register_external_app(
                 resources=f"name={name!r}",
                 error=cron_grant_error,
             )
-            return AppResult(
-                ok=False, name=name, error=f"invalid manifest: {cron_grant_error}"
-            )
+            return AppResult(ok=False, name=name, error=f"invalid manifest: {cron_grant_error}")
 
     # Self-registration is routine (self-managed apps re-register on every
     # launch) and the app authors its own manifest, so this path can widen the
@@ -3717,9 +3720,7 @@ def register_external_app(
     # Same holding back as ``update_app`` for added api/events entries. A first
     # registration approves what it declares: there is no earlier approval to
     # widen, as with an install.
-    new_permissions = (
-        manifest_data.get("permissions") if isinstance(manifest_data, dict) else None
-    )
+    new_permissions = manifest_data.get("permissions") if isinstance(manifest_data, dict) else None
     prior_grants = _effective_approved_grants(name, existing) if existing else None
     prior_grants_present = _approved_grants_path(name).is_file() if existing else False
     approved_grants: dict[str, list[str]] | None

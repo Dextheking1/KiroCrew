@@ -406,9 +406,9 @@ def _attach_backend_notice(payload: dict[str, Any], name: str) -> dict[str, Any]
 # The update skipped its restart because the old spawn record's removal was not
 # confirmed: starting now could adopt the old version still holding the port.
 _UPDATE_NOT_RESTARTED_NOTICE = (
-    "Update installed; the {name} backend was not restarted.\n"
-    "The previous version may still be running. Close it, check the disk has free "
-    "space, then turn the app off and on again."
+    "Update installed, but the background service for {name} was not restarted "
+    "because the previous version may still be running and holding its port. "
+    "Close that program, then turn the app off and on again."
 )
 
 
@@ -1195,8 +1195,22 @@ async def handle_update_app(request: web.Request) -> web.Response:
                 else:
                     reg_install = await install_from_registry(registry_name)
                     if not reg_install.get("ok"):
-                        reg_outcome_kind = "install_failed"
-                        await _restore_provenance_after_failed_update(name, reg_preserved_row)
+                        if reg_install.get("committed"):
+                            # The install already landed on disk, but a post-commit
+                            # step failed (set_app_provenance could not persist the
+                            # new row). This is NOT a rollback: the new code is in
+                            # place, so the pre-update row must stay revoked. Restoring
+                            # it would let the recovery adopt an old-code survivor as
+                            # the updated backend — exactly the misattribution this
+                            # change closes. Leave it revoked and fail closed: do not
+                            # restart (nothing may be adopted against the stale row).
+                            reg_outcome_kind = "committed_provenance_failed"
+                        else:
+                            # A confirmed rollback: the install did not land, so the
+                            # pre-update row still legitimately vouches for the app's
+                            # own backend and is restored.
+                            reg_outcome_kind = "install_failed"
+                            await _restore_provenance_after_failed_update(name, reg_preserved_row)
                     else:
                         # The update committed. Drop the pre-update spawn record
                         # BEFORE any restart (see _invalidate_provenance_before_restart):

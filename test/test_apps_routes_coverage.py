@@ -1443,6 +1443,51 @@ class TestUpdateApp:
         assert calls == ["stop", "deregister", "install", "register", "start"], calls
 
     @pytest.mark.asyncio
+    async def test_registry_update_committed_but_provenance_write_fails_keeps_the_row_revoked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Regression: a registry update can land on disk (durable_success) and THEN
+        # fail a post-commit step (set_app_provenance cannot persist the new row),
+        # so install_from_registry returns ok=False WITH committed=True. The route
+        # must NOT treat that as a rollback: restoring the pre-update spawn record
+        # would let the recovery adopt an old-code survivor as the updated backend.
+        # The row stays revoked and the backend is not restarted (fail-closed).
+        _setup_env(tmp_path, monkeypatch)
+        _install(tmp_path)
+        enable_app(APP)
+        restored: list[str] = []
+        started: list[str] = []
+
+        async def _committed_then_failed(name: str, **kwargs: Any) -> dict[str, Any]:
+            # ok=False but the install already committed; the new code is in place.
+            return {"ok": False, "name": name, "error": "disk full", "committed": True}
+
+        async def _spy_restore(name: str, preserved_row: Any) -> None:
+            restored.append(name)
+
+        async def _register(name: str) -> Any:
+            return SimpleNamespace(to_dict=lambda: {"name": name})
+
+        monkeypatch.setattr(routes_mod, "is_registry_source", lambda s: True)
+        monkeypatch.setattr(routes_mod, "registry_name_from_source", lambda s: APP)
+        monkeypatch.setattr(routes_mod, "install_from_registry", _committed_then_failed)
+        monkeypatch.setattr(routes_mod, "_restore_provenance_after_failed_update", _spy_restore)
+        monkeypatch.setattr(routes_mod, "deregister_app", lambda n: None)
+        monkeypatch.setattr(routes_mod, "_register_app_off_loop", _register)
+        monkeypatch.setattr(routes_mod, "stop_app_backend", lambda n: None)
+        monkeypatch.setattr(routes_mod, "start_app_backend", lambda n: started.append(n))
+
+        async with TestClient(TestServer(_make_app(dashboard_user="owner"))) as client:
+            resp = await client.post(f"/api/apps/{APP}/update", json={})
+            # The update landed on disk, so the HTTP transaction is not a 4xx failure.
+            assert resp.status == 200
+
+        # The pre-update spawn record is NOT restored over committed new code, and
+        # the backend is NOT restarted — nothing may be adopted against the stale row.
+        assert restored == [], "a committed update must not restore the old spawn record"
+        assert started == [], "a committed-but-provenance-failed update must not restart"
+
+    @pytest.mark.asyncio
     async def test_registry_update_failure_leaves_a_disabled_app_stopped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2221,12 +2266,6 @@ class TestUninstallRefusals:
 
         monkeypatch.setattr(routes_mod, "uninstall_app", _real_removal)
 
-        def _drop(n: str) -> dict[str, Any]:
-            order.append("provenance_delete")
-            return {"pid": 1}
-
-        monkeypatch.setattr(routes_mod, "forget_backend_provenance", _drop, raising=False)
-
         async with TestClient(TestServer(_make_app(dashboard_user="owner"))) as client:
             resp = await client.post(f"/api/apps/{APP}/uninstall", json={})
             assert resp.status == 200
@@ -2238,17 +2277,12 @@ class TestUninstallRefusals:
     async def test_failed_uninstall_never_touches_provenance(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """GPT crash-safety (option b): a failed uninstall_app leaves the app
-        installed, and because the provenance delete runs only on result.ok, the
-        record is never touched — nothing to restore, the app keeps attributing its
-        backend."""
+        """A failed uninstall_app leaves the app installed and returns 400; invalidation
+        lives inside uninstall_app (not the handler), so a failed removal leaves the
+        record untouched and the app keeps attributing its backend."""
 
         _setup_env(tmp_path, monkeypatch)
         _install(tmp_path)
-        deletes: list[str] = []
-        monkeypatch.setattr(
-            routes_mod, "forget_backend_provenance", lambda n: deletes.append(n), raising=False
-        )
 
         def _fail_removal(*args: Any, **kwargs: Any) -> AppResult:
             return AppResult(ok=False, error="rmtree failed")
@@ -2258,25 +2292,18 @@ class TestUninstallRefusals:
         async with TestClient(TestServer(_make_app(dashboard_user="owner"))) as client:
             resp = await client.post(f"/api/apps/{APP}/uninstall", json={})
             assert resp.status == 400
-        # The delete only runs at the commit boundary (result.ok), so a failed
-        # removal never reached it: the row is left intact.
-        assert deletes == []
 
     @pytest.mark.asyncio
     async def test_interruption_before_commit_leaves_the_provenance_row_intact(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """GPT crash-safety (option b): the delete is at the commit boundary, so an
-        interruption anywhere before it (here onUninstall raises) never deletes
-        provenance — the row stays on disk and the next-boot reap handles the orphan.
-        No window where the row is gone while the app survives."""
+        """Crash-safety: an interruption anywhere before the commit (here onUninstall
+        raises) never reaches uninstall_app, so the app and its record stay intact and
+        the next-boot reap handles the orphan. No window where the row is gone while
+        the app survives."""
 
         _setup_env(tmp_path, monkeypatch)
         _install(tmp_path, setup={"onUninstall": "teardown.sh"})
-        deletes: list[str] = []
-        monkeypatch.setattr(
-            routes_mod, "forget_backend_provenance", lambda n: deletes.append(n), raising=False
-        )
 
         async def _blow_up_mid_window(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise RuntimeError("gateway interrupted during onUninstall")
@@ -2291,8 +2318,6 @@ class TestUninstallRefusals:
         async with TestClient(TestServer(_make_app(dashboard_user="owner"))) as client:
             resp = await client.post(f"/api/apps/{APP}/uninstall", json={})
             assert resp.status == 500
-        # The commit boundary was never reached, so provenance was never deleted.
-        assert deletes == []
 
     @pytest.mark.asyncio
     async def test_unconfirmed_delete_at_commit_is_logged_not_aborted(
@@ -2301,21 +2326,17 @@ class TestUninstallRefusals:
         """Provenance invalidation lives INSIDE uninstall_app, so the handler does not
         delete the spawn record itself (that would wipe the revoked tombstone the
         shared transaction leaves as its fence). The handler therefore never calls
-        forget_backend_provenance or quarantine_backend; the uninstall's success is
-        governed by uninstall_app's own result (a durable-revoke failure aborts THERE,
-        covered by the manager tests). Here a successful uninstall_app yields 200 and
-        the handler touches neither provenance helper."""
+        quarantine_backend; the uninstall's success is governed by uninstall_app's own
+        result (a durable-revoke failure aborts THERE, covered by the manager tests).
+        Here a successful uninstall_app yields 200 and the handler touches the
+        quarantine helper not at all."""
 
         _setup_env(tmp_path, monkeypatch)
         _install(tmp_path)
 
         monkeypatch.setattr(routes_mod, "uninstall_app", lambda *a, **k: AppResult(ok=True))
 
-        deleted: list[str] = []
         quarantined: list[str] = []
-        monkeypatch.setattr(
-            routes_mod, "forget_backend_provenance", lambda n: deleted.append(n), raising=False
-        )
         monkeypatch.setattr(
             routes_mod, "quarantine_backend", lambda name, reason: quarantined.append(name)
         )
@@ -2324,8 +2345,7 @@ class TestUninstallRefusals:
             resp = await client.post(f"/api/apps/{APP}/uninstall", json={})
             assert resp.status == 200
             # The handler delegates invalidation to uninstall_app and does not run its
-            # own delete or quarantine.
-            assert deleted == []
+            # own quarantine.
             assert quarantined == []
 
     @pytest.mark.asyncio

@@ -82,7 +82,11 @@ class _PidfileGuard:
         try:
             path = self._lock_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._flock_fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+            # 0o600: this sidecar lives in the owner-only data home, so a
+            # fresh boot must not leave it readable by other users. The pidfile
+            # itself is already owner-only (atomic_write defaults a data-home
+            # target to 0o600); the lock takes the same restriction.
+            self._flock_fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
             cm = platform_compat.file_lock(self._flock_fd, exclusive=True)
             cm.__enter__()
             self._flock_cm = cm
@@ -120,16 +124,6 @@ _pidfile_lock = _PidfileGuard()
 # disk is full; the on-disk marker adds durability ACROSS a restart (and a restart's
 # stale-reap independently signals and drops the orphaned leader row either way).
 _quarantined_backends: set[str] = set()
-
-
-class PidfileDeleteFailed(Exception):
-    """A spawn-record deletion that MUST be confirmed could not be persisted.
-
-    Raised only by :func:`forget_backend_provenance`, the uninstall/update path:
-    there a retained row re-attributes an old-code survivor, so the caller must
-    abort before any restart rather than proceed on an unconfirmed delete. The
-    best-effort stop/record paths never raise it — they restore the row on refusal.
-    """
 
 
 class PidfileRevokeFailed(Exception):
@@ -196,7 +190,7 @@ def _read_pidfile_strict() -> dict[str, dict[str, Any]]:
     ``None``, indistinguishable from "no row", so the caller would report a confirmed
     invalidation that never happened and restart onto the survivor the stale row still
     attributes. This variant surfaces the failure as ``OSError`` (``ValueError`` on a
-    corrupt file is re-raised as ``OSError``) so :func:`forget_backend_provenance`
+    corrupt file is re-raised as ``OSError``) so :func:`revoke_backend_provenance`
     aborts. A missing file is still an empty dict — there is simply no row to delete.
     """
     try:
@@ -313,7 +307,7 @@ def _forget_app_pid_if(app_name: str, pid: int, start_time: str | None) -> dict[
         return None
 
 
-def _restore_app_pid(app_name: str, row: dict[str, Any]) -> None:
+def _restore_app_pid(app_name: str, row: dict[str, Any]) -> bool:
     """Put back a row a refused stop removed, unless the name has been re-recorded.
 
     Deliberately ``setdefault`` and not an overwrite: between the removal and the
@@ -321,16 +315,24 @@ def _restore_app_pid(app_name: str, row: dict[str, Any]) -> None:
     the older row would aim both the stale-reap and adoption provenance at a process
     that is gone. Never raises -- a restore that cannot happen leaves the retry no
     worse off than before this function existed.
+
+    Returns whether the row is durably present after the call: ``True`` when it was
+    written, or when a fresh spawn already holds the name (``setdefault`` left it in
+    place); ``False`` when the write was swallowed (ENOSPC/EDQUOT) so the row did NOT
+    land on disk. A caller that needs the restore to survive a gateway restart -- a
+    refused stop under a withdrawn ceiling -- reads the ``False`` and takes a
+    fail-closed backstop, rather than silently reporting a restore that never persisted.
     """
     try:
         with _pidfile_lock:
             data = _read_pidfile()
             if app_name in data:
-                return
+                return True
             data[app_name] = row
-            _write_pidfile(data)
+            return _write_pidfile(data)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Could not restore app pid for %s: %s", app_name, exc)
+        return False
 
 
 def _unrevoke_app_pid(app_name: str, original: dict[str, Any] | None) -> None:
@@ -546,71 +548,6 @@ def revoke_backend_provenance(app_name: str) -> dict[str, Any] | None:
         ) from exc
 
 
-def forget_backend_provenance(app_name: str) -> dict[str, Any] | None:
-    """Drop *app_name*'s spawn record, returning it so a caller can undo the drop.
-
-    An app UPDATE replaces the code behind the name while reusing the port, and
-    uninstall removes the app entirely. The pre-update/pre-removal row still vouches
-    for whatever rebinds that port, so the post-update restart's adopt branch (or a
-    later same-name install) would attribute a process running the OLD code. Called
-    at the post-update, pre-restart seam, this invalidates the stale row so the new
-    spawn records its own. The row is handed back so the UPDATE's rollback can
-    restore it: if the update fails, the old backend is still legitimately the app's
-    and its provenance must survive.
-
-    CONFIRMS the delete reached disk, both directions. The read goes through
-    :func:`_read_pidfile_strict`: ``_read_pidfile`` swallows an ``OSError``/corrupt
-    file and returns ``{}``, so a read failure would make ``data.pop`` yield ``None``
-    — indistinguishable from "no row" — and the caller would report a confirmed drop
-    that never happened. And ``_forget_app_pid`` returns the popped in-memory row even
-    when ``_write_pidfile`` swallowed an ``OSError`` — on ENOSPC/EDQUOT the row leaves
-    memory while the on-disk copy stays. Either way a caller that reported success and
-    restarted would adopt the survivor the stale row still attributes, so an
-    unconfirmed read OR write raises :class:`PidfileDeleteFailed` and the caller aborts
-    before restart.
-    """
-    _confirmed = False
-    try:
-        with _pidfile_lock:
-            data = _read_pidfile_strict()
-            removed = data.pop(app_name, None)
-            if removed is None:
-                _confirmed = True
-            else:
-                if not _write_pidfile(data):
-                    # The delete did not land (ENOSPC/EDQUOT), so the stale row stays
-                    # on disk and still vouches for whatever rebinds the port. The
-                    # in-memory quarantine the caller sets is lost on restart, and a
-                    # SIGTERM-survivor forked into the reaped group makes the startup
-                    # reap RETAIN the row rather than re-drop it -- so after a restart
-                    # nothing would refuse the old-code survivor. Stamp a DURABLE
-                    # revoked flag onto the surviving row as a best-effort fallback:
-                    # _adoption_provenance refuses any revoked row, and the flag rides
-                    # on the row the reap retains, so the refusal survives the restart
-                    # even when the full delete could not. Best-effort because the same
-                    # disk-full may defeat this smaller write too; the raise below is
-                    # the hard backstop that stops THIS restart regardless.
-                    data[app_name] = {**removed, "revoked": True}
-                    _write_pidfile(data)
-                    raise PidfileDeleteFailed(
-                        f"could not persist removal of the spawn record for {app_name!r}"
-                    )
-                _confirmed = True
-    except PidfileDeleteFailed:
-        raise
-    except OSError as exc:
-        raise PidfileDeleteFailed(
-            f"could not read the spawn record for {app_name!r}: {exc}"
-        ) from exc
-    # With the stale row the quarantine guards against confirmed gone, a later
-    # start cannot adopt an old-code survivor through it -- lift the hold.
-    # Done OUTSIDE the lock: clear_backend_quarantine re-takes _pidfile_lock, which is
-    # not reentrant. ``removed is None`` (no row) is still a confirmed-absent state.
-    if _confirmed:
-        clear_backend_quarantine(app_name)
-    return removed if isinstance(removed, dict) else None
-
-
 def capture_backend_provenance(app_name: str) -> dict[str, Any] | None:
     """Return a COPY of *app_name*'s spawn row without mutating the pidfile.
 
@@ -743,9 +680,9 @@ def is_backend_quarantined(app_name: str) -> bool:
 def clear_backend_quarantine(app_name: str) -> None:
     """Lift *app_name*'s quarantine once its spawn record is confirmed gone.
 
-    Called on a CONFIRMED forget_backend_provenance (the stale row the quarantine
-    guarded against is deleted) and on a fresh spawn recording its OWN identity
-    (_record_app_pid: a fresh row vouches for the new backend, not the old survivor).
+    Called when a spawn record is confirmed gone or overwritten -- a fresh spawn
+    recording its OWN identity (_record_app_pid: a fresh row vouches for the new
+    backend, not the old survivor), and a revoke that confirmed the row left disk.
     Clears both the in-memory backstop and the on-disk marker. Idempotent; the disk
     clear is best-effort -- a clear that cannot persist leaves the marker, which only
     costs an extra refusal, never a wrong adoption.
@@ -818,7 +755,7 @@ def _adoption_provenance(app_name: str, owners: list[int]) -> tuple[bool, str]:
         return False, "no spawn recorded for this app"
     if row.get("revoked"):
         # An update/uninstall that could not confirm the row's deletion stamped it
-        # revoked (forget_backend_provenance). The row survives on disk and still
+        # revoked (revoke_backend_provenance). The row survives on disk and still
         # names a spawn instance a detached survivor inherited, so the tree route
         # below would otherwise vouch for an OLD-code listener after a restart. A
         # revoked row attributes nothing: the next clean spawn records its own,
