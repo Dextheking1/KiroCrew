@@ -1763,8 +1763,13 @@ class AgentConfig:
             "sandbox cannot open at all — this document stays agent-READABLE by design, "
             "and a readable inode the agent owns can be given a second name in a writable "
             "directory, so a seal on this name cannot hold the switch. This key still "
-            "GRANTS for backwards compatibility and keeps working on platforms the "
-            "keystone mask does not cover yet, but it logs a deprecation warning and will "
+            "GRANTS for backwards compatibility only where no Kiro Crew sandbox CAN mask "
+            "the keystone leaf on this host (native Windows, or a host with no sandbox "
+            "backend); where a Crew-masked spawn is reachable it is refused — including "
+            "when sandbox is set to off on a host that CAN mask, because that value lives "
+            "in this same agent-writable config.json and cannot be trusted to prove the "
+            "host is unmaskable — and on delegated macOS the keystone is not honoured "
+            "either, so use the ad-hoc grant there. It logs a deprecation warning and will "
             "stop granting in a future release. Move the declaration to the keystone.",
             restart=True,
         ),

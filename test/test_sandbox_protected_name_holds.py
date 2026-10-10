@@ -347,14 +347,6 @@ class TestLeafOnlyPopulationIsRecorded:
     #: so a sandboxed shell cannot swap the bytes between a loader's digest check
     #: and its reopen. A data-home root leaf, three entries per tier, held by its
     #: own name for the same reason as the root leaves above.
-    #:
-    #: One more root-level leaf, three more entries per tier:
-    #:
-    #: * ``standing-approval`` -- the operator's standing auto-approve keystone
-    #:   directory, materialised empty at 0700 before every spawn so the data-home
-    #:   root cannot hold a second name a sandboxed write could plant. Its parent is
-    #:   the writable data-home root, so no enclosing mask can hold the bare leaf; it
-    #:   is leaf-only for the same reason as ``config.json`` and ``registry_trust.json``.
     EXPECTED: dict[str, int] = {"standard": 275, "cc": 282, "strict": 283}
 
     @pytest.mark.parametrize("tier", TIERS)

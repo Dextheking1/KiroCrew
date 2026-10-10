@@ -459,12 +459,12 @@ class TestTheMigrationCommandRuns:
         assert standing_approval.is_declared("auto") is True
 
     def test_the_default_rendering_follows_the_host(self, crew_home, _floor_monkeypatch):
-        """The rendering is resolved from the requested mode via ``_keystone_is_masked``."""
+        """The rendering is resolved from the requested mode via ``deprecated_alias_is_refused``."""
         # Maskable (the autouse fixture pins "auto" maskable): the migrate-by-hand remedy.
         assert "create the file" in standing_approval.migration_notice("auto")
         # Unmasked: the key-keeps-working rendering, no remedy.
         _floor_monkeypatch.setattr(
-            standing_approval, "_keystone_is_masked", lambda *_a, **_k: False
+            standing_approval, "deprecated_alias_is_refused", lambda *_a, **_k: False
         )
         assert "keeps working" in standing_approval.migration_notice("auto")
 
@@ -485,17 +485,31 @@ class TestConfigKeyIsADeprecatedAlias:
         )
         assert standing_approval.is_declared("auto") is False
 
-    def test_the_migration_notice_names_the_path_and_the_document(self):
+    def test_the_migration_notice_names_the_path_and_the_document(self, monkeypatch):
+        # Unmasked host: the key still grants, so the notice says so and names the keystone.
+        monkeypatch.setattr(
+            standing_approval, "deprecated_alias_is_refused", lambda *_a, **_k: False
+        )
         notice = standing_approval.migration_notice("auto")
         assert loader.STANDING_APPROVAL_DIRNAME in notice
         assert loader.STANDING_APPROVAL_FILENAME in notice
         assert "dangerously_skip_permissions" in notice
-        # First-Principles ruling: the key is DEPRECATED, not retired -- it STILL grants.
-        # The notice must say so (names the keystone to migrate to) and must NOT claim the
-        # key stopped granting.
         assert "DEPRECATED" in notice
         assert "still grants" in notice
-        assert "no longer grants" not in notice
+        assert "it is refused" not in notice
+
+    def test_the_migration_notice_on_a_masked_host_says_the_key_is_refused(self, monkeypatch):
+        # Masked host: the key is refused, so the notice must NOT claim it still grants and
+        # must tell the operator to move to the keystone available there.
+        monkeypatch.setattr(
+            standing_approval, "deprecated_alias_is_refused", lambda *_a, **_k: True
+        )
+        notice = standing_approval.migration_notice("auto")
+        assert loader.STANDING_APPROVAL_DIRNAME in notice
+        assert loader.STANDING_APPROVAL_FILENAME in notice
+        assert "DEPRECATED" in notice
+        assert "it is refused" in notice
+        assert "still grants" not in notice
 
     def test_the_notice_is_ascii_so_every_log_sink_renders_it(self):
         standing_approval.migration_notice("auto").encode("ascii")
@@ -539,16 +553,36 @@ class TestStartupHonoursOnlyTheKeystone:
         monkeypatch.setattr(_live, "current", lambda fallback, **_k: fallback)
         return server, calls
 
-    def test_a_deprecated_config_key_still_grants_and_warns(self, startup, caplog):
-        """First-Principles ruling: the config key is a DEPRECATED ALIAS, not retired. It
-        STILL grants (on every platform, so nobody loses the grant on upgrade), and logs a
-        one-line deprecation warning naming the keystone to migrate to."""
+    def test_the_deprecated_alias_is_refused_on_a_masked_host(self, startup, caplog, monkeypatch):
+        """On a masked host the config key is refused -- it is agent-reachable, so
+        honouring it would reopen the ``link(2)`` route the keystone closes, and the
+        keystone is available there as the replacement."""
         server, calls = startup
+        monkeypatch.setattr(
+            standing_approval, "deprecated_alias_is_refused", lambda *_a, **_k: True
+        )
+        with caplog.at_level("WARNING"):
+            server._apply_startup_yolo(object(), self._cfg(declared=True))
+        assert calls == []
+        assert "DEPRECATED" in caplog.text
+        assert "is refused on this host" in caplog.text
+
+    def test_the_deprecated_alias_still_grants_where_the_mask_is_unavailable(
+        self, startup, caplog, monkeypatch
+    ):
+        """Where the keystone mask is UNAVAILABLE (Windows, kiro-cli-delegated macOS,
+        ``sandbox: off``) the config key STILL grants, so nobody on those platforms loses
+        the grant on upgrade, and logs a one-line deprecation warning naming the keystone
+        to migrate to."""
+        server, calls = startup
+        monkeypatch.setattr(
+            standing_approval, "deprecated_alias_is_refused", lambda *_a, **_k: False
+        )
         with caplog.at_level("WARNING"):
             server._apply_startup_yolo(object(), self._cfg(declared=True))
         assert calls == ["granted"]
         assert "DEPRECATED" in caplog.text
-        assert "no longer grants" not in caplog.text
+        assert "is refused on this host" not in caplog.text
 
     def test_the_keystone_grants_and_logs_no_migration_warning(self, startup, caplog, crew_home):
         server, calls = startup
@@ -650,6 +684,46 @@ class TestTheGrantNeedsTheMaskItRestsOn:
         server._apply_startup_yolo(object(), self._cfg(sandbox_mode="off"))
         assert calls == ["granted"]
 
+    def test_a_forged_sandbox_off_does_not_re_grant_the_alias_on_a_masked_host(
+        self, startup, crew_home, caplog
+    ):
+        """The config.json alias refusal must not rest on ``agent.sandbox``, which lives in
+        the same agent-writable document as the alias itself.
+
+        The whole premise of refusing the config key is that an in-sandbox process can give
+        config.json a second name through the ``link(2)`` route and write
+        ``dangerously_skip_permissions: true`` through it. That same write can set
+        ``sandbox: "off"`` -- a requested ``off`` short-circuits ``credential_mask_state``
+        to ``absent`` BEFORE any backend probe, so a refusal keyed on the requested mode
+        would read the forged ``off`` as "this host cannot mask" and install the no-expiry
+        standing grant on a host whose real backend WOULD mask the leaf. That is the alias
+        refusal failing OPEN to the very actor it defends against.
+
+        Here the host IS maskable (the ``maskable_host`` fixture: namespace backend, no
+        governance floor, not delegated), the config carries BOTH the forged ``off`` and
+        the alias key, and startup must install NO grant. ``test_a_confined_startup_grants``
+        is the companion that proves the key path still grants where the mask holds for a
+        confined tier.
+        """
+        with caplog.at_level("WARNING"):
+            server, calls = startup
+            server._apply_startup_yolo(object(), self._cfg(sandbox_mode="off", declared=True))
+        assert calls == []
+        # Refused, not silently granted: the operator is told the key is refused and the
+        # keystone is the available replacement on this maskable host.
+        assert "DEPRECATED" in caplog.text
+        assert "refused" in caplog.text
+
+    def test_the_alias_predicate_refuses_a_forged_off_on_a_masked_host(self, crew_home):
+        """Predicate-level: ``deprecated_alias_is_refused`` refuses a requested ``off`` on a
+        host a confined tier would mask, and still grants where the host genuinely cannot
+        mask (the justified ``sandbox: off`` / no-backend case stays granting)."""
+        # Masked host (maskable_host fixture): a forged "off" is refused, exactly like
+        # "auto", because the host CAN mask the leaf.
+        assert standing_approval.deprecated_alias_is_refused("auto") is True
+        assert standing_approval.deprecated_alias_is_refused("off") is True
+        assert standing_approval.host_can_mask_leaf() is True
+
     def test_no_backend_refuses_even_with_the_unsandboxed_opt_in(
         self, startup, crew_home, monkeypatch
     ):
@@ -669,17 +743,15 @@ class TestTheGrantNeedsTheMaskItRestsOn:
 
 
 class TestTheMaskIsPlatformBound:
-    """Where Crew's own mask runs, and therefore where the standing grant exists.
+    """The two named predicates across every platform and delegation state.
 
-    The mask is a Linux bind mount or a macOS Seatbelt profile, and ``wrap_argv`` hands
-    the spawn to kiro-cli's internal sandbox on Windows and on macOS where that sandbox
-    is enabled. A delegated spawn is confined, but by something that applies none of
-    Crew's masks, so the leaf is reachable from inside it and the declaration is not an
-    authorization there.
-
-    ``test_an_undelegated_macos_host_masks`` is the control that keeps this about
-    delegation rather than about macOS: the same platform masks when kiro-cli's own
-    sandbox is off.
+    ``deprecated_alias_is_refused`` and ``_keystone_is_masked`` (keystone-grant honour)
+    agree on masked Linux/macOS (refuse the alias, honour the keystone) and on native
+    Windows (neither), and DIFFER on a delegated macOS host: the alias is refused there
+    (a non-kiro-cli spawn keeps Crew's Seatbelt, so the agent-readable alias must not
+    stand), but a written ``grant.json`` is NOT honoured there (the delegated kiro-cli
+    spawn runs unmasked and could author the leaf). A delegated host therefore honours
+    neither standing source.
     """
 
     @pytest.fixture(autouse=True)
@@ -691,21 +763,38 @@ class TestTheMaskIsPlatformBound:
         _floor_monkeypatch.setattr(sandbox, "kiro_internal_sandbox_enabled", lambda: False)
         _floor_monkeypatch.setattr(sandbox.sys, "platform", "linux")
 
-    def test_a_maskable_linux_host_masks(self):
-        assert standing_approval._keystone_is_masked("auto") is True
+    # (platform, kiro internal sandbox on, alias-refused, keystone-honoured)
+    _TABLE = [
+        ("linux", False, True, True),  # masked Linux: refuse alias, honour keystone
+        ("darwin", False, True, True),  # masked macOS (no delegation): same
+        ("darwin", True, True, False),  # delegated macOS: refuse alias, do NOT honour grant
+        ("win32", False, False, False),  # native Windows: alias grants, keystone never honoured
+        ("win32", True, False, False),  # native Windows stays delegated regardless
+    ]
 
-    def test_windows_can_never_mask(self, monkeypatch):
-        monkeypatch.setattr(sandbox.sys, "platform", "win32")
-        assert standing_approval._keystone_is_masked("auto") is False
+    @pytest.mark.parametrize("platform,internal,alias_refused,keystone_honoured", _TABLE)
+    def test_both_predicates_over_the_platform_table(
+        self, monkeypatch, platform, internal, alias_refused, keystone_honoured
+    ):
+        monkeypatch.setattr(sandbox.sys, "platform", platform)
+        monkeypatch.setattr(sandbox, "kiro_internal_sandbox_enabled", lambda: internal)
+        assert standing_approval.deprecated_alias_is_refused("auto") is alias_refused
+        assert standing_approval._keystone_is_masked("auto") is keystone_honoured
 
-    def test_delegated_macos_cannot_mask(self, monkeypatch):
+    def test_delegated_macos_grant_true_is_not_honoured(self, monkeypatch, crew_home):
+        """A real ``grant.json`` = true on delegated macOS is NOT an authorization:
+        the delegated kiro-cli spawn runs unmasked and could have written it."""
         monkeypatch.setattr(sandbox.sys, "platform", "darwin")
         monkeypatch.setattr(sandbox, "kiro_internal_sandbox_enabled", lambda: True)
-        assert standing_approval._keystone_is_masked("auto") is False
+        _write_grant(crew_home, {standing_approval.GRANT_FIELD: True})
+        assert standing_approval.is_declared("auto") is False
 
-    def test_an_undelegated_macos_host_masks(self, monkeypatch):
+    def test_masked_macos_grant_true_is_honoured(self, monkeypatch, crew_home):
+        """The same written grant IS honoured on a masked macOS host (no delegation)."""
         monkeypatch.setattr(sandbox.sys, "platform", "darwin")
-        assert standing_approval._keystone_is_masked("auto") is True
+        monkeypatch.setattr(sandbox, "kiro_internal_sandbox_enabled", lambda: False)
+        _write_grant(crew_home, {standing_approval.GRANT_FIELD: True})
+        assert standing_approval.is_declared("auto") is True
 
     def test_a_delegated_host_refuses_a_written_grant_at_startup(self, monkeypatch, crew_home):
         """The platform answer reaches the startup path, not just the predicate."""
@@ -830,7 +919,7 @@ class TestTheNoticeMatchesTheMask:
         it keeps granting. The notice says the key still grants and nothing need change
         here, rather than telling the operator the grant is unavailable."""
         _floor_monkeypatch.setattr(
-            standing_approval, "_keystone_is_masked", lambda *_a, **_k: False
+            standing_approval, "deprecated_alias_is_refused", lambda *_a, **_k: False
         )
         text = standing_approval.migration_notice("auto")
         assert "still grants" in text
@@ -841,13 +930,132 @@ class TestTheNoticeMatchesTheMask:
         assert "create the file" not in text
         assert "UNAVAILABLE" not in text
 
+    def test_delegated_macos_notice_states_unavailable_not_a_keystone_remedy(
+        self, crew_home, monkeypatch
+    ):
+        """On delegated macOS the alias is refused AND the keystone is not honoured, so the
+        notice must say the standing grant is unavailable and name the ad-hoc grant, NOT
+        promise a keystone that is_declared would then refuse. Pin both predicates to the
+        delegated-macOS combination directly, so the branch is exercised without a real
+        sandbox backend on the test host."""
+        monkeypatch.setattr(
+            standing_approval, "deprecated_alias_is_refused", lambda *_a, **_k: True
+        )
+        monkeypatch.setattr(standing_approval, "_keystone_is_masked", lambda *_a, **_k: False)
+        text = standing_approval.migration_notice("auto")
+        low = text.lower()
+        assert "unavailable on this host" in low
+        assert "ad-hoc" in low
+        # It must NOT send the operator to write a keystone that will be refused.
+        assert "create the file" not in low
+        assert "keystone grant is honoured" not in low
+
     def test_the_notice_resolves_the_mask_from_the_mode_it_is_given(self, crew_home, monkeypatch):
         monkeypatch.setattr(sandbox, "_governance_sandbox_floor", lambda: None)
         monkeypatch.setattr(sandbox, "detect_backend", lambda config_mode="auto": "namespace")
         monkeypatch.setattr(sandbox, "kiro_internal_sandbox_enabled", lambda: False)
         monkeypatch.setattr(platform_compat, "IS_WINDOWS", False)
         monkeypatch.setattr(platform_compat, "IS_MACOS", False)
-        # Masked: a migrate-to-the-keystone remedy. Unmasked: the key keeps working, no
-        # remedy to hand over.
+        # On a host whose confined tier WOULD mask the leaf, both renderings point at the
+        # keystone. A requested ``auto`` is masked, so the notice hands over the migrate
+        # remedy. A requested ``off`` reads uncovered for THAT mode, but ``agent.sandbox``
+        # is agent-writable in the same config.json the alias lives in, so a forged ``off``
+        # must not read as "the host cannot mask" and keep the alias granting -- the alias
+        # is refused and the notice points at the keystone, which is available here.
         assert "create the file" in standing_approval.migration_notice("auto")
-        assert "keeps working" in standing_approval.migration_notice("off")
+        assert "create the file" in standing_approval.migration_notice("off")
+
+
+class TestAnInconclusiveProbeFailsSafe:
+    """A transient/uncached sandbox probe failure must not let the alias refusal fail OPEN.
+
+    ``credential_mask_state`` returns ``"indeterminate"`` when ``detect_backend`` gives
+    ``"none"`` WITHOUT caching it (a transient or deferred probe failure, token recorded
+    in ``_last_unshare_failure``). On ``indeterminate`` the agent-readable alias is
+    REFUSED and a written keystone is NOT honoured -- the fail-safe direction -- so no
+    standing grant is installed during ordinary startup probe pressure. Only a DEFINITE
+    ``"none"`` (a successful probe that cached ``_backend = "none"``) keeps today's
+    unmasked-host behaviour where the alias still grants.
+    """
+
+    @pytest.fixture()
+    def _transient_probe(self, _floor_monkeypatch):
+        """Drive detect_backend to the uncached, transient-failure 'none' = indeterminate."""
+        _floor_monkeypatch.setattr(sandbox, "detect_backend", lambda config_mode="auto": "none")
+        _floor_monkeypatch.setattr(sandbox, "_backend", None)
+        _floor_monkeypatch.setattr(
+            sandbox, "_last_unshare_failure", (True, "probe deferred (cold cache)", "retry")
+        )
+
+    @pytest.fixture()
+    def _definite_none(self, _floor_monkeypatch):
+        """Drive detect_backend to the settled, cached 'none' = absent (not indeterminate)."""
+        _floor_monkeypatch.setattr(sandbox, "detect_backend", lambda config_mode="auto": "none")
+        _floor_monkeypatch.setattr(sandbox, "_backend", "none")
+        _floor_monkeypatch.setattr(sandbox, "_last_unshare_failure", None)
+
+    def test_the_mask_state_is_indeterminate_on_a_transient_probe_failure(self, _transient_probe):
+        assert sandbox.credential_mask_state("auto") == "indeterminate"
+        assert standing_approval._mask_covers_leaf_state("auto") == "indeterminate"
+
+    def test_the_mask_state_is_absent_on_a_definite_none(self, _definite_none):
+        assert sandbox.credential_mask_state("auto") == "absent"
+        assert standing_approval._mask_covers_leaf_state("auto") == "uncovered"
+
+    def test_an_indeterminate_probe_refuses_the_alias(self, _transient_probe):
+        # Fail-safe: a probe that could not conclude refuses the agent-readable key.
+        assert standing_approval.deprecated_alias_is_refused("auto") is True
+
+    def test_a_definite_none_keeps_the_alias_granting(self, _definite_none):
+        # A settled no-mask host is unchanged: the alias still grants (not refused).
+        assert standing_approval.deprecated_alias_is_refused("auto") is False
+
+    def test_an_indeterminate_probe_does_not_honour_the_keystone(self, _transient_probe):
+        assert standing_approval._keystone_is_masked("auto") is False
+
+    def test_an_indeterminate_probe_installs_no_standing_grant_at_startup(
+        self, _transient_probe, crew_home, monkeypatch
+    ):
+        """The dashboard startup path must not install a standing grant when the probe
+        could not conclude, even with the deprecated config key set."""
+        from kiro_crew.config import live as _live
+        from kiro_crew.dashboard import server
+
+        monkeypatch.setattr(server, "apply_config_duration", lambda: None)
+        calls: list[str] = []
+
+        class _Result:
+            active = True
+            ttl = 0
+
+        monkeypatch.setattr(
+            server, "grant_declared_yolo", lambda: (calls.append("granted"), _Result())[1]
+        )
+        monkeypatch.setattr(_live, "current", lambda fallback, **_k: fallback)
+
+        class _Agent:
+            dangerously_skip_permissions = True
+            sandbox = "auto"
+            sandbox_allow_unsandboxed_exec = False
+
+        class _Cfg:
+            agent = _Agent()
+
+        server._apply_startup_yolo(object(), _Cfg())
+        assert calls == []
+
+    def test_a_masked_host_is_unchanged(self, crew_home):
+        # The maskable_host fixture pins detect_backend -> "namespace": mask applies, so
+        # the alias is refused and the keystone IS honoured (today's masked behaviour).
+        assert sandbox.credential_mask_state("auto") == "applies"
+        assert standing_approval.deprecated_alias_is_refused("auto") is True
+        assert standing_approval._keystone_is_masked("auto") is True
+
+    def test_the_notice_says_the_sandbox_state_could_not_be_determined(self, _transient_probe):
+        text = standing_approval.migration_notice("auto")
+        low = text.lower()
+        assert "could not be determined" in low
+        assert "ad-hoc" in low
+        # It is NOT the delegated-macOS wording, and NOT a keystone-write remedy.
+        assert "delegated to kiro-cli" not in low
+        assert "create the file" not in low

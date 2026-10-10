@@ -1041,10 +1041,9 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
     ``WSSocketModeClient`` requires a current event loop in the constructing
     thread (its ``__init__`` ends in ``asyncio.ensure_future``), so running
     this function in a worker thread crashes every Slack-enabled boot with
-    ``RuntimeError: There is no current event loop``.  The three blocking calls
-    it contains — the standing-approval keystone read, the YOLO grant's
-    profiles-dir walk and the enterprise ``auth.test`` network call — are
-    offloaded individually below instead,
+    ``RuntimeError: There is no current event loop``.  The two blocking calls
+    it contains — the YOLO grant's profiles-dir walk and the enterprise
+    ``auth.test`` network call — are offloaded individually below instead,
     which keeps the security-relevant early-return ordering (owner check,
     then YOLO grant, then enterprise validation) intact.
     ``test_slack_events_coverage.py::TestInitSocketMode`` pins both halves.
@@ -1096,22 +1095,43 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
         # blocking, so off-loop.
         await asyncio.to_thread(set_yolo_mode, True)
     elif orch._cfg.agent.dangerously_skip_permissions:
-        # Deprecated alias: agent.dangerously_skip_permissions still GRANTS (today's
-        # behaviour, on every platform including those the keystone mask does not cover),
-        # with a one-line deprecation warning naming the keystone to migrate to. Retiring
-        # it, or refusing it off the masked platforms, would be a product-shape change the
-        # First-Principles review blocks, so it is kept working and warned about instead.
-        # Off-loop for the same reason as the call above: migration_notice establishes the
+        # Deprecated alias. config.json is agent-READABLE, so an agent can give its inode
+        # a second name in the writable data home and write the standing grant through it
+        # -- the very link(2) route the keystone exists to close. The alias is therefore
+        # refused wherever any Crew-masked spawn is reachable (deprecated_alias_is_refused):
+        # masked Linux and non-delegated macOS, where the keystone is the replacement; and
+        # delegated macOS, where the kiro-cli spawn is delegated but a KAS/MCP/cron spawn
+        # keeps Crew's mask. On delegated macOS the keystone is not honoured either, so
+        # that host refuses BOTH sources and the standing grant is unavailable there (the
+        # notice names the ad-hoc grant). Only a host that genuinely CANNOT mask the leaf
+        # -- native Windows, or a confirmed no-backend host -- leaves the alias granting;
+        # a requested sandbox: off on a host that CAN mask is refused, because that value
+        # lives in this same agent-writable config.json and cannot be trusted to prove the
+        # host is unmaskable. Off-loop for the same reason
+        # as the call above: migration_notice / deprecated_alias_is_refused establish the
         # sandbox mask to decide the remedy wording, which reads the data home and probes
         # the backend.
-        notice = await asyncio.to_thread(standing_approval.migration_notice, sandbox_mode)
-        logger.warning(
-            "agent.dangerously_skip_permissions in config.json is DEPRECATED as a "
-            "standing auto-approve switch and will stop granting in a future release. "
-            "It still grants for now. %s",
-            notice,
+        refused = await asyncio.to_thread(
+            standing_approval.deprecated_alias_is_refused, sandbox_mode
         )
-        await asyncio.to_thread(set_yolo_mode, True)
+        notice = await asyncio.to_thread(standing_approval.migration_notice, sandbox_mode)
+        if refused:
+            logger.warning(
+                "agent.dangerously_skip_permissions in config.json is a DEPRECATED "
+                "standing auto-approve switch and is refused on this host: the "
+                "key is agent-reachable, so honouring it would let a sandboxed process "
+                "grant itself a standing skip of every approval. Move the grant to the "
+                "keystone, which is available here. %s",
+                notice,
+            )
+        else:
+            logger.warning(
+                "agent.dangerously_skip_permissions in config.json is DEPRECATED as a "
+                "standing auto-approve switch and will stop granting in a future release. "
+                "It still grants for now. %s",
+                notice,
+            )
+            await asyncio.to_thread(set_yolo_mode, True)
     set_orch_cfg(orch._cfg)
     if orch.dashboard_state:
         set_dashboard_state(orch.dashboard_state)

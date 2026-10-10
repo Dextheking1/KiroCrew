@@ -64,11 +64,17 @@ def _apply_startup_yolo(state: DashboardState, cfg: Any) -> None:
     ``yolo_duration`` governance scope), in which case it falls back to the ad-hoc
     duration. Picking another approval mode still clears it immediately.
 
-    ``agent.dangerously_skip_permissions`` in ``config.json`` is a DEPRECATED ALIAS: it
-    still grants on every platform, so no operator loses the grant on upgrade and no
-    platform is narrowed. When it is set, the operator is told once, at WARNING, that the
-    key is deprecated and names the keystone to move to; the grant is still made. Retiring
-    it would be a product-shape change the First-Principles review blocks.
+    ``agent.dangerously_skip_permissions`` in ``config.json`` is a DEPRECATED ALIAS. It
+    still grants ONLY where no Crew-masked spawn is reachable -- native Windows and
+    ``sandbox: off`` -- so an operator there keeps the grant on upgrade. It is refused
+    wherever a Crew-masked spawn is reachable: masked Linux and non-delegated macOS, where
+    the key is agent-reachable so honouring it would reopen the ``link(2)`` route the
+    keystone closes and the keystone is available as the replacement; and delegated macOS,
+    where the kiro-cli spawn is delegated but a KAS/MCP/cron spawn keeps Crew's mask. On
+    delegated macOS the keystone is not honoured either, so that host refuses BOTH sources
+    and the no-expiry standing grant is unavailable there -- the operator uses the ad-hoc
+    grant instead. Either way the operator is told once, at WARNING, with the keystone or
+    the ad-hoc remedy named.
 
     Ad-hoc grants are untouched: Slack, the dashboard picker and the API all expire on
     the single ``agent.yolo_duration`` value (default 6h).
@@ -94,23 +100,46 @@ def _apply_startup_yolo(state: DashboardState, cfg: Any) -> None:
     # Two paths grant the standing override, in order of preference:
     #   1. the keystone -- the SECURE path, honoured only where the sandbox masks the
     #      leaf away from the agent (``is_declared``);
-    #   2. ``agent.dangerously_skip_permissions`` in config.json -- a DEPRECATED ALIAS
-    #      kept working so no operator loses their standing grant on upgrade, and so the
-    #      grant is NOT narrowed off platforms the keystone cannot cover yet (Windows,
-    #      kiro-cli-delegated macOS, ``sandbox: off``). Retiring it, or refusing it on
-    #      those platforms, would be a product-shape change the First-Principles review
-    #      blocks; this keeps today's behaviour and warns instead.
+    #   2. ``agent.dangerously_skip_permissions`` in config.json -- a DEPRECATED ALIAS,
+    #      honoured ONLY where no Crew-masked spawn is reachable (native Windows,
+    #      ``sandbox: off``). Where a Crew-masked spawn is reachable the key is refused: it
+    #      is agent-reachable, so honouring it there would reopen the ``link(2)`` route the
+    #      keystone closes. On masked Linux and non-delegated macOS the keystone is the
+    #      replacement; on delegated macOS the keystone is not honoured either, so that
+    #      host refuses both and the standing grant is unavailable there.
     # The config key is the agent-writable surface the keystone exists to replace, so the
-    # deprecation warning tells the operator to migrate -- but it still GRANTS until they
-    # do, which is the backwards-compatible, non-narrowing behaviour.
+    # deprecation warning tells the operator what works on this host -- migrate to the
+    # keystone where it is honoured, use the ad-hoc grant on delegated macOS, or nothing
+    # to change on native Windows / ``sandbox: off`` where the key still grants.
     source_desc: str
     if standing_approval.is_declared(sandbox_mode):
         source_desc = "standing-approval keystone"
     elif cfg.agent.dangerously_skip_permissions:
-        # Deprecated alias: still honoured, with a one-line migration warning and the
-        # keystone path/line to move to. This path is reachable on every platform,
-        # including those where the keystone mask is unavailable, so nobody loses the
-        # grant they have today.
+        # Deprecated alias. The whole point of the keystone is that an agent can give the
+        # agent-READABLE ``config.json`` inode a second name in the writable data home and
+        # write the standing grant through it, so honouring this key hands the population
+        # the grant governs the very ``link(2)`` route the keystone exists to close. The
+        # alias is therefore refused wherever any Crew-masked spawn is reachable
+        # (``deprecated_alias_is_refused``): masked Linux and macOS, AND delegated macOS,
+        # where the kiro-cli spawn is delegated but a KAS/MCP/cron spawn keeps Crew's mask.
+        # On masked Linux and non-delegated macOS the keystone is available as the
+        # replacement, so the operator is told to move the grant there and nobody is left
+        # without a way to grant. On delegated macOS the keystone is NOT honoured either
+        # (the delegated kiro-cli spawn runs unmasked and could author the leaf), so that
+        # host refuses BOTH sources and the no-expiry standing grant is unavailable there;
+        # the notice names the ad-hoc grant instead. Only native Windows and ``sandbox:
+        # off`` leave the alias granting (no Crew backend masks any spawn), where the
+        # keystone can never be in force.
+        if standing_approval.deprecated_alias_is_refused(sandbox_mode):
+            logger.warning(
+                "agent.dangerously_skip_permissions in config.json is a DEPRECATED "
+                "standing auto-approve switch and is refused on this host: the "
+                "key is agent-reachable, so honouring it would let a sandboxed process "
+                "grant itself a standing skip of every approval. Move the grant to the "
+                "keystone, which is available here. %s",
+                standing_approval.migration_notice(sandbox_mode),
+            )
+            return
         logger.warning(
             "agent.dangerously_skip_permissions in config.json is DEPRECATED as a "
             "standing auto-approve switch and will stop granting in a future release. "
