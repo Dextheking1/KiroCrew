@@ -323,7 +323,27 @@ def _url_payload_command(n: int) -> str:
 #: start with a literal ``re`` searches at memchr speed, which takes a second
 #: Authorization half and the comments that say why each spelling accepts
 #: exactly what the old one did. No credential branch, gate verdict or pass moved.
-_PACKAGE_LINE_BUDGET = 29_205
+#:
+#: Raised again, from 29,205, for the remote-command ``-R`` fix: a single-field
+#: reverse-SOCKS value is a self dial unless it PROVABLY cannot be a port
+#: (``_might_be_forward_port`` fails closed -- only a literal ``/``-bearing token
+#: with no shell metacharacter is a non-forward value, since OpenSSH takes ``0``
+#: and service names and the shell expands braces/globs/variables/``${p%/}`` to a
+#: port). A TWO-field value always fails closed (its last field can be a local
+#: socket path, a real reverse forward in). The exemption is trusted ONLY for an
+#: ssh at program position with none of the INDIRECTION MACHINERY that defeats
+#: argv position: an expansion/glob/newline, a quote or backslash splice
+#: (``a""lias``, ``e\val``), or an ``alias``/``eval``/``source``/``.`` verb --
+#: all detected on the raw text, failing CLOSED on any doubt rather than
+#: modelling each spelling. So a launcher-run ssh (``xargs -I word ssh …``), a
+#: same-line ``alias``-rewritten argv, a quote-spliced ``a""lias`` and an
+#: ``eval``/``source``-wrapped payload all fail closed, while ``gh ... -R o/r``
+#: is allowed. ``mksh`` stays in the nested-shell set, so a self dial through
+#: ``mksh -c`` is caught while a non-self far host is allowed, exactly as under
+#: ``bash``/``ksh``. The one pure ``_arith_int_literal_repl`` helper moved from
+#: ``argv_floor`` to ``shell_normalizer`` (no behaviour change) keeps
+#: ``argv_floor`` under the per-module cap below.
+_PACKAGE_LINE_BUDGET = 29_311
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
