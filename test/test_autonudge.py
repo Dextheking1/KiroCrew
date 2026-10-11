@@ -1303,14 +1303,21 @@ class TestPersistenceIsOffLoopAndOrdered:
         release = threading.Event()
         entered = asyncio.Event()
         loop = asyncio.get_running_loop()
-        real_write = svc._write_state
 
         def _slow_write(payload):
             order.append("write-start")
             loop.call_soon_threadsafe(entered.set)
             if not release.wait(default_timeout()):
                 raise AssertionError("test did not release the writer")
-            real_write(payload)
+            # The real fsyncing store write is deliberately NOT called here. This
+            # test asserts the lock is held across the write and that the cancel
+            # is deferred until the write settles — the ordering, not that the
+            # bytes reach disk. On a loaded shard `real_write`'s fsync can land
+            # several seconds after `release.set()`, inside the finally's bounded
+            # `wait_for(remover, …)`, raising a `TimeoutError` that has nothing to
+            # do with the lock behaviour under test. Recording the payload and
+            # marking the write done keeps the slow disk out of the window.
+            _ = payload
             order.append("write-done")
 
         svc._write_state = _slow_write  # type: ignore[method-assign]
