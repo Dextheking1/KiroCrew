@@ -305,7 +305,10 @@ def _write_owner_marker(directory: Path, pids: "int | Iterable[int]") -> None:
     _refuse_linked(marker, f"{OWNER_FILENAME} in {directory.name!r}")
     if isinstance(pids, int):
         pids = (pids,)
-    atomic_write(marker, "\n".join(str(pid) for pid in pids))
+    # ``mode=0o600``: same reason as the backend-tmp twin. The marker sits in a
+    # ``0o700`` dir but is a file the owner-only sweep walks, and a umask-based
+    # create leaves it ``0o644`` under a ``022`` umask.
+    atomic_write(marker, "\n".join(str(pid) for pid in pids), mode=0o600)
 
 
 #: Largest owner marker this module will read. Pids are at most 11 bytes each

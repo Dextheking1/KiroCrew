@@ -209,7 +209,7 @@ def record_owner(path: Path, pid: int) -> None:
         )
         return
     try:
-        atomic_write(marker, str(pid))
+        atomic_write(marker, str(pid), mode=0o600)
     except OSError:
         # Fail-open: the sweep never deletes an UNOWNED dir, so a failed write
         # leaves one that is kept, not reclaimed -- but only once the
