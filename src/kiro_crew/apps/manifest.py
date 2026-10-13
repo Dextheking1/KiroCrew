@@ -190,6 +190,32 @@ def _has_dotdot_segment(rel_path: str) -> bool:
     return ".." in PurePosixPath(rel_path).parts or ".." in PureWindowsPath(rel_path).parts
 
 
+def app_root_containment(candidate: Path, app_root: Path) -> bool | None:
+    """Whether ``candidate``'s canonical path stays inside ``app_root``'s.
+
+    Both paths are canonicalised by :func:`kiro_crew.hooks.validate_file_path`, which
+    reads a Windows link's own target and refuses an untrusted UNC share before
+    anything follows the link, so no outbound SMB connection is opened for a path an
+    app manifest controls. Returns ``None`` when the screen refuses either path: the
+    answer is then unknown, which a caller that deletes state must not read as
+    "outside".
+    """
+    from kiro_crew import hooks
+
+    resolved = hooks.validate_file_path(str(candidate))
+    if resolved is None:
+        return None
+    root = hooks.validate_file_path(str(app_root))
+    if root is None:
+        return None
+    return Path(resolved).is_relative_to(root)
+
+
+def path_within_app_root(candidate: Path, app_root: Path) -> bool:
+    """:func:`app_root_containment`, with a refused screen counted as outside the root."""
+    return app_root_containment(candidate, app_root) is True
+
+
 def _path_escapes_app_root(rel_path: str, app_root: Path | None) -> bool:
     """Return True if ``rel_path`` is an unsafe app-resource path.
 
@@ -212,8 +238,7 @@ def _path_escapes_app_root(rel_path: str, app_root: Path | None) -> bool:
         return True
     if app_root is not None:
         try:
-            resolved = (app_root / rel_path).resolve()
-            return not resolved.is_relative_to(app_root.resolve())
+            return not path_within_app_root(app_root / rel_path, app_root)
         except (OSError, ValueError):
             return True
     return False
@@ -2547,7 +2572,7 @@ class AppManifest:
             errors.append("missing required field: description")
 
         # Path containment check on all app-root-relative resource paths.
-        # Canonical (resolve + is_relative_to) when app_root is known; lexical
+        # Canonical (screened canonicalisation + is_relative_to) when app_root is known; lexical
         # (reject absolute + '..' segments) otherwise. Applied uniformly to
         # agents/skills/sops, ui.entry, ui.pages[].entryPoint AND
         # backend.entryPoint. (A module-style dotted backend.entryPoint such as
