@@ -49,8 +49,10 @@ from kiro_crew.apps.manager import (
 )
 from kiro_crew.apps.manifest import (
     AppManifest,
+    app_root_containment,
     has_stdio_mcp_server,
     is_module_style_entry_point,
+    path_within_app_root,
 )
 from kiro_crew.atomic_write import atomic_write
 from kiro_crew.config.loader import (
@@ -994,7 +996,14 @@ def _register_agents(
         for agent_path_str in manifest.agents:
             agent_path = app_root / agent_path_str
             # Path containment check — reject paths that escape the app root
-            if not agent_path.resolve().is_relative_to(app_root.resolve()):
+            contained = app_root_containment(agent_path, app_root)
+            if contained is None:
+                # Unverified is not refused: report it as retryable.
+                logger.warning("App %s: agent path could not be checked: %s", app_name, agent_path)
+                if io_failures is not None:
+                    io_failures.append(str(agent_path))
+                continue
+            if not contained:
                 logger.warning("App %s: agent path escapes app root: %s", app_name, agent_path)
                 continue
             if not agent_path.is_file():
@@ -1224,7 +1233,7 @@ def _register_skills(app_name: str, manifest: AppManifest, app_root: Path) -> li
 
     for skill_path_str in manifest.skills:
         skill_path = app_root / skill_path_str
-        if not skill_path.resolve().is_relative_to(app_root.resolve()):
+        if not path_within_app_root(skill_path, app_root):
             logger.warning("App %s: skill path escapes app root: %s", app_name, skill_path)
             continue
         if not skill_path.is_dir():
@@ -3771,7 +3780,11 @@ def _prune_stale_app_resources(app_name: str, manifest: AppManifest, app_root: P
     for agent_path_str in manifest.agents or []:
         agent_path = app_root / agent_path_str
         try:
-            if not agent_path.resolve().is_relative_to(app_root.resolve()):
+            contained = app_root_containment(agent_path, app_root)
+            if contained is None:
+                # An unverified path is not a removed agent: abort like an unreadable one.
+                raise OSError("containment could not be verified")
+            if not contained:
                 continue
             data = json.loads(agent_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
