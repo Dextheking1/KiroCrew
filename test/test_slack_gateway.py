@@ -596,6 +596,10 @@ class TestInitServices:
         assert orch.conv_log is not None
         assert orch.consolidator is not None
         assert orch.channel_history is not None
+        # The gateway hands background embedding its "no turn running" signal.
+        from kiro_crew import embeddings
+
+        assert embeddings._bulk_idle_signal == orch._no_active_turn
 
     def test_init_services_dashboard_only_mode(self):
         orch = _make_orchestrator(slack_enabled=False)

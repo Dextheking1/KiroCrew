@@ -2481,6 +2481,16 @@ unembedded writes eligible for ordinary backfill. Native batch calls contain
 at most eight texts, and bulk cooldown belongs to the shared worker so parallel
 stores cannot each consume a separate duty budget.
 
+**Idle-gated duty** (`embeddings.set_bulk_idle_signal`). The host may install a
+cheap, non-blocking predicate that says nothing is running; the gateway installs
+"no agent turn in flight" (no `SessionManager.any_active_turn()` and no running
+subagent, `SubagentManager.running_count`) when it builds its session manager and
+removes it at shutdown. `bulk_pace_delay` asks it once per
+bulk row: idle runs the row at duty 1.0 (no pause), busy applies
+`memory.embedding_bulk_duty` from the next row. No signal installed (CLI,
+standalone stores) or a signal that raises reads as busy, so the configured duty
+stays the fallback.
+
 **Sync embedding cache** (`make_sync_embed_fn()`, no args): all store callables
 share one bounded 128-entry cache and coalesce concurrent identical requests.
 Backend instance changes invalidate the cache even when the model id is the

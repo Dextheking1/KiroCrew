@@ -2150,7 +2150,7 @@
       "sensitive": false,
       "tags": [],
       "label": "Embedding Duty Cycle (bulk)",
-      "help": "Fraction of wall time a background embedding sweep targets for computing. At the default 0.2 the shared worker targets an idle interval four times as long as each bulk inference. Parallel stores share this pacing; interactive queries can interrupt the idle interval. The sweep resumes across restarts, so it need not finish in one session. A target rather than a ceiling: one unusually slow row is capped at a 30-second pause and so runs hotter than the configured share. 1.0 runs flat out. Clamped to [0.05, 1.0]; a sweep a user explicitly starts from Settings is never paced.",
+      "help": "Fraction of wall time a background embedding sweep targets for computing. At the default 0.2 the shared worker targets an idle interval four times as long as each bulk inference. Parallel stores share this pacing; interactive queries can interrupt the idle interval. The sweep resumes across restarts, so it need not finish in one session. A target rather than a ceiling: one unusually slow row is capped at a 30-second pause and so runs hotter than the configured share. 1.0 runs flat out. Clamped to [0.05, 1.0]; a sweep a user explicitly starts from Settings is never paced. While the gateway has no agent turn running the sweep runs flat out; this share applies while one is.",
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": 0.2

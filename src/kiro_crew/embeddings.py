@@ -1199,6 +1199,39 @@ def bulk_duty_cycle() -> float:
     return max(_MIN_BULK_DUTY, duty)
 
 
+# The host's "nothing is happening" signal, injected at composition time (the
+# gateway installs "no agent turn in flight"). None means the host has no usable
+# signal, so the configured duty cycle stays the whole mechanism.
+_bulk_idle_signal: "Callable[[], bool] | None" = None
+
+
+def set_bulk_idle_signal(signal: "Callable[[], bool] | None") -> None:
+    """Install (or, with None, remove) the host's idle predicate for bulk pacing.
+
+    The store and the inference worker cannot ask the dashboard whether a turn
+    is running, so the gateway hands this module a callable instead. It is called
+    from worker threads once per bulk row, so it must be cheap and must not block.
+    """
+    global _bulk_idle_signal
+    _bulk_idle_signal = signal
+
+
+def _host_is_idle() -> bool:
+    """True only when an installed idle signal says so. Never raises.
+
+    A missing signal, or one that raises (a dict resized under a cross-thread
+    scan, say), reads as busy: the safe answer keeps the configured duty cycle.
+    """
+    signal = _bulk_idle_signal
+    if signal is None:
+        return False
+    try:
+        return bool(signal())
+    except Exception:
+        logger.debug("bulk idle signal failed; pacing as busy", exc_info=True)
+        return False
+
+
 def bulk_pace_delay(elapsed: float) -> float:
     """Seconds a bulk loop should idle after a unit of work taking *elapsed*.
 
@@ -1207,6 +1240,11 @@ def bulk_pace_delay(elapsed: float) -> float:
     long as it worked. Returns 0.0 when pacing is off, and never returns more
     than :data:`_MAX_BULK_PACE_SLEEP`.
 
+    While the host's idle signal (:func:`set_bulk_idle_signal`) says nothing is
+    running, the loop runs at duty 1.0 so a backlog clears fast; the moment it
+    says busy, the configured duty applies again from the next row. With no
+    signal installed the configured duty always applies.
+
     Corpus callers sleep without a model lock. The shared inference worker also
     applies this delay between bulk jobs, with an interruptible wait so an
     interactive query can wake it immediately. Independent stores therefore
@@ -1214,6 +1252,8 @@ def bulk_pace_delay(elapsed: float) -> float:
     pauses.
     """
     if elapsed <= 0:
+        return 0.0
+    if _host_is_idle():
         return 0.0
     duty = bulk_duty_cycle()
     if duty >= 1.0:

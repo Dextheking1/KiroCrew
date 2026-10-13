@@ -126,6 +126,86 @@ def test_one_pathological_row_cannot_park_the_sweep(_memory_cfg):
 
 
 # ---------------------------------------------------------------------------
+# host idle signal
+# ---------------------------------------------------------------------------
+
+
+def test_an_idle_host_runs_the_sweep_at_full_duty(_memory_cfg, monkeypatch):
+    monkeypatch.setattr(emb, "_bulk_idle_signal", None)
+    emb.set_bulk_idle_signal(lambda: True)
+    assert emb.bulk_pace_delay(1.0) == 0.0
+
+
+def test_a_busy_host_keeps_the_configured_duty(_memory_cfg, monkeypatch):
+    monkeypatch.setattr(emb, "_bulk_idle_signal", None)
+    emb.set_bulk_idle_signal(lambda: False)
+    assert emb.bulk_pace_delay(1.0) == pytest.approx(4.0)
+    _memory_cfg["embedding_bulk_duty"] = 0.5
+    assert emb.bulk_pace_delay(0.3) == pytest.approx(0.3)
+
+
+def test_the_signal_is_asked_on_every_row(_memory_cfg, monkeypatch):
+    """A turn that starts mid-backlog throttles the very next row."""
+    monkeypatch.setattr(emb, "_bulk_idle_signal", None)
+    answers = iter([True, False, True])
+    emb.set_bulk_idle_signal(lambda: next(answers))
+    assert [emb.bulk_pace_delay(1.0) for _ in range(3)] == [0.0, pytest.approx(4.0), 0.0]
+
+
+def test_no_signal_keeps_the_configured_duty(_memory_cfg, monkeypatch):
+    monkeypatch.setattr(emb, "_bulk_idle_signal", None)
+    emb.set_bulk_idle_signal(lambda: True)
+    emb.set_bulk_idle_signal(None)
+    assert emb.bulk_pace_delay(1.0) == pytest.approx(4.0)
+
+
+def test_a_raising_signal_reads_as_busy(_memory_cfg, monkeypatch):
+    monkeypatch.setattr(emb, "_bulk_idle_signal", None)
+
+    def _boom() -> bool:
+        raise RuntimeError("dictionary changed size during iteration")
+
+    emb.set_bulk_idle_signal(_boom)
+    assert emb.bulk_pace_delay(1.0) == pytest.approx(4.0)
+
+
+def test_the_gateway_idle_signal_tracks_active_turns():
+    from kiro_crew.slack.gateway import GatewayOrchestrator
+
+    class _Sessions:
+        active = False
+
+        def any_active_turn(self) -> bool:
+            return self.active
+
+    gw = GatewayOrchestrator.__new__(GatewayOrchestrator)
+    assert gw._no_active_turn() is False  # no session manager yet: not idle
+    gw.sessions = _Sessions()
+    assert gw._no_active_turn() is True
+    gw.sessions.active = True
+    assert gw._no_active_turn() is False
+
+
+def test_the_gateway_idle_signal_counts_running_subagents():
+    """Subagents run on their own runtimes, outside the session table."""
+    from kiro_crew.slack.gateway import GatewayOrchestrator
+
+    class _Sessions:
+        def any_active_turn(self) -> bool:
+            return False
+
+    class _Subagents:
+        running_count = 1
+
+    gw = GatewayOrchestrator.__new__(GatewayOrchestrator)
+    gw.sessions = _Sessions()
+    gw.subagent_mgr = _Subagents()
+    assert gw._no_active_turn() is False
+    gw.subagent_mgr.running_count = 0
+    assert gw._no_active_turn() is True
+
+
+# ---------------------------------------------------------------------------
 # bulk_embed_threads
 # ---------------------------------------------------------------------------
 

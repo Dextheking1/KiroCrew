@@ -633,6 +633,19 @@ def _small_default_host(_floor_monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_bulk_idle_signal(_floor_monkeypatch):
+    """Start every test with no host idle signal for bulk embedding pacing.
+
+    A gateway a test builds installs one process-wide and only removes it at
+    shutdown, so without this a gateway one test never shut down would make a
+    later test's paced sweep run unpaced. A test about the signal installs its own.
+    """
+    from kiro_crew import embeddings
+
+    _floor_monkeypatch.setattr(embeddings, "_bulk_idle_signal", None)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_reexec_environment(_floor_monkeypatch):
     """Start every test with nothing kept for an exec successor.
 

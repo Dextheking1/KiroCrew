@@ -209,6 +209,7 @@ from kiro_crew.embeddings import (  # noqa: F401
     peek_ready_shared_embedder,
     reconcile_store_embedding_space,
     reembed_progress,
+    set_bulk_idle_signal,
     start_background_model_download,
     store_embedding_space_is_stale,
 )
@@ -2568,6 +2569,21 @@ class GatewayOrchestrator:
         except Exception:
             pass  # unparseable version output — stay silent
 
+    def _no_active_turn(self) -> bool:
+        """The gateway's idle signal for background embedding: no agent turn is running.
+
+        A turn is a top-level session turn or a running subagent; subagents run
+        on their own runtimes, which the session table does not list. Called from
+        embedding worker threads. It reads the session table without the loop,
+        so a scan racing a resize raises; the embeddings module reads any raise
+        as busy.
+        """
+        sessions = getattr(self, "sessions", None)
+        if sessions is None or sessions.any_active_turn():
+            return False
+        subagents = getattr(self, "subagent_mgr", None)
+        return subagents is None or subagents.running_count <= 0
+
     async def _init_services(self) -> None:
         """Initialize memory, skills, hooks, context, history, sessions.
 
@@ -2756,6 +2772,9 @@ class GatewayOrchestrator:
         self.sessions = SessionManager(
             self._cfg, provider_factory=factory
         )  # type: ignore[arg-type]
+        # Background re-embedding runs flat out while no agent turn is in flight
+        # and falls back to memory.embedding_bulk_duty while one is.
+        set_bulk_idle_signal(self._no_active_turn)
 
         # History consolidator
         self.consolidator = HistoryConsolidator(
@@ -11804,6 +11823,7 @@ class GatewayOrchestrator:
         if update_task is not None and not update_task.done():
             update_task.cancel()
         self._memory_repair_stop.set()
+        set_bulk_idle_signal(None)
         if self._memory_repair_task is not None:
             self._memory_repair_task.cancel()
             await asyncio.gather(self._memory_repair_task, return_exceptions=True)

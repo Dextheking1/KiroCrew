@@ -84,7 +84,8 @@ class MemoryConfig:
             "A target rather than a ceiling: one unusually slow row is capped at a "
             "30-second pause and so runs hotter than the configured share. 1.0 runs "
             "flat out. Clamped to [0.05, 1.0]; a sweep a user explicitly starts from "
-            "Settings is never paced.",
+            "Settings is never paced. While the gateway has no agent turn running the "
+            "sweep runs flat out; this share applies while one is.",
         ),
     )
     embedding_idle_evict_secs: int = field(
