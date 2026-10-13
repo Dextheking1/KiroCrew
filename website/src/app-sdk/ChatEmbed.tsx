@@ -19,7 +19,6 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { ArrowUp, Loader2 } from 'lucide-react'
 import ChatMessageList, { type VirtualTranscriptHandle } from './ChatMessageList'
 import ErrorNotice from '../components/ErrorNotice'
-import { mergeIntoDraft } from '../utils/chatDrafts'
 import { JumpToBottomButton } from './ChatScrollChrome'
 import FollowUpBar from '../components/FollowUpBar'
 import ChatFooter from '../pages/chat/ChatFooter'
@@ -207,7 +206,7 @@ function ChatEmbed({
   /** The composer's draft behaviour, owned by the chat SDK rather than by this file —
    *  see useComposerDraft's own docs. Picking a follow-up option edits the draft
    *  (matching every other surface) instead of sending immediately. */
-  const { draft, setDraft, textareaRef, picked, toggleOption, composition, submitOnEnter } =
+  const { draft, setDraft, mergeIntoDraft, textareaRef, picked, toggleOption, composition, submitOnEnter } =
     useComposerDraft({ followUpOptions, maxHeight: composerMaxHeight })
 
   // startAtBottom follow is owned by the virtualizer behind ChatMessageList.
@@ -257,12 +256,16 @@ function ChatEmbed({
       // network error, a 5xx), so hand the text back -- merged, not chosen, the
       // same as SideChat: a follow-up chip may have edited the draft meanwhile.
       // The error itself renders above the composer.
-      onError: () => { setDraft(prev => mergeIntoDraft(prev, msg)) },
+      onError: () => { mergeIntoDraft(msg) },
     })
-  }, [draft, setDraft, sendMutation])
-  // The failure's own text (e.g. `API 403: ...`) under a plain lead line; an
-  // error with no text shows the lead line alone rather than it twice.
-  const sendErrorDetail = sendMutation.error?.message || null
+  }, [draft, setDraft, mergeIntoDraft, sendMutation])
+  // The second line says what went wrong. A 403 is the host not granting
+  // /api/chat: a resend cannot succeed, so it names the fix instead of the raw
+  // body. Any other failure shows its own text; an error with no text shows the
+  // lead line alone rather than it twice.
+  const sendErrorDetail = (sendMutation.error as { status?: number } | null)?.status === 403
+    ? i18nT('appSdk.chatEmbed.send_not_permitted')
+    : sendMutation.error?.message || null
 
   // Resolve a pending tool approval from inside the embed.
   //
@@ -410,6 +413,7 @@ function ChatEmbed({
 
       {sendMutation.isError && (
         <div className={`shrink-0 px-3 pt-2 ${frameless ? '' : 'bg-bg-accent'}`}>
+          {/* No hand-off: askAgent navigates to the main chat, which would discard the restored, unsaved embed composer draft. */}
           <ErrorNotice
             testId="chat-embed-send-error"
             title={sendErrorDetail ? i18nT('appSdk.chatEmbed.send_failed') : undefined}

@@ -365,7 +365,8 @@
       "send_message": "Invia il messaggio",
       "session_ready_type_a_message_to_start": "Sessione pronta. Digita un messaggio per iniziare.",
       "streaming": "streaming",
-      "send_failed": "Invio non riuscito. Il messaggio è tornato nella casella."
+      "send_failed": "Invio non riuscito. Il messaggio è tornato nella casella del messaggio.",
+      "send_not_permitted": "Questa app non ha il permesso di inviare messaggi in chat. Chiedi a chi l'ha creata di concedere l'accesso alla chat."
     },
     "chatMessageList": {
       "copied": "Copiato!",

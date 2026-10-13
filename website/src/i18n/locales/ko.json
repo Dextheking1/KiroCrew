@@ -353,7 +353,8 @@
       "send_message": "메시지 보내기",
       "session_ready_type_a_message_to_start": "세션이 준비되었습니다. 메시지를 입력해 시작하세요.",
       "streaming": "스트리밍 중",
-      "send_failed": "보내지 못했습니다. 메시지를 입력란에 되돌려 놓았습니다."
+      "send_failed": "보내지 못했습니다. 메시지를 입력란에 되돌려 놓았습니다.",
+      "send_not_permitted": "이 앱에는 채팅 메시지를 보낼 권한이 없습니다. 앱 작성자에게 채팅 권한을 요청하세요."
     },
     "chatMessageList": {
       "copied": "복사했습니다!",

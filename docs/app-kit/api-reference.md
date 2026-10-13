@@ -119,7 +119,9 @@ keeps its height and scrolls vertically.
 A send that fails is not lost. If `POST /api/chat` is refused (for example the
 host did not grant `/api/chat`), the network drops, or an `onSend` handler
 rejects, the message goes back into the composer and an error notice shows above
-it with the failure's text. Dismissing the notice or sending again clears it.
+it with the failure's text. A 403 names the fix instead (the app's author must
+grant `/api/chat`), since resending cannot succeed. Dismissing the notice or
+sending again clears it.
 
 A host that boxes the embed at a fixed height passes `composerMaxHeight` (in
 pixels) to lower that cap, so a long draft cannot take most of the box from the

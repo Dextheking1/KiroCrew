@@ -353,7 +353,8 @@
       "send_message": "发送消息",
       "session_ready_type_a_message_to_start": "会话已就绪。输入消息即可开始。",
       "streaming": "流式输出中",
-      "send_failed": "发送失败。你的消息已放回输入框。"
+      "send_failed": "发送失败。你的消息已放回输入框。",
+      "send_not_permitted": "这个应用没有发送聊天消息的权限。请让应用作者开通聊天权限。"
     },
     "chatMessageList": {
       "copied": "已复制！",

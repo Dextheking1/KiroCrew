@@ -62,7 +62,8 @@
       "send_message": "Send message",
       "session_ready_type_a_message_to_start": "Session ready. Type a message to start.",
       "streaming": "streaming",
-      "send_failed": "Couldn't send. Your message is back in the box."
+      "send_failed": "Couldn't send. Your message is back in the message box.",
+      "send_not_permitted": "This app isn't allowed to send chat messages. Ask the app's author to grant chat access."
     },
     "chatMessageList": {
       "open_path": "Open {{path}}"

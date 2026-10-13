@@ -359,7 +359,8 @@
       "send_message": "Nachricht senden",
       "session_ready_type_a_message_to_start": "Sitzung bereit. Geben Sie eine Nachricht ein, um zu beginnen.",
       "streaming": "Streaming",
-      "send_failed": "Senden fehlgeschlagen. Ihre Nachricht steht wieder im Eingabefeld."
+      "send_failed": "Senden fehlgeschlagen. Deine Nachricht steht wieder im Eingabefeld.",
+      "send_not_permitted": "Diese App darf keine Chatnachrichten senden. Bitte den Autor der App, den Chatzugriff freizugeben."
     },
     "chatMessageList": {
       "copied": "Kopiert!",

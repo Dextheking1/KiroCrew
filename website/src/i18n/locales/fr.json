@@ -365,7 +365,8 @@
       "send_message": "Envoyer le message",
       "session_ready_type_a_message_to_start": "Session prête. Saisissez un message pour commencer.",
       "streaming": "diffusion en cours",
-      "send_failed": "Échec de l'envoi. Votre message est de retour dans la zone de saisie."
+      "send_failed": "Échec de l'envoi. Ton message est de retour dans la zone de saisie.",
+      "send_not_permitted": "Cette app n'a pas le droit d'envoyer des messages de chat. Demande à son auteur d'autoriser l'accès au chat."
     },
     "chatMessageList": {
       "copied": "Copié !",

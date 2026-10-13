@@ -535,7 +535,7 @@ describe('ChatEmbed', () => {
     // composer and the failure is shown above it. Before the fix the draft was
     // cleared on submit and the error never rendered, so the message vanished.
     it('restores the draft and shows the error when the send is rejected', async () => {
-      mockPost.mockRejectedValue(new Error('API 403: not permitted'))
+      mockPost.mockRejectedValue(Object.assign(new Error('API 403: {"detail":"not granted"}'), { status: 403 }))
 
       await act(async () => {
         renderWithProviders(<ChatEmbed slotKey="slot-1" />)
@@ -554,8 +554,11 @@ describe('ChatEmbed', () => {
       expect(input.value).toBe('please keep me')
       expect(input.disabled).toBe(false)
       const notice = screen.getByTestId('chat-embed-send-error')
-      expect(notice).toHaveTextContent("Couldn't send. Your message is back in the box.")
-      expect(notice).toHaveTextContent('API 403: not permitted')
+      expect(notice).toHaveTextContent("Couldn't send. Your message is back in the message box.")
+      // A 403 is a missing grant, which a resend cannot fix: the notice names the
+      // fix in plain words instead of showing the raw response body.
+      expect(notice).toHaveTextContent("This app isn't allowed to send chat messages.")
+      expect(notice).not.toHaveTextContent('API 403')
     })
 
     it('restores a rejected onSend message and clears the notice on dismiss and on the next send', async () => {
