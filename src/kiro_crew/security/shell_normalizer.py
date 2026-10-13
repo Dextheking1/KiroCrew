@@ -3498,6 +3498,147 @@ def _nested_shell_payloads(
 # ``${a[@]}`` / ``${a[*]}`` / ``$a[@]`` -- the whole array as separate words.
 
 
+def _structural_len(text: str) -> int:
+    """Length of *text* with the home-directory path discounted to one character.
+
+    The walk below descends a nested payload only while it is strictly shorter
+    than its parent, which is what bounds the descent.  A payload's ``$HOME`` is
+    expanded to the real home path before it reaches that comparison, while the
+    parent is measured from its own text, so a long home path can inflate a
+    payload past its parent and the payload goes unread -- the bound depends on a
+    value outside the command.  Discounting the home path on both sides restores a
+    bound that depends only on the command's structure: a payload lives inside one
+    token of its parent, so it stays shorter than the parent whatever the home
+    path's length.  ``os.path.expanduser`` is read at call time, as the per-token
+    expansion reads it, so the two agree.
+    """
+    home = os.path.expanduser("~")
+    if home and home != "~":
+        text = text.replace(home, "~")
+    return len(text)
+
+
+#: Consumers that read a heredoc body as DATA rather than running it.  The shared
+#: data-consumer vocabulary, minus the few whose own grammar can run a line
+#: (``sed`` ``e``, ``awk`` ``system()``, pagers that shell out), plus ``git``/``gh``
+#: whose heredoc is a message or patch to a builtin subcommand.
+_HEREDOC_DATA_PROGRAMS = (_DATA_CONSUMER_PROGRAMS - {"sed", "awk", "less", "more"}) | {"git", "gh"}
+
+#: Programs and verbs that RUN text another command prints: a shell, an evaluator,
+#: or ``xargs`` appending it to a command line.
+_PRINTED_TEXT_RUNNERS = _NESTED_SHELL_PROGRAMS | _NESTED_SHELL_VERBS | {"xargs"}
+
+#: A ``<<`` that opens a heredoc (not a ``<<<`` here-string), anywhere in a word.
+_HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)")
+_HEREDOC_TAG_QUOTES = "'\"\\"
+
+#: A word whose OUTPUT is what it becomes once the quotes and parentheses the shell
+#: strips first are off: a command substitution or a parameter expansion.  Where
+#: such a word sits in a position that runs its output, the output is a command.
+_EXPANSION_LEAD_RE = re.compile(r"\A[\"'(]*[$`]")
+
+
+def _heredoc_tag(tokens: "list[str]", index: int) -> "tuple[str, bool] | None":
+    """``(tag, strips_tabs)`` for a heredoc opened in ``tokens[index]``, else None."""
+    token = tokens[index]
+    found = _HEREDOC_OPEN_RE.search(token)
+    if found is None:
+        return None
+    marker = _heredoc_marker(token[found.start() :])
+    if marker is None:
+        return None
+    strips_tabs = token[found.start() :].startswith("<<-")
+    if marker == "":
+        if index + 1 >= len(tokens):
+            return None
+        marker = tokens[index + 1]
+    tag = re.split(r"[;&|]", marker)[0]
+    tag = "".join(ch for ch in tag if ch not in _HEREDOC_TAG_QUOTES)
+    return (tag, strips_tabs) if tag else None
+
+
+def _without_data_heredoc_body(source: str, tokens: "list[str]") -> "list[str] | None":
+    """*tokens* re-read with a data consumer's heredoc body removed, else None.
+
+    Only the simple shape is handled: exactly one heredoc in the frame, opened on
+    one line of *source*.  The body runs from the line after it to the first line
+    that is exactly the tag (``<<-`` strips leading tabs first), as bash ends it; a
+    missing tag runs the body to the end, as bash does.  Every other shape keeps
+    its body, the fail-closed reading.
+    """
+    openers = [i for i, token in enumerate(tokens) if _HEREDOC_OPEN_RE.search(token)]
+    if len(openers) != 1 or len(_HEREDOC_OPEN_RE.findall(source)) != 1:
+        return None
+    index = openers[0]
+    if _argv_programs(tokens)[index] not in _HEREDOC_DATA_PROGRAMS:
+        return None
+    tag_info = _heredoc_tag(tokens, index)
+    if tag_info is None:
+        return None
+    tag, strips_tabs = tag_info
+    lines = source.split("\n")
+    opener_line = next(i for i, line in enumerate(lines) if _HEREDOC_OPEN_RE.search(line))
+    end = len(lines)
+    for i in range(opener_line + 1, len(lines)):
+        if (lines[i].lstrip("\t") if strips_tabs else lines[i]) == tag:
+            end = i
+            break
+    return _self_tokens("\n".join(lines[: opener_line + 1] + lines[end:]))
+
+
+def _can_run_printed_text(frames: "list[list[str]]") -> bool:
+    """True if any frame could execute text another command PRINTS.
+
+    A word counts when it sits where its text becomes a command: program position
+    (past any leading assignments), or an argument of a program outside the data
+    vocabulary (``sudo``, ``env``, ``find -exec``).  Such a word is a shell, an
+    evaluator or ``xargs`` by name, or an expansion whose output is the command.
+    When no frame has one, nothing in the command runs a data consumer's printed
+    heredoc body, so that body is data and is set aside; when one does, the body
+    is kept, the fail-closed reading.
+    """
+    for tokens in frames:
+        programs = _argv_programs(tokens)
+        expect_program = True
+        for index, token in enumerate(tokens):
+            at_program = expect_program and ENV_ASSIGNMENT_RE.match(token) is None
+            if at_program or programs[index] not in _HEREDOC_DATA_PROGRAMS:
+                if _program_basename(token) in _PRINTED_TEXT_RUNNERS:
+                    return True
+                if _EXPANSION_LEAD_RE.match(token):
+                    return True
+            if _ends_argv(token):
+                expect_program = True
+            elif at_program:
+                expect_program = False
+    return False
+
+
+def _without_inert_heredoc_bodies(
+    out: "list[tuple[str, list[str]]]",
+) -> "list[tuple[str, list[str]]]":
+    """*out* with each frame's data-consumer heredoc body set aside, when inert.
+
+    A heredoc body folds into the frame's token stream as commands, so a body that
+    a data consumer only reads (``cat``/``tee``/``git commit -F -``) is scanned as
+    if it ran -- a message or file that merely NAMES a refused command is refused.
+    The body is a command only when something can run the text that consumer
+    prints: a shell or evaluator consuming it, a pipe into one, or an expansion in
+    a position that runs its output.  When nothing in the whole command can
+    (:func:`_can_run_printed_text` over every frame), each data-consumer body is
+    set aside; otherwise every body is kept, the fail-closed reading.  A
+    substitution inside a body is its own frame of the walk and is judged on its
+    own either way.
+    """
+    if _can_run_printed_text([tokens for _source, tokens in out]):
+        return out
+    rebuilt: list[tuple[str, list[str]]] = []
+    for source, tokens in out:
+        stripped = _without_data_heredoc_body(source, tokens)
+        rebuilt.append((source, tokens if stripped is None else stripped))
+    return rebuilt
+
+
 def _shell_payload_walk(text_lower: str) -> "list[tuple[str, list[str]]]":
     """``(source, argv)`` for *text_lower* and every nested shell payload in it.
 
@@ -3526,7 +3667,12 @@ def _shell_payload_walk(text_lower: str) -> "list[tuple[str, list[str]]]":
     # The third field is whether this frame may perform the ``eval`` argument join.
     # A frame PRODUCED by a join may not, which is what bounds the walk: see
     # ``_nested_shell_payloads``.
-    pending: list[tuple[str, int, bool]] = [(text_lower, len(text_lower) + 1, True)]
+    #
+    # Lengths are measured with the home path discounted (:func:`_structural_len`)
+    # so the descent bound stays structural: a payload's ``$HOME`` is expanded
+    # before it is measured, and comparing an expanded payload to its parent's own
+    # length made the bound depend on how long the home path is.
+    pending: list[tuple[str, int, bool]] = [(text_lower, _structural_len(text_lower) + 1, True)]
     while pending:
         source, parent_len, allow_join = pending.pop()
         tokens = _self_tokens(source)
@@ -3554,13 +3700,18 @@ def _shell_payload_walk(text_lower: str) -> "list[tuple[str, list[str]]]":
         for payload in list(nested) + _substitution_bodies(_fold_line_continuations(source)):
             # Descend through EVERY literal payload, to any depth.  Termination is
             # structural, not a cap: a payload is carried inside one token of its
-            # parent, so it is strictly shorter than the parent's source text.
+            # parent, so it is strictly shorter than the parent's source text,
+            # measured with the home path discounted so the bound is $HOME-length
+            # independent.
             payload = _decode_printf_escapes(payload)
-            if len(payload) >= parent_len or payload in seen:
+            if _structural_len(payload) >= parent_len or payload in seen:
                 continue
             seen.add(payload)
-            pending.append((payload, len(source), payload not in joined_here))
-    return out
+            pending.append((payload, _structural_len(source), payload not in joined_here))
+    # A heredoc body that only a data consumer reads is set aside once the whole
+    # walk is in hand, since whether anything can run the printed text is a
+    # property of the whole command, not of one frame.
+    return _without_inert_heredoc_bodies(out)
 
 
 def _is_mint_verb(token: str) -> bool:

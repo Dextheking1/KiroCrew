@@ -270,7 +270,15 @@ def _url_payload_command(n: int) -> str:
 #: one chained command of that title would otherwise stop firing. No new rule, no new
 #: matching logic and no floor change: the growth is the helper's signature, the flag
 #: and its docstring.
-_PACKAGE_LINE_BUDGET = 28_906
+#:
+#: Raised again, from 28,906, for the shared shell walk in ``shell_normalizer.py``:
+#: it attributes a heredoc body to its consumer, reading the body as commands
+#: only when something in the line can run the text a data consumer prints (a shell,
+#: an evaluator, ``xargs``, or an expansion whose output is a command), and measures
+#: the descent bound with the home path discounted so the bound is independent of
+#: the length of ``$HOME``. The growth is the body-attribution helpers and their
+#: docstrings; the frames the walk returns are otherwise the same.
+_PACKAGE_LINE_BUDGET = 29_057
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
