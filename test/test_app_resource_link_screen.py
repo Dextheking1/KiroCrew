@@ -288,3 +288,34 @@ def test_validate_routes_only_unchecked_paths_to_the_unchecked_list(tmp_path, mo
 
     assert manifest.validate(app_root=src, unchecked=unchecked) == []
     assert len(unchecked) == 1 and PATH_UNVERIFIED_REFUSAL in unchecked[0]
+
+
+def test_register_skills_reports_a_screen_refusal_as_retryable(tmp_path, monkeypatch):
+    app_root = tmp_path / "app"
+    (app_root / "skills" / "my-skill").mkdir(parents=True)
+    (app_root / "skills" / "my-skill" / "SKILL.md").write_text("# s\n", encoding="utf-8")
+    monkeypatch.setattr(bridges_mod, "_skills_dir", lambda: tmp_path / "skills")
+    manifest = SimpleNamespace(skills=["skills/my-skill"])
+    _screen_refusing(monkeypatch, "my-skill")
+    io_failures: list[str] = []
+
+    assert bridges_mod._register_skills("someapp", manifest, app_root, io_failures) == []
+    assert [Path(p).name for p in io_failures] == ["my-skill"]
+
+
+def test_validate_screens_the_app_root_once_per_pass(tmp_path, monkeypatch):
+    src = _make_app_source(tmp_path)
+    raw = json.loads((src / APP_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    raw["agents"] = [f"agents/{_AGENT_FILE}", "agents/second.json", "agents/third.json"]
+    manifest = AppManifest.from_dict(raw)
+    screened: list[str] = []
+
+    def counting_screen(raw_path: str) -> str | None:
+        screened.append(raw_path)
+        return os.path.realpath(raw_path)
+
+    monkeypatch.setattr(hooks, "validate_file_path", counting_screen)
+
+    assert manifest.validate(app_root=src) == []
+    assert screened.count(str(src)) == 1
+    assert len(screened) == 1 + len(raw["agents"])

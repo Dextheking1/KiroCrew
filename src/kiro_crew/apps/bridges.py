@@ -49,10 +49,10 @@ from kiro_crew.apps.manager import (
 )
 from kiro_crew.apps.manifest import (
     AppManifest,
-    app_root_containment,
+    contained_in_screened_root,
     has_stdio_mcp_server,
     is_module_style_entry_point,
-    path_within_app_root,
+    screen_app_root,
 )
 from kiro_crew.atomic_write import atomic_write
 from kiro_crew.config.loader import (
@@ -993,10 +993,11 @@ def _register_agents(
         policy = _agent_mcp_policy(app_name)
         own_servers = _own_mcp_servers(app_name)
 
+        screened_root = screen_app_root(app_root) if manifest.agents else None
         for agent_path_str in manifest.agents:
             agent_path = app_root / agent_path_str
             # Path containment check — reject paths that escape the app root
-            contained = app_root_containment(agent_path, app_root)
+            contained = contained_in_screened_root(agent_path, screened_root)
             if contained is None:
                 # Unverified is not refused: report it as retryable.
                 logger.warning("App %s: agent path could not be checked: %s", app_name, agent_path)
@@ -1206,12 +1207,20 @@ def _deregister_agents(app_name: str) -> int:
 _RESERVED_SKILL_DIRS = {"auto"}
 
 
-def _register_skills(app_name: str, manifest: AppManifest, app_root: Path) -> list[str]:
+def _register_skills(
+    app_name: str,
+    manifest: AppManifest,
+    app_root: Path,
+    io_failures: list[str] | None = None,
+) -> list[str]:
     """Symlink app skill directories into ~/.kiro/crew/skills/.
 
     Creates both a namespaced link (``skills/{app_name}/{skill_name}``) and a
     flat link (``skills/{skill_name}``) so the skill scanner finds the skill
     regardless of whether it walks subdirectories or only checks the top level.
+
+    ``io_failures``, when supplied, collects the skills skipped because the path
+    screen could not check them, which a later registration can still link.
 
     Returns list of registered skill names (namespaced).
     """
@@ -1231,9 +1240,17 @@ def _register_skills(app_name: str, manifest: AppManifest, app_root: Path) -> li
     app_skills_dir = skills_root / app_name
     app_skills_dir.mkdir(parents=True, exist_ok=True)
 
+    screened_root = screen_app_root(app_root)
     for skill_path_str in manifest.skills:
         skill_path = app_root / skill_path_str
-        if not path_within_app_root(skill_path, app_root):
+        contained = contained_in_screened_root(skill_path, screened_root)
+        if contained is None:
+            # Unverified is not refused: report it as retryable.
+            logger.warning("App %s: skill path could not be checked: %s", app_name, skill_path)
+            if io_failures is not None:
+                io_failures.append(str(skill_path))
+            continue
+        if not contained:
             logger.warning("App %s: skill path escapes app root: %s", app_name, skill_path)
             continue
         if not skill_path.is_dir():
@@ -3777,10 +3794,11 @@ def _prune_stale_app_resources(app_name: str, manifest: AppManifest, app_root: P
     # Agents: the current link names the manifest still declares (same derivation
     # as _register_agents: the JSON's `name`, falling back to the file stem).
     current_links: set[str] = set()
+    screened_root = screen_app_root(app_root) if manifest.agents else None
     for agent_path_str in manifest.agents or []:
         agent_path = app_root / agent_path_str
         try:
-            contained = app_root_containment(agent_path, app_root)
+            contained = contained_in_screened_root(agent_path, screened_root)
             if contained is None:
                 # An unverified path is not a removed agent: abort like an unreadable one.
                 raise OSError("containment could not be verified")
@@ -3923,10 +3941,16 @@ def register_app(app_name: str) -> RegistrationResult:
             "-- agent source missing or unreadable"
         )
 
+    unchecked_skills: list[str] = []
     try:
-        result.skills = _register_skills(app_name, manifest, app_root)
+        result.skills = _register_skills(app_name, manifest, app_root, unchecked_skills)
     except Exception as exc:
         result.errors.append(f"skill registration failed: {exc}")
+    if unchecked_skills:
+        result.errors.append(
+            "skill path(s) could not be checked yet, retry registration: "
+            + ", ".join(unchecked_skills)
+        )
 
     try:
         result.crons = _register_crons(app_name, manifest)
