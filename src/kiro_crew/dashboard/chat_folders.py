@@ -20,6 +20,11 @@ from kiro_crew.dashboard.chat_persistence import _coerce_requested_mode, save_sl
 from kiro_crew.dashboard.chat_tags import tags_write_lock, validate_folder_tag_ids
 from kiro_crew.dashboard.chat_utils import effective_session_key, slot_history_key
 from kiro_crew.dashboard.create_rate_limit import FOLDER_CREATE, allow_create
+from kiro_crew.dashboard.folder_ownership import (  # re-exported: callers import them here
+    _folder_owner_app,
+    _is_descendant,
+    _subtree_holds_foreign_folder,
+)
 from kiro_crew.dashboard.handlers._shared import read_bounded_json
 from kiro_crew.dashboard.slot_ownership import (
     audit_app_slot_denial,
@@ -721,7 +726,7 @@ MAX_FOLDER_STEERING_DIR_LEN = 4096
 
 
 def _refuse_principal_steering_dirs(
-    request_app: str, steering_dirs: list, *, operation: str, folder_id: str
+    request_app: str, steering_dirs: list, *, operation: str, folder_id: str, agent: bool = False
 ) -> web.Response | None:
     """Only the PERSON may declare steering directories; refuse everyone else.
 
@@ -738,11 +743,16 @@ def _refuse_principal_steering_dirs(
     calls carry the empty principal and are unaffected; a person can still
     declare steering on a folder an app or member owns, and the delivery gate
     then routes it to that principal's chats as before.
+
+    ``agent`` marks a call on the internal credential every MCP tool call
+    carries. It is refused the same way: an agent proposes a ``folder.steering``
+    change card instead, which the person's own browser applies through this
+    route.
     """
-    if not request_app or not steering_dirs:
+    if not (request_app or agent) or not steering_dirs:
         return None
     sel().log_api_access(
-        caller=request_app,
+        caller=request_app or "internal",
         operation=operation,
         outcome="denied",
         source="app_isolation",
@@ -1072,29 +1082,6 @@ def member_slot_write_refused(
     return web.json_response({"error": "not found", "code": "slot_not_found"}, status=404)
 
 
-def _folder_owner_app(folder: dict[str, Any]) -> str:
-    """The principal that owns *folder*, or ``""`` when the person owns it.
-
-    The single place the storage rule is expressed. A folder created by a
-    non-person principal carries that principal in ``owner_app``:
-
-    * an APP -> its bare app name (unchanged; every folder written before crew
-      members reached this surface keeps its meaning, so this stayed a field
-      addition rather than a migration); and
-    * an admitted crew MEMBER -> ``"member:<store>"`` (see
-      ``token_auth.folder_principal``). App names are validated identifiers that
-      never begin ``member:``, so the two principal spaces cannot collide.
-
-    An absent or empty key reads as the person's, exactly as before.
-
-    Ownership decides only the tree-shaping verbs (create-into, rename,
-    reparent, delete). Reads stay whole for apps (an app sees the person's
-    folders); a member's reads are scoped to its own folders and sessions (see
-    ``api_chat_folders``).
-    """
-    return str(folder.get("owner_app") or "")
-
-
 def caller_home_slot(state: DashboardState, request: web.Request, principal: str) -> Any:
     """The calling session's OWN slot, when a non-person *principal* may nest from it.
 
@@ -1137,57 +1124,6 @@ def _slot_home_folder_id(slot: Any) -> str:
     """The folder *slot* is filed in, or ``""`` for none (or no slot)."""
     folder_id = getattr(slot, "folder_id", "") if slot is not None else ""
     return folder_id if isinstance(folder_id, str) else ""
-
-
-def _subtree_holds_foreign_folder(
-    folders: list[dict[str, Any]], *, root_id: str, request_app: str
-) -> bool:
-    """True if anything under *root_id* belongs to someone other than *request_app*.
-
-    Reparenting a folder relocates everything beneath it -- that is what "the
-    folder moves with everything in it" means -- so the blast radius of a move is
-    the whole SUBTREE, not the row being written. An app moving a folder it owns
-    would otherwise relocate a folder the person nested inside it, which is the
-    same violation as editing that folder directly, reached one level down.
-
-    Used by the reparent path only. Delete asks a stricter question instead --
-    whether the folder is EMPTY -- because a delete has more kinds of content to
-    account for (sessions, and archived sessions a live scan cannot see), and
-    emptiness answers all of them without an ownership test per content type.
-
-    Scoped to the descendants and not the root: the caller's authority over the
-    root itself is a separate question, answered separately.
-
-    Uses the cycle-guarded walk so a pre-existing corrupt parent chain in
-    folders.json cannot hang the request.
-    """
-    for f in folders:
-        fid = str(f.get("id") or "")
-        if fid == root_id:
-            continue
-        if _folder_owner_app(f) == request_app:
-            continue
-        if _is_descendant(folders, ancestor_id=root_id, folder_id=fid):
-            return True
-    return False
-
-
-def _is_descendant(folders: list[dict], *, ancestor_id: str, folder_id: str) -> bool:
-    """True if `folder_id` is `ancestor_id` or lies anywhere under it.
-
-    Walks parent_id links upward from `folder_id` with a visited-set guard
-    so pre-existing corrupt cycles in folders.json can't hang the request.
-    """
-    by_id = {f["id"]: f for f in folders}
-    seen: set[str] = set()
-    cur: str | None = folder_id
-    while cur and cur not in seen:
-        if cur == ancestor_id:
-            return True
-        seen.add(cur)
-        node = by_id.get(cur)
-        cur = str(node.get("parent_id") or "") if node else None
-    return False
 
 
 class FolderCreateError(ValueError):
@@ -1604,7 +1540,11 @@ async def api_chat_folder_create(request: web.Request) -> web.Response:
     # the person" stays the one representation (see _folder_owner_app).
     request_app = folder_principal(state, request)
     refused = _refuse_principal_steering_dirs(
-        request_app, steering_dirs, operation="chat.folder_create", folder_id=""
+        request_app,
+        steering_dirs,
+        operation="chat.folder_create",
+        folder_id="",
+        agent=request.get("internal_auth") is True,
     )
     if refused is not None:
         return refused
@@ -1872,6 +1812,7 @@ async def api_chat_folder_update(request: web.Request) -> web.Response:
             raw_steering if isinstance(raw_steering, list) else [raw_steering],
             operation="chat.folder_steering_dirs",
             folder_id=fid,
+            agent=request.get("internal_auth") is True,
         )
         if refused is not None:
             return refused
@@ -1883,6 +1824,26 @@ async def api_chat_folder_update(request: web.Request) -> web.Response:
                 {"error": steering_err, "code": "steering_dirs_invalid"}, status=400
             )
         changes["steering_dirs"] = resolved_steering
+    from kiro_crew.dashboard.handlers.change_cards import REQ_CARD_FOLDER_STEERING_EXPECT
+
+    # Set only by a folder.steering card's Apply/Undo step: the list it
+    # replaces, compared under the store lock in _apply.
+    expect_steering = request.get(REQ_CARD_FOLDER_STEERING_EXPECT)
+    if (
+        expect_steering is not None
+        and "steering_dirs" in changes
+        and changes["steering_dirs"] != body["steering_dirs"]
+    ):
+        # The card carries each directory already resolved, so a step whose
+        # list now resolves elsewhere (a directory swapped for a link after
+        # the person approved it) would store a tree they never saw.
+        return web.json_response(
+            {
+                "error": "a steering directory now resolves to a different path than the card showed",
+                "code": "steering_dirs_changed",
+            },
+            status=409,
+        )
     if "tags" in body:
         # Vocabulary-constrained tag list. An empty list clears the folder's
         # tags; anything else must be ids that exist in the tag vocabulary.
@@ -1949,6 +1910,11 @@ async def api_chat_folder_update(request: web.Request) -> web.Response:
         # belongs to between validation and the write.
         if request_app and _folder_owner_app(target) != request_app:
             return False, "not_owned"
+        if (
+            expect_steering is not None
+            and list(target.get("steering_dirs") or []) != expect_steering
+        ):
+            return False, "steering_changed"
         if reparenting and new_parent:
             if not any(f["id"] == new_parent for f in folders):
                 return False, "parent_not_found"
@@ -2089,6 +2055,14 @@ async def api_chat_folder_update(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "parent folder not found", "code": "folder_parent_not_found"},
             status=400,
+        )
+    if err == "steering_changed":
+        return web.json_response(
+            {
+                "error": "the folder's steering directories changed since this was checked",
+                "code": "steering_dirs_changed",
+            },
+            status=409,
         )
     if err == "cycle":
         # A concurrent reparent moved the target under this folder while this

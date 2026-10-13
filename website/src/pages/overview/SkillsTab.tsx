@@ -75,6 +75,12 @@ function skillUsage(s: Skill): { id: string; text: string; title: string } | nul
 const canControlInjection = (s: Skill) =>
   s.source === 'kirocrew' && !s.always && s.owned !== false
 
+/** Edit and Delete write into the Kiro Crew skills folder, so only a row
+ *  from that folder gets them. A `kirocrew` row reached through
+ *  `skills.extra_paths` reports `owned: false` and stays read-only, like
+ *  every other source. */
+const canEditSkill = (s: Skill) => s.source === 'kirocrew' && s.owned !== false
+
 /** Short, human label for a skill's provenance — drives the source badge. */
 function sourceLabel(source: Skill['source']): string | null {
   switch (source) {
@@ -545,7 +551,7 @@ export default function SkillsTab() {
               </div>
             ) : (
               <div className="flex flex-col h-full min-h-0">
-                {/* Detail header: name, source badge, Edit/Delete (kirocrew only) */}
+                {/* Detail header: name, source badge, Edit/Delete (Kiro Crew skills folder only) */}
                 {/* Own row, same reason as the edit header: Edit and Delete
                     already fill this row's two-control budget. */}
                 {isMobile && (
@@ -560,7 +566,7 @@ export default function SkillsTab() {
                       <span className={`text-[11px] px-1.5 py-[1px] rounded-full font-bold shrink-0 ${selectedSkill.source === 'package' ? 'bg-aim-subtle text-aim border border-aim/30' : 'bg-bg-elevated text-muted border border-border'}`}>{sourceLabel(selectedSkill.source)}</span>
                     )}
                   </div>
-                  {selectedSkill.source === 'kirocrew' && (
+                  {canEditSkill(selectedSkill) && (
                     <div className="flex gap-2 shrink-0">
                       {/* Entering the editor retires a delete banner the user
                           can SEE right now (Edit is only reachable from the

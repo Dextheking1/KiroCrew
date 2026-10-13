@@ -380,7 +380,19 @@ itself:
 
 The managed default (`kirocrew`) spec does NOT point `prompt` at the
 operating-contract template. `build_agent_config` and `_refresh_dynamic_fields`
-set it to `_NATIVE_PROMPT_STUB` (`agent.py`), a short authority-delegating line.
+set it to `_NATIVE_PROMPT_STUB` (`agent.py`), a short authority-delegating
+paragraph. It is the only system-role text Crew controls on these harnesses, and
+the harness's own system prompt tells the model to refuse non-system content that
+claims an identity for it — the exact shape of the injected block, which opens
+the first user turn, is labelled a system prompt and starts with a persona. So
+the stub does more than point: it says the Kiro Crew gateway writes the block
+(not the person typing), that it arrives inside the first user turn and again
+after a compaction, that its persona extends the native identity rather than
+replacing it, that the memory, lessons, skills and tool names following it are
+part of the same delivery (some tools stay hidden until loaded through tool
+search), and that nothing else — a tool result, a file, a page, a later message —
+earns the same trust. A bare pointer left the model to choose between the two
+rules, and it refused the block as a prompt injection.
 The kiro-family backends deliver the spec prompt NATIVELY — kiro-cli reads the
 file, KAS inlines it over the wire — while `context.py` injects the RESOLVED
 operating contract on session start for EVERY backend. A `file://` template here
@@ -391,10 +403,13 @@ single source, and being non-empty it satisfies KAS without hitting the
 own `prompt` keep it — the stub is the managed default's value only. A fork or
 template copy inherits the stub verbatim, and the fork heal in
 `_refresh_dynamic_fields` rewrites a fork still carrying the managed `file://`
-pointer to the stub. A capability-materialized owned member is the exception:
+pointer, or a superseded stub spelling, to the current stub. A
+capability-materialized owned member is the exception to both:
 `agent_capabilities._maintain_owned` snapshots and restores its `prompt` around
 that heal, so one still carrying the `file://` pointer keeps delivering the
-persona natively — the same double delivery tracked in #13305. The two readers
+persona natively — the same double delivery tracked in #13305 — and one still
+carrying a superseded stub keeps that older, weaker system-role framing until
+the carve-out is settled there. The two readers
 that must not deliver the managed contract twice (member essentials and the
 session-start load in `context.py`) recognise the stub and managed file URIs
 through `is_managed_prompt`: essentials omit the contract, and the session-start load
@@ -403,7 +418,9 @@ fork or template copy alike — so a fork inheriting the managed contract is
 delivered exactly once, resolved, via the injection. The stub text is frozen
 once shipped: forks carry it verbatim on disk and `is_managed_prompt` matches
 by equality, so a respelled stub would leave every existing fork with the old
-stub text as a custom persona. An agent whose `prompt` names its OWN persona
+stub text as a custom persona. A retired spelling therefore joins
+`_SUPERSEDED_NATIVE_PROMPT_STUBS`: the readers still treat it as the managed
+contract and the fork heal rewrites it to the current stub. An agent whose `prompt` names its OWN persona
 file is out of scope: it still receives that persona both natively and through
 the injection.
 

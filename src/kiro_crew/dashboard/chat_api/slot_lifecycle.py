@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         _replacement_shares_transcript,
         _resettle_restricted_key,
         _subagents_attached_response,
+        _switch_target_busy,
         _sync_dashboard_slots,
         _unblock_pending_waits,
         deny_app_slot_access,
@@ -154,7 +155,7 @@ async def _restore_slot_nudge_loop(
     The replacement carries the REMAINING budget, never a fresh one. ``add()``
     mints a new id and a new ``created_ts``, so the spent allowance is subtracted
     here instead: a failed close must not buy unattended cycles the user never
-    granted. A loop whose cycle cap or wall-clock budget is already spent is not
+    granted. A loop whose cycle cap or runtime budget is already spent is not
     restored at all (it was one tick from terminal), and neither is a paused one
     — reviving that would override an explicit stop.
     """
@@ -188,6 +189,7 @@ async def _restore_slot_nudge_loop(
         return
     try:
         from kiro_crew import autonudge  # circular: autonudge -> dashboard.chat -> chat_handlers
+        from kiro_crew.autonudge_service.model import runtime_elapsed
 
         svc = autonudge.get_instance()
         if svc is None:
@@ -203,7 +205,9 @@ async def _restore_slot_nudge_loop(
                 return
             # >=1: a budget of 0 means UNLIMITED, so a spent-to-the-second
             # remainder must not round into "no budget at all".
-            runtime_left = max(1, int(loop.max_runtime_secs - (time.time() - loop.created_ts)))
+            runtime_left = max(
+                1, int(loop.max_runtime_secs - runtime_elapsed(loop, loop.created_ts))
+            )
         await svc.add(
             loop.slot_key,
             loop.message,
@@ -254,11 +258,12 @@ async def api_chat_slot_reset_conversation(request: web.Request) -> web.Response
     the shared sub-agent runtime — so it takes the same guards the sibling
     teardown route does, through the same shared helpers rather than a third
     policy of its own: authorization on the SESSION (not merely the slot),
-    ``provider.has_active_turn()``, ``running``, and the sub-agent gate. Each of
-    the three protects work the caller cannot see from the outside: a turn
-    running on the session with no dashboard task behind it (an inbound channel
-    message), a turn mid-write, and children still running after their parent's
-    turn ended.
+    ``provider.has_active_turn()``, ``running``, a sibling alias's turn on the
+    same session (``_switch_target_busy``), and the sub-agent gate. Each of the
+    four protects work the caller cannot see from the outside: a turn running on
+    the session with no dashboard task behind it (an inbound channel message), a
+    turn mid-write, another alias's turn still cold-starting before any provider
+    is registered, and children still running after their parent's turn ended.
 
     The ``has_active_turn()`` check is a best-effort fast path; the
     authoritative guard is the discard's ``skip_if_busy``, which probes the
@@ -347,6 +352,23 @@ async def api_chat_slot_reset_conversation(request: web.Request) -> web.Response
     attached = await _subagents_attached_response(state, slot, key, "slot_reset_conversation")
     if attached is not None:
         return attached
+
+    # A SIBLING alias cold-starting on this same session, which the two checks
+    # above cannot see: two slots can drive one session (a channel-linked slot
+    # and its dashboard twin), and while the other one's first turn is still in
+    # ``provider.start()`` this slot's ``running`` is False and no provider is
+    # registered yet. Discarding the resume pointer then reports a reset while
+    # the starting turn brings the old conversation back. ``_switch_target_busy``
+    # is the predicate the switch handlers refuse that window with. It runs
+    # here, after the children probe, because that probe is an await a turn can
+    # begin in, and nothing but the discard follows it. The discard's
+    # ``skip_if_busy`` stays the authority for a registered session; it cannot
+    # see an unregistered one, which is why this read must be the last.
+    if _switch_target_busy(state, slot, key, state.sessions.get_provider(key)):
+        return web.json_response(
+            {"error": "a turn is in flight", "code": "turn_in_flight", "slot": name},
+            status=409,
+        )
 
     # ``skip_if_busy``: the fast paths above cannot see a turn that holds the
     # per-session semaphore but has not yet put a prompt in flight (an inbound

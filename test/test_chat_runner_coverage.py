@@ -26,10 +26,11 @@ import asyncio
 import json
 import os
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from chat_test_helpers import _make_ready_kiro_prerequisite
@@ -49,15 +50,36 @@ from kiro_crew.agent_sdk.capabilities import capabilities_for
 from kiro_crew.config import live
 from kiro_crew.config.sections import ResolvedBindings
 from kiro_crew.dashboard import chat_runner
+from kiro_crew.dashboard.chat_utils import chunk_generation
 from kiro_crew.dashboard.state import DashboardState, _ChatSlot
 from kiro_crew.history import ConversationLog
 from kiro_crew.memory_stores import UnknownMemoryStore
 from kiro_crew.metrics import turns as turns_mod
 from kiro_crew.providers.base import LLMEvent
 from kiro_crew.security import oauth_url_contains_credential
-from kiro_crew.trust_patterns import canonical_non_shell_trust_key, exact_trust_pattern
+from kiro_crew.trust_patterns import (
+    GrantDeadline,
+    base_trust_patterns,
+    canonical_non_shell_trust_key,
+    exact_trust_pattern,
+)
 
 # ── Shared helpers ────────────────────────────────────────────────────────
+
+
+def _write_recorder(order: list[str]):
+    """A transport ``_send_response`` that runs the caller's write check first.
+
+    It follows the framing contract: the check runs right before the frame is
+    written, and a raise means nothing was written.
+    """
+
+    def _write(_request_id, _result, *, before_write=None):
+        if before_write is not None:
+            before_write()
+        order.append("sent")
+
+    return _write
 
 
 def _slot(key: str = "chat-cov-1") -> _ChatSlot:
@@ -245,6 +267,13 @@ async def _drive(state, slot, message: str = "hello", *, _turn_actor: str = "") 
     with _quiet_sel():
         await chat_runner._run_chat(state, slot, message, _turn_actor=_turn_actor)
     await _settle(slot)
+
+
+def _answer_card(slot, outcome: str) -> None:
+    """Answer the pending approval card, as a person clicking it would."""
+    future = slot._approval_futures.get("req-cov-1")
+    if future is not None and not future.done():
+        future.set_result(outcome)
 
 
 async def _settle(slot) -> None:
@@ -3518,7 +3547,14 @@ class TestFinishQueueCycle:
         assert slot.task is None
         state.refresh_slot_source_status.assert_called_once_with(slot.key)
         state.broadcast_ws.assert_any_call(
-            "chat_done", {"slot": slot.key, "continuing": False, "needs_input": False}
+            "chat_done",
+            {
+                "slot": slot.key,
+                "turn": slot._turn_generation,
+                "turn_gen": chunk_generation(),
+                "continuing": False,
+                "needs_input": False,
+            },
         )
         assert slot._cycle_reached_provider is False, "the next cycle starts unserved"
 
@@ -5224,11 +5260,11 @@ class TestRunChatAutoApproveRungs:
                 _complete(),
             ],
         )
+        # The notice is posted only beside a card someone can answer, so the
+        # card is answered (rejected) rather than born declined by a zero budget.
+        state.push_slots_update.side_effect = lambda: _answer_card(slot, "rejected")
         slot._empty_response_retries = 2
-        with (
-            patch.object(chat_runner, "sel") as mock_sel,
-            patch.object(chat_runner, "tool_approval_timeout_secs", return_value=0.0),
-        ):
+        with patch.object(chat_runner, "sel") as mock_sel:
             audit = MagicMock()
             mock_sel.return_value = audit
             await chat_runner._run_chat(state, slot, "hello")
@@ -5245,7 +5281,111 @@ class TestRunChatAutoApproveRungs:
             "reason": "redirect_outside_grant",
             "tier": "trusted_pattern",
         }
-        assert any("Trusted pattern not applied" in m.get("content", "") for m in slot.messages)
+        # The redirect check also fires on a quoted ``>`` that writes nothing,
+        # so both texts say the command MAY write, not that it does.
+        assert (
+            declined[0]["error"]
+            == "the command may write through a redirect the grant does not cover"
+        )
+        notices = [
+            m.get("content", "")
+            for m in slot.messages
+            if "Trusted pattern not applied" in m.get("content", "")
+        ]
+        assert notices, slot.messages
+        assert "may write through a redirect, which the grant does not cover" in notices[0]
+        assert "writes to a file" not in notices[0]
+
+    @pytest.mark.asyncio
+    async def test_a_card_born_declined_gets_no_declined_grant_notice(self, tmp_path):
+        """No turn budget left: the card is created rejected, so nobody is asked."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_patterns = {"ls*"}
+        _set_stream(
+            client,
+            [_permission(title="Running: ls -la", tool_input='{"command": "ls -la"}'), _complete()],
+        )
+        refusal = name_grant.Refusal(name_grant.SHADOWED, "ls resolves to /writable/ls")
+        with (
+            patch.object(
+                chat_runner, "_name_grant_refusal_off_loop", new=AsyncMock(return_value=refusal)
+            ) as pattern_check,
+            patch.object(chat_runner, "tool_approval_timeout_secs", return_value=0.0),
+        ):
+            await _drive(state, slot)
+
+        # The pattern rung really declined; otherwise no notice proves nothing.
+        pattern_check.assert_awaited_once()
+        client.approve_tool.assert_not_awaited()
+        (card,) = [m for m in slot.messages if m.get("role") == "permission"]
+        assert json.loads(card["cls"]).get("resolved") == "rejected"
+        assert not any("not applied" in m.get("content", "") for m in slot.messages)
+
+    @pytest.mark.asyncio
+    async def test_one_shadowed_name_refused_by_two_rungs_is_one_notice(self, tmp_path):
+        from kiro_crew.hooks import TOOL_AUTO_APPROVE, ToolHookResult
+
+        context_builder = MagicMock()
+        context_builder.hooks.on_tool_call.return_value = ToolHookResult(action=TOOL_AUTO_APPROVE)
+        context_builder.build_message.return_value = ("hello", None)
+        state, client = _runner_state(tmp_path, context_builder=context_builder)
+        slot = _slot()
+        slot._trusted_patterns = {"python3*"}
+        state.push_slots_update.side_effect = lambda: _answer_card(slot, "rejected")
+        _set_stream(
+            client,
+            [
+                _permission(title="Running: python3 -V", tool_input='{"command": "python3 -V"}'),
+                _complete(),
+            ],
+        )
+        refusal = name_grant.Refusal(name_grant.SHADOWED, "python3 resolves to /shims/python3")
+        with (
+            patch.object(
+                chat_runner, "_name_grant_refusal_for", new=AsyncMock(return_value=refusal)
+            ) as hook_check,
+            patch.object(
+                chat_runner, "_name_grant_refusal_off_loop", new=AsyncMock(return_value=refusal)
+            ) as pattern_check,
+        ):
+            await _drive(state, slot)
+
+        # Both rungs really declined; otherwise one notice proves nothing.
+        hook_check.assert_awaited_once()
+        pattern_check.assert_awaited_once()
+        shown = [
+            m.get("role")
+            for m in slot.messages
+            if m.get("role") == "permission" or "not applied" in m.get("content", "")
+        ]
+        assert shown == ["system", "permission"], slot.messages
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("grant", ["trust", "yolo"])
+    async def test_a_declined_pattern_approved_by_a_later_rung_asks_nothing(self, tmp_path, grant):
+        """No "approve explicitly" notice when session trust or YOLO approves anyway."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_patterns = {"ls*"}
+        if grant == "trust":
+            slot._trust = True
+        else:
+            state.enable_yolo()
+        _set_stream(
+            client,
+            [_permission(title="Running: ls -la", tool_input='{"command": "ls -la"}'), _complete()],
+        )
+        refusal = name_grant.Refusal(name_grant.SHADOWED, "ls resolves to /writable/ls")
+        with patch.object(
+            chat_runner, "_name_grant_refusal_off_loop", new=AsyncMock(return_value=refusal)
+        ) as pattern_check:
+            await _drive(state, slot)
+
+        # The pattern rung really declined; otherwise no notice proves nothing.
+        pattern_check.assert_awaited_once()
+        client.approve_tool.assert_awaited_once_with("req-cov-1")
+        assert not any("not applied" in m.get("content", "") for m in slot.messages)
 
     @pytest.mark.asyncio
     async def test_a_base_grant_still_covers_a_discard_redirect(self, tmp_path):
@@ -5331,6 +5471,258 @@ class TestRunChatAutoApproveRungs:
             await _drive(state, slot)
 
         client.reject_tool.assert_awaited_once_with("req-cov-1")
+
+    @pytest.mark.asyncio
+    async def test_live_timed_pattern_auto_approves_a_matching_command(self, tmp_path):
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        deadline = GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        slot._trusted_pattern_deadlines = {"ls*": deadline}
+        _set_stream(
+            client,
+            [_permission(tool_input=json.dumps({"command": "ls -la"})), _complete()],
+        )
+
+        await _drive(state, slot)
+
+        client.approve_tool.assert_awaited_once_with("req-cov-1", deadline=deadline)
+        assert set(slot._trusted_pattern_deadlines) == {"ls*"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("timed_pattern", ["git*", "ls*"])
+    async def test_chat_long_pattern_approval_carries_no_deadline(self, tmp_path, timed_pattern):
+        """The chat-long grant alone covers the call, so it is approved exactly as before."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_patterns = {"ls*"}
+        slot._trusted_pattern_deadlines = {
+            timed_pattern: GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        }
+        _set_stream(
+            client,
+            [_permission(tool_input=json.dumps({"command": "ls -la"})), _complete()],
+        )
+
+        await _drive(state, slot)
+
+        assert client.approve_tool.await_args_list == [call("req-cov-1")]
+
+    @pytest.mark.asyncio
+    async def test_timed_grant_ending_before_the_send_prompts_and_sends_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """Approved while the grant was live, the answer would land after its deadline: ask."""
+        from kiro_crew import permission_floor, trust_patterns
+        from kiro_crew.acp.client import AcpClient
+
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_pattern_deadlines = {
+            "ls*": GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        }
+        event = _permission(tool_input=json.dumps({"command": "ls -la"}))
+        # The real transport answers the runner, and its floor check lasts an
+        # hour on the clocks the deadline check reads: a host suspended mid-check.
+        order: list[str] = []
+        transport = AcpClient(work_dir=tmp_path)
+        transport._send_response = AsyncMock(side_effect=_write_recorder(order))
+        transport._permission_gate_events[event.request_id] = event
+        client.approve_tool.side_effect = transport.approve_tool
+
+        class _Clock:
+            offset = 0.0
+
+            def time(self):
+                return time.time() + self.offset
+
+            def monotonic(self):
+                return time.monotonic() + self.offset
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+        clock = _Clock()
+
+        def _hour_long_floor(_event):
+            clock.offset += 3600
+            return None
+
+        monkeypatch.setattr(permission_floor, "refusal_for", _hour_long_floor)
+        monkeypatch.setattr(trust_patterns, "time", clock)
+
+        def _allow_once_when_registered():
+            future = slot._approval_futures.get("req-cov-1")
+            if future is not None and not future.done():
+                order.append("prompted")
+                future.set_result("approved")
+
+        state.push_slots_update.side_effect = _allow_once_when_registered
+        _set_stream(client, [event, _complete()])
+
+        await _drive(state, slot)
+
+        assert order == ["prompted", "sent"]
+
+    @pytest.mark.asyncio
+    async def test_expired_timed_pattern_is_dropped_before_matching(self, tmp_path):
+        """Fail closed: a grant past its deadline never reaches the matcher."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_patterns = {"git status"}
+        # Past on the wall clock only, as after a suspended host wakes.
+        slot._trusted_pattern_deadlines = {
+            "ls*": GrantDeadline(wall=time.time() - 1, mono=time.monotonic() + 600)
+        }
+        # Session trust lets the turn finish; the matcher is what is observed.
+        slot._trust = True
+        _set_stream(
+            client,
+            [_permission(tool_input=json.dumps({"command": "ls -la"})), _complete()],
+        )
+
+        with patch.object(
+            chat_runner, "_matches_trusted_pattern", wraps=chat_runner._matches_trusted_pattern
+        ) as matcher:
+            await _drive(state, slot)
+
+        matcher.assert_called_once()
+        assert matcher.call_args.args[1] == {"git status"}
+        assert slot._trusted_patterns == {"git status"}
+        assert slot._trusted_pattern_deadlines == {}
+
+    @pytest.mark.asyncio
+    async def test_only_expired_timed_patterns_skip_matching_entirely(self, tmp_path):
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_pattern_deadlines = {
+            "ls*": GrantDeadline(wall=time.time() + 600, mono=time.monotonic() - 1)
+        }
+        slot._trust = True
+        _set_stream(
+            client,
+            [_permission(tool_input=json.dumps({"command": "ls -la"})), _complete()],
+        )
+
+        with patch.object(chat_runner, "_matches_trusted_pattern") as matcher:
+            await _drive(state, slot)
+
+        matcher.assert_not_called()
+        assert slot._trusted_pattern_deadlines == {}
+
+    @pytest.mark.asyncio
+    async def test_timed_grant_expiring_during_the_program_check_prompts(
+        self, tmp_path, monkeypatch
+    ):
+        """A grant that ends during the awaited check is not answered: the call prompts."""
+        from kiro_crew import permission_floor
+        from kiro_crew.acp.client import AcpClient
+
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_pattern_deadlines = {
+            "ls*": GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        }
+        event = _permission(tool_input=json.dumps({"command": "ls -la"}))
+        order: list[str] = []
+        transport = AcpClient(work_dir=tmp_path)
+        transport._send_response = AsyncMock(side_effect=_write_recorder(order))
+        transport._permission_gate_events[event.request_id] = event
+        client.approve_tool.side_effect = transport.approve_tool
+        monkeypatch.setattr(permission_floor, "refusal_for", lambda _event: None)
+
+        async def _expire_while_checking(_command):
+            # The executor hop lasts past the deadline (a slow pool, a host
+            # suspended mid-call): the grant is live when matched, gone after.
+            slot._trusted_pattern_deadlines["ls*"] = GrantDeadline(wall=0.0, mono=0.0)
+            return None
+
+        def _allow_once_when_registered():
+            future = slot._approval_futures.get("req-cov-1")
+            if future is not None and not future.done():
+                order.append("prompted")
+                future.set_result("approved")
+
+        state.push_slots_update.side_effect = _allow_once_when_registered
+        _set_stream(client, [event, _complete()])
+
+        with patch.object(
+            chat_runner,
+            "_name_grant_refusal_off_loop",
+            new=AsyncMock(side_effect=_expire_while_checking),
+        ):
+            await _drive(state, slot)
+
+        assert order == ["prompted", "sent"]
+        assert client.approve_tool.await_args_list[0] == call(
+            "req-cov-1", deadline=GrantDeadline(wall=0.0, mono=0.0)
+        )
+
+    @staticmethod
+    def _redirect_permissions(command: str) -> list:
+        """The same write-redirect command asked twice, then the turn's end."""
+        return [
+            _permission(
+                title=f"Running: {command}",
+                tool_input=json.dumps({"command": command}),
+                request_id=request_id,
+            )
+            for request_id in ("req-cov-1", "req-cov-2")
+        ] + [_complete()]
+
+    @pytest.mark.asyncio
+    async def test_timed_exact_grant_covers_its_own_write_redirect(self, tmp_path):
+        """A timed exact grant spells the redirect, so every repeat is approved unprompted."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        deadline = GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        slot._trusted_pattern_deadlines = {exact_trust_pattern("echo hi > out.txt"): deadline}
+        _set_stream(client, self._redirect_permissions("echo hi > out.txt"))
+
+        # A prompt would time out at once and reject, so any prompt fails the test.
+        with patch.object(chat_runner, "tool_approval_timeout_secs", return_value=0.0):
+            await _drive(state, slot)
+
+        assert client.approve_tool.await_args_list == [
+            call("req-cov-1", deadline=deadline),
+            call("req-cov-2", deadline=deadline),
+        ]
+        client.reject_tool.assert_not_awaited()
+        assert not any("Trusted pattern not applied" in m.get("content", "") for m in slot.messages)
+
+    @pytest.mark.asyncio
+    async def test_chat_long_exact_grant_covers_its_own_write_redirect(self, tmp_path):
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_patterns = {exact_trust_pattern("echo hi > out.txt")}
+        _set_stream(client, self._redirect_permissions("echo hi > out.txt"))
+
+        with patch.object(chat_runner, "tool_approval_timeout_secs", return_value=0.0):
+            await _drive(state, slot)
+
+        assert client.approve_tool.await_args_list == [call("req-cov-1"), call("req-cov-2")]
+        client.reject_tool.assert_not_awaited()
+        assert not any("Trusted pattern not applied" in m.get("content", "") for m in slot.messages)
+
+    @pytest.mark.asyncio
+    async def test_timed_redirect_grant_under_a_chat_long_base_grant_carries_its_deadline(
+        self, tmp_path
+    ):
+        """The chat-long ``echo *`` matches, but only the timed grant covers the redirect."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._trusted_patterns = base_trust_patterns("echo")
+        deadline = GrantDeadline(wall=time.time() + 600, mono=time.monotonic() + 600)
+        slot._trusted_pattern_deadlines = {exact_trust_pattern("echo hi > out.txt"): deadline}
+        _set_stream(client, self._redirect_permissions("echo hi > out.txt"))
+
+        with patch.object(chat_runner, "tool_approval_timeout_secs", return_value=0.0):
+            await _drive(state, slot)
+
+        assert client.approve_tool.await_args_list == [
+            call("req-cov-1", deadline=deadline),
+            call("req-cov-2", deadline=deadline),
+        ]
+        client.reject_tool.assert_not_awaited()
 
 
 class TestRunChatApprovalWindow:

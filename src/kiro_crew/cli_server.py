@@ -163,6 +163,16 @@ def _probe_dashboard_health(port: int) -> None:
 # still being healthy.
 _TOKEN_REQUEST_TIMEOUT = 20.0
 
+# Second line of the "could not reach" failure: what to run so a gateway listens
+# on this host. Both spellings are given because they are different remedies --
+# `kirocrew gateway` runs one in the foreground for this login, `kirocrew
+# service install` registers one that survives logout and reboot, which is what
+# a host that is only ever reached remotely needs.
+_GATEWAY_NOT_LISTENING_HINT = (
+    "   No gateway is listening on this host. Start one with `kirocrew gateway`, "
+    "or install it as a service that survives logout with `kirocrew service install`."
+)
+
 
 def _token(args: argparse.Namespace) -> None:
     """Print a dashboard URL with a fresh auth token.
@@ -225,7 +235,17 @@ def _token(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
         else:
-            print(f"❌ Could not reach gateway on port {port}: {exc}", file=sys.stderr)
+            # Nothing answered on the port: no gateway is listening. On a
+            # host an installer provisioned without ever starting one, this
+            # is the first thing the operator sees -- through a remote mint --
+            # and the exception text alone names no remedy. The leading
+            # phrase is the documented stable classification (cli.md) and
+            # stays; the remedy is a second line.
+            print(
+                f"❌ Could not reach gateway on port {port}: {exc}\n"
+                f"{_GATEWAY_NOT_LISTENING_HINT}",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     if not token:
@@ -3130,6 +3150,8 @@ async def _run_task(args: argparse.Namespace) -> None:
         global_timeout=timeout,
         workspace_dir=cfg.taskrunner.workspace_dir,
         max_parallel_steps=cfg.taskrunner.max_parallel_steps,
+        test_cmd=cfg.taskrunner.test_command,
+        require_verification=cfg.taskrunner.require_verification,
     )
 
     # Pre-warm session pool (background session for lesson extraction)

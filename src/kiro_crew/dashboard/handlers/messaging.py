@@ -78,6 +78,7 @@ from kiro_crew.dashboard.handlers._shared import (  # noqa: F401
     internal_memory_scope,
     pip_extra_install_command,
     read_bounded_json,
+    spawn_parent_claim,
 )
 from kiro_crew.dashboard.handlers.browser_view_relay import ROUTE_PREFIX
 from kiro_crew.dashboard.handlers.core import _hot_apply_after_write  # noqa: F401
@@ -98,6 +99,7 @@ from kiro_crew.dashboard.messaging_api import wecom_settings as _owner_wecom_set
 from kiro_crew.dashboard.messaging_api.channel_delivery import (  # noqa: F401
     _channel_delivery_key,
     _ChannelSendFailed,
+    _cron_job_for,
     _deliver_channel_dm,
     _deliver_to_channel,
     _owner_dm_target,
@@ -135,9 +137,11 @@ from kiro_crew.dashboard.messaging_api.notifications import (  # noqa: F401
 )
 from kiro_crew.dashboard.messaging_api.proactive_send import (  # noqa: F401
     _SLACK_ERRORS_WITH_UNKNOWN_OUTCOME,
+    _SOURCE_NAME_MAX,
     _audit_send_message,
     _deliver_send_message_fallback,
     _post_send_message_to_slack,
+    _proactive_source_line,
     _read_send_message,
     _redact_all,
     _resolve_session_link_url,
@@ -149,6 +153,7 @@ from kiro_crew.dashboard.messaging_api.proactive_send import (  # noqa: F401
     _session_link_blocks,
     _slack_rate_limited,
     _slack_rejected_outright,
+    _with_source_line,
     api_delete_message,
     api_update_message,
 )
@@ -187,6 +192,7 @@ from kiro_crew.dashboard.messaging_api.slack_settings import (  # noqa: F401
 )
 from kiro_crew.dashboard.messaging_api.spawn import (  # noqa: F401
     _continue_on_loop,
+    _qualified_model_refusal,
     _requested_backend,
     _slot_for_parent,
     _spawn_on_loop,
@@ -759,6 +765,7 @@ async def api_notification_agent_push(request: web.Request) -> web.Response:
         group_key=body.get("group_key"),
         actions=actions,
         member=member,
+        publisher_session=attribution_key or None,
     )
     try:
         note = state.notification_bus.push(payload)
@@ -2709,10 +2716,14 @@ async def api_imessage_config_save(request: web.Request) -> web.Response:
 # Channels whose SDK ships as an optional extra rather than in core. Maps the
 # channel to (import name, extra name) so the panel can report BOTH whether the
 # SDK is importable by this gateway process and the exact command that installs
-# it into this interpreter. Teams (PyJWT) and WhatsApp (neonize) have the same
-# shape and are one entry each when their panels adopt the card.
+# it into this interpreter. Every panel that reports these renders the shared
+# optional-SDK card instead of a bare ``pip install`` line.
 _CHANNEL_SDK_EXTRA: dict[str, tuple[str, str]] = {
     "feishu": ("lark_oapi", "feishu"),
+    # PyJWT installs as the ``jwt`` package (teams/client.py imports ``jwt``).
+    "teams": ("jwt", "teams"),
+    # whatsapp/client.py probes ``find_spec("neonize")``.
+    "whatsapp": ("neonize", "whatsapp"),
 }
 
 

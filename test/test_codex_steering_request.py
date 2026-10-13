@@ -312,10 +312,10 @@ async def test_a_malformed_answer_is_undelivered_and_never_raises(result):
 async def test_retained_steers_are_bounded_in_count_and_size():
     rt = _Runtime()
     handle = _handle(rt)
-    assert await handle.steer("x" * (sh._MAX_STEERING_TEXT_CHARS + 1)) is False
+    assert await handle.steer("x" * (sh.MAX_STEERING_TEXT_CHARS + 1)) is False
     assert rt.requests == []
     fut = asyncio.get_running_loop().create_future()
-    handle._steering_answers = [(fut, handle._prompt_starts, "t")] * sh._MAX_STEERING_ANSWERS
+    handle._steering_answers = [(fut, handle._prompt_starts, "t")] * sh.MAX_STEERING_ANSWERS
     assert await handle.steer("hello") is False
     assert rt.requests == []
 
@@ -325,16 +325,16 @@ async def test_proven_steers_awaiting_the_terminal_count_toward_the_cap():
     """Text held for the clean-terminal report is bounded by the same cap."""
     rt = _Runtime()
     handle = _handle(rt)
-    handle._steers_proven = ["t"] * sh._MAX_STEERING_ANSWERS
+    handle._steers_proven = ["t"] * sh.MAX_STEERING_ANSWERS
     assert await handle.steer("hello") is False
     assert rt.requests == []
 
 
-def test_only_codex_takes_the_steering_request():
+def test_only_codex_and_claude_take_the_steering_request():
     """A mutation pin: a backend added here would inherit this steer transport."""
-    from kiro_crew.agent_sdk.backends import ACP_BACKENDS_STEERING_REQUEST
+    from kiro_crew.agent_sdk.backends import ACP_BACKEND_CLAUDE, ACP_BACKENDS_STEERING_REQUEST
 
-    assert ACP_BACKENDS_STEERING_REQUEST == frozenset({ACP_BACKEND_CODEX})
+    assert ACP_BACKENDS_STEERING_REQUEST == frozenset({ACP_BACKEND_CODEX, ACP_BACKEND_CLAUDE})
 
 
 @pytest.mark.asyncio
@@ -707,7 +707,7 @@ async def test_a_steer_proven_mid_turn_is_not_reported_consumed_if_the_turn_is_c
 @pytest.mark.asyncio
 async def test_an_answer_slower_than_the_send_request_bound_is_queued(monkeypatch):
     """The composer's send request cannot outwait the browser's abort."""
-    monkeypatch.setattr(sh, "_STEERING_ANSWER_WAIT_SECS", 0.05)
+    monkeypatch.setattr(sh, "STEERING_ANSWER_WAIT_SECS", 0.05)
     rt = _Runtime()  # the answer never arrives
     handle = _handle(rt)
     assert await asyncio.wait_for(handle.steer("hello"), 5) is False
@@ -796,7 +796,7 @@ async def test_answers_still_awaited_after_their_turn_share_the_bound():
     assert await _steer_then_end_turn(handle) is False
     assert handle._abandoned_steering == [rt.answer]
     handle._steering_answers = [(rt.answer, handle._prompt_starts, "t")] * (
-        sh._MAX_STEERING_ANSWERS - 1
+        sh.MAX_STEERING_ANSWERS - 1
     )
     handle._turn_done.clear()
     sent = len(rt.requests)

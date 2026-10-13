@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional
@@ -5126,3 +5127,47 @@ def test_extract_tags_ignores_masked_code_in_any_script() -> None:
     assert notes_mod.extract_tags("```\n#논문\n```") == []
     assert notes_mod.extract_tags("`#논문`") == []
     assert notes_mod.extract_tags("real #논문 and `#가짜`") == ["논문"]
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        "\u0939\u093f\u0928\u094d\u0926\u0940",  # Hindi: vowel signs and a virama
+        "\u09b0\u09bf\u09aa\u09cb\u09b0\u09cd\u099f",  # Bengali
+        "\u0ba4\u0bae\u0bbf\u0bb4\u0bcd",  # Tamil
+        "\u0e20\u0e32\u0e29\u0e32\u0e44\u0e17\u0e22\u0e14\u0e35",  # Thai, with a vowel mark
+        "\u05e9\u05c1\u05b8\u05dc\u05d5\u05b9\u05dd",  # pointed Hebrew
+        "\u0645\u064f\u062f\u064e\u0631\u0651\u0650\u0633",  # Arabic with harakat
+    ],
+)
+def test_extract_tags_keeps_a_word_whose_script_uses_combining_marks(word: str) -> None:
+    """Python's ``\\w`` has no combining marks, so a tag scanner built on it alone
+    would register these as their first letter -- ``#हिन्दी`` as ``ह`` -- a
+    different tag from the one typed. The whole word is the tag."""
+    from kiro_crew.apps.builtins.md_notebook import notes as notes_mod
+
+    # NFC can reorder a run of marks (canonical ordering), so the tag is the word's NFC form.
+    tag = unicodedata.normalize("NFC", word)
+    assert notes_mod.extract_tags(f"see #{word} here") == [tag]
+    assert notes_mod.extract_tags(f"#{word}/sub-topic") == [f"{tag}/sub-topic"]
+
+
+def test_extract_tags_is_nfc_so_one_tag_has_one_spelling() -> None:
+    """A decomposed accent (``e`` + U+0301) is the same tag as the composed one,
+    not a visually identical second tag -- and not the truncated ``cafe``."""
+    from kiro_crew.apps.builtins.md_notebook import notes as notes_mod
+
+    assert notes_mod.extract_tags("#cafe\u0301 and #caf\u00e9") == ["caf\u00e9"]
+    meta = notes_mod.parse_note("n.md", "---\ntags: [cafe\u0301]\n---\nbody #caf\u00e9\n")
+    assert meta["tags"] == ["caf\u00e9"]
+
+
+def test_extract_tags_still_ends_at_a_format_character() -> None:
+    """Only combining marks were added: a zero-width space or a bidi override is
+    not part of a word, so it still ends the tag rather than hiding inside it."""
+    from kiro_crew.apps.builtins.md_notebook import notes as notes_mod
+
+    assert notes_mod.extract_tags("#ab\u200bcd") == ["ab"]
+    assert notes_mod.extract_tags("#ab\u202ecd") == ["ab"]
+    assert notes_mod.extract_tags("#todo.") == ["todo"]
+    assert notes_mod.extract_tags("#a,b") == ["a"]

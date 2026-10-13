@@ -1,19 +1,19 @@
 # Session Control — driving another session
 
-One chat session can open, fork, seed, watch, stop, retry, rename, close and revive
+One chat session can open, fork, seed, watch, stop, retry, continue, rename, retitle, close and revive
 another one, change its model, reload its agent process, and take another one under itself in
 the sidebar. The tools come from the
 `kirocrew-dashboard` MCP server, so an agent that does not mount that server
 never has them — exactly like any other MCP server. This page is the reference
-for all 32 of its tools, written for the agent that is about to use them.
+for all 35 of its tools, written for the agent that is about to use them.
 
 The server is defined in `src/kiro_crew/mcp_dashboard.py`. Two halves:
 
 - **Session control** — `session_create`, `session_fork`, `session_send`,
   `session_read_message`, `session_summary`, `session_stop`, `session_end_wait`, `session_retry`,
-  `session_set_model`, `session_reload`, `session_rename`, `session_close`, `session_revive`,
-  `session_broadcast`, `session_status`, `session_adopt`, `session_release`. These reach another
-  session.
+  `session_continue`, `session_set_model`, `session_reload`, `session_rename`, `session_generate_title`, `session_close`, `session_revive`,
+  `session_broadcast`, `session_status`, `session_adopt`, `session_release`,
+  `session_move_to_column`. These reach another session.
 - **Sidebar shape** — `chat_folder_tree`, `chat_folder_create`,
   `chat_folder_move`, `chat_folder_update`, `chat_folder_move_session`, `chat_folder_delete`,
   `chat_folder_file_self`, `chat_tag_list`, `chat_tag_create`, `chat_tag_update`, `chat_tag_assign`,
@@ -549,6 +549,37 @@ remote crew and is read-only now, is refused with `relay_archive_read_only`.
 The session-control audit line records your session key as the caller, and the
 target's own `dashboard_continue` line records `via=session_control`.
 
+### `session_continue`
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `target` | yes | Session key or exact title |
+
+Hands a session's thread back to its agent, the same way the Continue button in
+that tab does. Use it after a gateway restart or a killed process cut a turn
+short. Such a turn runs no cleanup, so it leaves no error row and looks
+finished, and `session_retry` refuses it with `turn_not_failed`.
+
+The target is sent one of two fixed messages, chosen the same way the button
+chooses, and the result's `body` says which:
+
+| `body` | When | What the target is told |
+|---|---|---|
+| `resumed` | its last turn was interrupted | pick that turn up where it stopped |
+| `continued` | its last turn ended cleanly | carry on from there |
+
+There is no prompt argument. To ask for something new, use `session_send`.
+
+The refusals are Continue's own: `slot_running`, `slot_stopping`,
+`slot_queue_pending`, `slot_approval_pending`, `slot_subagents_running` and
+`slot_empty`. After two failed session starts in a row the call is refused too,
+and the refusal says to restart the gateway. An old relay chat is refused with
+`relay_archive_read_only`. Target reach is the same as `session_retry`'s.
+
+The session-control audit line records your session key as the caller and the
+`body` that was sent; the target's own `dashboard_continue` line records
+`via=session_control`.
+
 ### `session_revive`
 
 | Argument | Required | Meaning |
@@ -634,16 +665,49 @@ the session's next save writes it; until then a restart brings back the previous
 one. Renaming again with the same title is safe. A call that returns `ok` has
 been saved.
 
+### `session_generate_title`
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `target` | yes | Session key or exact title of a session you created |
+
+Regenerates the target's sidebar title from its recent transcript. It runs the
+code behind the sidebar's "Regenerate title" action, so it costs one model call
+on the titling model, and the call waits for that model. The reply carries the
+new title, or the current one with a note when the model had nothing better.
+
+The new title replaces the current one, including a title someone set by hand,
+exactly as the sidebar action does. It stays an automatic title, so the
+background refresh may revise it later. A rename that lands while the model
+call runs wins, and the call then reports the title unchanged.
+
+The access check runs again once the model answers, before anything changes. A
+target that was closed or replaced meanwhile answers `target_replaced`; one that
+became channel-linked or mirrored answers that refusal. Either way the session
+keeps its title. The save checks again that the session still holds its key, so
+a session closed and reopened during the save also answers `target_replaced`
+and the new session's title is left alone. If the history write fails, the
+session still shows the new title (its next save writes it) and the call
+answers `title_persist_failed` instead of success.
+
+Only sessions the calling session created are reachable (`not_creator`), for
+every kind of caller, and never the caller itself (`self_target`). The other
+refusals are the ones `session_stop` gets. One call per target every 5 minutes,
+counted from when a call is admitted: a repeat inside that window is refused
+with `title_rate_limited`. If the tool call times out, the title can still land;
+a retry is still refused, because the 5-minute window is longer than the tool's
+120-second wait.
+
 ## Folders
 
 The sidebar tree the person organizes their sessions in.
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `chat_folder_tree` | none | Every folder (id, human path, project dir, default agent) with the live sessions nested under it, plus an `(unfiled)` group. Listed in **sidebar order**, not alphabetically |
+| `chat_folder_tree` | none | Every folder (id, human path, project dir, default agent, declared steering directories) with the live sessions nested under it, plus an `(unfiled)` group. Listed in **sidebar order**, not alphabetically |
 | `chat_folder_create` | `name` (required), `parent` | Create a folder. `parent` is an id or a `/`-separated path; missing segments are created (`mkdir -p`). Omit or pass `root` for top level. Creating never moves anything. An app agent or crew member may nest only under a folder it owns or the folder its own session is filed in. A same-name sibling it owns is reused; any other same-name sibling is refused `409 folder_name_exists` |
 | `chat_folder_move` | `folder` (required), `new_parent`, `before`, `after` | Reparent a folder and/or set its position among siblings. Moves everything inside it; cycle-guarded |
-| `chat_folder_update` | `folder` (required), `name`, `icon`, `color` | Rename a folder, set its emoji icon, or set its palette color. Cannot set `project_dir`, `default_agent` or `steering_dirs` |
+| `chat_folder_update` | `folder` (required), `name`, `icon`, `color` | Rename a folder, set its emoji icon, or set its palette color. Cannot set `project_dir`, `default_agent` or `steering_dirs`; for steering, `propose_change(kind="folder.steering")` asks the person on a change card |
 | `chat_folder_move_session` | `session` (required), `folder` | File another live session into a folder, or omit `folder` to unfile it to the top level |
 | `chat_folder_delete` | `folder` (required) | Delete an **empty** folder **this session created**. Refused for the person's folders, and while it holds a subfolder, a live session or an archived session |
 | `chat_folder_file_self` | `folder` | File **this** session — the caller — into a folder. Writes only its own placement |
@@ -752,11 +816,24 @@ column list is part of the person's own layout, shared by every session.
 | `chat_tag_column_list` | none | Every column in board order: id, name, what it filters on. Read-only |
 | `chat_tag_column_create` | `name` (required), `tag` (required) | Append a column showing sessions that carry `tag`. A column with the same name and tag is returned instead of duplicated |
 | `chat_tag_column_move` | `column` (required), exactly one of `before` / `after` | Move one column next to another. The others keep their order |
+| `session_move_to_column` | `session` (required), `column` (required) | Move a live session's card into a column, the same as dragging it there |
 
 `tag`, `column`, `before` and `after` take an id or an exact name. There is
 no delete or retag verb: removing a column or changing its filter removes a view
 the person built. An app agent and a crew member can list columns but not
 write them; the `/api/chat/tag-columns` write endpoints refuse both.
+
+`session_move_to_column` gives the session the one status tag the column
+filters on and removes its other status tags; plain labels stay. `session` takes
+the same references as `chat_session_pin`. A column that does not filter on
+exactly one status tag, or that follows live state, cannot take a card: the tool
+answers "Not moved" and writes nothing. The rules of `chat_tag` `set_state`
+hold: the column's status must be one an agent may both add and remove, so a
+status the person reserved or made add-only cannot be entered, and one it
+cannot remove cannot be left. If the session's tags change between the tool's
+read and its write, nothing is written and the tool asks you to call it again.
+`column` matches a column name case-insensitively. An app agent moves only
+its own sessions and a crew member only a session it owns or created.
 
 ## Pins
 
@@ -807,7 +884,8 @@ gateway-issued key counts. Refusals you should expect, by code:
 | `model_owner_only` | HTTP 403: `auto` and **Auto (Jev)** can only be picked by the owner from the model picker |
 | `model_rejected` | The model id is missing, malformed, looks like a credential, or is one the target's backend would refuse |
 | `effort_rejected` | session_set_model: `reasoning_effort` is not one of the five standard levels (low, medium, high, xhigh, max). `""` is refused too; set it from the target's effort dropdown |
-| `target_replaced` | HTTP 409: the target was replaced by another session under the same key while the call ran; nothing was changed. Try again |
+| `target_replaced` | HTTP 409: the target was replaced by another session under the same key while the call ran (or, for title generation, closed); nothing was changed. Try again |
+| `title_rate_limited` | HTTP 429, title generation only: that target's title was generated less than 5 minutes ago |
 | `invalid_field_type` | An argument had the wrong type (for example a broadcast target list that is not a list of strings) |
 
 Two argument checks answer from the HTTP layer instead: `message_required` when
@@ -837,8 +915,9 @@ other humans can see, and sending would run channel text as a turn inside it.
 sidebar the same way `session_adopt` and `session_release` do. The tool also
 refuses a `channel:` caller itself, before listing any session, so an
 auto-approved call that never reaches the permission prompt is still refused.
-`chat_tag_column_create` and `chat_tag_column_move` are blocked and refused at
-dispatch in the same way, because they rearrange the person's board.
+`chat_tag_column_create`, `chat_tag_column_move` and `session_move_to_column`
+are blocked and refused at dispatch in the same way, because they rearrange the
+person's board.
 `session_broadcast` is blocked for that reason multiplied by the fleet, and
 `session_status` because its rows carry other sessions' titles — the names of the
 user's private work, in front of whoever is in the thread.

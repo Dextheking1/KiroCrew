@@ -76,6 +76,7 @@
     <span data-dashboard-field="items">-</span> <span data-i18n="on_board">on the board,</span>
     <span data-dashboard-field="omitted">-</span> <span data-i18n="not_shown">not shown (list truncated)</span>
     <span data-dashboard-field="asks" hidden></span>
+    <span data-dashboard-field="forgotten" hidden></span>
   </div>
 
   <script>
@@ -265,13 +266,22 @@
         return Array.isArray(f.items) ? f.items.filter(function (i) { return i && typeof i === 'object'; }) : [];
       }
 
+      // The closed items the fold no longer holds, counted per closing state. The
+      // fold keeps only open items and the newest closed ones, so every whole-board
+      // number adds these to what `items` holds.
+      function forgotten() {
+        var f = ((window.kirocrew || {}).fields || {}).forgotten;
+        var g = f && typeof f === 'object' ? f : {};
+        function n(k) { var v = g[k]; return typeof v === 'number' && isFinite(v) && v > 0 ? Math.floor(v) : 0; }
+        return { items: n('items'), accepted: n('accepted'), rejected: n('rejected'), abandoned: n('abandoned') };
+      }
+
       function drawStates(list) {
         var bar = document.getElementById('states');
         var tally = document.getElementById('tally');
         if (!bar || !tally) return;
         bar.textContent = '';
         bar.className = 'states' + (bar.getAttribute('data-drawn') ? '' : ' grow');
-        if (list.length) bar.setAttribute('data-drawn', '1');
         tally.textContent = '';
         var counts = {};
         var order = [];
@@ -280,6 +290,15 @@
           if (counts[s] === undefined) { counts[s] = 0; order.push(s); }
           counts[s] += 1;
         }
+        var gone = forgotten();
+        var closing = ['accepted', 'rejected', 'abandoned'];
+        for (var c = 0; c < closing.length; c++) {
+          if (!gone[closing[c]]) continue;
+          if (counts[closing[c]] === undefined) { counts[closing[c]] = 0; order.push(closing[c]); }
+          counts[closing[c]] += gone[closing[c]];
+        }
+        var total = list.length + gone.items;
+        if (total) bar.setAttribute('data-drawn', '1');
         // Known states first in their declared order, then anything the ledger used
         // that this page does not know, so a new state shows up rather than hiding.
         var seq = [];
@@ -289,7 +308,7 @@
           var state = seq[j];
           var seg = document.createElement('i');
           seg.style.background = colourFor(state);
-          seg.style.width = (list.length ? (counts[state] / list.length) * 100 : 0) + '%';
+          seg.style.width = (total ? (counts[state] / total) * 100 : 0) + '%';
           bar.appendChild(seg);
           var row = document.createElement('span');
           var sw = document.createElement('b');
@@ -310,9 +329,10 @@
           if (live(list[i])) run += 1;
           if (needsYou(list[i])) ask.push(list[i]);
         }
+        var gone = forgotten();
         done.textContent = '';
         var b = document.createElement('b');
-        b.textContent = i18n('done_of', { d: acc, n: list.length });
+        b.textContent = i18n('done_of', { d: acc + gone.accepted, n: list.length + gone.items });
         done.appendChild(b);
         done.appendChild(document.createTextNode(i18n('running', { n: run }) + ' \u00b7 ' + i18n('waiting', { n: ask.length })));
         you.textContent = '';
@@ -433,7 +453,7 @@
         // The bound element for the array gets a count: the host binds by textContent,
         // so left alone this cell reads as dumped JSON.
         var note = document.querySelector('[data-dashboard-field="items"]');
-        if (note) note.textContent = String(list.length);
+        if (note) note.textContent = String(list.length + forgotten().items);
       }
 
       render();

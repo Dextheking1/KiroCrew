@@ -450,6 +450,33 @@ def save_all_slots_to_history(state: DashboardState) -> None:
         logger.debug("Shutdown: context snapshot flush failed", exc_info=True)
 
 
+async def wait_for_unwinding_turns(state: DashboardState | None) -> None:
+    """Wait for the dashboard turns ``sessions.close_all()`` cut off to finish unwinding.
+
+    The graceful shutdown, the update restart, the dashboard restart and the Slack
+    restart each run :func:`save_all_slots_to_history`, then ``close_all()``, then
+    exit or exec, and each awaits this right after ``close_all()``. A turn that was
+    mid-reply saves the text its user watched stream as it unwinds, after that first
+    save, and the exit or exec would otherwise beat it.
+
+    Bounded by ``DASHBOARD_TURN_UNWIND_SECS``, and never cancelling: a turn still
+    running at the deadline is left to the exit.
+    """
+    slots = getattr(state, "_slots", None)
+    if not isinstance(slots, dict):
+        return
+    unwinding = {
+        task
+        for task in (getattr(slot, "task", None) for slot in list(slots.values()))
+        if isinstance(task, asyncio.Future) and not task.done()
+    }
+    if not unwinding:
+        return
+    from kiro_crew import gateway_shutdown_budget
+
+    await asyncio.wait(unwinding, timeout=gateway_shutdown_budget.DASHBOARD_TURN_UNWIND_SECS)
+
+
 def _prefetch_rehydrate_inputs(
     conv_log: ConversationLog,
     history_key: str,
@@ -1494,7 +1521,9 @@ def _member_private_selection(
     The selection and prewarm-release paths share this classification. An
     optional captured store limits the choice to the caller's admitted routing.
     """
-    selected = agent or config.default_agent
+    # An empty name is the default TEMPLATE, which owns no member memory; it
+    # is never read as the default crewmate alias.
+    selected = agent
     if not selected or selected == "default":
         return "", ""
     store = getattr(config.agents.get(selected), "memory_store", "")
@@ -1626,7 +1655,7 @@ async def pin_private_agent_store(
     callers may already hold a slot lock, while config writers serialize private
     ownership changes through the namespace lock.
     """
-    selected = agent or config.default_agent
+    selected = agent
     _entry_selected, entry_store = _member_private_selection(selected, config)
     native_context = state.sessions.get_provider(session_key) is not None or bool(
         state.sessions.resumable_sid(session_key)

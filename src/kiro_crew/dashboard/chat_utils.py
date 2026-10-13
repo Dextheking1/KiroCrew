@@ -66,6 +66,8 @@ from kiro_crew.history import (
 from kiro_crew.hooks import _HOST_READ_ONLY_BUILTIN_TOOLS, safe_read_file
 from kiro_crew.memory_stores import UnknownMemoryStore
 from kiro_crew.messaging.link import canonical_key, is_channel_session_key
+from kiro_crew.messaging.renderer import split_options_trailer
+from kiro_crew.messaging.split import FENCE_CLOSE, FENCE_OPEN, iter_fence_lines
 from kiro_crew.quick_prompts import QUICK_PROMPTS
 from kiro_crew.security import (
     CREDENTIAL_REDACTION_TAGS,
@@ -97,6 +99,7 @@ from kiro_crew.validation import (
     THEME_CONSENT_SHA_RE,
     sanitize_string,
 )
+from kiro_crew.widget_parse import parse_widgets
 
 logger = logging.getLogger(__name__)
 
@@ -1306,7 +1309,12 @@ def _attached_verdict(running: Any, queued: int, slot: _ChatSlot | None) -> bool
 
 
 async def chat_done_payload(
-    state: DashboardState, slot: _ChatSlot, *, continuing: bool = False, queue_held: bool = False
+    state: DashboardState,
+    slot: _ChatSlot,
+    *,
+    continuing: bool = False,
+    queue_held: bool = False,
+    ends_turn: bool = True,
 ) -> dict[str, Any]:
     """Describe whether a turn boundary actually hands the floor to the user.
 
@@ -1315,6 +1323,11 @@ async def chat_done_payload(
     attached-child guard that protects session teardown, including queued spawns
     and results still being delivered. This is a notification hint only; it never
     changes dispatch, transcript finalization, or the slot's running state.
+
+    ``turn`` / ``turn_gen`` name the turn this frame ENDS, and the dashboard
+    records that turn as ended. A caller whose turn keeps running past the frame
+    (the deferred ``/compact`` acknowledgement) passes ``ends_turn=False`` and
+    the identity is omitted, so the frame cannot fence the live turn.
 
     A coroutine for one reason: that guard's queued half reads the task store,
     and every caller here is a turn-boundary frame on the gateway loop, so the
@@ -1325,6 +1338,12 @@ async def chat_done_payload(
     memory-preparation or setup failure): nothing drains it until the user's
     next send, so its entries are not work that continues.
     """
+    # Capture before the queued-subagent probe yields: a successor can start
+    # while that store read is in flight, but this frame still ends the turn
+    # that called the helper.
+    turn = slot._turn_generation
+    turn_gen = chunk_generation()
+
     # Avoid a circular import: autonudge's slot lookup imports dashboard.state.
     from kiro_crew.autonudge import get_instance
 
@@ -1350,11 +1369,13 @@ async def chat_done_payload(
         # notification failure must never prevent the terminal frame itself.
         logger.warning("Completion activity unavailable for slot %s", slot.key, exc_info=True)
         continuing = True
-    return {
-        "slot": slot.key,
-        "continuing": continuing,
-        "needs_input": bool(slot._question_pending),
-    }
+    payload: dict[str, Any] = {"slot": slot.key}
+    if ends_turn:
+        payload["turn"] = turn
+        payload["turn_gen"] = turn_gen
+    payload["continuing"] = continuing
+    payload["needs_input"] = bool(slot._question_pending)
+    return payload
 
 
 def wire_session_subagent_probe(state: DashboardState) -> None:
@@ -2324,8 +2345,12 @@ def _redact_meta_for_role(role: str, meta: dict) -> dict:
 # ``SLOT_DETAIL_MAX_LIMIT`` in ``website/src/store/chat/paging.ts``.
 SLOT_DETAIL_MAX_LIMIT = 500
 _DISPLAY_REDACTION_STRINGS_PER_ROW = 8
-_DISPLAY_REDACTION_CACHE_MAX_ENTRIES = (
-    SLOT_DETAIL_MAX_LIMIT * _DISPLAY_REDACTION_STRINGS_PER_ROW * 2
+# The entry cap must also hold the strings the battery DOES change across the
+# sessions a reader moves between: 39 real dashboard transcripts held 35.6k of
+# them, so the old 8,000-entry cap evicted them on every render. The 16 MiB byte
+# cap below is unchanged and still bounds the memory.
+_DISPLAY_REDACTION_CACHE_MAX_ENTRIES = max(
+    SLOT_DETAIL_MAX_LIMIT * _DISPLAY_REDACTION_STRINGS_PER_ROW * 2, 40_000
 )
 _DISPLAY_REDACTION_CACHE_MAX_BYTES = 16 * 1024 * 1024
 _DisplayRedactionKey = tuple[bytes, int]
@@ -2360,10 +2385,12 @@ def _display_redaction_cache_key(text: str) -> tuple[_DisplayRedactionKey, int]:
 
 def _clear_display_redaction_cache() -> None:
     """Reset the process-local cache for deterministic tests."""
-    global _display_redaction_cache_bytes
+    global _display_redaction_cache_bytes, _display_clean_young, _display_clean_old
     with _display_redaction_cache_lock:
         _display_redaction_cache.clear()
         _display_redaction_cache_bytes = 0
+        _display_clean_young = set()
+        _display_clean_old = set()
 
 
 def _display_redaction_cache_info() -> tuple[int, int]:
@@ -2372,11 +2399,70 @@ def _display_redaction_cache_info() -> tuple[int, int]:
         return len(_display_redaction_cache), _display_redaction_cache_bytes
 
 
+# Verdicts for strings the battery returned UNCHANGED -- nearly every string a
+# transcript holds (on a real 708k-string corpus, 110 were redacted). The output
+# cache above has to store each output, so its 16 MiB / entry caps hold a few
+# thousand rows, while one slot-detail render of a long session redacts hundreds
+# of thousands: every render evicted the previous one and the cache never hit.
+# For an unchanged string the input IS the output, so the verdict needs only the
+# key -- 128 bits of the same keyed digest (which already covers the exempt-host
+# set) plus the input byte length, as one int of about 86 bytes with its set
+# slot. Strings the battery changes still go
+# through the output cache, so a returned value is always either a cached output
+# for this exact key or the caller's own string the battery left untouched.
+#
+# Bounded as two generations of at most _DISPLAY_CLEAN_GENERATION entries each:
+# a hit in the old generation is copied to the young one, and when the young one
+# fills it becomes the old one and the previous old one is dropped. So at most
+# 2 * _DISPLAY_CLEAN_GENERATION verdicts (~34 MB) are held, and what is dropped
+# first is what no render has touched for a whole generation. 39 real dashboard
+# transcripts needed ~160k verdicts; a generation smaller than the set a reader
+# cycles through evicts it before the next render reaches it (at 150k a repeat
+# pass still redacted 45.6k strings, at 200k none).
+_DISPLAY_CLEAN_GENERATION = 200_000
+_display_clean_young: set[int] = set()
+_display_clean_old: set[int] = set()
+
+
+def _clean_verdict_key(key: _DisplayRedactionKey) -> int:
+    """128 bits of the digest with the input byte length above them.
+
+    The MAC input ``text + NUL + hosts`` alone does not say where the text ends:
+    a text that itself ends in ``NUL + host`` under a smaller host set yields the
+    same bytes. The length in the key is what separates those two, exactly as it
+    does for the output cache, so the verdict must keep it too.
+    """
+    digest, length = key
+    return (length << 128) | int.from_bytes(digest[:16], "big")
+
+
+def _display_clean_seen(ck: int) -> bool:
+    """Whether *ck* is a known-unchanged string. Caller holds the cache lock."""
+    if ck in _display_clean_young:
+        return True
+    if ck in _display_clean_old:
+        _display_clean_add(ck)
+        return True
+    return False
+
+
+def _display_clean_add(ck: int) -> None:
+    """Record a known-unchanged string. Caller holds the cache lock."""
+    global _display_clean_young, _display_clean_old
+    if len(_display_clean_young) >= _DISPLAY_CLEAN_GENERATION:
+        _display_clean_old = _display_clean_young
+        _display_clean_young = set()
+    _display_clean_young.add(ck)
+
+
 def _redact_for_display(text: str) -> str:
     """Apply all display redactors, reusing only an exact content-hash match."""
     global _display_redaction_cache_bytes
     key, input_bytes = _display_redaction_cache_key(text)
+    ck = _clean_verdict_key(key)
     with _display_redaction_cache_lock:
+        if _display_clean_seen(ck):
+            return text
         cached = _display_redaction_cache.get(key)
         if cached is not None:
             _display_redaction_cache.move_to_end(key)
@@ -2384,6 +2470,10 @@ def _redact_for_display(text: str) -> str:
 
     redacted, _ = redact_exfiltration_urls(text)
     redacted, _ = redact_credentials(redacted)
+    if redacted == text:
+        with _display_redaction_cache_lock:
+            _display_clean_add(ck)
+        return text
     entry_bytes = len(key[0]) + input_bytes + len(redacted.encode("utf-8", errors="surrogatepass"))
     if entry_bytes > _DISPLAY_REDACTION_CACHE_MAX_BYTES:
         return redacted
@@ -2927,6 +3017,74 @@ _LEAKED_INVOKE_OPEN_RE = re.compile(
 # so a lone stray open tag in prose (a truncated quote, a typo'd example) does
 # not read as a full leaked invocation.
 _LEAKED_INVOKE_BODY_RE = re.compile(r"<(?:[A-Za-z][\w.-]*:)?(?:parameter\b|/invoke\s*>)")
+
+
+def open_construct_at_end(text: str) -> str:
+    """Name the construct left OPEN at the end of *text*, or ``""`` when
+    finalizing a segment here is safe.
+
+    A segment cut is a PERSISTENCE boundary: the accumulated text becomes its
+    own assistant row and the buffer resets. Cutting inside a construct that
+    renders only when WHOLE therefore destroys it, because the halves persist
+    as two rows and nothing rejoins them.
+
+    A tool call cuts the segment, so while background agents run their tool
+    calls interleave with the parent's token stream and cut it wherever they
+    land. One reply then persists as many assistant rows split mid-word, and an
+    options marker whose closing ``]`` falls in the next row matches no render
+    grammar: the chips are lost and the tail reaches the user as literal prose.
+    The alternation repeats for as long as the wave runs.
+
+    Provenance cannot decide this. A child tool call arrives on this path with
+    no ``sub_session_id`` and no agent marker, indistinguishable from the
+    parent's own call, so the cut is made safe by asking WHERE it lands rather
+    than who owns it.
+
+    Deferral is bounded by construction: the turn-end flush does not consult
+    this predicate, so an unterminated construct still persists when the turn
+    closes. The cost of deferring is transcript ORDERING (the text lands after
+    the tools it preceded) and never text loss.
+
+    The name is returned rather than a bool so a deferred cut can log WHY.
+    """
+    if not text:
+        return ""
+    # An options marker is open when a trailing ``[OPTIONS:`` fragment is still
+    # in flight. split_options_trailer owns that rule: at hide_partial=True it
+    # trims an in-flight partial marker, at hide_partial=False it keeps it, so
+    # the two bodies differ exactly when one is open. Reusing it (rather than a
+    # local ``[OPTIONS:`` + ASCII ``]`` test) keeps the MARKER_CLOSERS set and
+    # the grammar viability check in one place -- an ASCII-only copy misses a
+    # marker whose only closers are lookalikes (e.g. ``】``).
+    held, _choices = split_options_trailer(text, hide_partial=True)
+    kept, _choices2 = split_options_trailer(text, hide_partial=False)
+    if held != kept:
+        return "options-line"
+    # A fence is open at the end exactly when the text ends INSIDE a fenced
+    # block. iter_fence_lines classifies each line as opener/closer/body/
+    # outside; walking those roles leaves `inside` true iff the last opener was
+    # never matched by a closer. Reusing this machine avoids a second spelling
+    # of the fence rule (its docstring forbids one) and inherits the real
+    # CommonMark logic -- line-start openers, matched run lengths -- so an
+    # inline triple-backtick in prose does not read as an open fence, and a
+    # closed fence whose closer line ends exactly at the text end is not
+    # mistaken for an open one.
+    inside_fence = False
+    for _line, role in iter_fence_lines(text):
+        if role == FENCE_OPEN:
+            inside_fence = True
+        elif role == FENCE_CLOSE:
+            inside_fence = False
+    if inside_fence:
+        return "code-fence"
+    # A widget is open when the last widget span parse_widgets finds is
+    # unterminated. Reusing its ``truncated`` flag (rather than counting
+    # ``<mcwidget`` vs ``</mcwidget>``) honours the code-span and fence rules
+    # that module applies, which a naive tag count ignores.
+    widgets = parse_widgets(text)
+    if widgets and widgets[-1].truncated:
+        return "mcwidget"
+    return ""
 
 
 def has_leaked_tool_call(text: str) -> bool:
@@ -3821,6 +3979,18 @@ USAGE_LIMIT_KIND = "usage_limit"
 #: (restart the gateway). Decided from the exception's tag, never from the
 #: prose, which a reword or a translation moves.
 SESSION_START_FAILED_KIND = "session_start_failed"
+
+#: Row-level kind for the terminal `error` row a CONTEXT OVERFLOW produces: the
+#: provider refused the turn because the conversation does not fit in one
+#: request (kiro-cli's "context window overflowed", the claude adapter's "Input
+#: is too long" -- the ``context_overflow`` tag ``_raise_acp_error`` sets). The
+#: native history is what overflowed, so a retry, a Resume or another model
+#: re-sends the same history and fails the same way. The card swaps Resume for
+#: the fix that ends it: a fresh native conversation on the same slot
+#: (``reset-conversation``), which Crew seeds from the transcript's TEXT -- the
+#: replay strips image references, so the pictures that usually fill the
+#: window are not carried over.
+CONTEXT_OVERFLOW_KIND = "context_overflow"
 
 #: Structural queue-entry kinds for system injections.  Classification by kind
 #: tag — set at enqueue time — is unforgeable: a user typing the same prefix

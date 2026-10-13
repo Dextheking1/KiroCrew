@@ -35,7 +35,6 @@ vi.mock('../../api/client', () => ({
     webhooks: vi.fn(() => Promise.resolve({ tokens: [] })),
     defaultAgent: vi.fn(() => Promise.resolve({ default_agent: '' })),
     autonudgeList: vi.fn(() => Promise.resolve({ enabled: true, loops: [] })),
-    memberPanel: vi.fn(() => Promise.resolve({ panel: null, html: null })),
   },
 }))
 
@@ -46,7 +45,7 @@ vi.mock('../../components/ChatPane', () => ({
 import { api } from '../../api/client'
 import MembersPage from './MembersPage'
 
-function row(name: string, lastChat: number) {
+function row(name: string, lastActive: number) {
   return {
     name,
     slug: name,
@@ -58,8 +57,7 @@ function row(name: string, lastChat: number) {
     model: '',
     source: 'kirocrew',
     starred: false,
-    last_chat_ts: lastChat,
-    last_active_ts: lastChat,
+    last_active_ts: lastActive,
   }
 }
 

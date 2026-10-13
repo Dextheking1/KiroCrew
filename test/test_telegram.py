@@ -1393,6 +1393,46 @@ class TestInlineKeyboard:
         assert len(kb["inline_keyboard"][0]) == 2
         assert len(kb["inline_keyboard"][1]) == 1
 
+    def test_long_labels_get_one_button_per_row(self) -> None:
+        # Labels that differ only late in the text would be cut to the same
+        # visible prefix on a half-width phone button.
+        opts = ["Samstag 10:00 Uhr buchen", "Sonntag 10:00 Uhr buchen"]
+        kb = build_inline_keyboard(opts, self._SESSION_KEY)
+        assert kb is not None
+        rows = kb["inline_keyboard"]
+        assert [len(row) for row in rows] == [1, 1]
+        assert [row[0]["text"] for row in rows] == opts
+
+    def test_one_long_label_puts_every_button_on_its_own_row(self) -> None:
+        opts = ["Yes", "No", "Show me the full diff first", "Skip"]
+        kb = build_inline_keyboard(opts, self._SESSION_KEY)
+        assert kb is not None
+        rows = kb["inline_keyboard"]
+        assert [len(row) for row in rows] == [1, 1, 1, 1]
+        tag = session_provenance_tag(self._SESSION_KEY)
+        assert [row[0]["callback_data"] for row in rows] == [
+            f"opt:{i}:{tag}" for i in range(len(opts))
+        ]
+
+    def test_label_at_half_width_limit_keeps_two_per_row(self) -> None:
+        opts = ["x" * 16, "y" * 16]
+        kb = build_inline_keyboard(opts, self._SESSION_KEY)
+        assert kb is not None
+        assert [len(row) for row in kb["inline_keyboard"]] == [2]
+        kb = build_inline_keyboard(["x" * 17, "y"], self._SESSION_KEY)
+        assert kb is not None
+        assert [len(row) for row in kb["inline_keyboard"]] == [1, 1]
+
+    def test_cjk_label_is_measured_by_display_width(self) -> None:
+        # Eight ideographs fill 16 cells; nine overflow a half-width button
+        # even though they are only nine code points.
+        kb = build_inline_keyboard(["显示完整差异然后", "跳过"], self._SESSION_KEY)
+        assert kb is not None
+        assert [len(row) for row in kb["inline_keyboard"]] == [2]
+        kb = build_inline_keyboard(["显示完整差异然后再", "跳过"], self._SESSION_KEY)
+        assert kb is not None
+        assert [len(row) for row in kb["inline_keyboard"]] == [1, 1]
+
 
 class TestExtractOptions:
     def test_trailing_options_extracted(self) -> None:
@@ -2439,6 +2479,147 @@ class TestRenderer:
         seen = self._parts_seen(lambda text, kw: "bravo" in text and kw.get("parse_mode"))
         assert seen == ["1", "2", "3"]
 
+    @staticmethod
+    def _overflowing_table() -> str:
+        # A pipe table that fits one segment while it streams but whose degraded
+        # render is split into several messages when it is sealed.
+        rows = "".join(f"| row {i} | value {i} |\n" for i in range(400))
+        return "| name | value |\n| --- | --- |\n" + rows
+
+    @staticmethod
+    def _sealed_over_dead_edits(
+        table: bool, fails: Any, lost: str | None = None
+    ) -> tuple[FakeClient, list[int], int, list[str]]:
+        # Seals one streamed answer, or a pipe table whose degraded render splits,
+        # while every edit fails although the live frame still exists (the per-chat
+        # edit budget, or two timeouts). ``fails(text, kwargs)`` says which sends
+        # fail once the live frame has landed, and ``lost`` ("first", "second" or
+        # "last") names one part of the table whose every send fails, its notice
+        # still going out. Returns the client, the id of each send that landed (the
+        # live frame first), the number of parts the reply is sealed in, and the
+        # sends and deletes in the order they happened.
+        notice = "Part of this reply may not have been delivered."
+        ids: list[int] = []
+        order: list[str] = []
+        lost_at = 0  # the number of the part whose sends all fail, 0 for none
+
+        class _Client(FakeClient):
+            async def edit_message(self, *a: Any, **kw: Any) -> bool:
+                await super().edit_message(*a, **kw)
+                return False
+
+            async def send_message(self, chat_id: int, text: str, **kw: Any) -> Any:
+                # The live frame plus the parts landed so far: the part now being
+                # sent is number ``len(ids)``.
+                part_lost = len(ids) == lost_at and text != notice
+                if ids and (fails(text, kw) or part_lost):
+                    return None
+                ids.append(await super().send_message(chat_id, text, **kw))
+                order.append(f"send {ids[-1]}")
+                return ids[-1]
+
+            async def delete_message(self, chat_id: int, message_id: int) -> None:
+                order.append(f"delete {message_id}")
+                await super().delete_message(chat_id, message_id)
+
+        cli = _Client()
+        cli.rich_fails = True
+        r = TelegramRenderer(cli, 55, TELEGRAM_CAPABILITIES, session_key="telegram:1:0")  # type: ignore[arg-type]
+        text = TestRenderer._overflowing_table()
+        parts = 1
+        if table:
+            assert len(text) <= r._rich_limit(), "precondition: one segment while streaming"
+            assert (
+                len(_md_to_telegram_html(text)) > r._rendered_limit()
+            ), "precondition: the degraded seal must split, so its first chunk takes the frame"
+            parts = len(r._degraded_table_chunks(text))
+        if lost:
+            assert parts >= 3, "precondition: a first chunk, a middle chunk and a tail"
+            lost_at = {"first": 1, "second": 2, "last": parts}[lost]
+
+        async def _answer() -> None:
+            await r.on_turn_start()
+            await r.dispatch(OutputEvent(kind=TEXT_CHUNK, text="first half"))
+            await r.dispatch(OutputEvent(kind=TEXT_CHUNK, text=", second half"))
+            await r.dispatch(OutputEvent(kind=DONE, stop_reason=""))
+
+        async def _degraded_table() -> None:
+            await r.on_turn_start()
+            await r.on_text_chunk(text)  # the live frame is sent
+            await r._seal_current()
+
+        asyncio.run(_degraded_table() if table else _answer())
+        return cli, ids, parts, order
+
+    @pytest.mark.parametrize("table", [False, True], ids=["answer", "degraded table"])
+    @pytest.mark.parametrize("html_send_fails", [False, True], ids=["html send", "plain send"])
+    def test_a_resent_answer_replaces_the_live_frame_it_could_not_edit(
+        self, table: bool, html_send_fails: bool
+    ) -> None:
+        # The answer is sent as a new message, and the live frame above it, an older
+        # and shorter draft, is deleted, as the rich path deletes the bubble it
+        # supersedes. "degraded table" is the first chunk of an overflowing table,
+        # which re-uses the live frame through its own ladder; either send of a
+        # ladder (the HTML one, then the plain one) can be the one that lands. The
+        # frame goes last: until every part has landed it is the only copy of what
+        # the reader saw.
+        cli, ids, parts, order = self._sealed_over_dead_edits(
+            table, lambda text, kw: html_send_fails and bool(kw.get("parse_mode"))
+        )
+        assert len(ids) == 1 + parts, "the live frame, then each part as a new message"
+        assert cli.deleted == [ids[0]]
+        assert order == [f"send {i}" for i in ids] + [f"delete {ids[0]}"]
+
+    @pytest.mark.parametrize("table", [False, True], ids=["answer", "degraded table"])
+    def test_a_failed_resend_keeps_the_live_frame(self, table: bool) -> None:
+        # When the fallback send fails too, the live frame is the only copy of the
+        # answer the reader has, so it stays, and a notice stands where each part is
+        # missing.
+        notice = "Part of this reply may not have been delivered."
+        cli, _ids, parts, _order = self._sealed_over_dead_edits(
+            table, lambda text, kw: text != notice
+        )
+        assert cli.deleted == []
+        assert [text for text, _kb in cli.sent[1:]] == [notice] * parts
+
+    @pytest.mark.parametrize("lost", ["first", "second", "last"])
+    def test_a_lost_part_keeps_the_live_frame(self, lost: str) -> None:
+        # Each part of an overflowing table is a send of its own, and the pressure
+        # that failed the edits can fail any one of them. The frame holds rows the
+        # reader has already seen, and the parts that landed may not carry them, so
+        # one lost part keeps it, wherever that part falls: the first chunk, a middle
+        # chunk (the first one to go out below the frame) or the tail (sealed by
+        # ``_seal_text``). A notice stands where the part is missing; the rest land.
+        notice = "Part of this reply may not have been delivered."
+        cli, ids, parts, _order = self._sealed_over_dead_edits(True, lambda text, kw: False, lost)
+        at = {"first": 1, "second": 2, "last": parts}[lost]
+        sent = [text for text, _kb in cli.sent[1:]]
+        assert len(sent) == parts, "every part either landed or left a notice"
+        assert [n for n, text in enumerate(sent, 1) if text == notice] == [at]
+        assert len(ids) == 1 + parts
+        assert cli.deleted == []
+
+    def test_a_chunk_edited_into_the_live_frame_leaves_it_alone(self) -> None:
+        # With working edits, the first chunk of an overflowing table lands in the
+        # live frame itself and the rest go out below it. The frame now carries that
+        # chunk, so nothing replaces it, and deleting it would delete the chunk.
+        cli = FakeClient()
+        cli.rich_fails = True
+        r = TelegramRenderer(cli, 55, TELEGRAM_CAPABILITIES, session_key="telegram:1:0")  # type: ignore[arg-type]
+        text = self._overflowing_table()
+        parts = len(r._degraded_table_chunks(text))
+        assert parts >= 3, "precondition: the table splits, so its first chunk takes the frame"
+
+        async def _go() -> None:
+            await r.on_turn_start()
+            await r.on_text_chunk(text)  # the live frame is sent
+            await r._seal_current()
+
+        asyncio.run(_go())
+        assert len(cli.edits) == 1, "the first chunk is edited into the live frame"
+        assert len(cli.sent) == parts, "the live frame, then every other part as a new message"
+        assert cli.deleted == []
+
     def test_error_done_renders_error_when_no_text(self) -> None:
         cli = self._drive([OutputEvent(kind=DONE, stop_reason="error")])
         assert "Error" in cli.sent[-1][0]
@@ -3089,7 +3270,7 @@ class TestDispatcher:
 
         class _FailingProvider(FakeProvider):
             async def stream(self, message: str) -> Any:
-                raise AcpError(msg, transient=False)
+                raise AcpError(msg, transient=False, user_worded=True)
                 yield  # pragma: no cover — makes this an async generator
 
         class _Sessions(FakeSessions):
@@ -3655,6 +3836,143 @@ class TestConfigurableApiBase:
         # The full download URL built in download_file keeps the prefix.
         url = f"{client_mod._file_base()}/file/bot<TOKEN>/photos/f.jpg"
         assert url == "https://proxy.example.com/tg/file/bot<TOKEN>/photos/f.jpg"
+
+
+class TestFileBaseFollowsApiBase:
+    """The download base is derived from the template ``_api_base`` accepted.
+
+    ``_api_base`` validates the parsed URL, which lowercases the scheme, and
+    accepts any template carrying both placeholders. A file route can be
+    derived only from one that ends in ``bot{token}/{method}``; for any other
+    accepted template there is no download base, and no request is made.
+    """
+
+    @pytest.mark.parametrize(
+        ("template", "expected"),
+        [
+            ("HTTPS://proxy.example.com/bot{token}/{method}", "https://proxy.example.com"),
+            ("Https://proxy.example.com/tg/bot{token}/{method}", "https://proxy.example.com/tg"),
+            ("HTTP://127.0.0.1:8080/bot{token}/{method}", "http://127.0.0.1:8080"),
+        ],
+    )
+    def test_the_scheme_is_read_the_way_api_base_accepted_it(
+        self, monkeypatch: Any, template: str, expected: str
+    ) -> None:
+        import kiro_crew.telegram.client as client_mod
+
+        monkeypatch.setenv("TELEGRAM_API_BASE_URL", template)
+        assert client_mod._api_base() == template
+        assert client_mod._file_base() == expected
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "https://proxy.example.com/tg/{token}/{method}",
+            "https://proxy.example.com/bot{token}/{method}/",
+            "https://proxy.example.com/api?token={token}&method={method}",
+        ],
+    )
+    def test_a_template_without_the_method_tail_has_no_download_base(
+        self, monkeypatch: Any, template: str
+    ) -> None:
+        import kiro_crew.telegram.client as client_mod
+
+        monkeypatch.setenv("TELEGRAM_API_BASE_URL", template)
+        # Method calls keep using it exactly as before ...
+        assert client_mod._api_base() == template
+        # ... but no download route can be derived from it.
+        assert client_mod._file_base() is None
+
+    def test_a_query_after_the_method_tail_has_no_download_base(self, monkeypatch: Any) -> None:
+        import kiro_crew.telegram.client as client_mod
+
+        template = "https://proxy.example.com/bot{token}/{method}?key=x"
+        monkeypatch.setenv("TELEGRAM_API_BASE_URL", template)
+        assert client_mod._api_base() == template
+        assert client_mod._file_base() is None
+
+    def _client(self, monkeypatch: Any, template: str | None) -> tuple[Any, dict[str, list[Any]]]:
+        """A real client whose ``getFile`` call and session are fakes.
+
+        Returns the client and a record of what it requested: the ``api``
+        method names and the ``get`` URLs.
+        """
+        import kiro_crew.telegram.client as client_mod
+
+        seen: dict[str, list[Any]] = {"api": [], "get": []}
+        if template is None:
+            monkeypatch.delenv("TELEGRAM_API_BASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("TELEGRAM_API_BASE_URL", template)
+
+        class _Content:
+            async def iter_chunked(self, size: int) -> Any:
+                yield b"file-bytes"
+
+        class _FakeResp:
+            status = 200
+            content = _Content()
+
+            async def __aenter__(self) -> "_FakeResp":
+                return self
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        class _FakeSession:
+            def get(self, url: str, **kwargs: Any) -> _FakeResp:
+                seen["get"].append(url)
+                return _FakeResp()
+
+        cli = client_mod.TelegramClient(token="123:ABC")
+
+        async def _fake_api(method: str, params: dict, *a: Any, **k: Any) -> Any:
+            seen["api"].append(method)
+            return {"file_path": "photos/f.jpg"}
+
+        async def _fake_ensure() -> _FakeSession:
+            return _FakeSession()
+
+        monkeypatch.setattr(cli, "_api", _fake_api)
+        monkeypatch.setattr(cli, "_ensure_session", _fake_ensure)
+        return cli, seen
+
+    def test_download_goes_to_the_proxy_the_api_base_names(
+        self, monkeypatch: Any, tmp_path: Any
+    ) -> None:
+        cli, seen = self._client(monkeypatch, "HTTPS://proxy.example.com/tg/bot{token}/{method}")
+        dest = tmp_path / "out.bin"
+        asyncio.run(cli.download_file("file-id", str(dest)))
+        assert seen["get"] == ["https://proxy.example.com/tg/file/bot123:ABC/photos/f.jpg"]
+        assert dest.read_bytes() == b"file-bytes"
+
+    def test_download_without_the_override_requests_the_public_host(
+        self, monkeypatch: Any, tmp_path: Any
+    ) -> None:
+        # Control: the unset default is unchanged.
+        cli, seen = self._client(monkeypatch, None)
+        asyncio.run(cli.download_file("file-id", str(tmp_path / "out.bin")))
+        assert seen["get"] == ["https://api.telegram.org/file/bot123:ABC/photos/f.jpg"]
+
+    def test_download_refuses_a_template_it_cannot_derive_a_route_from(
+        self, monkeypatch: Any, tmp_path: Any
+    ) -> None:
+        cli, _ = self._client(monkeypatch, "https://proxy.example.com/tg/{token}/{method}")
+        dest = tmp_path / "out.bin"
+        with pytest.raises(ValueError) as excinfo:
+            asyncio.run(cli.download_file("file-id", str(dest)))
+        # The reason names the variable and never the token or the template.
+        assert "TELEGRAM_API_BASE_URL" in str(excinfo.value)
+        assert "123:ABC" not in str(excinfo.value)
+        assert "proxy.example.com" not in str(excinfo.value)
+        assert not dest.exists()
+
+    def test_a_refused_download_makes_no_request(self, monkeypatch: Any, tmp_path: Any) -> None:
+        # Refused before getFile: nothing is spent on a download that cannot happen.
+        cli, seen = self._client(monkeypatch, "https://proxy.example.com/tg/{token}/{method}")
+        with pytest.raises(ValueError):
+            asyncio.run(cli.download_file("file-id", str(tmp_path / "out.bin")))
+        assert seen == {"api": [], "get": []}
 
 
 class TestLoopbackProxyBypass:
@@ -6432,25 +6750,34 @@ class TestTelegramSessionPidPublish:
 
 
 class TestUserSafeFailureReason:
-    def test_permanent_acp_error_yields_bounded_single_line(self) -> None:
-        exc = AcpError("line one\nline two\ttail", transient=False)
+    def test_user_worded_acp_error_yields_bounded_single_line(self) -> None:
+        exc = AcpError("line one\nline two\ttail", transient=False, user_worded=True)
         assert _user_safe_failure_reason(exc) == "⚠️ line one line two tail"
 
     def test_local_paths_are_redacted(self) -> None:
-        exc = AcpError("failed reading /home/alice/.kiro/crew/creds", transient=False)
+        exc = AcpError(
+            "failed reading /home/alice/.kiro/crew/creds", transient=False, user_worded=True
+        )
         out = _user_safe_failure_reason(exc)
         assert out is not None
         assert "/home/alice" not in out
 
     def test_length_hard_cap(self) -> None:
-        out = _user_safe_failure_reason(AcpError("x" * 5000, transient=False))
+        out = _user_safe_failure_reason(AcpError("x" * 5000, transient=False, user_worded=True))
         assert out is not None
         # "⚠️ " prefix + capped body (ellipsis included in the cap).
         assert len(out) <= 500 + len("⚠️ ")
         assert out.endswith("…")
 
+    def test_non_retryable_provider_fallback_returns_none(self) -> None:
+        # The formatter's fallback passes the provider's own text through and
+        # still marks it non-retryable; only Kiro Crew's own wording may reach chat.
+        exc = AcpError("provider said: {'data': 'opaque'}", transient=False)
+        assert _user_safe_failure_reason(exc) is None
+
     def test_transient_returns_none(self) -> None:
-        assert _user_safe_failure_reason(AcpError("5xx", transient=True)) is None
+        exc = AcpError("5xx", transient=True, user_worded=True)
+        assert _user_safe_failure_reason(exc) is None
 
     def test_unclassified_returns_none(self) -> None:
         assert _user_safe_failure_reason(AcpError("unknown", transient=None)) is None
@@ -6459,7 +6786,8 @@ class TestUserSafeFailureReason:
         assert _user_safe_failure_reason(ValueError("boom")) is None
 
     def test_empty_message_returns_none(self) -> None:
-        assert _user_safe_failure_reason(AcpError("   \n ", transient=False)) is None
+        exc = AcpError("   \n ", transient=False, user_worded=True)
+        assert _user_safe_failure_reason(exc) is None
 
 
 # ── /yolo (dispatch/commands.py) + /model (dispatch/pickers.py) ────────────
@@ -8808,20 +9136,23 @@ class TestTurnLifecycleCharacterization:
     def test_a_failure_reason_is_bounded_and_scrubbed(self) -> None:
         from kiro_crew.memory_stores import UnknownMemoryStore
 
-        assert _user_safe_failure_reason(AcpError("x" * 500, transient=False)) == "⚠️ " + "x" * 500
-        assert _user_safe_failure_reason(AcpError("x" * 501, transient=False)) == (
-            "⚠️ " + "x" * 499 + "…"
+        assert (
+            _user_safe_failure_reason(AcpError("x" * 500, transient=False, user_worded=True))
+            == "⚠️ " + "x" * 500
         )
-        assert _user_safe_failure_reason(AcpError("a" * 498 + " " + "b" * 10, transient=False)) == (
-            "⚠️ " + "a" * 498 + "…"
-        )
+        assert _user_safe_failure_reason(
+            AcpError("x" * 501, transient=False, user_worded=True)
+        ) == ("⚠️ " + "x" * 499 + "…")
+        assert _user_safe_failure_reason(
+            AcpError("a" * 498 + " " + "b" * 10, transient=False, user_worded=True)
+        ) == ("⚠️ " + "a" * 498 + "…")
         scrubbed = _user_safe_failure_reason(
-            AcpError("failed reading /srv/op/.kiro/crew/creds", transient=False)
+            AcpError("failed reading /srv/op/.kiro/crew/creds", transient=False, user_worded=True)
         )
         assert scrubbed is not None and "/srv/op" not in scrubbed
         assert scrubbed.startswith("⚠️ failed reading ")
         secret = _user_safe_failure_reason(
-            AcpError("token AKIAIOSFODNN7EXAMPLE rejected", transient=False)
+            AcpError("token AKIAIOSFODNN7EXAMPLE rejected", transient=False, user_worded=True)
         )
         assert secret is not None and "AKIAIOSFODNN7EXAMPLE" not in secret
         assert _user_safe_failure_reason(
@@ -8832,7 +9163,9 @@ class TestTurnLifecycleCharacterization:
             def __str__(self) -> str:
                 raise RuntimeError("boom")
 
-        assert _user_safe_failure_reason(_Unprintable("x", transient=False)) is None
+        assert (
+            _user_safe_failure_reason(_Unprintable("x", transient=False, user_worded=True)) is None
+        )
 
     def _instrument(self, monkeypatch: Any, d: Any, sess: Any, stream: Any = None) -> list:
         from kiro_crew.messaging import auto_title
@@ -8997,7 +9330,12 @@ class TestTurnLifecycleCharacterization:
         from kiro_crew.memory_stores import UnknownMemoryStore
 
         cases = [
-            (AcpError("model not in your plan", transient=False), "⚠️ model not in your plan"),
+            (
+                AcpError("model not in your plan", transient=False, user_worded=True),
+                "⚠️ model not in your plan",
+            ),
+            # Non-retryable, but the provider's own fallback text: generic reply.
+            (AcpError("provider said: {'data': 'opaque'}", transient=False), None),
             (AcpError("5xx", transient=True), None),
             (RuntimeError("boom"), None),
             (

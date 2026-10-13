@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, AbstractSet, Any, Literal, overload
+from typing import IO, TYPE_CHECKING, AbstractSet, Any, Literal, overload
 
 from kiro_crew import platform_compat
 from kiro_crew.atomic_write import atomic_write, replace_with_retry
@@ -37,6 +37,7 @@ from kiro_crew.jsonl_util import (
     strict_raw_records_with_offsets,
 )
 from kiro_crew.preview_text import speech_preview
+from kiro_crew.transcript_count import count_messages, message_row
 
 if TYPE_CHECKING:
     from kiro_crew.history import ConversationLog
@@ -97,6 +98,41 @@ _TRANSCRIPT_PAGE_INDEX_STRIDE = 128
 #: where the stride is the smallest power-of-two multiple of the base that fits.
 _TRANSCRIPT_PAGE_INDEX_MAX_CHECKPOINTS = 1024
 _TRANSCRIPT_PAGE_READ_ATTEMPTS = 2
+
+#: Characters per text read in ``_read_messages_locked``. One whole-file
+#: ``read()`` or ``splitlines()`` is a single C call that holds the GIL for the
+#: whole file (0.45 s and 0.67 s on a 400 MB transcript), so even a reader in a
+#: worker thread froze the event loop that long. A megabyte per call keeps each
+#: hold to about a millisecond.
+_TRANSCRIPT_READ_CHUNK = 1 << 20
+
+
+def _iter_splitlines(handle: IO[str]) -> Iterator[str]:
+    """Yield ``handle.read().splitlines(keepends=True)``, one bounded read at a time.
+
+    Exactly the same pieces: a piece is cut only at a boundary character, so the
+    last piece of a read is carried into the next one unless it ends on a
+    boundary. The text read has already turned ``\\r\\n`` into one ``\\n`` and
+    holds back a trailing ``\\r`` until it sees the next character, so no
+    two-character boundary can straddle two reads.
+    """
+    carry: list[str] = []
+    while chunk := handle.read(_TRANSCRIPT_READ_CHUNK):
+        pieces = chunk.splitlines(keepends=True)
+        last = pieces.pop()
+        for piece in pieces:
+            if carry:
+                carry.append(piece)
+                piece = "".join(carry)
+                carry.clear()
+            yield piece
+        carry.append(last)
+        if last.splitlines()[0] != last:  # it ends on a boundary, so it is whole
+            yield "".join(carry)
+            carry.clear()
+    if carry:
+        yield "".join(carry)
+
 
 #: ``(key, file stamp or None when the file does not exist, generation)`` per chain member.
 ChainRevision = tuple[tuple[str, FileStamp | None, int], ...]
@@ -1075,6 +1111,56 @@ class TranscriptReadProjection:
                 self._log._msg_cache.pop(key, None)
             return messages
 
+    def _count_messages(self, key: str, *, hold_writer_lock: bool = True) -> int:
+        """``len(self._read_messages(key))`` without parsing into or filling the cache.
+
+        A warm cache entry answers for free. Otherwise the file is streamed
+        one line at a time (:func:`kiro_crew.transcript_count.count_messages`),
+        under the same best-effort writer lock and transient-retry contract as
+        the full read, and nothing is published: a caller that only counts
+        (the startup idle-seed scan over every recent transcript) must not
+        leave each parsed transcript resident in the message cache.
+
+        ``hold_writer_lock=False`` never takes the per-file writer lock. The
+        consolidator counts in a worker thread, and holding the lock for the
+        whole stream there would make an event-loop writer, which acquires it
+        blocking, wait out the count anyway. The count is the same: nothing is
+        published, so no memo depends on the lock.
+        """
+        path = self._log._path(key)
+        try:
+            identity = self._log._cache_identity(path.stat())
+        except OSError:
+            identity = None
+        if identity is not None:
+            cached = self._log._msg_cache.get(key)
+            if cached and cached[0] == identity and cached[1] == self._log._cache_gen(key):
+                return len(cached[2])
+        fill_lock = (
+            self._log._cache_fill_lock(key) if hold_writer_lock else contextlib.nullcontext(False)
+        )
+        with fill_lock:
+            if not path.exists():
+                return 0
+            attempts = _history_facade()._METADATA_READ_ATTEMPTS
+            for attempt in range(attempts):
+                try:
+                    return count_messages(path)
+                except FileNotFoundError:
+                    return 0
+                except OSError:
+                    if attempt + 1 < attempts:
+                        self._log._pause_for_transient_retry()
+                        continue
+                    _HISTORY_LOGGER.warning(
+                        "history: could not count messages for %s after %d attempts",
+                        key,
+                        attempts,
+                        exc_info=True,
+                    )
+                    raise
+        return 0
+
     @contextlib.contextmanager
     def _cache_fill_lock(self, key: str) -> Iterator[bool]:
         """Best-effort bounded hold of the owner's per-file writer lock."""
@@ -1120,8 +1206,12 @@ class TranscriptReadProjection:
                 cached = self._log._msg_cache.get(key)
                 if cached and cached[0] == identity and cached[1] == self._log._cache_gen(key):
                     return cached[2]
+                messages: list[dict] = []
                 with open(path, encoding="utf-8") as handle:
-                    raw = handle.read()
+                    for line in _iter_splitlines(handle):
+                        data = message_row(line)
+                        if data is not None:
+                            messages.append(data)
             except FileNotFoundError:
                 # A delete racing the read is a definitive empty answer, not a
                 # transient sharing failure worth retrying.
@@ -1139,20 +1229,6 @@ class TranscriptReadProjection:
                     exc_info=True,
                 )
                 raise
-
-            messages: list[dict] = []
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(data, dict):
-                    continue
-                if data.get("_type") != "metadata":
-                    messages.append(data)
 
             entry_generation = self._log._cache_gen(key) if gen is None else gen
             if gen is None or (

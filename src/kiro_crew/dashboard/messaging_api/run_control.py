@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         logger,
         read_state,
         record_panel_dismissal_outcome,
+        spawn_parent_claim,
         subagent_event_slot,
         warm_project_agents_for_spawn,
     )
@@ -382,7 +383,9 @@ async def api_spawn_lost(request: web.Request) -> web.Response:
         batch_total = 0
     reason = str(body.get("reason", "") or "spawn submission failed")[:300]
     parent_session = str(body.get("parent_session", "") or "")
-    _, refusal = await internal_memory_scope(request, "spawn.batch", claimed_session=parent_session)
+    _, refusal = await internal_memory_scope(
+        request, "spawn.batch", claimed_session=spawn_parent_claim(request, parent_session)
+    )
     if refusal is not None:
         return refusal
     state.subagents.record_lost_submission(
@@ -412,7 +415,9 @@ async def api_spawn_mark_collected(request: web.Request) -> web.Response:
             {"error": "'ids' array required", "code": "ids_required"}, status=400
         )
     parent_session = str(body.get("parent_session", "") or "")
-    _, refusal = await internal_memory_scope(request, "spawn.batch", claimed_session=parent_session)
+    _, refusal = await internal_memory_scope(
+        request, "spawn.batch", claimed_session=spawn_parent_claim(request, parent_session)
+    )
     if refusal is not None:
         return refusal
     slot_name = dashboard_slot_key(parent_session)

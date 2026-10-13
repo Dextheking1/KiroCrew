@@ -637,7 +637,8 @@ reports `retentionKeep` as the EFFECTIVE count the sweep would use, or `null` wh
 retention is off, `retentionUnclaimed` as the last sweep's per-kind count and bytes
 of archives no sweep can ever retire, and `retentionUnrecorded` as its per-kind count and
 bytes of objects under this install's folder that it holds no record of -- a number that
-claims neither ownership nor reclaimability. No console control ships for any of them: the
+claims neither ownership nor reclaimability -- and `retentionLastSweep` as how each kind's
+last sweep ended. No console control ships for any of them: the
 count is set and read over HTTP
 only, and the status field exists so an operator who wrote one can confirm what was
 stored instead of trusting the write. A renderer is a separate surface and is not part
@@ -789,7 +790,9 @@ large to hold rather than returning the part that fits, the unclaimed-archive co
 and bytes reaching the audit event AND the status read, the unrecorded-object count
 beside it, the refusal to persist either pair -- or to prune a version record -- from a
 listing the sweep would not act on, the survival of a version record past its key
-leaving the panel history, the audit events including the
+leaving the panel history, every terminal sweep state reaching `retentionLastSweep`
+with the refusals included and a later refusal replacing an earlier success, the audit
+events including the
 partial-purge count, and the best-effort contract.
 
 What the sweep measures is the keys this install still REMEMBERS whose recorded version
@@ -891,6 +894,25 @@ live: refreshing it would need the bucket listing this payload keeps opt-in, and
 without the stamp a reader cannot tell a measurement taken before a manual delete from
 one taken after. A measured zero is stored like any other count, so an absent kind
 means only that no sweep has measured it.
+
+`retentionLastSweep` (`{kind: {result, skipped, retired, versions, at}}`) is how each
+kind's last sweep ENDED, and it is written on every terminal path, the refusing ones
+included -- the one place it differs from the pair above. Without it every ending
+reaches only the audit event and a log line, so a status read shows a configured
+count and nothing about whether any sweep has acted on it, and a sweep refused every
+night looks identical to a working one. `result` is `successful` when the sweep did
+what its configuration asked (retired what `keep` allowed, found nothing to retire,
+had retention off, or saw the owner change the count mid-sweep), `refused` when an
+authorization gate decided against it before anything was deleted, and `failed`
+otherwise -- an unusable setting, a credential or cloud error at a gate, the gate's
+teardown refusal during a shutdown, a listing it would not act on, a declined sessions
+sweep, or a later cloud error, after which
+`versions` says what was already erased. The refused/failed split is the audit event's
+own, so the two never disagree about one ending. `skipped` is the
+sweep's own fixed reason text and never an exception message: the error text stays
+in the audit event. A later sweep replaces the kind's record, so a success never
+outlives the refusals after it, and the record is stamped with when the sweep ended
+for the same reason the pair above is stamped.
 
 `run_sessions_backup` always archives the crew half (the display transcript under
 the data home). It archives the kiro-cli half -- Layer B, the byte-exact

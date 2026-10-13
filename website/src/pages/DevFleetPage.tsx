@@ -763,7 +763,7 @@ interface Worktree {
   pod_resources?: PodResources | null
 }
 interface UndoTarget { name: string; path: string }
-interface FleetData { worktrees: Worktree[]; error?: string; needs_setup?: boolean; main_repo?: string; main_repo_inferred?: boolean; base_branch?: string; sync_run_id?: string; build_pending?: boolean; gateway_service_active?: boolean; gateway_service_reason?: string | null; pods_available?: boolean; pods_unavailable_reason?: string | null; serving_install_reason?: string | null; staged_target?: string | null; staged_cancel_available?: boolean; undo_target?: UndoTarget | null; live_state_known?: boolean; manual_restart?: string; fleet_totals?: FleetTotals }
+interface FleetData { worktrees: Worktree[]; error?: string; needs_setup?: boolean; main_repo?: string; main_repo_inferred?: boolean; base_branch?: string; sync_run_id?: string; build_pending?: boolean; gateway_service_active?: boolean; gateway_service_reason?: string | null; pods_available?: boolean; pods_unavailable_reason?: string | null; serving_install_reason?: string | null; staged_target?: string | null; staged_cancel_available?: boolean; undo_target?: UndoTarget | null; live_state_known?: boolean; live_verified?: boolean; manual_restart?: string; fleet_totals?: FleetTotals }
 // `lastIsCause` distinguishes the two things `last` can hold. A gateway-composed
 // diagnosis is decision-critical prose ending in the action to take, so it must
 // not render in the muted 11.5px monospace the raw log tail uses.
@@ -2167,7 +2167,17 @@ export default function DevFleetPage() {
             {w.is_main ? (fleet?.base_branch && w.branch && w.branch !== fleet.base_branch
               ? <Badge variant="warn" className="text-[10px] px-1.5 py-0" title={i18nT('pages.devFleetPage.the_primary_checkout_is_on_branch_not_base', { branch: w.branch, base: fleet.base_branch })}>{i18nT('pages.devFleetPage.parked_on_branch', { branch: w.branch })}</Badge>
               : <span style={mut}>{i18nT('pages.devFleetPage.main')}</span>) : null}
-            {w.is_live ? <Badge variant="aim" className="text-[10px] px-1.5 py-0" title={i18nT('pages.devFleetPage.the_live_gateway_on_this_port_runs_from_this_che')}>{i18nT('pages.devFleetPage.live')}</Badge> : null}
+            {/* live_verified false: the pointer names this row but a packaged gateway
+                cannot confirm it runs this checkout, so the badge asks, not asserts,
+                and the reason is visible text rather than a hover-only tooltip. */}
+            {w.is_live ? (fleet?.live_verified === false
+              ? <>
+                  <Badge variant="warn" className="text-[10px] px-1.5 py-0" title={i18nT('pages.devFleetPage.marked_live_but_this_install_cant_confirm_it')}>{i18nT('pages.devFleetPage.live_unverified')}</Badge>
+                  {/* Takes only the space left after the name (basis 0), so it
+                      ellipsizes instead of squeezing the worktree name. */}
+                  <span className="text-[10px] text-muted" data-testid="fleet-live-unverified-reason" title={i18nT('pages.devFleetPage.marked_live_but_this_install_cant_confirm_it')} style={{ overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: '1 1 0%', whiteSpace: 'nowrap' } as CSSProperties}>{i18nT('pages.devFleetPage.marked_live_but_this_install_cant_confirm_it')}</span>
+                </>
+              : <Badge variant="aim" className="text-[10px] px-1.5 py-0" title={i18nT('pages.devFleetPage.the_live_gateway_on_this_port_runs_from_this_che')}>{i18nT('pages.devFleetPage.live')}</Badge>) : null}
             {/* A staged cutover outlives the toast that announced it: without a
                 persistent marker an operator who dismissed or missed the toast
                 reads the old running image as the new one. */}

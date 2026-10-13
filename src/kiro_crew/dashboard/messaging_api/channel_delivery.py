@@ -225,13 +225,22 @@ def _channel_delivery_key(state: DashboardState, caller_session: str, declared_s
     Returns ``""`` when neither source answers, which fails the send closed.
     """
     if caller_session.startswith("cron:"):
-        cron_id = caller_session.removeprefix("cron:").split(":")[0]
-        jobs = state.crons.list_jobs(include_disabled=True)
-        job = next((j for j in jobs if j.id == cron_id), None)
+        job = _cron_job_for(state, caller_session)
         if job is None:
             return ""
         return job.session_key or ""
     return declared_session
+
+
+def _cron_job_for(state: DashboardState, caller_session: str) -> Any | None:
+    """The cron job a ``cron:<job_id>[:<run>]`` caller names, or ``None``.
+
+    The one place the job id is read off the key: per-run keys carry extra
+    segments (``cron:<job_id>:<run_id>``), and only the first names the job.
+    """
+    cron_id = caller_session.removeprefix("cron:").split(":")[0]
+    jobs = state.crons.list_jobs(include_disabled=True)
+    return next((j for j in jobs if j.id == cron_id), None)
 
 
 async def _deliver_to_channel(

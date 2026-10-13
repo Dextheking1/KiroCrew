@@ -28,10 +28,8 @@ deliberate exception to the rule the rest of the file keeps, taken for the one f
 the rule cannot reach: "nobody has driven this yet" is a statement about Crew's own
 EVIDENCE rather than about the harness, it exists today only as prose in a set's
 comment, and no bit anywhere carries it. So the alternative to declaring it is not
-deriving it: it is a two-level card, where ``ACP_BACKENDS_COMPACT`` excludes pi for
-want of a driven capture ("pi is unclassified", in the set's own words) and that
-exclusion wears the same mark as a harness with no compaction surface at
-all. Those two answers are not one answer, and a reader of two levels cannot see
+deriving it: it is a two-level card, where a set that excludes a harness for want
+of a driven capture wears the same mark as a harness with no such surface at all. Those two answers are not one answer, and a reader of two levels cannot see
 which cell a measurement would pay for.
 
 Five things keep the exception from growing into the per-harness table this
@@ -625,30 +623,14 @@ class UnmeasuredLine:
 #: string so a literal id is illegible, and a renamed constant raises here instead of
 #: quietly reading as a harness nobody has.
 #:
-#: The one entry rests on words in ``ACP_BACKENDS_COMPACT``: pi dispatches
-#: ``/compact`` before any model turn in its own source, it could not be driven where
-#: that was written (it answers ``Authentication required``), and the set asks for the
-#: bar opencode and goose met -- a live session whose ``usage_update.used`` was seen to
-#: fall. Until then Crew declines its ``/compact`` with ``COMPACT_ARM_UNCLASSIFIED``,
-#: which promises nothing, and this is the card saying the same thing rather than
-#: reporting a limit of the harness.
+#: The table is empty: every core line of every known harness has an answer. An
+#: entry is added only when a deciding set's own comment names the harness and says
+#: the gap is missing evidence, never missing capability.
 #:
 #: USER-FACING lines only, which is not an omission: the security and operator notes
 #: are stated only when they HOLD, so an unmeasured one is already absent rather than
 #: crossed out, and a third level would have nothing to correct.
-DECLARED_UNMEASURED: Mapping[Tuple[str, str], UnmeasuredLine] = {
-    ("ACP_BACKEND_PI", LINE_MANUAL_COMPACT): UnmeasuredLine(
-        reason=REASON_NO_DRIVEN_CAPTURE,
-        declared_by="ACP_BACKENDS_COMPACT",
-        citation=(
-            "pi-acp 0.0.33 intercepts /compact in prompt() and awaits "
-            "session.proc.compact(...), so the source says inline. What it has no "
-            "driven capture of is the context actually shrinking, and it could not be "
-            "driven where the set was written -- it answers Authentication required. "
-            "Until then it is unclassified"
-        ),
-    ),
-}
+DECLARED_UNMEASURED: Mapping[Tuple[str, str], UnmeasuredLine] = {}
 
 
 @dataclass(frozen=True)

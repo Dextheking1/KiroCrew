@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         PostedOptions,
         _blocks_request_remote_media,
         _channel_delivery_key,
+        _cron_job_for,
         _deliver_channel_dm,
         _deliver_to_channel,
         _is_slack_ts,
@@ -132,9 +133,7 @@ def _resolve_session_target(
     # caller_session is "cron:{job_id}" or "cron:{job_id}:{run_id}" (stateless)
     if not caller_session.startswith("cron:"):
         return None, None
-    cron_id = caller_session.removeprefix("cron:").split(":")[0]
-    jobs = state.crons.list_jobs(include_disabled=True)
-    job = next((j for j in jobs if j.id == cron_id), None)
+    job = _cron_job_for(state, caller_session)
     if not job or not job.session_key:
         return None, None
     # session_key is e.g. "dashboard:chat-3-1712793600" but slot names
@@ -736,6 +735,55 @@ async def _read_send_message(
     )
 
 
+#: Longest sender name the source line carries; a chat title can be long.
+_SOURCE_NAME_MAX = 80
+
+
+def _proactive_source_line(
+    state: "DashboardState",
+    caller_session: str,
+    declared_session: str,
+    *,
+    is_cron_caller: bool,
+) -> str:
+    """``Sent by cron: <name>`` or ``Sent by chat: <title>``, or ``""``.
+
+    Read from the same identities the channel legs trust: a cron's validated
+    ``caller_session`` names its job, and any other caller is the attested
+    ``X-Session-Key``. Only a dashboard chat gets a line, because its title is
+    a name the user knows; a channel-born or unknown caller gets none.
+    """
+    if is_cron_caller:
+        try:
+            job = _cron_job_for(state, caller_session)
+        except Exception:
+            logger.warning("send_message: could not read cron jobs for the source line")
+            job = None
+        cron_id = caller_session.removeprefix("cron:").split(":")[0]
+        kind, name = "cron", (getattr(job, "name", "") if job is not None else "") or cron_id
+    elif declared_session.startswith("dashboard:"):
+        # Lazy: the facade rebinds this function onto its own globals, which do
+        # not carry this name.
+        from kiro_crew.dashboard.session_memory import session_title
+
+        info = session_title(declared_session, state.get_slot)
+        kind = "chat"
+        name = str(info["slot_key"] if info["untitled"] else info["title"])
+    else:
+        return ""
+    name = " ".join(str(name).split())
+    name, _ = redact_exfiltration_urls(name)
+    name, _ = redact_credentials(name)
+    if len(name) > _SOURCE_NAME_MAX:
+        name = name[: _SOURCE_NAME_MAX - 1].rstrip() + "…"
+    return f"Sent by {kind}: {name}" if name else ""
+
+
+def _with_source_line(text: str, source_line: str) -> str:
+    """*text* with *source_line* as its last paragraph, or *text* unchanged."""
+    return f"{text}\n\n{source_line}" if source_line else text
+
+
 async def _deliver_send_message_fallback(
     state: "DashboardState",
     body: dict,
@@ -780,7 +828,9 @@ async def _deliver_send_message_fallback(
     # Only an attested, non-app caller's key names the publishing crewmate
     # (``attributable_session_key``); a bare TCP or app-token header does not.
     member = await asyncio.to_thread(member_identity_for_session, attribution_session)
-    state.notify("agent", title, text, member=member)
+    # A message that offers [OPTIONS:] asks the user to choose, so it is not muted.
+    publisher = None if options else attribution_session or None
+    state.notify("agent", title, text, member=member, publisher_session=publisher)
     # No widget on either channel path, so a parsed [OPTIONS:] trailer is
     # re-attached as a numbered list rather than dropped: the user still
     # learns the choices exist and can answer by typing one. Built from the
@@ -788,12 +838,18 @@ async def _deliver_send_message_fallback(
     # hoisted above both legs so neither mechanism drops it.
     if options:
         channel_text = f"{channel_text}\n\n{format_overflow(options, 0)}"
+    # Many sessions and crons share one owner DM, so a proactive message there
+    # says who sent it. The own-conversation leg below labels only a cron: a
+    # chat sending into its own conversation is that conversation talking.
+    source_line = _proactive_source_line(
+        state, caller_session, declared_session, is_cron_caller=is_cron_caller
+    )
     if channel_target:
         outcome.sent_channel, outcome.channel_code, outcome.channel_detail = (
             await _deliver_channel_dm(
                 state,
                 channel_target,
-                channel_text,
+                _with_source_line(channel_text, source_line),
                 # Vet on the CALLER's real identity so the fail-closed
                 # ``channels`` re-vet inside the leg resolves that caller's own
                 # profile rather than the permissive ``HOST_SESSION_KEY``
@@ -821,7 +877,7 @@ async def _deliver_send_message_fallback(
         outcome.sent_channel = await _deliver_to_channel(
             state,
             _channel_delivery_key(state, caller_session, declared_session),
-            channel_text,
+            _with_source_line(channel_text, source_line if is_cron_caller else ""),
             channel_type=channel_type,
         )
     # Opt-in "Open session" deep-link button: resolved (server-side) only

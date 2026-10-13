@@ -123,10 +123,9 @@ Config facts worth knowing before you touch a spec:
 
 Playwright runs two projects. The `setup` project (`playwright/auth.setup.ts`)
 navigates once to `/?token=<PLAYWRIGHT_TOKEN>`, lets the gateway exchange the
-token for a session cookie, sets two localStorage flags, and persists the whole
-storage state. `mc-onboarded` keeps the first-run theme overlay from
-intercepting clicks; `mc-crewmates-onboarded` keeps the Meet CrewMates chapter
-from covering the `/members` specs. The `chromium` project declares `dependencies: ['setup']` and loads that
+token for a session cookie, sets the `mc-onboarded` localStorage flag, and
+persists the whole storage state. `mc-onboarded` keeps the first-run theme
+overlay from intercepting clicks. The `chromium` project declares `dependencies: ['setup']` and loads that
 state, so raw tokens never appear in test-level traces or videos.
 
 The state path is `PLAYWRIGHT_STORAGE_STATE` or `playwright/.auth/state.json`,
@@ -322,6 +321,17 @@ the attempt manifest records that fixture limitation. Only a completed CI run
 supplies these recordings; source authoring alone is not rendered evidence.
 Its retention is seven days, and it does not fail when setup produced no images.
 
+`website/playwright/dashboard-preview-link.spec.ts` opens the link
+`dashboard_preview` hands a crewmate and asserts that it resolves: the Members page
+draws the staged page under its **Preview, not applied** label, and the dashboard read accepts the
+crewmate the link names. Before the browser starts, the harness
+(`test_playwright_e2e._stage_dashboard_preview`) seeds one crewmate in the disposable
+config, stages the `standup` template for it with the production store, and passes
+the link that store's `wire()` returns in `KIROCREW_E2E_DASHBOARD_PREVIEW`. The spec
+never builds the link itself. `standup` is not the default page, so a tab still
+showing the live page fails. The spec guards against a person being asked to approve
+a page they could not open.
+
 When the job fails, a final `if: failure()` step uploads
 `website/test-results/` and `website/playwright-report/` as the
 `e2e-playwright-failures` artifact (7-day retention). `test-results/` holds one
@@ -507,10 +517,13 @@ process instead, which is the path
 [windows-install.md](../guides/windows-install.md) describes and the one the
 managed-server invocation resolves.
 
-### `build.yml`'s installer job boots the gateway it installed, on every PR
+### `build.yml`'s installer job boots the gateway it installed, on every qualifying PR
 
 `build.yml`'s `build-windows-installer` job compiles an NSIS installer on every
-qualifying PR, installs it silently, and runs
+qualifying PR (one that changed a Windows-packaging input, per `desktop-matrix`'s
+`windows_installer` filter; a merge group always qualifies, and so does a push
+to main unless `MERGE_QUEUE_ENABLED` is `'true'`),
+installs it silently, and runs
 `.github/scripts/test-windows-installer.ps1` with NO `-SkipGatewayValidation`.
 The script starts the just-installed bundled interpreter against an isolated data
 home and requires `/api/ready` within 50 seconds, so an artifact that installs

@@ -24,7 +24,7 @@ If the dashboard doesn't load after setup:
 
 ### Chat (`/chat`)
 
-Multi-session parallel chat with full Markdown rendering, syntax-highlighted code blocks, Mermaid diagrams, and clickable file paths. A confirmed local file link in an agent reply opens that file in the chat side panel; a `:line` suffix opens the file at that line instead of navigating the browser back to Chat.
+Multi-session parallel chat with full Markdown rendering, syntax-highlighted code blocks, Mermaid diagrams, and clickable file paths. A confirmed local file link in an agent reply opens that file in the chat side panel; a `:line` suffix opens the file at that line instead of navigating the browser back to Chat. A link that leaves the dashboard (a web page, or an editor or mail link) always goes where it points: when its text is a file path (a repo file linked to its GitHub page, say), clicking it opens the link, not the local file, and the path is not turned into a clickable path chip.
 
 - **Multiple tabs**: each tab runs its own agent session in parallel.
 - **Agent selection**: pick an agent before starting a chat, or switch mid-session.

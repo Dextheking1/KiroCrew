@@ -18,6 +18,7 @@ import errno
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -4686,6 +4687,53 @@ class TestTokenMintGeneric:
         exit_127 = cmd.index("exit 127")
         assert not_found < diagnosis < exit_127
 
+    def test_candidate_ladder_covers_managed_launcher_dir(self):
+        """A remote provisioned by a managed installer has ``kirocrew`` under
+        ``~/.toolbox/bin`` -- the launcher dir ``env._EXTRA_PATH_DIRS`` already
+        searches locally -- and in neither of the two classic locations. Every
+        mint on such a remote exits 127 unless ``remote_bin`` is set by hand.
+        The ladder must try that dir, AFTER the two install-script locations so
+        nothing moves for a remote that has those."""
+        from kiro_crew.env import _EXTRA_PATH_DIRS
+        from kiro_crew.instances.token_mint import REMOTE_BIN_CANDIDATES, build_candidate_command
+
+        assert REMOTE_BIN_CANDIDATES[:2] == (
+            "$HOME/.local/bin/kirocrew",
+            "$HOME/.kirocrew-app/.venv/bin/kirocrew",
+        )
+        assert "$HOME/.toolbox/bin/kirocrew" in REMOTE_BIN_CANDIDATES
+        # The ladder names the same directory the local launcher search does, so
+        # the two cannot disagree about where a managed install puts the binary.
+        assert "{home}/.toolbox/bin" in _EXTRA_PATH_DIRS
+        cmd = build_candidate_command("token")
+        assert '"$HOME/.toolbox/bin/kirocrew"' in cmd
+        # Every candidate is a $HOME-rooted literal: the snippet is double-quoted
+        # shell, so a candidate with a quote or a `$(` would be a new injection
+        # surface on the remote command line.
+        for cand in REMOTE_BIN_CANDIDATES:
+            assert re.fullmatch(r"\$HOME(/[A-Za-z0-9._-]+)+/kirocrew", cand), cand
+
+    def test_not_found_path_names_the_remote_bin_override(self):
+        """When no candidate is executable the error must say what to do, not
+        just what was tried: the override field is ``remote_bin``, and the
+        example is in ``~/`` form because the validator refuses ``$``. The hint
+        comes AFTER the per-candidate diagnosis and BEFORE ``exit 127``, so it
+        is only ever printed on the failure path."""
+        from kiro_crew.instances.token_mint import REMOTE_BIN_HINT, build_candidate_command
+
+        assert "remote_bin" in REMOTE_BIN_HINT
+        assert "~/" in REMOTE_BIN_HINT
+        assert "$" not in REMOTE_BIN_HINT
+        assert '"' not in REMOTE_BIN_HINT  # embedded in a double-quoted echo
+        cmd = build_candidate_command("token")
+        assert f'echo "{REMOTE_BIN_HINT}" >&2;' in cmd
+        diagnosis = cmd.index("candidate diagnosis:")
+        hint = cmd.index(REMOTE_BIN_HINT)
+        exit_127 = cmd.index("exit 127")
+        assert diagnosis < hint < exit_127
+        # The success path never prints it: the hint sits after the exec loop.
+        assert cmd.index('exec "$b" token;') < hint
+
     def test_run_remote_kirocrew(self, monkeypatch):
         from kiro_crew.instances import token_mint as tm
 
@@ -5442,6 +5490,56 @@ class TestSelfHealRefreshRestart:
         # A real certificate-expiry message stays an auth verdict.
         t._stderr_buf = "Certificate has expired\n"
         assert "auth failed" in t._exit_error(255).lower()
+
+    def test_first_connect_transport_drop_points_at_ssh_host(self):
+        """A drop before the forward ever came up most often means the
+        instance's ``ssh_host`` names a host that does not exist under that
+        name (rebuilt, renamed): the proxy closes the socket before the ssh
+        handshake and ssh prints only "Connection closed by UNKNOWN". The
+        first-connect classification must name ``ssh_host``; a drop on a tunnel
+        that WAS up must not, because that host was reachable."""
+        from kiro_crew.instances.ssh_tunnel_manager import _SshTunnel
+
+        t = _SshTunnel("cd-1", "h", 1, 2)
+        t._stderr_buf = (
+            "kex_exchange_identification: Connection closed by remote host\r\n"
+            "Connection closed by UNKNOWN port 65535\r\n"
+        )
+        first = t._exit_error(255, first_connect=True)
+        assert first.startswith("ssh tunnel transport drop (")
+        assert "ssh_host" in first
+        assert "Connection closed by UNKNOWN port 65535" in first
+        # Steady-state wording is unchanged: same classification, no hint.
+        steady = t._exit_error(255)
+        assert steady.startswith("ssh tunnel transport drop:")
+        assert "ssh_host" not in steady
+        # The hint never leaks into the other classes.
+        t._stderr_buf = "host: Permission denied (publickey).\n"
+        assert "ssh_host" not in t._exit_error(255, first_connect=True)
+        t._stderr_buf = "bind [127.0.0.1]:7778: Address already in use\n"
+        assert "ssh_host" not in t._exit_error(255, first_connect=True)
+
+    @pytest.mark.asyncio
+    async def test_wait_until_ready_child_death_is_a_first_connect_error(self):
+        """``_wait_until_ready`` is the first-connect path, so a child that dies
+        there with a transport drop surfaces the ``ssh_host`` hint in
+        ``status.error`` -- the string the dashboard shows on Connect."""
+        from kiro_crew.instances.ssh_tunnel_manager import TunnelState, _SshTunnel
+
+        class _Proc:
+            def __init__(self):
+                self.returncode = 255
+                self.stderr = self
+
+            async def read(self):
+                return b"Connection closed by UNKNOWN port 65535\r\nConnection reset by peer\r\n"
+
+        t = _SshTunnel("cd-1", "stale-alias", 53991, 7777, connect_timeout_secs=1.0)
+        t._proc = _Proc()
+        assert await t._wait_until_ready() is False
+        assert t.status.state == TunnelState.ERROR
+        assert "ssh_host" in t.status.error
+        assert t.status.error.startswith("ssh tunnel transport drop (")
 
     def test_recover_backoff_grows_and_caps(self):
         from kiro_crew.instances.ssh_tunnel_manager import (

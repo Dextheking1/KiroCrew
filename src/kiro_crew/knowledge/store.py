@@ -1188,6 +1188,34 @@ class KnowledgeStore:
 
         """)
         self.db.commit()
+        # An empty library gets its search indexes now, for free. A populated
+        # one does not: building them is O(data) (seconds on a cold 59k-entity
+        # library) and this runs before the gateway listener binds. The gateway
+        # builds them post-bind via ensure_search_indexes(); until then a search
+        # returns the same rows, only slower. Both indexed tables must be empty:
+        # entities can outlive their mentions until the orphan sweep runs.
+        if (
+            self.db.execute("SELECT 1 FROM mentions LIMIT 1").fetchone() is None
+            and self.db.execute("SELECT 1 FROM entities LIMIT 1").fetchone() is None
+        ):
+            self.ensure_search_indexes()
+
+    #: Indexes that only make knowledge search faster. Results never depend on
+    #: them, so a store may serve queries before they exist.
+    _SEARCH_INDEXES = (
+        # find_entity's case-insensitive fallback; without it every query term
+        # that misses the exact name scans the whole table.
+        "CREATE INDEX IF NOT EXISTS idx_entities_name_lower ON entities(LOWER(name))",
+        # The graph leg counts mentions by entity_id; the primary key leads with
+        # item_id, so without this every search scans every mention.
+        "CREATE INDEX IF NOT EXISTS idx_mentions_entity_item ON mentions(entity_id, item_id)",
+    )
+
+    def ensure_search_indexes(self) -> None:
+        """Create the search-only indexes if missing. O(data) the first time, then a no-op."""
+        for stmt in self._SEARCH_INDEXES:
+            self.db.execute(stmt)
+        self.db.commit()
 
     def _migrate(self):
         """Add columns that may be missing in older databases."""
@@ -2652,15 +2680,16 @@ class KnowledgeStore:
     def ensure_fts_index_current(self) -> None:
         """Rebuild ``items_fts`` if it holds a stale term representation.
 
-        Called by each of the three FTS readers before it matches --
-        :meth:`search_items_fts`, ``HybridRetriever._keyword_search``, and the
-        dashboard's entity-items lookup. Deliberately NOT called
+        Called first by the gateway's post-bind knowledge maintenance task
+        (``_kick_knowledge_orphan_reclaim``, on a worker thread), and by each of
+        the three FTS readers before it matches -- :meth:`search_items_fts`,
+        ``HybridRetriever._keyword_search``, and the dashboard's entity-items
+        lookup -- as the fallback when that task could not take the writer lock.
+        Deliberately NOT called
         from ``__init__``: the constructor runs on the gateway's boot path, and a
         rebuild is proportional to corpus size, so migrating there would stall
-        the gateway at boot for a large legacy library. All three readers run on
-        a worker thread
-        (``run_in_embed_pool`` / ``asyncio.to_thread``), so the one-time cost
-        lands on the first search instead of on startup.
+        the gateway at boot for a large legacy library. Every caller runs on a
+        worker thread, so the one-time cost lands after the listener binds.
 
         Steady state is a single boolean check. The first caller takes the lock
         and does the work; concurrent readers wait rather than each starting
@@ -3047,7 +3076,13 @@ Called by ``FolderWatcher.scan_source`` when it refuses such a row, which is
         row = self.db.execute("SELECT * FROM entities WHERE LOWER(name) = LOWER(?)", (name,)).fetchone()
         if row:
             return dict(row)
-        for row in self.db.execute("SELECT * FROM entities"):
+        # Only rows that can carry an alias. '' and '[]' (the column default)
+        # parse to no aliases, so filtering them in SQL returns the same row
+        # while sparing a json.loads per entity: on a 59k-entity library that
+        # scan was ~half of every knowledge search, and it holds the GIL.
+        for row in self.db.execute(
+            "SELECT * FROM entities WHERE aliases IS NOT NULL AND aliases NOT IN ('', '[]')"
+        ):
             aliases = json.loads(row["aliases"]) if row["aliases"] else []
             if any(a.lower() == name.lower() for a in aliases):
                 return dict(row)

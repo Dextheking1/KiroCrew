@@ -1110,6 +1110,9 @@ export interface RemoteCrewCapabilities {
   /** The equality gate the backend enforces on every dispatch. False also covers
    *  "could not be read": an unknown version cannot be proven equal. */
   version_match: boolean
+  /** The peer runs a strictly older build than this machine (exact version,
+   *  so a patch skew counts). Absent from a gateway that predates the field. */
+  behind?: boolean
   agents: { name: string; description: string; scope: string; model: string }[]
   /** The agent the PEER falls back to when the session has picked none. "" when
    *  the roster read failed — never substitute this machine's default, which
@@ -1124,7 +1127,61 @@ export interface RemoteCrewCapabilities {
   unavailable: Record<string, string>
 }
 
-export interface ChatSlot {
+/** One CONNECTED crew's version beside this machine's (`GET /api/instances/versions`). */
+export interface InstanceVersionRow {
+  id: string
+  name: string
+  /** The peer's gateway version, or "" when it did not answer. */
+  version: string
+  /** Strictly older than `local_version`; never true for an unknown version. */
+  behind: boolean
+  /** This dashboard can run the crew's updater: false for a chained crew
+   *  (no shell from here) and a fargate or headless one (no gateway). */
+  updatable: boolean
+  /** Why the crew's version could not be read (the carrier's code), or "" when
+   *  it answered. A crew with an error is never `behind`: its version is unknown. */
+  error?: string
+}
+
+export interface InstanceVersions {
+  local_version: string
+  instances: InstanceVersionRow[]
+}
+
+/** The latest "Update remote" job for one crew (`GET /api/instances/{id}/update`). */
+export interface RemoteUpdateJob {
+  /** `succeeded`: the crew came back on a different version. `unchanged`: both
+   *  commands exited 0 but it came back on the same version (its updater
+   *  installed nothing). `unverified`: it did not answer with a version in time. */
+  state: 'running' | 'succeeded' | 'unchanged' | 'unverified' | 'failed'
+  /** Where the job is, or where it failed: the remote `kirocrew update`, then
+   *  `kirocrew restart`, then reading the crew's version back. */
+  phase: 'updating' | 'restarting' | 'verifying' | 'done'
+  started_at: number
+  finished_at: number | null
+  elapsed_secs: number
+  /** The remote's redacted error tail on a failure, else "". */
+  error: string
+  /** The crew's version before the update and after its restart; "" when it
+   *  did not answer. */
+  version_before: string
+  version_after: string
+}
+
+/** Turn identity is monotonic only within one gateway process generation. */
+export interface TurnIdentityFields {
+  turn?: number
+  turn_gen?: string
+}
+
+/** Terminal WebSocket payload; identity is optional for older gateways. */
+export interface ChatDonePayload extends TurnIdentityFields {
+  slot: string
+  continuing?: boolean
+  needs_input?: boolean
+}
+
+export interface ChatSlot extends TurnIdentityFields {
   /** Which namespace `agent` was chosen in: a configured member, a shared
    *  provider template, or "" when the choice was made by name alone or came
    *  back from history. Display provenance for the picker's selected row; the
@@ -1259,6 +1316,11 @@ export interface ChatSlot {
    * button. Always false while `running`. Lets the sidebar stop rendering a
    * goal-loop session as actively working when it is actually stalled. */
   interrupted?: boolean
+  /** A loop wake is opening the running turn and its row is not in the
+   * transcript yet (a structured monitor writes it only once the runner
+   * accepts the turn). Only ever true while `running`; absent from an older
+   * gateway. */
+  wake_starting?: boolean
   // Soft-stop state machine
   stop_state?: 'idle' | 'soft_pending' | 'killing'
   /** An automatic context compaction holds the session right now. Not a turn,
@@ -1528,6 +1590,22 @@ export interface ChatMessage {
   decisions_tool_risk?: unknown
 }
 
+/** GET /api/chat/slots/{slot}; identity is optional for older gateways. */
+export interface ChatSlotDetailResponse extends TurnIdentityFields {
+  key: string
+  title?: string
+  running: boolean
+  stopping?: boolean
+  messages: ChatMessage[]
+  queue?: unknown[]
+  total: number
+  has_more: boolean
+  next_before: number
+  context_pct?: number
+  context_used_tokens?: number
+  context_window_tokens?: number
+}
+
 export interface SubagentActivity {
   id: string; task: string; agent: string
   /** The wave this agent belongs to, absent for a solo spawn. Folded from the
@@ -1631,6 +1709,9 @@ export interface ContentBlock {
   complete: boolean
   /** 1-based line in the original raw source where this block starts. */
   startLine?: number
+  /** Set on a finalized fence whose closing delimiter never appeared. Its
+   * content may include the rest of the reply, so it must stay visible. */
+  unclosed?: boolean
   /** Artifact slug (widget blocks only) — when present, the widget is
    * already saved as an artifact in the user's library. The dashboard uses
    * this to render the bookmark filled, link the title to /artifacts/<slug>,

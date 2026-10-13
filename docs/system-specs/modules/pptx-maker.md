@@ -121,9 +121,15 @@ honestly:
   so this is a cost-and-coverage decision, not an integrity one: shipping it
   would mean a partial, platform-asymmetric installer for a tool the user can get
   in one command. `/deps` therefore returns a per-OS `hints` command and the user
-  runs it. On Linux the command is picked from os-release (apt or dnf family);
-  Amazon Linux packages no LibreOffice, so it gets no command rather than a
-  failing `dnf` line.
+  runs it. macOS and Windows each name their one conventional manager. On Linux the
+  command is built from what the host has, by the rule the browser installer uses
+  (`browser_cli/os_deps.py`, [browser](browser.md)): the apt family by os-release
+  lineage, the Fedora/RHEL family with the first of `dnf`, `yum` and `microdnf` that
+  `os_deps.rpm_package_manager` finds on `PATH`. Every other host gets no command
+  rather than a guessed one: Amazon Linux (it packages no LibreOffice), SUSE (its
+  manager is `zypper`, even when `dnf` or `yum` is installed there), an unrecognized
+  distribution, and an rpm host with none of the three managers on `PATH`. The UI
+  then shows its note without a command.
 
   `conda-forge` poppler was rejected on the same axis rather than for integrity:
   the tree IS relocatable (`@loader_path`/`$ORIGIN`), but it is not
@@ -724,9 +730,12 @@ sensitive-path check and the governance ceiling — would never be reached.
   user-sized tree; one blocking call here would freeze every chat session on the
   gateway (AUTOSDE `no-blocking-call-on-event-loop`).
 - **Spawn hardening.** Every engine and `uv` invocation goes through
-  `sandboxed_spawn_argv` + `cgroup_scope_argv` + `run_limited` — the
+  `sandboxed_spawn_argv` + `run_limited` — the
   same OS sandbox, credential-scrubbed environment and resource ceiling the rest of
-  the codebase applies, with the resource limits delivered after `exec` by the
+  the codebase applies. The chokepoint already applies `cgroup_scope_argv` as its
+  outermost layer, so the callers never wrap its result again: a second
+  `systemd-run --scope` collides on the first one's unit name. The
+  resource limits are delivered after `exec` by the
   spawn shim rather than in a fork child. Argv is fixed; the only variable parts
   are the resolved
   `uv` path and paths already contained by `paths.py`. `PYTHONPATH` is cleared so

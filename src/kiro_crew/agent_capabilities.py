@@ -1136,8 +1136,13 @@ class CapabilityService:
                 prepare_member_capabilities(snap["member"], snap["project"])
             except CapabilityError as exc:
                 runtime.update(status="failed", error_code=exc.code)
+        # Only a saved (or previewed, which always carries its projected
+        # intent) spec is gated at chat start; an unenrolled member runs its
+        # template as before and gets no warning.
+        backend_warning = member_backend_warning(selected) if intent else None
         return safe_view(
             {
+                "backend_warning": backend_warning,
                 "schema_version": 1,
                 "member": snap["member"],
                 "mode": "inherited" if intent else snap["mode"],
@@ -1613,16 +1618,83 @@ def prepare_member_capabilities(member: str, project_dir: str | Path | None = No
         ),
         # Launched servers whose entry turns single tools off. Not every member
         # backend can carry that (``ACP_BACKENDS_MEMBER_TOOL_LIMITS``).
-        "tool_limited_servers": tuple(
-            sorted(
-                name
-                for name, server in spec.get("mcpServers", {}).items()
-                if isinstance(server, dict)
-                and server.get("disabledTools")
-                and not mcp_entry_is_muted(server)
-            )
-        ),
+        "tool_limited_servers": tool_limited_servers(spec),
     }
+
+
+def tool_limited_servers(spec: dict) -> tuple[str, ...]:
+    """Launched MCP servers in *spec* whose entry turns single tools off.
+
+    The one definition both the chat-start seam (via
+    :func:`prepare_member_capabilities`) and the Capabilities page warning read,
+    so the page cannot name a different set than the start refuses on.
+    """
+    servers = spec.get("mcpServers", {})
+    if not isinstance(servers, dict):
+        return ()
+    return tuple(
+        sorted(
+            name
+            for name, server in servers.items()
+            if isinstance(server, dict)
+            and server.get("disabledTools")
+            and not mcp_entry_is_muted(server)
+        )
+    )
+
+
+def member_backend_gap(backend: str, limited_servers: tuple[str, ...]) -> str | None:
+    """Why a member chat on *backend* would refuse a saved spec, or ``None``.
+
+    Mirrors the start gate in ``session_allocation``: a backend outside
+    ``ACP_BACKENDS_MEMBER_CAPABILITIES`` refuses with
+    ``capability_harness_unsupported``; one outside
+    ``ACP_BACKENDS_MEMBER_TOOL_LIMITS`` refuses a spec with single-tool limits
+    with ``capability_tool_limits_unsupported``. Pure: no config read.
+    """
+    from kiro_crew.acp_backends import (
+        ACP_BACKENDS_MEMBER_CAPABILITIES,
+        ACP_BACKENDS_MEMBER_TOOL_LIMITS,
+    )
+
+    if backend not in ACP_BACKENDS_MEMBER_CAPABILITIES:
+        return "harness_unsupported"
+    if limited_servers and backend not in ACP_BACKENDS_MEMBER_TOOL_LIMITS:
+        return "tool_limits_unsupported"
+    return None
+
+
+def member_backend_warning(spec: dict) -> dict | None:
+    """Non-blocking warning for the Capabilities page, or ``None``.
+
+    Checks both backends a member's chats can start on, resolved as
+    ``members.select_provider_backend`` resolves them: the member DM arm
+    (``agent.member_acp_backend``) and the default arm (``agent.acp_backend``),
+    which carries the member's Slack threads, cron jobs and spawned sessions --
+    those also reach the chat-start gate through ``resolve_crew_identity``. The
+    first backend that would refuse is named, member DMs first. A spawn with an
+    explicit backend override is chosen per call and cannot be known here. A
+    warning only: the settings can change after the save, so nothing refuses.
+    """
+    from kiro_crew.acp_backends import resolve_selected_backend
+
+    cfg = KiroCrewConfig.load()
+    limited = tool_limited_servers(spec)
+    for setting, value in (
+        ("agent.member_acp_backend", cfg.agent.member_acp_backend),
+        ("agent.acp_backend", cfg.agent.acp_backend),
+    ):
+        backend = resolve_selected_backend(value)
+        code = member_backend_gap(backend, limited)
+        if code is None:
+            continue
+        warning: dict[str, Any] = {"code": code, "backend": backend, "setting": setting}
+        # Also on a harness refusal: switching to a member backend that loads
+        # saved specs (kas) would then refuse these, so the page names both fixes.
+        if limited:
+            warning["servers"] = list(limited)
+        return warning
+    return None
 
 
 def reconcile_member_capabilities(member: str) -> None:

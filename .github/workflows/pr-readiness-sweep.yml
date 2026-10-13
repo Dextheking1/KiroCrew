@@ -533,8 +533,18 @@ jobs:
                 # (see pending_min_age_seconds), which is what carries a
                 # rescue's own republish past the same check on the next tick.
                 if [ "$newest_epoch" -le $(( updated_epoch - publish_lag_seconds )) ]; then
-                  # No evidence. ONE status-description read classifies this
-                  # pending for both recoveries that depend on it.
+                  # No evidence. Both recoveries below are aged against
+                  # STALE_MINUTES, so a pending younger than that is left alone
+                  # BEFORE the status-description read: a young pending in the
+                  # shared pool costs no REST call per tick.
+                  if [ "$age" -lt "$stale_seconds" ]; then
+                    echo "PR #$number: PR Readiness pending for ${age}s at $sha but no" \
+                      "check completed within ${publish_lag_seconds}s of it being published;" \
+                      "a recompute would re-derive the same verdict, so not re-firing."
+                    continue
+                  fi
+                  # ONE status-description read classifies this pending for
+                  # both recoveries that depend on it.
                   rs_desc="$(readiness_description "$sha")"
                   # A pending that an advisory lane owes this head a
                   # verdict it withheld. A recompute of THIS aggregator cannot
@@ -567,8 +577,7 @@ jobs:
                   # newest completion -- is handled immediately, and adding the
                   # read to every pending to close the gap is the per-PR cost the
                   # sweep's GraphQL rebuild exists to avoid.
-                  if [ "$age" -ge "$stale_seconds" ] \
-                    && readiness_has_unpublished_verdict "$rs_desc"; then
+                  if readiness_has_unpublished_verdict "$rs_desc"; then
                     echo "PR #$number: PR Readiness names a withheld advisory verdict at $sha;" \
                       "re-running the owing lane(s) to republish it."
                     python3 .github/scripts/republish_withheld_verdict.py \
@@ -578,7 +587,7 @@ jobs:
                   # The one PENDING that still deserves an aggregator nudge here
                   # is the read-failure class, and it is aged against
                   # STALE_MINUTES, not the lag -- see the note above.
-                  if [ "$age" -lt "$stale_seconds" ] || ! readiness_is_read_failure "$rs_desc"; then
+                  if ! readiness_is_read_failure "$rs_desc"; then
                     echo "PR #$number: PR Readiness pending for ${age}s at $sha but no" \
                       "check completed within ${publish_lag_seconds}s of it being published;" \
                       "a recompute would re-derive the same verdict, so not re-firing."

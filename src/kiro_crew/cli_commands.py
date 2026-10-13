@@ -3579,10 +3579,10 @@ def _memory_search_embedding(store: VectorMemoryStore, query: str) -> list[float
     if store_embedding_space_is_stale(store):
         print(_SEARCH_KEYWORD_ONLY_STALE_SPACE, file=sys.stderr)
         return None
-    # BLOCK once, here. The callable from make_sync_embed_fn() never waits on the
-    # model load — it kicks the background load and returns None — so binding it
-    # alone leaves the very invocation the user typed on keyword search. A
-    # one-shot read is exactly the sync context wait_ready() exists for.
+    # BLOCK once, here. The callable from make_sync_embed_fn() waits at most
+    # _COLD_LOAD_WAIT_SECS for the model load, which a slow host can exceed, so
+    # binding it alone could leave the very invocation the user typed on keyword
+    # search. A one-shot read is exactly the sync context wait_ready() exists for.
     # wait_ready is the llama.cpp backend's seam and NOT on the EmbeddingBackend
     # ABC, so probe for it, same as the dashboard and the re-embed sweep.
     embedder = get_shared_embedder()
@@ -3942,6 +3942,82 @@ def _memory_create_store(args: argparse.Namespace) -> None:
         print(f"Memory store {safe!r} already exists at {path}; nothing changed.")
 
 
+def _interactive_terminal() -> bool:
+    """Whether both stdin and stdout are a terminal a person can answer at."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _refuse_forget_outside_owner_terminal() -> None:
+    """Refuse ``memory forget`` from an agent session's shell or with no terminal.
+
+    These are the CLI's own refusals, checked before any store opens. They keep an
+    agent from running the verb; they are not what authorizes the delete. That is
+    the gateway's owner gate on the dashboard delete route, which the verb calls
+    (``memory_forget_client``), so an empty answer here grants nothing by itself.
+    """
+    from kiro_crew.mcp_caller import resolve_own_identity
+
+    identity = resolve_own_identity()
+    if identity.session_key or identity.failed:
+        raise ValueError(
+            "`kirocrew memory forget` does not run from an agent session's shell; "
+            "nothing was forgotten. Run it in your own terminal, or delete the key "
+            "from the dashboard Memory page."
+        )
+    if not _interactive_terminal():
+        raise ValueError(
+            "`kirocrew memory forget` asks you to confirm, so it needs an interactive "
+            "terminal; nothing was forgotten."
+        )
+
+
+def _memory_forget(store: VectorMemoryStore, args: argparse.Namespace) -> None:
+    """Show one semantic key, ask the person at the terminal, then delete it
+    through the gateway's owner-gated route. Exits 1 when the key is absent."""
+    from kiro_crew.memory_forget_client import AlreadyAbsent, forget_via_gateway
+
+    key = str(args.key)
+    winner = getattr(args, "superseded_by", None)
+    shown_key = _TERMINAL_CTRL_RE.sub("", key)
+    if winner is not None and winner == key:
+        raise ValueError("--superseded-by names the key being forgotten; nothing was forgotten.")
+    row = store.get_semantic(key)
+    if row is None:
+        print(f"Already absent: {shown_key}", file=sys.stderr)
+        sys.exit(1)
+    if winner is not None and store.get_semantic(winner) is None:
+        raise ValueError(
+            f"--superseded-by {_TERMINAL_CTRL_RE.sub('', winner)!r} is not a live key; "
+            "nothing was forgotten."
+        )
+    try:
+        value = json.loads(row["value_json"])
+    except (TypeError, ValueError):
+        value = row["value_json"]
+    if key.startswith("lesson."):
+        value = _lesson_display_text(value) or value
+    print(f"  {shown_key}: {_TERMINAL_CTRL_RE.sub('', str(value))}")
+    try:
+        typed = input("Type the key again to forget it: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        typed = ""
+    if typed.strip() != key:
+        print("Not confirmed; nothing was forgotten.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        # Compare-and-delete against the value just shown, so a write landing
+        # after it was shown is never removed unseen.
+        forget_via_gateway(key, expect_value_json=row["value_json"], superseded_by=winner)
+    except AlreadyAbsent:
+        print(f"Already absent: {shown_key}", file=sys.stderr)
+        sys.exit(1)
+    if winner is not None:
+        print(f"Forgotten; superseded by {_TERMINAL_CTRL_RE.sub('', winner)}.")
+    else:
+        print("Forgotten.")
+
+
 def _memory_cmd(args: argparse.Namespace) -> None:
     """Manage the memory system (vector store + markdown layer).
 
@@ -3964,6 +4040,9 @@ def _memory_cmd(args: argparse.Namespace) -> None:
 def _memory_verb(args: argparse.Namespace) -> None:
     """Run one ``kirocrew memory`` verb; :func:`_memory_cmd` owns its refusals."""
     action = getattr(args, "mem_action", None)
+    # Checked before ANY store opens, so a refused call touches nothing.
+    if action == "forget":
+        _refuse_forget_outside_owner_terminal()
     # "show" reads only the markdown layer — don't open (or create) the
     # vector store for it.
     if action == "show":
@@ -4354,6 +4433,9 @@ def _memory_verb(args: argparse.Namespace) -> None:
                         print(f"  {row['id']}  superseded by {row['superseded_by']}")
                         print(f"    {row['text'][:120]}")
 
+            elif action == "forget":
+                _memory_forget(store, args)
+
             elif action == "import":
                 # Validated and parsed above, before this store was opened, so nothing
                 # here can be the reason an empty database exists.
@@ -4407,7 +4489,10 @@ def _memory_verb(args: argparse.Namespace) -> None:
                     )
 
             else:
-                print("Usage: kirocrew memory {list|search|show|stats|audit|export|migrate|import}")
+                print(
+                    "Usage: kirocrew memory "
+                    "{list|search|show|stats|audit|export|migrate|forget|import}"
+                )
         finally:
             try:
                 store.close()

@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from kiro_crew.dashboard import chat_auto_tag
 from kiro_crew.dashboard.chat_auto_tag import maybe_auto_tag
 
 
@@ -861,3 +862,98 @@ class TestTopicTags:
 
         assert _names(state, slot) == ["MyRepo"]
         assert slot._auto_tagged is True
+
+
+@pytest.mark.asyncio
+class TestTopicTagsUiLanguage:
+    """Topic tags render beside chrome in ``dashboard.language``."""
+
+    @staticmethod
+    def _configure(monkeypatch, language):
+        """Serve a config that enables topic tags and carries ``language``."""
+
+        def _load():
+            dashboard = SimpleNamespace(topic_tags_enabled=True, language=language)
+            return SimpleNamespace(dashboard=dashboard)
+
+        monkeypatch.setattr("kiro_crew.dashboard.chat_auto_tag.KiroCrewConfig.load", _load)
+
+    async def test_prompt_names_the_ui_language(self, patch_save_slot, topic_model, monkeypatch):
+        self._configure(monkeypatch, "zh-CN")
+        state = _make_state()
+        slot = _topic_slot()
+
+        await maybe_auto_tag(state, slot)
+
+        [call] = topic_model["calls"]
+        prompt = call["prompt"]
+        assert "BCP-47 tag zh-CN" in prompt
+        assert "Why does the build fail?" in prompt
+        assert "{language}" not in prompt
+
+    async def test_the_none_control_word_stays_literal_under_a_ui_language(
+        self, patch_save_slot, topic_model, monkeypatch
+    ):
+        # A translated NONE would be stored as a tag (``_parse_topic_tags`` only drops
+        # the ASCII word), so the language line has to pin it.
+        self._configure(monkeypatch, "zh-CN")
+        state = _make_state()
+        slot = _topic_slot()
+
+        await maybe_auto_tag(state, slot)
+
+        [call] = topic_model["calls"]
+        assert "NONE is a control word, not a tag" in call["prompt"]
+        assert "reply with the literal ASCII NONE" in call["prompt"]
+
+    @pytest.mark.parametrize("language", ["", "ar"])
+    async def test_prompt_has_no_language_line_without_a_usable_ui_language(
+        self, patch_save_slot, topic_model, monkeypatch, language
+    ):
+        # "" is the follow-the-browser sentinel; "ar" names no shipped catalog.
+        self._configure(monkeypatch, language)
+        state = _make_state()
+        slot = _topic_slot()
+
+        await maybe_auto_tag(state, slot)
+
+        [call] = topic_model["calls"]
+        prompt = call["prompt"]
+        assert "BCP-47" not in prompt and "{language}" not in prompt
+        assert prompt.endswith("Reply with exactly NONE when the topic is unclear.\n")
+
+    async def test_a_config_that_cannot_answer_the_ui_language_still_tags(
+        self, patch_save_slot, topic_model
+    ):
+        # The fixture's config has no ``language``: the lookup fails soft to "".
+        state = _make_state()
+        slot = _topic_slot()
+
+        await maybe_auto_tag(state, slot)
+
+        [call] = topic_model["calls"]
+        assert "BCP-47" not in call["prompt"]
+        assert _names(state, slot) == ["MyRepo", "debugging", "code review"]
+
+    async def test_ui_language_is_read_off_the_event_loop(
+        self, patch_save_slot, topic_model, monkeypatch
+    ):
+        # ``patch_save_slot`` runs ``asyncio.to_thread`` inline, so the dispatch itself is
+        # what is observable here: the lookup must go through it, never be called on the loop.
+        self._configure(monkeypatch, "zh-CN")
+        dispatched = []
+
+        async def _inline_to_thread(fn, *args, **kwargs):
+            dispatched.append(fn)
+            return fn(*args, **kwargs)
+
+        state = _make_state()
+        slot = _topic_slot()
+
+        # Scoped to the call, not to the test: ``patch_save_slot`` already holds
+        # this attribute, and an outer patch that unwinds after the fixture
+        # would leave the fixture's mock installed for every later test.
+        with patch("kiro_crew.dashboard.chat_auto_tag.asyncio.to_thread", _inline_to_thread):
+            await maybe_auto_tag(state, slot)
+
+        assert chat_auto_tag._ui_language in dispatched

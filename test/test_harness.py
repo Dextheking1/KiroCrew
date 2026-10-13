@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -39,6 +40,7 @@ from kiro_crew.testing.harness import (
     GatewaySpawnError,
     _drain_stderr,
     _resolve_workspace_src,
+    _StdoutPump,
     _terminate_process_group,
     _wait_for_ready_line,
     crash_dump_diagnostic,
@@ -209,6 +211,132 @@ def test_ready_line_raises_on_malformed_payload(bad_payload: str) -> None:
 
     msg = str(exc.value)
     assert "malformed" in msg or "expected dict" in msg or "missing required key" in msg
+
+
+# ── _wait_for_ready_line — improved timeout diagnostics ──────────────────
+
+
+def test_ready_line_no_output_timeout_includes_cold_import_hint() -> None:
+    """Timeout with zero stdout/stderr output includes a cold-import hint."""
+    fake = FakePopen([])
+    fake.returncode = None
+
+    with pytest.raises(GatewaySpawnError) as exc:
+        _wait_for_ready_line(
+            fake,  # type: ignore[arg-type]
+            timeout=0.05,
+            stderr_buffer=[],
+        )
+
+    msg = str(exc.value)
+    assert "cold import phase" in msg
+    assert "KIROCREW_HARNESS_READY_TIMEOUT" in msg
+
+
+def test_ready_line_timeout_message_includes_stdout_and_process_state() -> None:
+    """Exit error carries stdout content.
+
+    Deterministic (D7/D8): ``_MockPump`` sets ``fake.returncode`` after
+    all chunks are delivered; the harness exit check fires immediately on
+    the next iteration — no wall-clock dependence.  ``timeout=30`` is only
+    a safety net.
+    """
+    fake = FakePopen([])  # stdout pipe not used; mock_pump owns delivery
+    fake.returncode = None
+    chunks: list = [b"Starting up...\n", b"still going\n"]
+    mock_pump = _MockPump(chunks, proc=fake, exit_code=1)
+
+    with pytest.raises(GatewaySpawnError) as exc:
+        _wait_for_ready_line(
+            fake,  # type: ignore[arg-type]
+            timeout=30,  # safety net — process exit fires the error
+            stderr_buffer=[b"WARNING: config missing\n"],
+            pump=mock_pump,  # type: ignore[arg-type]
+        )
+
+    msg = str(exc.value)
+    assert "before emitting" in msg
+    # Stdout content in the early-exit error message.
+    assert "Starting up" in msg
+    # Stderr still present.
+    assert "WARNING: config missing" in msg
+
+
+class _MockPump:
+    """Pump stand-in that yields one chunk per get() call, without read1 batching.
+
+    FakePopen-based tests cannot overflow the deque reliably because
+    ``_StdoutPump._run`` calls ``read1(4096)`` which batches small chunks
+    into a single queue entry.  This mock feeds entries one at a time, giving
+    exact control over how many queue items ``_wait_for_ready_line`` processes.
+
+    If ``proc`` is supplied, its ``returncode`` is set to ``exit_code`` once
+    all items have been delivered.  The harness ``proc.poll()`` check then
+    returns non-None on the next iteration, triggering the exit path
+    deterministically — no wall-clock dependence (D7/D8).
+    """
+
+    def __init__(self, items: list, proc: object = None, exit_code: int = 1) -> None:
+        self._items = list(items)
+        self._i = 0
+        self._proc = proc
+        self._exit_code = exit_code
+
+    def start(self) -> None:
+        pass  # no background thread needed
+
+    def get(self, timeout: float) -> object:
+        if self._i < len(self._items):
+            item = self._items[self._i]
+            self._i += 1
+            if self._i >= len(self._items) and self._proc is not None:
+                # All items delivered — signal process exit so the harness
+                # exit check fires on the next loop iteration.
+                self._proc.returncode = self._exit_code
+            return item
+        raise queue.Empty
+
+    def drain_until_eof(self, timeout: float) -> bytes:
+        return b""
+
+    def handoff(self) -> None:
+        pass
+
+
+def test_ready_line_stdout_received_is_bounded() -> None:
+    """stdout_received uses a bounded deque; exit error still shows the tail.
+
+    The GPT BLOCK (a-bound-bounds-every-field-it-retains) pinned that
+    ``stdout_received.append(chunk)`` with an unbounded list let >4 MiB of
+    startup stdout accumulate before the timeout, all retained for a join+decode
+    that only displays 2 000 characters.  The fix uses
+    ``deque(maxlen=_StdoutPump.TAIL_CHUNKS)`` with a count of dropped entries.
+
+    Deterministic (D7/D8): ``_MockPump`` sets ``fake.returncode`` after
+    TAIL_CHUNKS + 1 entries are delivered; the harness exit check fires on
+    the next iteration — no wall-clock dependence.  ``timeout=30`` is a safety net.
+    """
+    cap = _StdoutPump.TAIL_CHUNKS
+    fake = FakePopen([])  # stdout pipe not used; mock_pump owns delivery
+    fake.returncode = None
+    chunks: list = [f"line-{i}\n".encode() for i in range(cap + 1)]
+    mock_pump = _MockPump(chunks, proc=fake, exit_code=1)
+
+    with pytest.raises(GatewaySpawnError) as exc:
+        _wait_for_ready_line(
+            fake,  # type: ignore[arg-type]
+            timeout=30,  # safety net — process exit fires the error
+            stderr_buffer=[],
+            pump=mock_pump,  # type: ignore[arg-type]
+        )
+
+    msg = str(exc.value)
+    assert "before emitting" in msg
+    # The truncation note must appear (the 257th chunk evicted the first).
+    assert "chunk(s) dropped" in msg, "expected truncation note in error message"
+    # The LAST line must still be present in the tail (deque retains the tail).
+    last_line = f"line-{cap}"
+    assert last_line in msg, f"expected last line {last_line!r} in stdout tail"
 
 
 # ── parse_ready_line ────────────────────────────────────────────────────
@@ -778,28 +906,39 @@ def test_crash_dump_diagnostic_carries_the_newest_stack(tmp_path: Path) -> None:
     assert "older" not in text
 
 
-def test_crash_dump_diagnostic_keeps_the_wedged_thread_under_the_cap(tmp_path: Path) -> None:
-    """``faulthandler`` writes the main thread LAST, behind every idle worker. The
-    diagnostic replays the wedged thread first, so a dump past the cap keeps the
-    stack that explains the stall and drops workers."""
+def test_crash_dump_diagnostic_replays_every_thread_uncapped(tmp_path: Path) -> None:
+    """``faulthandler`` writes threads newest-first, so hundreds of idle workers
+    sit between the top of the file and the one thread that matters. The
+    diagnostic replays the wedged thread first and then EVERY other thread with
+    the journal's 120-line / 8 KiB cap lifted: a loop thread caught at a syscall
+    boundary is waiting for the GIL some OTHER thread holds, and that thread can
+    be anywhere in the file."""
     workers = "".join(
         f"Thread 0x{n:04x} (most recent call first):\n"
-        '  File "threading.py", line 1 in _bootstrap\n'
-        '  File "queue.py", line 2 in get\n'
+        '  File "/usr/lib/python3.12/queue.py", line 171 in get\n'
+        '  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 90 in _worker\n'
+        '  File "/usr/lib/python3.12/threading.py", line 1032 in _bootstrap\n'
         for n in range(400)
     )
     body = (
-        "Timeout (0:00:25)!\n" + workers + "Thread 0xffff (most recent call first):\n"
-        '  File "memory.py", line 42 in wedged_frame\n'
+        "Timeout (0:00:25)!\n"
+        + workers[: len(workers) // 2]
+        + "Thread 0xbeef (most recent call first):\n"
+        '  File "/usr/lib/python3.12/ctypes/__init__.py", line 379 in __init__\n'
+        '  File "/home/u/src/kiro_crew/embeddings.py", line 700 in gil_holder\n'
+        + workers[len(workers) // 2 :]
+        + "Current thread 0xffff (most recent call first):\n"
+        '  File "/usr/lib/python3.12/selectors.py", line 468 in select\n'
+        '  File "/usr/lib/python3.12/asyncio/base_events.py", line 1961 in _run_once\n'
     )
     _write_dump(tmp_path, "loopstall-20261010T034911Z.txt", body)
     text = crash_dump_diagnostic(tmp_path)
-    assert text.endswith("... (dump truncated; wedged thread shown first)")
-    assert "wedged_frame" in text
-    assert text.index("wedged_frame") < text.index("_bootstrap")
-    # dump_replay_lines caps at 120 lines / 8192 bytes of stack text; the header
-    # line and the joining newlines ride on top.
-    assert len(text) < 8192 + 120 + 200
+    assert "truncated" not in text
+    # Wedged thread first, and the holder buried mid-file is still there.
+    assert text.index("in select") < text.index("gil_holder")
+    # Nothing is dropped: 400 workers + the holder + the wedged thread.
+    assert text.count("(most recent call first)") == 402
+    assert len(text) > 8192 + 120
 
 
 def test_gateway_diagnostics_include_the_crash_dump() -> None:

@@ -564,7 +564,9 @@ function isStaleBundleSignal({ exitCode = null, spawnErrorCode = "" }) {
 // `.cmd`/`.bat` (spawn EINVAL), so a bundled `bin\kirocrew.cmd` is replaced by
 // the bundled `python.exe` one directory up, run with `-s -P -m kiro_crew`
 // (`-s`/`-P` keep the user site and the spawn cwd off sys.path, exactly as the
-// shim does). Any other bin (a POSIX console script, a dev entry point) is
+// shim does). The shim's other job, clearing PYTHONPATH/PYTHONHOME, is done
+// for this unwrapped spawn by buildGatewayEnvironment({ bundled: true }) in
+// gateway-env.js. Any other bin (a POSIX console script, a dev entry point) is
 // called as-is. Pure: `pathMod` defaults to the host's `path`.
 function gatewayCliInvocation(bin, subArgs, pathMod = path) {
   if (bin.endsWith("kirocrew.cmd")) {

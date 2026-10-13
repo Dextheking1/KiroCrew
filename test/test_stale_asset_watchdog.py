@@ -982,9 +982,27 @@ async def test_an_update_that_stayed_up_keeps_a_managed_gateway_up_without_a_che
     shutdown = asyncio.Event()
     update_ownership.refuse_restart("the dependency sync did not complete")
     enough = asyncio.Event()
-    asyncio.get_running_loop().call_later(0.3, enough.set)
+    loop = asyncio.get_running_loop()
+    _drain_calls = {"n": 0}
+
+    def _count() -> int:
+        _drain_calls["n"] += 1
+        if _drain_calls["n"] == 2:
+            # The second drain runs synchronously right before _with_stay_up
+            # logs the CRITICAL.  call_soon fires at the next event-loop yield
+            # (after the synchronous path including _refused completes), so
+            # enough fires only AFTER the CRITICAL is recorded.
+            #
+            # A wall-clock call_later(0.3, ...) races on slow Windows CI: both
+            # the confirm-delay timeout and the 0.3 s timer can expire in the
+            # same asyncio _run_once tick.  asyncio breaks the tie by insertion
+            # order; enough was registered first, so shutdown.set() arrived
+            # before _refused ran, leaving caplog empty.
+            loop.call_soon(enough.set)
+        return 0
+
     with _gap():
-        fired = await _run_until(shutdown, enough, reentry_check=None)
+        fired = await _run_until(shutdown, enough, reentry_check=None, count_in_flight=_count)
 
     assert fired is False
     assert _records(caplog, level=logging.CRITICAL, text="an update stopped before restart")

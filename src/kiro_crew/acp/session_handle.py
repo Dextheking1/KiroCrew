@@ -118,6 +118,7 @@ from kiro_crew.acp.mcp_session_report import (
     sanitize_sink_text,
 )
 from kiro_crew.acp.prompt_blocks import build_prompt_blocks, summarize_prompt_structure
+from kiro_crew.acp.skill_reads import SkillReadTracker
 from kiro_crew.acp.types import (
     ACP_BACKEND_KAS,
     ACP_BACKEND_KIRO,
@@ -147,8 +148,11 @@ from kiro_crew.acp.types import (
     EVENT_TEXT_CHUNK,
     EVENT_TODO_UPDATE,
     EVENT_TOOL_CALL,
+    EVENT_TOOL_CALL_UPDATE,
     EVENT_TOOL_RESULT,
     JSONRPC_METHOD_NOT_FOUND,
+    MAX_STEERING_ANSWERS,
+    MAX_STEERING_TEXT_CHARS,
     METHOD_CANCEL,
     METHOD_COMMANDS_EXECUTE,
     METHOD_KAS_MCP_STATUS,
@@ -156,6 +160,7 @@ from kiro_crew.acp.types import (
     METHOD_MCP_OAUTH_REQUEST,
     METHOD_PROMPT,
     METHOD_REQUEST_PERMISSION,
+    METHOD_SESSION_STEERING,
     METHOD_SET_CONFIG_OPTION,
     METHOD_SET_MODE,
     METHOD_SET_MODEL,
@@ -168,6 +173,9 @@ from kiro_crew.acp.types import (
     STATUS_EXTENSION_KEY,
     STATUS_ORIGIN_LIVENESS_ORACLE,
     STATUS_PHASE_WAITING,
+    STEERING_ANSWER_WAIT_SECS,
+    STEERING_INJECTED,
+    STEERING_STARTED_NEW_TURN,
     STOP_REASON_CANCELLED,
     STOP_REASON_COMPACTION_FAILED,
     STOP_REASON_CONTENT_FILTERED_WIRE,
@@ -186,6 +194,7 @@ from kiro_crew.acp.types import (
     JsonRpcMessage,
     StructuredStatus,
     effort_config_option_id,
+    steering_outcome,
 )
 from kiro_crew.agent_sdk.capabilities import capabilities_for
 from kiro_crew.agent_sdk.drivers.acp import EntitlementRevalidating  # noqa: F401 - raised here
@@ -197,6 +206,7 @@ from kiro_crew.platform.context import redact_log_via_context
 from kiro_crew.recovery.ladder import InfraError, classify_infra_error
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
 from kiro_crew.sel import sel
+from kiro_crew.trust_patterns import GrantDeadline, GrantEnded, grant_deadline_guard
 from kiro_crew.validation import MAX_ACP_SESSION_ID_LEN
 
 logger = logging.getLogger(__name__)
@@ -631,37 +641,11 @@ def mcp_launch_roster(
 # AcpClient's _CANCEL_GRACE_SECS floor without the process-kill (which is
 # impossible on a multiplexed runtime).
 _CANCEL_GRACE_SECS = 10.0
-# codex-acp's ``_session/steering`` request (``ACP_BACKENDS_STEERING_REQUEST``) and
-# the two outcomes that decide delivery.
-METHOD_SESSION_STEERING = "_session/steering"
-STEERING_INJECTED = "injected"
-STEERING_STARTED_NEW_TURN = "startedNewTurn"
-# Bounds on what a session holds for codex steers it has sent and not settled: at
-# most this many at once, each at most this long. A steer past either bound takes
-# the caller's queue path instead, which has its own limits.
-_MAX_STEERING_ANSWERS = 16
 # How long a new prompt waits for codex steering answers still owed from the
 # previous turn, so an adapter-owned turn one of them started is cancelled before
-# our prompt goes out (``_settle_abandoned_steering``).
+# our prompt goes out (``_settle_abandoned_steering``). The request's own wire and
+# bounds are shared with ``AcpClient`` (see ``acp.types``).
 _STEERING_SETTLE_SECS = 5.0
-# How long a codex steer waits for the adapter's answer. The dashboard composer
-# awaits the steer inside its send request, which the browser aborts after 10s
-# (``SEND_ABORT_MS``), so an answer slower than this sends the steer down the
-# caller's queue path instead of leaving the request to time out.
-_STEERING_ANSWER_WAIT_SECS = 8.0
-_MAX_STEERING_TEXT_CHARS = 64_000
-
-
-def _steering_outcome(result: object) -> str:
-    """The ``outcome`` of a ``_session/steering`` answer; "" for any other shape.
-
-    The answer is adapter-authored JSON: a result that is not an object is read as
-    no outcome (undelivered) rather than trusted to have ``.get``.
-    """
-    if not isinstance(result, dict):
-        return ""
-    outcome = result.get("outcome")
-    return outcome if isinstance(outcome, str) else ""
 
 
 # Commands that must stay on the PROMPT transport even where native
@@ -1065,7 +1049,13 @@ class AcpRuntimeProtocol(Protocol):
 
     def forget_request(self, future: "asyncio.Future[dict[str, Any]]") -> None: ...
 
-    async def send_response(self, request_id: str | int, result: dict[str, Any]) -> None: ...
+    async def send_response(
+        self,
+        request_id: str | int,
+        result: dict[str, Any],
+        *,
+        before_write: Callable[[], None] | None = None,
+    ) -> None: ...
 
     async def send_error(self, request_id: str | int, code: int, message: str) -> None: ...
 
@@ -1380,6 +1370,11 @@ class AcpSessionHandle:
         # raw_tool_params for the governance keystone (sensitive-path /
         # write-protected-config) checks. Mirrors AcpClient's _tool_call_params.
         self._tool_call_raw_params: dict[str, dict] = {}
+        # Skill bodies this session's tool calls read directly, credited to the
+        # usage ledger once each read completes. The same tracker AcpClient
+        # owns, so a backend served by the shared runtime earns the credit a
+        # per-process one does. Same per-turn lifecycle as the caches above.
+        self._skill_reads = SkillReadTracker()
         # toolCallId -> path named by the tool_call's diff content block, so the
         # permission event can carry diff_path for the edit gate when the
         # params themselves carry no path key. Same lifecycle as the caches above.
@@ -1887,6 +1882,7 @@ class AcpSessionHandle:
         self._tool_call_input_redacted.clear()
         self._tool_call_is_shell.clear()
         self._tool_call_raw_params.clear()
+        self._skill_reads.clear()
         self._tool_call_diff_path.clear()
         self._tool_call_kind.clear()
         self._tool_call_cache_overflow.clear()
@@ -2466,7 +2462,13 @@ class AcpSessionHandle:
 
     # ── Tool Approval ──
 
-    async def approve_tool(self, request_id: str | int, option_id: str | None = None) -> bool:
+    async def approve_tool(
+        self,
+        request_id: str | int,
+        option_id: str | None = None,
+        *,
+        deadline: GrantDeadline | None = None,
+    ) -> bool:
         """Approve a pending permission request.
 
         ``option_id`` overrides the auto-resolved id when provided. Otherwise the
@@ -2481,6 +2483,12 @@ class AcpSessionHandle:
         (:mod:`kiro_crew.permission_floor`): a request the deny floor or the
         sensitive-path checks refuse is REJECTED here, whichever consumer asked
         to approve it and whether or not that consumer consulted the gate.
+
+        ``deadline`` is set only by an approval a timed grant backs. It is
+        checked under the write lock, right before the answer is written: if it
+        has passed, nothing is written, the request stays pending as it was, and
+        :class:`~kiro_crew.trust_patterns.GrantEnded` tells the caller to ask
+        the person instead. Without it the approval is sent as before.
         """
         gate_event = self._permission_gate_events.pop(request_id, None)
         # No recorded event means no request this transport built, so there is
@@ -2502,10 +2510,11 @@ class AcpSessionHandle:
             return False
         resolved_id = option_id
         recorded = self._permission_options.pop(request_id, None)
-        # Answered — the turn is no longer waiting on a human. Also closes the
-        # human-wait segment of the park so an observer does not attribute the
-        # person's thinking time to the consumer (see _end_human_wait).
-        self._end_human_wait()
+        if deadline is None:
+            # Answered, so the turn is not waiting on a human. Also closes the
+            # human-wait segment of the park so an observer does not attribute the
+            # person's thinking time to the consumer (see _end_human_wait).
+            self._end_human_wait()
         if recorded:
             if resolved_id is None:
                 resolved_id = recorded.get("once") or recorded.get("always")
@@ -2515,10 +2524,27 @@ class AcpSessionHandle:
                 resolved_id = recorded.get("once") or resolved_id
         if resolved_id is None:
             resolved_id = OPTION_ALLOW_ONCE
-        await self._runtime.send_response(
-            request_id,
-            {"outcome": {"outcome": OUTCOME_SELECTED, "optionId": resolved_id}},
-        )
+        if deadline is None:
+            await self._runtime.send_response(
+                request_id,
+                {"outcome": {"outcome": OUTCOME_SELECTED, "optionId": resolved_id}},
+            )
+            return True
+        try:
+            await self._runtime.send_response(
+                request_id,
+                {"outcome": {"outcome": OUTCOME_SELECTED, "optionId": resolved_id}},
+                before_write=grant_deadline_guard(deadline, request_id),
+            )
+        except GrantEnded:
+            # Nothing was written: put the request back exactly as it was.
+            if gate_event is not None:
+                self._permission_gate_events[request_id] = gate_event
+            if recorded is not None:
+                self._permission_options[request_id] = recorded
+            raise
+        # Answered only now: until the write the request was still pending.
+        self._end_human_wait()
         return True
 
     async def reject_tool(self, request_id: str | int) -> None:
@@ -3167,7 +3193,7 @@ class AcpSessionHandle:
         See ``ACP_BACKENDS_STEERING_REQUEST`` for what was measured. The adapter
         sends no ``steering_consumed`` echo, so the request's own answer is the
         only delivery evidence. It is awaited until it arrives, the turn it was
-        aimed at ends, or ``_STEERING_ANSWER_WAIT_SECS`` pass, whichever is first;
+        aimed at ends, or ``STEERING_ANSWER_WAIT_SECS`` pass, whichever is first;
         the bound exists because the dashboard composer awaits this call inside a
         send request the browser aborts.
 
@@ -3213,8 +3239,8 @@ class AcpSessionHandle:
         what was injected with it (see ``ACP_BACKENDS_STEER``), so a steer settled
         there would be reported delivered and never run. Returning False sends it
         down the queue path instead, and it runs as the next turn. The same goes
-        for a steer past ``_MAX_STEERING_TEXT_CHARS`` or while
-        ``_MAX_STEERING_ANSWERS`` are held (the cap counts unanswered, abandoned
+        for a steer past ``MAX_STEERING_TEXT_CHARS`` or while
+        ``MAX_STEERING_ANSWERS`` are held (the cap counts unanswered, abandoned
         and proven-but-unreported steers).
         """
         if not self.is_turn_active or not self._prompt_written or self._awaiting_permission:
@@ -3222,7 +3248,7 @@ class AcpSessionHandle:
         held = (
             len(self._steering_answers) + len(self._abandoned_steering) + len(self._steers_proven)
         )
-        if len(text) > _MAX_STEERING_TEXT_CHARS or held >= _MAX_STEERING_ANSWERS:
+        if len(text) > MAX_STEERING_TEXT_CHARS or held >= MAX_STEERING_ANSWERS:
             return False
         session_id = self._session_id
         aimed_at = self._prompt_starts
@@ -3318,7 +3344,7 @@ class AcpSessionHandle:
         def _late_answer(fut: "asyncio.Future[dict[str, Any]]") -> None:
             if fut.cancelled() or fut.exception() is not None:
                 return
-            outcome = _steering_outcome(fut.result())
+            outcome = steering_outcome(fut.result())
             if outcome == STEERING_STARTED_NEW_TURN:
                 _cancel_unowned_turn()
             elif outcome == STEERING_INJECTED:
@@ -3348,7 +3374,7 @@ class AcpSessionHandle:
         try:
             waiters: set[asyncio.Future[Any]] = {answer, ended}
             await asyncio.wait(
-                waiters, timeout=_STEERING_ANSWER_WAIT_SECS, return_when=asyncio.FIRST_COMPLETED
+                waiters, timeout=STEERING_ANSWER_WAIT_SECS, return_when=asyncio.FIRST_COMPLETED
             )
         except BaseException:
             # A cancelled caller cannot settle this steer, but the runtime still
@@ -3386,7 +3412,7 @@ class AcpSessionHandle:
                 "cancelled" if answer.cancelled() else type(answer.exception()).__name__,
             )
             return False
-        outcome = _steering_outcome(answer.result())
+        outcome = steering_outcome(answer.result())
         if outcome == STEERING_STARTED_NEW_TURN:
             _unregister()
             _cancel_unowned_turn()
@@ -3486,7 +3512,7 @@ class AcpSessionHandle:
                 waiting.append((answer, aimed_at, wrapped))
                 continue
             elif not answer.cancelled() and answer.exception() is None:
-                ok = _steering_outcome(answer.result()) == STEERING_INJECTED
+                ok = steering_outcome(answer.result()) == STEERING_INJECTED
             if ok:
                 settled.append(wrapped)
             if flag is not None and not flag.done():
@@ -4292,7 +4318,7 @@ class AcpSessionHandle:
             self._available_models = parse_advertised_models({"availableModels": models})
             self._mark_available_models_captured()
 
-    async def ensure_served_default(self) -> None:
+    async def ensure_served_default(self, *, activated_model: str = "") -> None:
         """Move an inheriting pooled session off a backend default it cannot run.
 
         The pooled twin of ``AcpClient._ensure_served_default``.
@@ -4320,8 +4346,17 @@ class AcpSessionHandle:
         pooled session would be pinned to whichever model happened to be first
         on the list, and an unpinned slot would stop following the default.
         Only ``_resolved_model_id`` — what the session actually runs — changes.
+
+        ``activated_model`` is the model a ``session/set_mode`` just applied.
+        kiro-cli switches the session to the model the activated agent's spec
+        pins, replacing whatever it ran before — including the served model an
+        earlier call here moved it to. The id recorded from ``session/new`` is
+        stale then, so the caller passes the model kiro-cli reported for the
+        activation and it is judged instead.
         """
         if self._runtime.acp_backend == ACP_BACKEND_KIRO:
+            if activated_model.strip():
+                self._resolved_model_id = activated_model.strip()
             unserved = self._resolved_model_id or ""
             fallback = pick_served_default(unserved, self._advertised_model_ids())
             if not fallback:
@@ -5576,6 +5611,16 @@ class AcpSessionHandle:
                         # consumer that stops pulling: the call already ran, and this
                         # is the only in-band notice that it did.
                         self._tripwire_spec_disabled_tool(ev, msg)
+                        # Skill-read credit, awaited per frame so a call is noted
+                        # before its completion frame can arrive. The initial
+                        # tool_call and its refinement are both noted (the
+                        # arguments may ride either); the tracker dedupes by id.
+                        # Child-routed frames surface as subagent activity, not
+                        # these kinds, so a native child's reads are not credited.
+                        if ev.kind in (EVENT_TOOL_CALL, EVENT_TOOL_CALL_UPDATE):
+                            await self._skill_reads.note(ev)
+                        elif ev.kind == EVENT_TOOL_RESULT:
+                            self._skill_reads.credit(ev)
                         # After the tripwire read the row: a terminal frame settles
                         # the call, and its provenance is released so the caches
                         # hold calls in flight, not the turn's history.

@@ -3557,6 +3557,28 @@ jobs:
         shell: bash
         run: python .github/actions/setup-windows-tests/probe.py
 
+      - name: Pre-compile kiro_crew source to warm the .pyc cache
+        # Placed AFTER run-as-runner so this step runs as the same user (and
+        # with the same HOME) as the pytest session.  conftest._redirect_bytecode_cache
+        # sets PYTHONPYCACHEPREFIX to "${XDG_CACHE_HOME:-~/.cache}/kirocrew/pycache";
+        # the gateway child inherits that env var, so it only reads bytecode from
+        # that prefix tree -- NOT from __pycache__/.  Without the matching prefix
+        # this step warms the wrong cache and the first boot is still cold.
+        #
+        # Evidence of root cause (run 38339527809, job 115116247097):
+        #   boot1 (cold, no .pyc): 62.3 s -> 60 s timeout (FAILED)
+        #   boot2 (warm, .pyc in page cache): 19.5 s (PASSED)
+        #   delta = 42.8 s -- pure .pyc compilation on first subprocess import
+        run: |
+          python -c "
+          import os, subprocess, sys
+          cache = os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache')
+          prefix = os.path.join(cache, 'kirocrew', 'pycache')
+          os.makedirs(prefix, exist_ok=True)
+          env = {**os.environ, 'PYTHONPYCACHEPREFIX': prefix}
+          sys.exit(subprocess.run([sys.executable, '-m', 'compileall', '-q', 'src/kiro_crew'], env=env).returncode)
+          "
+
       - name: Boot a gateway end to end and assert the pass count
         # Linux uses the same non-root boundary as the backend shards.
         # Windows/macOS retain bash and the exact same test command.

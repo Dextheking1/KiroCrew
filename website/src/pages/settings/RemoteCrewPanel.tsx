@@ -85,6 +85,7 @@ import {
 import type { ErrorReport } from '../../utils/errorReport'
 import { parseErrorCode } from '../../utils/errorReport'
 import { reportInstanceFailure } from '../../utils/instanceFailureReport'
+import { isInstancesDisabledError } from '../../utils/instancesDisabled'
 import { readPersistedString, usePersistedString } from '../../hooks/usePersistedString'
 import { usePersistedBool } from '../../hooks/usePersistedBool'
 import { AUTO_CONNECT_KEY } from '../../hooks/useAutoConnectInstances'
@@ -96,6 +97,7 @@ import { setCrewEnabled } from '../../lib/crewEnabled'
 import { i18nT } from '../../i18n/t'
 import { guideCaution } from '../../guide/trustRoot'
 import { AddInstanceForm, StatusBadge } from './InstancesPanel'
+import CrewVersionStatus, { CrewVersionsReadError } from './CrewVersionStatus'
 import {
   EditInstanceForm,
   instanceFormFromView,
@@ -1000,6 +1002,7 @@ function CrewRow({
                 <KeyRound className="lucide-inline" /> {i18nT('pages.settings.remoteCrewPanel.needs_sign_in')}
               </Badge>
             )}
+            <CrewVersionStatus instanceId={inst.id} name={inst.name} connected={connected && !inst.disabled} />
           </div>
           <div className="text-[11px] text-muted-strong mt-1">
             {isCloud
@@ -1607,10 +1610,9 @@ export function RemoteCrewPanel() {
     // until an unrelated refetch. Poll while any delete is in flight, then stop.
     refetchInterval: () => (deletingTags.size > 0 ? 4000 : false),
   })
-  const disabled =
-    instancesQuery.error instanceof ApiError &&
-    instancesQuery.error.status === 403 &&
-    /disabled/i.test(instancesQuery.error.message)
+  // Keyed on the gateway's `instances_disabled` code, not the message text, so
+  // an owner-only or Slack-origin 403 shows as a load error, not as "turned off".
+  const disabled = isInstancesDisabledError(instancesQuery.error)
   // Any OTHER failure is a load error, not "you have no crews": rendering the
   // empty state over it would tell the user their crews are gone.
   // Both queries gate the crew list: a row's cloud-vs-manual identity comes from the
@@ -2343,6 +2345,7 @@ export function RemoteCrewPanel() {
                 {inProgress.filter(job => !isRegistered(job)).map(job => (
                   <SettingUpRow key={job.id} job={job} cancelling={cancelMutation.isPending && cancelMutation.variables === job.id} onCancel={id => cancelMutation.mutate(id)} />
                 ))}
+                <CrewVersionsReadError anyConnected={instances.some(i => !i.disabled && i.status.state === 'connected')} />
                 {instances.map(inst => (
                   <CrewRow
                     key={inst.id}

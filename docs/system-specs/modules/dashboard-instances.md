@@ -9,7 +9,7 @@ The instance store is two modules and one route, each with one job:
 
 | Piece | Where | What it owns |
 |---|---|---|
-| registry | `dashboard_templates/catalog.py` | the built-in templates, one loader |
+| registry | `dashboard_templates/catalog.py` | the built-in templates and the operator's own, one loader |
 | instance | `dashboard_templates/instance.py` | the copy, its versions, rollback, state, history |
 | route | `dashboard/handlers/member_dashboard.py` | what the frame reads |
 
@@ -75,6 +75,11 @@ after it landed. The two need opposite answers from a human -- one is a fresh cr
 the other is a dashboard that stopped working -- so a 404, or one word for both, would
 hide the second behind the first.
 
+An `empty` crewmate is still SHOWN a page, from `default_instance(slug)`: the shipped page
+whose id is the crewmate's slug, else `DEFAULT_TEMPLATE_ID`. Only shipped pages match by
+name; an operator's page never does. The read route and the `[DASHBOARD]` turn block both
+resolve through it, and nothing is written. No shipped page may be named `default`.
+
 `stale` covers two cases with different sentences: the template moved ahead of the copy,
 and the template left the registry. Nothing is missing from the copy in either case --
 it still renders -- which is exactly what the frame's stale band says.
@@ -124,9 +129,9 @@ which is the one failure nothing downstream could detect.
 
 An imported template declares `shared`, so a reader asking where it came from gets an
 answer other than "somebody here wrote it". None of this is in the tree, and it cannot
-land on its own: the registry scans only the built-in directory and `RENDERABLE_SOURCES`
-holds only `builtin`, so share ships with the same P2 wrapper document that lets a page
-nobody here reviewed render at all. Import without that wrapper would be a second route
+land on its own: the registry scans only the built-in directory and the operator's own
+folder, and `RENDERABLE_SOURCES` does not hold `shared`, so share ships with the same P2
+wrapper document that lets a page nobody here reviewed render at all. Import without that wrapper would be a second route
 to the hole the preview refusal closes.
 
 ## Registry rules
@@ -142,15 +147,39 @@ is two names for one template, and a lookup would find or miss it depending on w
 name the caller happened to hold.
 
 **`source` is checked against where the file actually is.** A template in the built-in
-directory may declare only `builtin`. Without that check the field would be worth
-nothing to a surface reading it to mean "this shipped in the product".
+directory may declare only `builtin`, and one in the operator folder only `user`.
+Without that check the field would be worth nothing to a surface reading it to mean
+"this shipped in the product".
 
-**One directory is scanned, and it is in this repo.** A page that renders runs its own
-script against the crewmate's values inside a frame that can navigate itself, so a
-registry that also scanned a writable directory would let whatever can write there
-choose what a crewmate's dashboard executes. `builtin` is the only provenance carrying a
-human review, which is why `RENDERABLE_SOURCES` holds one value. A template somebody
-writes themselves is P2 and needs a wrapper document this gateway mints; see the RFC.
+**Two roots are scanned, and no agent can write either.** A page that renders runs its
+own script against the crewmate's values inside a frame that can navigate itself, so a
+registry that scanned an agent-writable directory would let the agent choose what a
+crewmate's dashboard executes. The two roots:
+
+| Root | Origin | Why a person put the page there |
+|---|---|---|
+| `dashboard_templates/builtin/<id>/` | `builtin` | it is in this repo and went through review |
+| `<data home>/panel-templates/<id>/` | `user` | the operator placed it; every agent write path is refused on this folder |
+
+The operator folder is the one the panel's own template overrides use (`<id>.html`
+files). A dashboard page there is a DIRECTORY, so the two never collide: panel
+discovery reads only `.html` files and the catalog reads only directories. Its fences
+are the panel's, and each is pinned for a page one level down by
+`test_dashboard_operator_pages.py`: the sandbox seals the folder read-only and
+pre-creates it, the folder name refuses an alias, the file-tool gate refuses a write
+under it, and it is classified child-readable.
+
+Three more rules hold for the operator root only:
+
+* **A built-in id wins.** An operator page with a shipped id is reported in `problems`
+  and never served in its place.
+* **A linked folder is refused** (`agent_panel.override_templates_dir`), reported under
+  `panel-templates`, and the built-in pages are still served.
+* **A linked entry is refused.** The page directory, `manifest.json` and
+  `template.html` must each be a real file or directory under that name.
+
+`RENDERABLE_SOURCES` is `{builtin, user}`. A page an agent writes, or one imported as
+`shared`, renders from neither root; see the RFC.
 
 ## Snapshots: all five parts or nothing
 
@@ -298,12 +327,58 @@ and a gateway restart all leave it set. The member record does not grow.
 While locked, the crewmate's `[DASHBOARD]` turn block carries a LOCKED line telling
 it not to apply, roll back or propose another page, while noting that previewing for
 the person to look at still works.
+## Every commit syncs the upkeep helpers
 
-## The preview link is the ordinary read with `?preview=1`
+A fold field fills itself from the crew log; an agentic field is the crewmate's to
+write. `dashboard_upkeep` supplies two things for the agentic fields, from the field's
+`upkeep` key (`means`, `when`, `how`, optional `helper`): the TEXT, which
+`dashboard_fields` puts on each agentic row of its reply when it is called
+(`dashboard_upkeep.upkeep_rows`), so it cannot go stale and a crewmate with no file
+tools reads it; and the HELPER SCRIPTS, copies of the shipped
+`builtin/<id>/helpers/<file>` under `<skills dir>/.dashboard-upkeep/<slug>/scripts/`,
+which fetch data the crew log does not hold (PR checks via `gh`) and print a ready
+`dashboard_write` payload. The reply names each helper's absolute path. The dot
+directory keeps the scripts out of the skills index, and it holds nothing else.
 
-`GET /api/members/{slug}/dashboard?preview=1` serves the staged page through the same
-renderer, the same masking pass and the same owner gate as the live one, with
-`preview: true` in the body and `instance_version` left at the current version.
+`_commit` calls `dashboard_upkeep.sync` with the record it just wrote, so adopt, apply,
+rollback and edit each copy the helpers the new page names and drop one it does not.
+`turn_block` calls it too -- a crewmate on the default page never commits, and a gateway
+upgrade can change a shipped helper -- and, when the page has fields to write, adds the
+one pointer line saying `dashboard_fields` carries the upkeep text, which rides the
+member section through every compaction. `sync` writes only what differs, so it also
+puts back a hand edit. A root session's own dashboard (`is_session_key`) has no
+crewmate shell and gets no scripts and no helper path.
+
+The text and the helpers are read from the SHIPPED catalog entry. The crewmate's copy
+of the manifest is on the agent-writable side and `edit` may change it, so its `upkeep`
+is never read; only a `builtin` template may name a helper. The profile's Notes tab
+shows the same text (`GET /api/members/{slug}/briefing` `upkeep`). Decision:
+`rfc-crewmate-dashboard-upkeep-skill.md`.
+
+
+## The preview link opens the Dashboard tab; the tab reads `?preview=1`
+
+The link `dashboard_preview` hands back (`instance.preview_url`) is a PAGE:
+`/members?member=<exact crew name>&dashboard=preview`. The Members page opens that
+crewmate, opens the side panel on its Dashboard tab, and draws the staged page in the
+same sandboxed frame as the live one, under the one preview label the chat's side
+panel also uses (`DashboardPreviewLabel`: **Preview, not applied**, and that nothing
+changes until the person answers in chat). The label drops once the staged page is
+applied or expires, and the tab says the preview has closed. Switching
+crewmate drops the query, so the preview never follows a person to another crewmate.
+The tab shows the dynamic dashboard for a preview whether or not the Dynamic Dashboard
+Feature Preview is on: the staged page exists only in that form, and the person was
+sent to look at it.
+
+The link carries the crew NAME, not just the slug, because slugification is lossy and
+the page and the read below both refuse a slug alone (`missing_member`).
+
+To fill the frame, the tab reads
+`GET /api/members/{slug}/dashboard?member=<name>&preview=1`, which serves the staged
+page through the same renderer, the same masking pass and the same owner gate as the
+live one, with `preview: true` in the body and `instance_version` left at the current
+version. Nothing staged answers 404 `no_preview`, which the tab says in words (the page
+was kept, discarded or expired) with the same way back to the live page.
 
 One route and not two. A staged page carries the same crewmate's fold values as the page
 it would replace, so a route of its own would be a second place to get that owner gate

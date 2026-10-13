@@ -15,6 +15,17 @@ import type { ClientTransport } from './transport'
  *  affordance that routed here already promised a copy. */
 type RevealResult = { copy?: string }
 
+/** GET/PUT /api/aws/project-profile. `profile` is the bound name, `boundDir` the mapped directory
+ *  that binds it (the project itself or an ancestor), `status` the sign-in health of a bound
+ *  profile: `expired` is an SSO sign-in that no longer resolves. Names only: no account or ARN. */
+export interface ProjectAwsProfile {
+  path: string
+  profile: string | null
+  boundDir: string | null
+  profiles: string[]
+  status?: 'ok' | 'expired' | 'unavailable' | null
+}
+
 /** Deadline for the whole-tree walks, `api.fileSearch` and `api.projectTree`. Its own literal,
  *  deliberately not an alias of the skills menu's: the two happen to agree today, and retuning
  *  that menu must not silently retune these walks. The tree read shares this bound rather than
@@ -93,6 +104,15 @@ export function createFilesEndpoints({ post, put, del, j, jfetch: fetch, checkSe
     /** Un-favourite one directory. The path rides the QUERY STRING, not a body: a DELETE body is
      *  not carried reliably by every client, which is why the endpoint reads it from the query. */
     removeFavoriteProject: (path: string) => del('/api/favorite-projects?path=' + encodeURIComponent(path)).then(j) as Promise<{ dirs: string[] }>,
+    /** The AWS named profile `path` is bound to (`aws.project_profiles`), its sign-in health and the
+     *  profile names the picker offers. Owner-only on the server, so a non-owner read rejects. */
+    projectAwsProfile: (path: string) =>
+      withJournaledDeadline(BROWSE_FILES_TIMEOUT_MS, undefined, '/api/aws/project-profile', s =>
+        fetch('/api/aws/project-profile?path=' + encodeURIComponent(path), { signal: s }).then(j)) as Promise<ProjectAwsProfile>,
+    /** Bind `path` to `profile`; `''` removes the binding for exactly that directory. Resolves with
+     *  the binding as the server now holds it (no health word: the chip re-reads for that). */
+    setProjectAwsProfile: (path: string, profile: string) =>
+      put('/api/aws/project-profile', { path, profile }).then(j) as Promise<ProjectAwsProfile>,
     // Bounded HERE, not per initiator: react-query dedupes on the key, so the weakest
     // initiator would decide the bound.
     browseDirs: (path?: string) => withJournaledDeadline(BROWSE_FILES_TIMEOUT_MS, undefined, '/api/browse-dirs', s => fetch('/api/browse-dirs' + (path ? '?path=' + encodeURIComponent(path) : ''), { signal: s }).then(j)) as Promise<{ path: string; parent: string; dirs: { name: string; path: string }[] }>,

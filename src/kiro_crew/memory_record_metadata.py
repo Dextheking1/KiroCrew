@@ -163,6 +163,23 @@ def ensure_schema(db: sqlite3.Connection) -> None:
         db.execute(statement)
 
 
+def identity_key(db: sqlite3.Connection, key: str, metadata: dict | None) -> str:
+    """Return the key of the active fact holding *metadata*'s identity, else *key*.
+
+    ``idx_memory_fact_identity`` makes the identity unique among active facts,
+    so a write naming an identity another key holds must land on that key; a
+    new key would INSERT a second holder. *metadata* must be normalized.
+    """
+    if not (metadata and metadata.get("subject") and metadata.get("predicate")):
+        return key
+    holder = db.execute(
+        "SELECT record_id FROM memory_record_meta WHERE scope=? AND subject=? "
+        "AND predicate=? AND status='active' AND kind IN ('fact','directive')",
+        (metadata.get("scope", ""), metadata["subject"], metadata["predicate"]),
+    ).fetchone()
+    return holder[0].removeprefix("key:") if holder else key
+
+
 def record_id_for(kind: str, record_id: str) -> str:
     if kind not in _KINDS or not isinstance(record_id, str) or not record_id:
         raise ValueError("Memory record kind and id are required")
@@ -486,6 +503,26 @@ def eligible(metadata: dict, *, now: str | None = None) -> bool:
         and (not metadata.get("valid_from") or metadata["valid_from"] <= stamp)
         and (not metadata.get("valid_until") or stamp < metadata["valid_until"])
     )
+
+
+def ineligible_record_ids(rows) -> set[str]:
+    """Record ids among metadata *rows* that :func:`eligible` rejects right now.
+
+    A row whose status is not ``active`` is ineligible at every instant, so it is
+    settled without parsing any timestamp; only active rows carrying a validity
+    window are evaluated, against one ``now`` taken for the whole set.
+    """
+    blocked: set[str] = set()
+    now: str | None = None
+    for row in rows:
+        if row["status"] != "active":
+            blocked.add(row["record_id"])
+            continue
+        if now is None:
+            now = datetime.now(timezone.utc).isoformat()
+        if not eligible(dict(row), now=now):
+            blocked.add(row["record_id"])
+    return blocked
 
 
 def reconcile(db: sqlite3.Connection) -> int:

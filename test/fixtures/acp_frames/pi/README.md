@@ -1,6 +1,6 @@
 # Pi frame corpus
 
-Three files, all live. Read `../README.md` first for what a fixture is and what
+Four files, all live. Read `../README.md` first for what a fixture is and what
 the corpus does and does not prove.
 
 | File | Provenance | Frame classes it carries |
@@ -8,11 +8,25 @@ the corpus does and does not prove.
 | `session-live.jsonl` | live | initialize response with `agentInfo.version`, `session/new` response with a `sessionId` (a `model` select of `provider/model` ids, a `thought_level` select, a `modes` block), `available_commands_update`, a `tool_call` and two `tool_call_update` frames (`in_progress`, then `failed`) for a read the model called with no arguments, `agent_message_chunk`, and the `session/prompt` result carrying `stopReason` |
 | `permission-request-live.jsonl` | live | `tool_call`, `tool_call_update`, the `session/request_permission` the adapter forwarded from Kiro Crew's gate extension, the updates through `completed`, and the result |
 | `session-load-live.jsonl` | live | a `session/load` from a second process: the replayed `user_message_chunk` / `agent_message_chunk` / `tool_call` updates and the load result, which carries `configOptions`, `models` and `modes` |
+| `compact-live.jsonl` | live | the initialize and `session/new` responses, four ordinary turns (`agent_message_chunk`, `usage_update`, `session/prompt` result), the `/compact` turn (pi's `Compaction completed` chunk and an `end_turn` result with no `usage_update` and no status frame), and one ordinary turn after it |
 
 Captured off `pi-acp` 0.0.33 spawning `pi` 0.85.1 and driving a locally
 served model configured in pi's own `models.json`, with agent-to-client lines
 verbatim. The working directory in the frames is a scratch project, not a home
 directory.
+
+## What the compaction capture establishes
+
+`compact-live.jsonl` was taken with `scripts/capture_acp_compaction.py` off `pi-acp`
+0.0.34 spawning `pi` 1.2.0, against a scripted OpenAI-compatible endpoint on the
+loopback interface named in pi's own `models.json`. That endpoint reports `prompt_tokens`
+as the character count of the messages pi sent, divided by four, so the `used` series
+measures what pi itself put on the wire. Over four ordinary turns `used` climbed
+12773 -> 25127 -> 37481 -> 49834. The `/compact` turn ended `end_turn` inside the same
+`session/prompt` request with pi's own `Compaction completed` chunk and nothing after
+it. The next ordinary turn added another ~12k-token prompt and read 37518, below the
+pre-compact peak. That is the bar `ACP_BACKENDS_COMPACT` holds its members to, and the
+absence of a status frame is what puts pi in `ACP_BACKENDS_INLINE_COMPACTION` too.
 
 ## What the permission capture establishes
 

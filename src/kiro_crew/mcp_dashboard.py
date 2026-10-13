@@ -83,7 +83,7 @@ from urllib.parse import quote
 
 from kiro_crew.config.loader import KiroCrewConfig
 from kiro_crew.config.sections import FOLDER_SORT_DEFAULT, FOLDER_SORT_MODES
-from kiro_crew.dashboard.chat_folders import (
+from kiro_crew.dashboard.folder_ownership import (
     _folder_owner_app,
     _subtree_holds_foreign_folder,
 )
@@ -138,7 +138,9 @@ def _folder_tools() -> tuple[Tool, ...]:
                 "mode the listing says so and warns that an anchor sets the stored "
                 "position without changing the displayed order. Returns per "
                 "folder: id, human path, project directory, default "
-                "agent, and a hidden flag; "
+                "agent, a hidden flag, and the steering directories it DECLARES "
+                "(``steering=[…]``; a folder inherits its ancestors' too, "
+                "root-first, so read up the tree for the full set); "
                 "then one line per live session (slot key + title) nested under it, "
                 "and an '(unfiled)' group for sessions at the top level. Use this to "
                 "get folder ids/paths and session keys before calling "
@@ -261,7 +263,9 @@ def _folder_tools() -> tuple[Tool, ...]:
                 "fields here): those fields change the working directory, agent, "
                 "memory boundary or standing instructions of every future session "
                 "filed in the folder, which is the person's call in the folder "
-                "settings, not an agent's. An app agent or crew member may update "
+                "settings, not an agent's. To ask for a steering_dirs change, "
+                "propose_change(kind='folder.steering') puts a card in front of "
+                "the person. An app agent or crew member may update "
                 "only a folder it created. Refused in a session linked to a channel "
                 "(a resumed channel conversation, a channel mirror or a linked Slack "
                 "thread)."
@@ -653,6 +657,51 @@ def _board_tools() -> tuple[Tool, ...]:
                 "PUT /api/chat/tag-columns/order",
             ),
         ),
+        Tool(
+            name="session_move_to_column",
+            description=(
+                "Move a LIVE session's card into a sidebar board column, the same as "
+                "dragging it there. ``session`` is a slot key or 'dashboard:<slot>' "
+                "session key from chat_folder_tree, or a session's exact title when "
+                "that title is unique. ``column`` is a column id or a column name, "
+                "matched case-insensitively (see chat_tag_column_list); a name two "
+                "columns share is refused. The session takes the one status tag the "
+                "column filters on and loses its other status tags; plain labels "
+                "stay. A column with no single status tag, and a live-state lane, "
+                "cannot take a card, and the result says so. The rules of chat_tag "
+                "set_state apply: the column's status must be one an agent may both "
+                "add and remove, so a status the person reserved or made add-only "
+                "is refused (tag_policy_denied). An "
+                "app agent may move only its own sessions; a crew member only a "
+                "session it owns or created."
+            ),
+            schema={
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "Slot key, 'dashboard:<slot>' session key, or exact unique session title.",
+                    },
+                    "column": {
+                        "type": "string",
+                        "description": "Column id, or column name (case-insensitive).",
+                    },
+                },
+                "required": ["session", "column"],
+            },
+            run=_run_session_move_to_column,
+            # A ``session_*`` row: the table's strict gate verifies the caller
+            # before the body runs and hands it over as ``ctx.caller_key``,
+            # and ``SESSION_CONTROL_TOOLS`` (hence the channel containment
+            # check) picks it up.
+            identity="strict",
+            routes=(
+                "GET /api/chat/tag-columns",
+                "GET /api/chat/tags",
+                "GET /api/chat/slots",
+                "POST /api/chat/slots/{slot}/drop",
+            ),
+        ),
     )
 
 
@@ -899,6 +948,34 @@ def _session_tools() -> tuple[Tool, ...]:
             routes=("POST /api/session-control/retry",),
         ),
         Tool(
+            name="session_continue",
+            description=(
+                "Hand another session's thread back to its agent, the same as pressing "
+                "Continue in that tab. Use it when a turn was cut short by a gateway "
+                "restart or a killed process: such a turn leaves no error row and looks "
+                "finished, so session_retry refuses it. The session is sent one of two "
+                "fixed messages and the result says which: 'resumed' (its last turn was "
+                "interrupted, pick it up) or 'continued' (its last turn ended cleanly, "
+                "carry on). Takes no prompt text; to ask for something new use "
+                "session_send. Refused while the target is running, busy or has queued "
+                "messages, and after two failed session starts in a row "
+                "(session_start_repeat)."
+            ),
+            schema={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Session key from list_sessions, or its exact title.",
+                    },
+                },
+                "required": ["target"],
+            },
+            run=_run_session_continue,
+            identity="strict",
+            routes=("POST /api/session-control/continue",),
+        ),
+        Tool(
             name="session_set_model",
             description=(
                 "Change the model and/or reasoning effort another session runs on; "
@@ -1007,6 +1084,33 @@ def _session_tools() -> tuple[Tool, ...]:
             run=_run_session_rename,
             identity="strict",
             routes=("POST /api/session-control/rename",),
+        ),
+        Tool(
+            name="session_generate_title",
+            description=(
+                "Regenerate the sidebar title of a live session YOU created, from its "
+                "recent transcript, the same as the sidebar's 'Regenerate title' action. "
+                "Costs one model call on the titling model and waits for it, so the "
+                "reply carries the new title (or the unchanged one when the model had "
+                "nothing better). The new title replaces the current one, including a "
+                "title someone set by hand, and the automatic titler may revise it "
+                "later. Only sessions this session created are reachable, never your "
+                "own. One call per session every 5 minutes; a repeat inside that window "
+                "is refused. To set an exact title instead, use session_rename."
+            ),
+            schema={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Session key from list_sessions, or its exact title.",
+                    },
+                },
+                "required": ["target"],
+            },
+            run=_run_session_generate_title,
+            identity="strict",
+            routes=("POST /api/session-control/generate-title",),
         ),
         Tool(
             name="session_close",
@@ -2885,6 +2989,27 @@ def _run_session_retry(args: dict[str, Any], ctx: ToolContext) -> str:
     )
 
 
+def _run_session_continue(args: dict[str, Any], ctx: ToolContext) -> str:
+    try:
+        resp = ctx.client.post(
+            "/api/session-control/continue",
+            {"target": args["target"]},
+            session_key=ctx.caller_key,
+        )
+    except DashboardError as refused:
+        return f"Error: could not continue that session: {refused.error}"
+    target = resp.get("target", args["target"])
+    body = resp.get("body", "continued")
+    if body == "resumed":
+        how = "its last turn was interrupted, so it was told to pick that turn up"
+    else:
+        how = "its last turn had ended, so it was told to carry on"
+    return redact(
+        f"\u25b6\ufe0f Continue sent to `{target}` ({body}): {how}. "
+        "Read the result with session_read_message."
+    )
+
+
 def _run_session_set_model(args: dict[str, Any], ctx: ToolContext) -> str:
     payload = {"target": args["target"]}
     for key in ("model", "reasoning_effort"):
@@ -2923,6 +3048,32 @@ def _run_session_rename(args: dict[str, Any], ctx: ToolContext) -> str:
         return redact(f"Error: could not rename that session: {resp['error']}")
     target = resp.get("target", args["target"])
     return redact(f"Renamed `{target}` to {resp.get('title', args['title'])!r}.")
+
+
+#: The generate-title route waits for one titling-model call, so the client
+#: allows longer than the 30-second default. A transport timeout does not undo
+#: the call: the title can still land, and the target's one-per-window budget
+#: (``create_rate_limit.WINDOW_SECS``, longer than this wait) refuses a retry.
+GENERATE_TITLE_TIMEOUT_SECS = 120
+
+
+def _run_session_generate_title(args: dict[str, Any], ctx: ToolContext) -> str:
+    try:
+        resp = ctx.client.post(
+            "/api/session-control/generate-title",
+            {"target": args["target"]},
+            timeout=GENERATE_TITLE_TIMEOUT_SECS,
+            session_key=ctx.caller_key,
+        )
+    except DashboardError as refused:
+        resp = refused.body
+    if resp.get("error"):
+        return redact(f"Error: could not generate a title for that session: {resp['error']}")
+    target = resp.get("target", args["target"])
+    title = resp.get("title", "")
+    if resp.get("changed"):
+        return redact(f"Retitled `{target}` to {title!r}.")
+    return redact(f"`{target}` keeps its title {title!r}; the model offered nothing new.")
 
 
 def _run_session_reload(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -3408,6 +3559,11 @@ def _run_chat_folder_tree(args: dict[str, Any], ctx: ToolContext) -> str:
             meta_bits.append(f"project={row['project_dir']}")
         if row.get("default_agent"):
             meta_bits.append(f"agent={row['default_agent']}")
+        # What the folder DECLARES, so an agent proposing a folder.steering
+        # card sees the list it replaces. An ancestor's line above is the
+        # inherited part: the tree is already root-first.
+        if isinstance(row.get("steering_dirs"), list) and row.get("steering_dirs"):
+            meta_bits.append(f"steering=[{', '.join(str(p) for p in row['steering_dirs'])}]")
         # No archived count. The invariant this server holds is that nothing it
         # emits discloses a non-persistent session — and the folders endpoint's
         # ``history_count`` covers archived transcripts with no memory_mode to
@@ -4378,6 +4534,91 @@ def _run_chat_tag_column_move(args: dict[str, Any], ctx: ToolContext) -> str:
             )
         return redact(f"Error: {refused.error}")
     return redact(f"Moved column `{names[move_id]}` {side} `{names[anchor_id]}`.")
+
+
+#: ``/drop`` rejection codes that are answers, not failures: the card stays
+#: where it is and calling again changes nothing, so they read as "Not moved".
+_DROP_NOT_MOVED = {
+    "not_status_lane": "that column does not filter on exactly one status tag, so "
+    "no tag change can place a card there",
+    "state_lane": "that column follows the session's live state, which no tag " "change can set",
+}
+
+
+def _run_session_move_to_column(args: dict[str, Any], ctx: ToolContext) -> str:
+    # This writes to a session OTHER than the caller's, so the row is strict:
+    # the table verified the caller before this ran, and that key rides on
+    # every request unchanged.
+    caller_key = ctx.caller_key
+    channel_err = _refuse_channel_board_write("session_move_to_column", caller_key)
+    if channel_err:
+        return channel_err
+    columns, cols_err = _get_rows(ctx.client, "/api/chat/tag-columns")
+    if cols_err:
+        return f"Error: {cols_err}"
+    column_id, col_err = _resolve_chat_tag_column(str(args["column"]), columns)
+    if col_err:
+        return redact(f"Error: {col_err}")
+    column_name = (
+        next((str(c.get("name") or "").strip() for c in columns if c.get("id") == column_id), "")
+        or column_id
+    )
+    chat_slots, slots_err = _visible_chat_slots(ctx)
+    if slots_err:
+        return f"Error: {slots_err}"
+    slot_key, slot_err = _resolve_chat_slot_key(args["session"], chat_slots)
+    if slot_err:
+        return redact(f"Error: {slot_err}")
+    slot_row = next((s for s in chat_slots if str(s.get("key") or "") == slot_key), {})
+    # ``expected_created`` pins the drop to the slot generation resolved above,
+    # as chat_session_pin does: a slot key recreated for another conversation
+    # in between is refused instead of retagged.
+    body: dict[str, Any] = {"column_id": column_id}
+    slot_created = str(slot_row.get("created") or "")
+    if slot_created:
+        body["expected_created"] = slot_created
+    # The tags revision read with the slot above: the drop compares-and-sets
+    # against it like chat_tag_assign's PUT, so a tag toggled in between is
+    # not judged or written on a list this call never saw.
+    base_rev = str(slot_row.get("tags_revision") or "")
+    if base_rev:
+        body["base_tags_revision"] = base_rev
+    try:
+        d = ctx.client.post(
+            f"/api/chat/slots/{quote(slot_key, safe='')}/drop",
+            body,
+            session_key=caller_key,
+        )
+    except DashboardError as refused:
+        if refused.code == "column_not_found":
+            return redact(
+                f"Error: column `{column_name}` was removed before the move. Nothing "
+                "was written — call chat_tag_column_list for the current columns."
+            )
+        if refused.code == "stale_base":
+            return redact(
+                f"Error: the tags on `{slot_key}` changed while this call was "
+                "resolving the session. Nothing was written — call "
+                "session_move_to_column again; it re-reads the session."
+            )
+        return redact(f"Error: {refused.error}")
+    if d.get("ok") is not True:
+        code = str(d.get("code") or "")
+        if code == "session_gone":
+            return redact(
+                f"Error: session `{slot_key}` closed or was replaced after it was "
+                "resolved. Nothing was written — call chat_folder_tree to see the "
+                "current sessions."
+            )
+        why = _DROP_NOT_MOVED.get(code) or str(d.get("reason") or "the board refused it")
+        return redact(f"Not moved: session `{slot_key}` stays put — {why}.")
+    tags, tags_err = _get_rows(ctx.client, "/api/chat/tags")
+    names_by_id = (
+        {} if tags_err else {str(t.get("id") or ""): str(t.get("name") or "?") for t in tags}
+    )
+    final = [str(t) for t in (d.get("tags") or []) if isinstance(t, str)]
+    shown = ", ".join(f"`{names_by_id.get(t, t)}`" for t in final) or "none"
+    return redact(f"Moved session `{slot_key}` into column `{column_name}`. Tags now: {shown}.")
 
 
 #: Every tool this server has, one row each, in the order ``tools/list`` advertises

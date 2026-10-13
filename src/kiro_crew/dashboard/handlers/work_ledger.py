@@ -92,8 +92,7 @@ _CODE_STATUS: dict[str, int] = {
     work_ledger.CODE_ALREADY_BOUND: 409,
     work_ledger.CODE_ITEM_CLOSED: 409,
     work_ledger.CODE_ITEM_CAP_EXCEEDED: 409,
-    work_ledger.CODE_ITEM_STORE_FULL: 409,
-    work_ledger.CODE_GOAL_ITEM_CAP_REACHED: 409,
+    work_ledger.CODE_GOAL_CONCURRENCY_CAP_REACHED: 409,
     work_ledger.CODE_DEPTH_EXCEEDED: 409,
     work_ledger.CODE_FIELD_TOO_LONG: 400,
     work_ledger.CODE_INVALID_ACTION: 400,
@@ -944,6 +943,7 @@ def _baseline_fields(item: Any, header: Any) -> dict[str, Any]:
         "created_at": item.created_at or None,
         "last_report_at": item.last_report_at or None,
         "closed_at": item.closed_at or None,
+        "decided_at": getattr(item, "decided_at", None) or None,
     }
 
 
@@ -1267,9 +1267,16 @@ async def api_work_ledger_get(request: web.Request) -> web.Response:
             f"read, so it is no longer one to return it to: {why}.",
         )
     _audit(key, "work_ledger_read", "ok", resources=f"{len(rows)} item(s)")
-    # ``goal_items_used`` is derived, never stored: the number the conductor's
-    # "items used: N of <item_cap>" line reports, read off the same header.
-    conductor = dict(record.to_dict(), goal_items_used=record.goal_items_used)
+    # ``goal_items_used`` and ``cap_exceeded`` are derived, never stored: the
+    # number the conductor's "items used: N of <item_cap>" line reports, and
+    # whether that line has gone past its cap, both read off the same header.
+    # Advisory: the compact read carries them so a patrol that reads only the
+    # status columns still sees a goal spending past what the user expected.
+    conductor = dict(
+        record.to_dict(),
+        goal_items_used=record.goal_items_used,
+        cap_exceeded=record.cap_exceeded,
+    )
     payload: dict[str, Any] = {"conductor": conductor, "items": rows}
     if compact:
         payload["compact"] = True
@@ -1313,6 +1320,7 @@ def _row_with_flags(
         item,
         worker_running=_slot_running(state, item.worker_session_key or ""),
         worker_closed=_slot_closed(state, item.worker_session_key or ""),
+        worker_looping=_slot_looping(item.worker_session_key or ""),
     )
     row["acceptance_concrete"] = work_ledger.is_acceptance_concrete(item.acceptance)
     row["unpatrolled"] = item.state == "open" and not patrolled
@@ -1468,6 +1476,18 @@ def _slot_closed(state: DashboardState, key: str) -> bool:
     return ledger_wake.worker_closed(state, key)
 
 
+def _slot_looping(key: str) -> bool:
+    """Whether *key*'s session holds an active loop, read the way the wake gate reads it.
+
+    One resolver, :func:`ledger_wake.worker_looping`, answers both the badge and the
+    stall wake, so a worker waiting inside its own monitor loop reads the same on
+    both. No auto-nudge service, or anything unreadable, answers False.
+    """
+    from kiro_crew.autonudge import get_instance
+
+    return ledger_wake.worker_looping(get_instance(), key)
+
+
 def worker_holds_open_item(slot_key: str) -> bool:
     """Whether *slot_key* is a worker bound to an OPEN item that names it back. BLOCKING.
 
@@ -1603,6 +1623,7 @@ async def api_work_ledger_record(request: web.Request) -> web.Response:
         event_ts=_WIDEST_STAMP,
         created_at=_WIDEST_STAMP,
         closed_at=_WIDEST_STAMP,
+        decided_at=_WIDEST_STAMP,
     )
     if invalid is not None:
         return invalid
@@ -1628,6 +1649,7 @@ async def api_work_ledger_record(request: web.Request) -> web.Response:
             event_ts=_WIDEST_STAMP,
             created_at=_WIDEST_STAMP,
             closed_at=_WIDEST_STAMP,
+            decided_at=_WIDEST_STAMP,
         ):
             return _refuse_item_too_large(key, "work_ledger_record", str(cleaned.get("item_id")))
         _audit(key, "work_ledger_record", "denied", resources=action, error="work_entry_too_large")
@@ -1734,6 +1756,7 @@ async def api_work_ledger_record(request: web.Request) -> web.Response:
                 event_ts=getattr(event, "ts", None) or None,
                 created_at=getattr(item, "created_at", None) if action == "create" else None,
                 closed_at=getattr(item, "closed_at", None) if action == "close" else None,
+                decided_at=getattr(item, "decided_at", None) if action == "decide" else None,
             ),
         )
         if not landed:
@@ -2064,6 +2087,7 @@ def _write(key: str, action: str, cleaned: dict[str, Any]) -> dict[str, Any]:
         round_number=cleaned.get("round"),
         fails=cleaned.get("fails"),
         item_cap=cleaned.get("item_cap"),
+        concurrency_cap=cleaned.get("concurrency_cap"),
         new_goal=cleaned.get("new_goal"),
     )
 

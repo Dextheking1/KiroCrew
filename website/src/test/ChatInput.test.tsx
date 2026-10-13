@@ -1018,7 +1018,7 @@ describe('ChatInput', () => {
       expect(screen.getByText('High')).toBeInTheDocument()
     })
 
-    it('renders Default label when effort is empty', () => {
+    it('leaves the level out when effort is empty', () => {
       renderWithProviders(
         <ChatInput {...defaultProps}
           providerId="acp"
@@ -1028,7 +1028,7 @@ describe('ChatInput', () => {
           onModelClick={vi.fn()}
         />
       )
-      expect(screen.getByText('Default')).toBeInTheDocument()
+      expect(screen.getByTestId('composer-model-chip')).toHaveTextContent(/^claude-opus-4\.7$/)
     })
 
     it('shown when hasEffort is set regardless of providerId', () => {

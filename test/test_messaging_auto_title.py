@@ -1164,6 +1164,33 @@ class TestCleaning:
         assert auto_title.clean_title(reply) == ""
 
     @pytest.mark.parametrize(
+        "reply",
+        [
+            "No puedo acceder a ese enlace.",
+            "Не могу открыть эту ссылку.",
+            "मैं इस लिंक को नहीं खोल सकता।",
+            "申し訳ありませんが、リンクを開けません。",
+        ],
+    )
+    def test_a_terminated_refusal_in_any_script_is_not_stored(self, reply):
+        """``clean_title`` strips a final period before the prose check, so the
+        sentence end is read from the line before the strip. Mutation: drop
+        the ``ends_like_sentence`` call -- red on the period-closed rows."""
+        assert auto_title.clean_title(reply) == ""
+
+    @pytest.mark.parametrize(
+        "reply, expected",
+        [
+            ("Piano di aggiornamento Node", "Piano di aggiornamento Node"),
+            ("إصلاح خطأ تسجيل الدخول", "إصلاح خطأ تسجيل الدخول"),
+            ("修复会话标题语言", "修复会话标题语言"),
+            ("Fix login bug.", "Fix login bug"),
+        ],
+    )
+    def test_a_short_title_in_any_script_is_kept(self, reply, expected):
+        assert auto_title.clean_title(reply) == expected
+
+    @pytest.mark.parametrize(
         "reply, expected",
         [
             ("Node upgrade plan", "Node upgrade plan"),

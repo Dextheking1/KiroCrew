@@ -77,6 +77,7 @@ import {
   PathProbeCtx,
   ReadOnlyCodeCtx,
   SessionActionCtx,
+  type InsideLink,
   type LinkUnfurl,
   type PathActions,
   type SessionActions,
@@ -108,6 +109,9 @@ export { pendingImageBoxStyle, reservedImageClass, reservedImageStyle } from './
 export { rehypeSanitize, remarkVerbatimUnknownTags } from './markdown/sanitize'
 export { rehypeStableRootKeys } from './markdown/treeTransforms'
 export { dispatchLightbox, Lightbox } from './markdown/Lightbox'
+
+/** A leading URL scheme (`https:`, `mailto:`, `vscode:`), RFC 3986 spelling. */
+const URL_SCHEME_RE = /^[a-z][a-z\d+.-]*:/i
 
 /** Default markdown anchor, unless a `LinkOverrideCtx` provider claims the href.
  *
@@ -157,6 +161,10 @@ function MdAnchor({ node, href, children }: React.AnchorHTMLAttributes<HTMLAncho
       if (!decodedHref.startsWith('//')) localHref = decodedHref
     } catch { /* keep it a normal link */ }
   }
+  // Where the link goes, for the code spans in its label (`InsideLinkCtx`): a
+  // scheme or a protocol-relative `//host` leaves the dashboard; anything else
+  // is a local address.
+  const linkKind: InsideLink = href && (URL_SCHEME_RE.test(href) || href.startsWith('//')) ? 'external' : 'local'
   // Decoded but NOT narrowed to root-relative: the app mints its own share links
   // absolute, and the recognizer's origin check is what refuses a foreign one.
   let sessionCandidate: string | null = null
@@ -335,7 +343,7 @@ function MdAnchor({ node, href, children }: React.AnchorHTMLAttributes<HTMLAncho
   if (target && meta) {
     return (
       <LinkChip meta={meta} href={target}>
-        <InsideLinkCtx.Provider value={true}>{children}</InsideLinkCtx.Provider>
+        <InsideLinkCtx.Provider value={linkKind}>{children}</InsideLinkCtx.Provider>
       </LinkChip>
     )
   }
@@ -375,7 +383,7 @@ function MdAnchor({ node, href, children }: React.AnchorHTMLAttributes<HTMLAncho
         ? 'text-muted'
         : 'text-accent underline underline-offset-2 decoration-accent/40 hover:decoration-accent'}
     >
-      <InsideLinkCtx.Provider value={true}>{children}</InsideLinkCtx.Provider>
+      <InsideLinkCtx.Provider value={linkKind}>{children}</InsideLinkCtx.Provider>
       {/* The not-open explanation reaches touch / keyboard / AT users as a
           visually-hidden description APPENDED to the anchor's accessible name —
           a native `title` renders only on mouse hover, so without this the muted
@@ -495,7 +503,8 @@ const MD_COMPONENTS = {
     // rule as FENCE_OPEN (useBlockAssembler) / fixCodeFences.
     const match = /language-(\S+)/.exec(className || '')
     const lang = match?.[1]
-    const codeStr = String(children).replace(/\n$/, '')
+    // An empty fence has no children; String(undefined) would show "undefined".
+    const codeStr = String(children ?? '').replace(/\n$/, '')
 
     // `rehypeRedactionMarkers` stamps the ordinal of this block's first
     // credential tag when it holds any this reply has a record for. It is
@@ -642,9 +651,11 @@ export function fixCodeFences(s: string): string {
     return num + '\\.' + trail
   })
   // Ensure blank line before opening fences that are glued to preceding text.
-  // The info string is the whole backtick-free line, including attributes and
-  // a leading space, matching FENCE_OPEN in useBlockAssembler.
-  s = s.replace(/([^\n])(\n?)(```[^`\n]*\n)/g, (_, pre, nl, fence) =>
+  // The info string may be a tag (FENCE_OPEN's tag rule in useBlockAssembler,
+  // after optional whitespace) plus an optional `{...}` attribute block, and
+  // nothing more: a ``` run followed by more words is a mid-sentence mention,
+  // and moving it onto its own line would open a fence over the prose after it.
+  s = s.replace(/([^\n])(\n?)(```(?:[ \t]*[^`\s]+)?(?:[ \t]+\{[^`\n]*\})?[ \t\r]*\n)/g, (_, pre, nl, fence) =>
     nl ? pre + nl + fence : pre + '\n\n' + fence
   )
   // Split closing fences glued to trailing text: ```358KB → ```\n358KB
@@ -980,9 +991,13 @@ function BlockRenderer({ block, prevBlock, onFileOpen, sourcePos, messageTs, slo
       const foldKey = slotKey != null && messageTs != null && block.startLine != null
         ? `${slotKey}:${messageTs}:${block.startLine}`
         : undefined
-      const node = collapseDiffs
-        ? <FoldableDiffBlock code={block.content} complete={block.complete} onFileOpen={onFileOpen} pathHint={pathHint} foldKey={foldKey} />
-        : <DiffBlock code={block.content} complete={block.complete} onFileOpen={onFileOpen} pathHint={pathHint} />
+      // A finalized fence that never closed may have swallowed the rest of the
+      // reply, so the chat must not leave it folded: the same chip stays
+      // mounted, opens itself and says why it looks wrong.
+      const node = !collapseDiffs
+        ? <DiffBlock code={block.content} complete={block.complete} onFileOpen={onFileOpen} pathHint={pathHint} />
+        : <FoldableDiffBlock code={block.content} complete={block.complete} onFileOpen={onFileOpen} pathHint={pathHint} foldKey={foldKey}
+            warning={block.unclosed ? i18nT('components.markdownRenderer.unclosed_diff_warning') : undefined} />
       // Smooth mode: wrap so the block height eases as lines arrive. The wrapper
       // is mounted for the whole message lifecycle (smooth is constant) so the
       // child never remounts when streaming flips to complete.

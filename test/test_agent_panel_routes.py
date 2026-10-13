@@ -32,6 +32,7 @@ from kiro_crew.crew_log import CrewLog
 from kiro_crew.crew_log import emit as crew_log_emit
 from kiro_crew.crew_log import projection as crew_log_projection
 from kiro_crew.dashboard.handlers import agent_panel as routes
+from kiro_crew.dashboard_templates.instance import preview_url as instance_preview_url
 
 pytestmark = pytest.mark.asyncio
 
@@ -330,6 +331,25 @@ async def test_a_publish_lands_on_the_callers_own_crew(vetted):
         assert folded is not None, "the publish recorded no history"
         assert folded["data"] == {"cycle": 47}
         assert folded["publishes"] == 1
+
+
+async def test_the_fold_a_page_reads_carries_the_scrubbed_publish_not_the_raw_body(vetted):
+    """A dashboard page binds the ``panel`` fold, so the fold must hold what the
+    publish path scrubbed, never the body the caller sent."""
+    # Assembled at runtime so the diff carries no credential-shaped literal.
+    token = "ghp" + "_" + "ZXAMPLEzxampleZXAMPLEzxampleZXAMPLE12"
+    _unit_for(CREW)
+    async with _client() as c:
+        resp = await c.post(
+            "/api/agent-panel/publish",
+            json={"data": {"note": f"fetched with {token}"}, "title": f"t {token}"},
+            headers={"X-Session-Key": "dashboard:chat-1"},
+        )
+        assert resp.status == 200, await resp.text()
+    folded = _folded()
+    assert folded is not None, "the publish recorded no history"
+    assert token not in json.dumps(folded), "the fold carries the raw publish body"
+    assert "fetched with" in folded["data"]["note"]
 
 
 async def test_a_publish_keys_on_the_crews_persisted_member_id(vetted):
@@ -2755,6 +2775,33 @@ async def test_a_write_succeeds_for_a_crewmate_that_adopted_nothing(vetted, monk
         assert body["written"] == {"field": "for_you", "type": "array"}, body["written"]
 
 
+async def test_an_unadopted_conductor_writes_needs_you_to_its_own_board(vetted):
+    """A crewmate named ``kirocrew-conductor`` that adopted nothing is shown the shipped
+    page of that id, so its ``needs_you`` write lands through THIS route, and the
+    ``goal-board`` field ``asks`` is refused, as the goal-conductor skill says.
+
+    Driven off the REAL registry and instance store rather than the seam stubs above:
+    what is pinned is that this route resolves the same slug-named page the read route
+    renders.
+    """
+    async with _client("kirocrew-conductor") as c:
+        resp = await c.post(
+            WRITE_PATH,
+            json={"field": "needs_you", "value": ["approve the plan"]},
+            headers={"X-Session-Key": "dashboard:chat-1"},
+        )
+        assert resp.status == 200, await resp.text()
+        assert (await resp.json())["written"] == {"field": "needs_you", "type": "array"}
+
+        refused = await c.post(
+            WRITE_PATH,
+            json={"field": "asks", "value": {}},
+            headers={"X-Session-Key": "dashboard:chat-1"},
+        )
+        assert refused.status == 400, await refused.text()
+        assert (await refused.json())["code"] == "unknown_field"
+
+
 async def test_an_unadopted_crewmate_is_refused_when_the_registry_ships_no_default(
     vetted, monkeypatch
 ):
@@ -2873,14 +2920,17 @@ def _page_store(monkeypatch, **over: Any) -> SimpleNamespace:
         "fields": ["credits", "phase"],
         "html_bytes": 120,
         "staged_ms": 1,
-        "preview_url": f"/api/members/{SLUG}/dashboard?preview=1",
     }
     store = SimpleNamespace(
         InstanceRefused=InstanceRefused,
         InstanceLocked=InstanceLocked,
         InstanceError=Exception,
         read=lambda _slug: SimpleNamespace(template_id="fixture-board"),
-        stage_preview=lambda _slug, **_kw: SimpleNamespace(wire=lambda: dict(staged)),
+        # `wire` takes the crew NAME and builds the link from it with the real
+        # builder, so a route that forgets to pass the name fails here.
+        stage_preview=lambda _slug, **_kw: SimpleNamespace(
+            wire=lambda member: {**staged, "preview_url": instance_preview_url(member)}
+        ),
         apply_preview=lambda _slug, **_kw: SimpleNamespace(
             instance_version=5, template_id="fixture-board"
         ),
@@ -2971,7 +3021,10 @@ class TestThePreviewRouteOverHttp:
             assert resp.status == 200, await resp.text()
             body = await resp.json()
         assert body["ok"] is True
-        assert body["preview"]["preview_url"].endswith("preview=1")
+        # The PAGE for this crew by name, never the JSON read: the Members page with
+        # its Dashboard tab on the staged page. A slug-only or `/api/` link is refused
+        # or shows raw JSON.
+        assert body["preview"]["preview_url"] == f"/members?member={CREW}&dashboard=preview"
         assert "html" not in body["preview"], "the staged page itself came back on the wire"
 
     async def test_a_non_string_template_id_is_refused(self, vetted, monkeypatch) -> None:
@@ -3083,6 +3136,28 @@ class TestTheApplyAndRollbackRoutesOverHttp:
         assert body["instance_version"] == 5 and body["template_id"] == "fixture-board"
         assert "saved_template_id" not in body, "apply still promises a saved template"
         assert frames == [("dashboard_instance_changed", {"slug": SLUG})], frames
+
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [(APPLY_PATH, {}), (ROLLBACK_PATH, {"to_version": 2})],
+        ids=["apply", "rollback"],
+    )
+    async def test_the_reply_hands_the_new_page_block_and_upkeep_pointer(
+        self, vetted, monkeypatch, path, body
+    ) -> None:
+        """The member section is rebuilt at session start and after a compaction, not
+        every turn, so the reply that changed the page carries its new pointer."""
+        from kiro_crew import dashboard_agentic
+
+        _page_store(monkeypatch)
+        monkeypatch.setattr(
+            dashboard_agentic, "turn_block", lambda slug: f"[DASHBOARD for {slug}]\nUpkeep: x"
+        )
+        async with _client() as c:
+            resp = await c.post(path, json=body, headers={"X-Session-Key": "dashboard:chat-1"})
+            assert resp.status == 200, await resp.text()
+            reply = await resp.json()
+        assert reply["dashboard"] == f"[DASHBOARD for {SLUG}]\nUpkeep: x"
 
     async def test_apply_with_nothing_staged_is_a_refusal(self, vetted, monkeypatch) -> None:
         store = _page_store(monkeypatch)

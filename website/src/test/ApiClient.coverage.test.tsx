@@ -2189,6 +2189,7 @@ describe('every api method issues one well-formed /api request', () => {
     'browseDrives',
     'recentProjects',
     'favoriteProjects',
+    'projectAwsProfile',
     'projectTree',
   ])
   const CALLER_SIGNAL = new AbortController().signal

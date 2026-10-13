@@ -168,6 +168,19 @@ def _crew_memory_store_rejected(raw: object) -> str | None:
     )
 
 
+async def _mark_first_greeting_owed(name: str, cfg: object) -> None:
+    """Record that the crewmate just created opens its chat with its goal question.
+
+    Best-effort: the crewmate exists either way, and a failed record only means
+    its chat opens empty, so :func:`kiro_crew.members.mark_welcome_owed` logs it
+    rather than failing the create. The record lands in the directory of the
+    member's immutable ``member_id`` slug, the one its thread uses.
+    """
+    from kiro_crew.members import WELCOME_KIND_GOAL, mark_welcome_owed
+
+    await asyncio.to_thread(mark_welcome_owed, name, config=cfg, kind=WELCOME_KIND_GOAL)
+
+
 async def api_kirocrew_agents_create(request: web.Request) -> web.Response:
     """POST /api/agents — create a new Kiro Crew agent.
 
@@ -492,6 +505,8 @@ async def _api_kirocrew_agents_create(request: web.Request) -> web.Response:
     # session naming that crew would take the chat default instead. Creation is
     # therefore always a change by `_effort_inputs` (None -> a tuple).
     await _refresh_session_defaults(request, name)
+    if body.get("first_greeting") is True:
+        await _mark_first_greeting_owed(name, cfg)
     _sel().log_api_access(
         caller=request.get("user", "dashboard"),
         operation="agent.create",
@@ -499,14 +514,6 @@ async def _api_kirocrew_agents_create(request: web.Request) -> web.Response:
         source="dashboard",
         resources=name,
     )
-    # Creating a crewmate is the user's own act (the owner gate above refuses an
-    # app token), so it counts as chatting with it: the Crewmates list shows the
-    # new crewmate at once, first. An attested cron caller is not the user.
-    from kiro_crew import crew_recency
-    from kiro_crew.dashboard.handlers._shared import cron_slot_creator
-
-    if not await cron_slot_creator(request):
-        await asyncio.to_thread(crew_recency.record_user_chat, name)
     # `member_id` is the crew's IMMUTABLE identity (allocated with its member
     # memory; `member_config_for_id` resolves it and never a name or slug), so a
     # client that must bind something to the crew it just made -- the Meet

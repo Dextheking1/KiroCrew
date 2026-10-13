@@ -205,6 +205,8 @@ async def run_persistence_watchdog(
         except asyncio.TimeoutError:
             pass
         confirmed = await probe()
+        if shutdown_event.is_set():
+            return False  # operator stop while the confirming probe ran
         if confirmed is None:
             logger.warning(
                 "Persistence watchdog: data home briefly failed a probe but "

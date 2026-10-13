@@ -19,6 +19,7 @@
         "model": "auto",
         "role_models": {},
         "role_efforts": {},
+        "model_context_tokens": {},
         "fallback_model": "auto",
         "refusal_fallback_model": "",
         "reasoning_effort": "",
@@ -200,6 +201,34 @@
       "path": "agent.role_efforts.*",
       "kind": "core",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "*",
+      "help": "",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": null
+    },
+    {
+      "path": "agent.model_context_tokens",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Served context windows",
+      "help": "Context window, in tokens, that an exact model id is served with, for example {\"server-a/org/model-7b\": 32768}. The key is the id exactly as agent.model carries it, so two servers of the same weights stay distinct. A declared window budgets the first prompt of a new session, before the backend has reported one, and outranks the catalog and registry windows. A value is an integer from 1024 to 10000000, at most 64 entries are read, and an invalid entry is ignored with a warning. Empty by default: a model with no window of its own keeps the 1,000,000-token reference. Takes effect on the next config reload.",
+      "hasChildren": true,
+      "enumValues": null,
+      "defaultValue": {}
+    },
+    {
+      "path": "agent.model_context_tokens.*",
+      "kind": "core",
+      "type": "integer",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -1765,7 +1794,9 @@
       "enumValues": null,
       "defaultValue": {
         "max_parallel_steps": 0,
-        "workspace_dir": ""
+        "workspace_dir": "",
+        "test_command": [],
+        "require_verification": false
       }
     },
     {
@@ -1795,6 +1826,50 @@
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": ""
+    },
+    {
+      "path": "taskrunner.test_command",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Test Command",
+      "help": "Argument list run after each step, no shell (e.g. [\"python\", \"-m\", \"pytest\", \"-q\"]). Exit 0 verifies the step. Empty = not configured.",
+      "hasChildren": true,
+      "enumValues": null,
+      "defaultValue": [],
+      "requiresRestart": true
+    },
+    {
+      "path": "taskrunner.test_command.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "*",
+      "help": "",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": null
+    },
+    {
+      "path": "taskrunner.require_verification",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Require Verification",
+      "help": "Fail a step unless its test command exited 0; refuse a run with none to run.",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": false,
+      "requiresRestart": true
     },
     {
       "path": "messaging",
@@ -1980,6 +2055,7 @@
         "embedding_threads": 4,
         "embedding_bulk_threads": 1,
         "embedding_bulk_duty": 0.2,
+        "embedding_idle_evict_secs": 3600,
         "embed_model_url": "",
         "embed_model_path": "",
         "embed_model_id": "",
@@ -2078,6 +2154,20 @@
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": 0.2
+    },
+    {
+      "path": "memory.embedding_idle_evict_secs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Unload Embedding Model When Idle (seconds)",
+      "help": "Seconds without any embedding before the embedding model is unloaded from memory. The next search or memory write loads it again, which takes a few seconds. 0 keeps the model loaded.",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": 3600
     },
     {
       "path": "memory.embed_model_url",
@@ -3637,6 +3727,50 @@
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": false
+    },
+    {
+      "path": "aws",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "AWS",
+      "help": "AWS settings for agent sessions: which named profile a project's sessions start with.",
+      "hasChildren": true,
+      "enumValues": null,
+      "defaultValue": {
+        "project_profiles": {}
+      }
+    },
+    {
+      "path": "aws.project_profiles",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Project AWS Profiles",
+      "help": "Binds an AWS named profile to a project directory, so the agent in a session working there starts with AWS_PROFILE and AWS_DEFAULT_PROFILE set to it and an AWS command reaches the intended account without --profile. Keys are absolute directory paths, values are profile names from your own AWS config (IAM or SSO), e.g. {\"/home/me/src/billing\": \"billing-prod\", \"/home/me/src/sandbox\": \"dev\"}. A session whose working directory is a key or lies under one gets that profile; when several keys contain it the deepest wins, and a sibling whose name merely starts the same (/a/proj and /a/project2) does not match. A directory under no key keeps the default credential chain. A profile a caller sets itself (a scheduled job's env, a workflow) wins over this map. A profile name must be 1 to 128 letters, digits, '_', '.', '+' or '-', not starting with '-'; an entry that breaks that rule or has a relative key is refused when saved and ignored with a warning if a hand edit puts it in config.json. Only the profile NAME is stored and passed on: no credential is read or copied, and the binding is never taken from a file inside the project. This picks the account a command goes to by default; it is not isolation, and the agent can still name another profile. Takes effect for sessions started after the change; a running session keeps the environment it started with.",
+      "hasChildren": true,
+      "enumValues": null,
+      "defaultValue": {}
+    },
+    {
+      "path": "aws.project_profiles.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "*",
+      "help": "",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": null
     },
     {
       "path": "mcp_gateway",
@@ -7286,6 +7420,7 @@
         "tips_recency_decay": 0.6,
         "tips_model": "auto",
         "tips_explore_ratio": 0.2,
+        "github_hosts": [],
         "gitlab_hosts": [],
         "jira_hosts": [],
         "jira_auth": [],
@@ -8482,6 +8617,34 @@
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": 0.2
+    },
+    {
+      "path": "dashboard.github_hosts",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "GitHub Enterprise Hosts",
+      "help": "Exact hostnames of GitHub Enterprise Server instances that gh-backed features may reach: the Changes and Issues panels and session source links. Empty = github.com only (deny-by-default): a pull-request or issue URL on any other host is only sent to the gh CLI if its host is an exact member of this list. Suffixes, wildcards and ports are not accepted (gh cannot address a host on a non-default port). Each listed host authenticates only from its own `gh auth login --hostname <host>` entry; the github.com token is never sent to it. A host that is also listed in gitlab_hosts or jira_hosts is refused. The Code Review Sage app reads its own github_hosts list from its app config, not this one; list a host in both to use it in both.",
+      "hasChildren": true,
+      "enumValues": null,
+      "defaultValue": []
+    },
+    {
+      "path": "dashboard.github_hosts.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "*",
+      "help": "",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": null
     },
     {
       "path": "dashboard.gitlab_hosts",

@@ -207,9 +207,10 @@ function kindLabel(
   queryActive = false,
 ): string | null {
   // An attention row's column carries its LIVE STATE, which is both more useful than
-  // a kind word and the reason that section exists. It is never empty: a row reaches
-  // this group only because its status is a pill, so the renderer always has one to
-  // show and never falls through to this label.
+  // a kind word and the reason that section exists. A session row reaches this group
+  // only because its status is a pill, so the renderer always has one to show. The
+  // group's `+N more blocked` overflow row is not a session and has no status, so its
+  // column stays empty: its title already says what it is.
   if (row.group === 'attention') return null
   // A recent row is named by its own group header and its session glyph, and its
   // right-hand column belongs to whatever the session is DOING. Labelling it

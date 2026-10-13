@@ -21,6 +21,15 @@ export interface CapabilityView {
   skills: { id: string; label: string; shared_reference: boolean }[]
   parent_changes: (CapabilityRef & { kind: 'added' | 'changed' | 'removed'; conflict: boolean; requires_approval: boolean; before: unknown; after: unknown })[]
   runtime: { status: 'pending' | 'applied' | 'failed' | 'unverified'; saved_revision: string; sessions: unknown[]; error_code?: string }
+  /** Set when a member chat on the backend `setting` resolves to would refuse
+   * this spec. A warning only: the save still lands. */
+  backend_warning?: CapabilityBackendWarning | null
+}
+export interface CapabilityBackendWarning {
+  code: 'harness_unsupported' | 'tool_limits_unsupported'
+  backend: string
+  setting: 'agent.member_acp_backend' | 'agent.acp_backend'
+  servers?: string[]
 }
 export type CapabilityOperation = CapabilityRef & (
   | { action: 'inherit' | 'remove' }

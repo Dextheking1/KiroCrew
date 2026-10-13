@@ -48,8 +48,8 @@ descendants, questions and tool approvals; Normal permission does not require
 the user to inspect every worker. Your no-file-writing role and the four
 non-delegable jobs above do not change, and a dashboard is never a reason to
 bypass a tool approval or escalate approval mode.
-Your own drawer board (`panel_publish`, template `kirocrew-conductor`) takes `{needs_you, done: "N of M", updated, next, repo?: "owner/name", tasks: [{task, state, step, pr?}]}` (with `repo`, a task's `pr` opens its GitHub PR) -- state one of done/working/testing/waiting/needs you/stuck, step one of Code/Test/PR/CI/Done (`kiro_crew.conductor_board_contract`).
-With the "Dynamic Dashboard" Feature Preview on, the Dashboard tab's `goal-board` gives every needs-you item a Reply button. To offer answers too, `dashboard_write` its one agentic field `asks`: `{<item_id>: {options: ["short answer", ...]}}`, in the user's language, each a full answer that reads on its own beside the worker's report. Each option becomes a button that fills the user's chat box; drop an item's entry once it is answered.
+A crewmate named `kirocrew-conductor` that adopted no other page gets the `kirocrew-conductor` page in its Dashboard tab; the `[DASHBOARD]` block names the page you have. That page draws every task from your work ledger. A needs-you item goes into its agentic field `needs_you` with `dashboard_write`: one short line per thing the user must do, in the user's language; drop a line once it is done. `panel_publish` (template `kirocrew-conductor`) shows only on a page that reads it; this page shows only its `next`, so needs-you items go in `needs_you`. It takes `{needs_you, done: "N of M", updated, next, repo?: "owner/name", tasks: [{task, state, step, pr?}]}` (with `repo`, a task's `pr` opens its GitHub PR) -- state one of done/working/testing/waiting/needs you/stuck, step one of Code/Test/PR/CI/Done (`kiro_crew.conductor_board_contract`).
+On the `goal-board` page only: it gives every needs-you item a Reply button. To offer answers too, `dashboard_write` its one agentic field `asks`: `{<item_id>: {options: ["short answer", ...]}}`, in the user's language, each a full answer that reads on its own beside the worker's report. Each option becomes a button that fills the user's chat box; drop an item's entry once it is answered. On your own `kirocrew-conductor` page an `asks` write is refused; write `needs_you` there instead.
 
 ### Work-item qualification
 
@@ -223,9 +223,10 @@ cycle; an unbound running worker is neither visible nor recoverable.
 | decomposes into two or more independently acceptable sub-items | `kirocrew-conductor` |
 | `select_crew` names a specialist crew that fits | that crew |
 
-`depth` is computed at `create` time and capped at 2, so you may dispatch a
-conductor and its own workers may not conduct. A `depth_exceeded` error
-means the item has to be flattened into leaves, not retried.
+`depth` is computed when a child first opens its ledger (its first `goal` or
+`create`) and capped at 2, so you may dispatch a conductor and its own
+workers may not conduct. A `depth_exceeded` error means the item has to be
+flattened into leaves, not retried.
 
 A specialist crew that does not mount `@kirocrew-work` cannot report to the
 ledger. Dispatch it anyway when it is the right crew for the item, and fall back
@@ -343,8 +344,8 @@ Each cycle:
    |---|---|---|
    | `progress` | informational | nothing |
    | `done` | the worker CLAIMS acceptance is met | verify (step 3) |
-   | `blocked` | an external dependency stopped the work | clear it or re-plan around it |
-   | `question` | your own decision is needed | `session_send` the answer, `session_read_message` the reply |
+   | `blocked` | an external dependency stopped the work | clear it or re-plan around it; when you answer the worker, `session_send` it, then `work_ledger_record` `action=decide` |
+   | `question` | your own decision is needed | `session_send` the answer, then `work_ledger_record` `action=decide`; `session_read_message` the reply |
 
    `blocked` and `question` differ by who must act. That is why they are separate
    values, and why you must not treat one as the other.
@@ -465,27 +466,38 @@ original plan did not have. Re-planning mid-round is not: let the round finish.
 When the re-plan leaves no item to dispatch, the goal is done or every item is
 terminal: that is a stop condition, not a pause.
 
-**Rounds are not gated, but spend is bounded.** Two checks replace the old
-per-round pause. Count both from `work_ledger_read`, not from memory:
+**Rounds are not gated, but spend is bounded.** A cap on parallel work, an
+advisory line on the total and a no-progress check replace the old per-round
+pause. Count all three from `work_ledger_read`, not from memory, and read the item
+total from its `conductor.goal_items_used`, not by counting `items`:
 
-- **Item cap.** When the user set no budget of their own, a goal may hold at
-  most **20 ledger items** in total — every round's items, re-plans included.
-  The ledger enforces it: a `create` past the cap is refused with
-  `goal_item_cap_reached`. A re-plan may add items only while the total stays
-  within the cap. That refusal is a spend decision: dispatch nothing new, keep
-  patrolling what is in flight, and ask the user with `ask_question` whether to
-  raise the cap. When they agree, raise it with `work_ledger_record`
-  `action=goal` `item_cap=<N>`. A budget the user set, or a Round-0 plan the
-  user approved with more than 20 items, sets `item_cap` the same way before
-  the first `create`. Only a goal the user replaced starts a new count: record
-  it with `action=goal` `new_goal=true`. Rewording the goal keeps the count.
+- **Concurrency cap.** When the user set no bound of their own, a goal may hold
+  at most **6 ledger items open at once**. The ledger enforces it: a `create`
+  past the cap is refused with `goal_concurrency_cap_reached`. That refusal is
+  about how much runs in parallel, never about the total: keep patrolling what
+  is in flight and dispatch the next item when one lands. Ask the user with
+  `ask_question` only when you want more running at once than the cap allows;
+  when they agree, raise it with `work_ledger_record` `action=goal`
+  `concurrency_cap=<N>`. A bound the user set, or a Round-0 plan the user
+  approved with more than 6 parallel items, sets `concurrency_cap` the same way
+  before the first `create`.
+- **Item cap (advisory).** A goal is expected to hold at most **20 ledger
+  items** in total — every round's items, re-plans included (`item_cap`, set
+  with `action=goal` `item_cap=<N>`). Nothing is refused past it. Read
+  `goal_items_used` and `cap_exceeded` off `work_ledger_read`'s `conductor`
+  block and put `items used: N of <item_cap>` in every round report; when
+  `cap_exceeded` is true, say so in that report so the user can decide whether
+  the goal is spending more than they meant, then carry on. Only a goal the
+  user replaced starts a new count: record it with `action=goal`
+  `new_goal=true`. Rewording the goal keeps the count.
 - **No progress.** When **two rounds in a row** land with no item accepted, do
   not re-plan a third time. Ask the user with `ask_question`, naming what failed
   and why, and dispatch nothing new until they answer.
 
-Both are needs-human stops (see the checklist): pause and ask, do not stop
-the loop. It stays armed, and the first cycle after the answer resumes. Put
-`items used: N of <item_cap>` in every round report.
+The no-progress check is a needs-human stop (see the checklist): pause and
+ask, do not stop the loop. It stays armed, and the first cycle after the answer
+resumes. A concurrency refusal is not a stop at all — the next landing frees a
+seat.
 
 **Then drop your chat.** Every patrol turn re-sends your whole conversation,
 and a conductor that runs for days pays for it on every quiet cycle. Your state
@@ -568,7 +580,7 @@ So the worker contract applies to you on top of everything in this skill:
   round boundaries keeps that to a handful of approvals per goal.
 
 Depth is capped at 2, so your own children may be workers only — a
-`depth_exceeded` on `create` means flatten, not retry.
+`depth_exceeded` on a child's first `goal` or `create` means flatten, not retry.
 
 ## Stop conditions
 
@@ -586,8 +598,11 @@ These cases look like stops but are handled while the loop keeps going:
   `rejected` and report it. The `fails` counter you record with
   `action=verdict` is what survives compaction and feeds this.
 - **A decision seems to need a person.** Run the needs-human checklist below.
-- **The item cap or the no-progress check fires** (Close the round). That is
-  a spend decision: ask, and dispatch nothing new until the user answers.
+- **The no-progress check fires** (Close the round). That is a spend decision:
+  ask, and dispatch nothing new until the user answers.
+- **A `create` is refused `goal_concurrency_cap_reached`** (Close the round).
+  Too much is running at once, not too much spent: dispatch the next item when
+  one lands, and ask only if you want a higher cap.
 
 ### Needs-human checklist
 

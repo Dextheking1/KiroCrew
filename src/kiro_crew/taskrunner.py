@@ -133,6 +133,50 @@ _WORKFLOW_RESULT_SUMMARY_CAP = 120
 _UNATTENDED_SOURCES = frozenset({"cron", "mcp"})
 
 
+class _MonotonicAge:
+    """How old one of a run's wall-clock stamps is, measured on the monotonic clock.
+
+    ``started_at`` and ``last_task_time`` stay wall-clock for display and
+    ``runs.json``; the watchdog and the executor read their AGE from here, so a
+    wall-clock step (an NTP correction, a manual change, a restored VM) neither
+    cancels or times out a task that is progressing nor spares one that is
+    stalled or past its global timeout. A reader sees a new stamp on its next
+    read, so the age a new stamp starts at is bounded by the monotonic time
+    since the previous read. The age is awake time: ``time.monotonic()`` stops
+    while the host is suspended on Linux and macOS, so a suspend there is
+    neither stall time nor timeout time (see ``taskrunner.md``).
+    """
+
+    def __init__(self, wall: float) -> None:
+        self._wall = wall
+        self._read = time.monotonic()
+        self._at = self._read - max(0.0, time.time() - wall)
+
+    def age(self, wall: float) -> float:
+        mono = time.monotonic()
+        if wall != self._wall:
+            self._wall = wall
+            self._at = mono - min(max(0.0, time.time() - wall), mono - self._read)
+        self._read = mono
+        return mono - self._at
+
+    @classmethod
+    def of_run_start(cls, run: Project, *, fresh: bool = False) -> _MonotonicAge:
+        """The one age of *run*'s ``started_at`` that the executor and the watchdog read.
+
+        Kept on the run instance, outside the dataclass fields, so ``runs.json``
+        never carries it. Each place that stamps ``started_at`` passes
+        ``fresh=True``, so the age is taken at the start the global timeout
+        counts from; a run nothing stamped (a test driving one reader) takes it
+        at its first read.
+        """
+        age = run.__dict__.get("_run_start_age")
+        if fresh or not isinstance(age, cls):
+            age = cls(run.started_at)
+            run.__dict__["_run_start_age"] = age
+        return age
+
+
 class WorkflowInitializing(RuntimeError):
     """Task mutations are unavailable until workflow attachment."""
 
@@ -433,6 +477,8 @@ class TaskRunner:
         max_parallel_steps: int | None = None,
         workspace_dir: str = "",
         workflow_service: WorkflowRunPublisher | None = None,
+        test_cmd: list[str] | None = None,
+        require_verification: bool = False,
     ) -> None:
         self._sessions = sessions
         self._ctx = context_builder
@@ -455,7 +501,9 @@ class TaskRunner:
         # ``taskrunner.workspace_dir`` restores exactly this (see _refresh_from_config).
         self._ctor_workspace_dir = self._workspace_dir
         self._ctor_work_dir = self._work_dir
-        self._test_cmd: list[str] | None = None
+        # The operator's taskrunner.test_command argv; never inferred from the project.
+        self._test_cmd: list[str] | None = list(test_cmd) if test_cmd else None
+        self._require_verification = require_verification
         self._conversation_log = conversation_log
         self._consolidator = consolidator
         self._lesson_store = lesson_store
@@ -566,12 +614,16 @@ class TaskRunner:
         git-coordinated, so its checkpoint is the last committed step) is
         resumed through ``execute_plan``, which re-runs only the steps that
         did not PASS. One that is not safe stays ``paused`` for a human and
-        its row is settled ``unknown_side_effect``. A row that was only ever
-        ACCEPTED (``queued``: the crash landed while it waited for a lane slot)
-        is settled ``cancelled`` -- a resume is a NEW row, so nothing is lost,
-        and no dispatcher exists for this kind to pick the old one up. One sweep
-        at a time: a call that overlaps the sweep ``attach_task_admission``
-        started joins it instead of adopting the same rows twice.
+        its row is settled ``unknown_side_effect``. A safe row that
+        ``RECOVERY_MAX_ATTEMPTS`` earlier gateway lives already resumed is
+        settled ``failed`` instead of being resumed again: the run stays
+        ``paused`` and a notice says that the limit counts every gateway stop,
+        not only a crash. A row that was only ever ACCEPTED (``queued``: the
+        crash landed while it waited for a lane slot) is settled ``cancelled``
+        -- a resume is a NEW row, so nothing is lost, and no dispatcher exists
+        for this kind to pick the old one up. One sweep at a time: a call that
+        overlaps the sweep ``attach_task_admission`` started joins it instead
+        of adopting the same rows twice.
         """
         inflight = self._adopt_inflight
         if inflight is not None and not inflight.done() and inflight is not asyncio.current_task():
@@ -620,6 +672,21 @@ class TaskRunner:
                     "\u23f8\ufe0f Run not auto-resumed",
                     "The interrupted step may have had a side effect (no git worktree "
                     "to checkpoint against). Review the workspace and resume manually.",
+                    run=run,
+                )
+        for rec_id in report.lost_owner_limit:
+            # ``owner_of`` drops the ``~N`` of the row a manual resume opens once the
+            # run's earlier row has ended, which slicing the prefix off would keep.
+            owner = _runner_adapter.owner_of(rec_id)
+            run = self._runs.get(owner[1]) if owner is not None else None
+            if run is not None and run.status == "paused":
+                await self._notify(
+                    "\u23f8\ufe0f Run not auto-resumed",
+                    f"This run was resumed automatically {_taskq_model.RECOVERY_MAX_ATTEMPTS} "
+                    "times after the gateway stopped, and the gateway stopped again before it "
+                    "finished, so it is not resumed again. The limit counts every gateway stop, "
+                    "a routine restart as much as a crash. Steps that passed are kept: resume "
+                    "the run by hand to continue it.",
                     run=run,
                 )
         return report
@@ -1456,6 +1523,9 @@ class TaskRunner:
             try:
                 run.status = "running"
                 run.started_at = run.last_task_time = time.time()
+                # The global timeout counts from here; the watchdog and the executor
+                # both read this one age of it, so they cannot disagree after a step.
+                _MonotonicAge.of_run_start(run, fresh=True)
                 await self._workflow_rebind(run)
                 await self._apersist_runs()  # persist immediately so crash recovery works
                 if run.branch_name:
@@ -1594,6 +1664,9 @@ class TaskRunner:
             derived_from_revision=existing.derived_from_revision if existing else 0,
             execution_context=existing.execution_context if existing else self._capture_execution(),
         )
+        # The global timeout counts from here; the watchdog and the executor
+        # both read this one age of it, so they cannot disagree after a step.
+        _MonotonicAge.of_run_start(run, fresh=True)
         run.task_id = task_id
         run.name = name or auto_name(spec_content, str(spec_path))
         run.work_dir = str(task_dir)
@@ -1712,9 +1785,18 @@ class TaskRunner:
         return run
 
     async def _execute_tasks(self, run: Project, history_key: str) -> None:
+        if self._require_verification and not (self._auto_test and self._test_cmd):
+            # No step could ever verify: stop before any agent turn edits the tree.
+            run.status = "failed"
+            run.error = "taskrunner.require_verification is on but no test command will run"
+            await self._notify("\U0001f9ea Verification required", run.error, run=run)
+            return
         # Bound once per execution: a config reload adopted at a LATER run's
         # entry (``_refresh_from_config``) must not resize this run's groups.
         max_parallel_steps = self._max_parallel_steps
+        # The run's age as the watchdog reads it (``_watchdog_loop``), taken where
+        # ``started_at`` was stamped, so the two global-timeout checks cannot disagree.
+        run_age = _MonotonicAge.of_run_start(run)
         pending = [t for t in run.tasks if t.status == TaskStatus.PENDING]
         already_done = {
             t.index for t in run.tasks if t.status in (TaskStatus.PASSED, TaskStatus.SKIPPED)
@@ -1729,7 +1811,7 @@ class TaskRunner:
                         run.status = "cancelled"
                         run.error = "Shutdown signal received"
                 break
-            if self._global_timeout > 0 and (time.time() - run.started_at) >= self._global_timeout:
+            if self._global_timeout > 0 and run_age.age(run.started_at) >= self._global_timeout:
                 run.status = "failed"
                 run.error = f"Global timeout ({int(self._global_timeout)}s) exceeded"
                 await self._notify("\u23f1\ufe0f Task timed out", run.error, run=run)
@@ -1919,6 +2001,7 @@ class TaskRunner:
                 log_task_fn=self._log_task,
                 extract_lesson_fn=self._extract_lesson,
                 session_key=session_key,
+                require_verification=self._require_verification,
                 **({"taskq": handle} if handle is not None else {}),
             )
         except asyncio.CancelledError:
@@ -2466,7 +2549,7 @@ class TaskRunner:
                 run.last_task_time,
             )
             previous_tasks = [
-                (task, task.status, task.error, task.result, task.attempts)
+                (task, task.status, task.error, task.result, task.verification, task.attempts)
                 for task in run.tasks
                 if task.index >= from_task
             ]
@@ -2480,6 +2563,9 @@ class TaskRunner:
                 run.error = ""
                 run.finished_at = 0.0
                 run.started_at = run.last_task_time = time.time()
+                # The global timeout counts from here; the watchdog and the executor
+                # both read this one age of it, so they cannot disagree after a step.
+                _MonotonicAge.of_run_start(run, fresh=True)
                 await self._apersist_runs()
             except BaseException:
                 # Persistence drains its worker even on repeated cancellation.
@@ -2488,13 +2574,9 @@ class TaskRunner:
                 run.status, run.error, run.finished_at, run.started_at, run.last_task_time = (
                     previous_run
                 )
-                for task, status, error, result, attempts in previous_tasks:
-                    task.status, task.error, task.result, task.attempts = (
-                        status,
-                        error,
-                        result,
-                        attempts,
-                    )
+                for task, status, error, result, verification, attempts in previous_tasks:
+                    task.status, task.error, task.result = status, error, result
+                    task.verification, task.attempts = verification, attempts
                 raise
             self._agent = agent
         except BaseException:
@@ -2770,6 +2852,9 @@ class TaskRunner:
         stall_notified = False
         dead_process_count = 0
         dead_process_key: str | None = None
+        # The same age the executor's own global-timeout check reads.
+        started = _MonotonicAge.of_run_start(run)
+        progress = _MonotonicAge(run.last_task_time)
         while run.status == "running":
             try:
                 await asyncio.sleep(_HEARTBEAT_INTERVAL)
@@ -2811,12 +2896,11 @@ class TaskRunner:
                 logger.debug("Watchdog heartbeat check failed", exc_info=True)
                 dead_process_count = 0
 
-            now = time.time()
-            elapsed = now - run.started_at
+            elapsed = started.age(run.started_at)
             if self._global_timeout > 0 and elapsed >= self._global_timeout:
                 logger.warning("Watchdog: global timeout reached (%.0fs)", elapsed)
                 return
-            since_last = now - run.last_task_time
+            since_last = progress.age(run.last_task_time)
             if since_last >= _STALL_CANCEL_TIMEOUT and run.task_id not in self._stall_cancelled_ids:
                 self._stall_cancelled_ids.add(run.task_id)
                 logger.warning("Watchdog: stall cancel after %d min", int(since_last / 60))
@@ -2837,7 +2921,7 @@ class TaskRunner:
                     f"No task completed in {int(since_last / 60)} min. Current: task {run.current_task}",
                     run=run,
                 )
-            if run.last_task_time > now - _STALL_TIMEOUT:
+            if since_last < _STALL_TIMEOUT:
                 stall_notified = False
                 self._stall_cancelled_ids.discard(run.task_id)
 
@@ -2950,6 +3034,7 @@ class TaskRunner:
                                 # would restore the task to a verbatim replay of a
                                 # possibly-executed step.
                                 "resume_hint": t.resume_hint or "",
+                                "verification": t.verification,
                             }
                             for t in run.tasks
                         ],
@@ -3135,6 +3220,7 @@ class TaskRunner:
                         error=t.get("error", ""),
                         result=t.get("result", ""),
                         resume_hint=t.get("resume_hint", ""),
+                        verification=str(t.get("verification", "")),
                         attempts=t.get("attempts", 1),
                         depends_on=t.get("depends_on", []),
                         requires_approval=t.get("requires_approval", False),

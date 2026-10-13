@@ -2105,8 +2105,8 @@ async def _verify_unix_peer(
                 #
                 # This is the MAC mismatch ALONE. A proven recycle verifies, so
                 # it is attested knowledge that the pid moved on rather than
-                # ambiguity about who is calling, and the sweep leaves one for
-                # every live recycled pid -- demanding a token there would deny
+                # ambiguity about who is calling, and one sits beside every live
+                # recycled pid until the next sweep -- demanding a token there would deny
                 # the tokenless callers the arm below exists for. The CLIENT-side
                 # walk in `mcp_caller` keeps the wider set on purpose: it reads
                 # without requiring a signature, so a recycled-looking file
@@ -3091,7 +3091,13 @@ def token_auth_middleware(
                         _log_auth(request, "internal", "denied", "delegated record missing")
                         return _deny(request, "Forbidden", "caller_record_missing")
                     return await handler(request)  # type: ignore[operator]
-                # Wrong secret → deny (don't fall through)
+                # Wrong secret → deny (don't fall through). An empty provided
+                # value means the gateway received no credential from this
+                # caller. Masking that withholds it and listener desync are
+                # both possible; the client-facing decoder states that without
+                # promising one repair. It is not the instance mix-up a
+                # held-but-stale credential would be.
+                _detail = f"wrong secret ({_credential_mismatch_detail(internal_secret, _provided_secret)})"
                 _sel = _sel_fn()
                 _sel.log_api_access(
                     caller=_caller,
@@ -3099,14 +3105,11 @@ def token_auth_middleware(
                     outcome="denied",
                     source="token_auth",
                     resources=path,
-                    error=f"wrong secret ({_credential_mismatch_detail(internal_secret, _provided_secret)})",
+                    error=_detail,
                 )
-                _log_auth(
-                    request,
-                    "internal",
-                    "denied",
-                    f"wrong secret ({_credential_mismatch_detail(internal_secret, _provided_secret)})",
-                )
+                _log_auth(request, "internal", "denied", _detail)
+                if not _provided_secret:
+                    return _deny(request, "Forbidden", "internal_secret_missing")
                 return _deny(request, "Forbidden", "internal_auth_mismatch")
             # No secret header (browser request) → verify cookie/query-param auth
             # inline to satisfy deny-by-default: positively confirm auth
@@ -3212,6 +3215,8 @@ def token_auth_middleware(
                             error=_detail,
                         )
                         _log_auth(request, "internal", "denied", _detail)
+                        if not request.headers["X-Internal-Secret"]:
+                            return _deny(request, "Forbidden", "internal_secret_missing")
                         return _deny(request, "Forbidden", "internal_auth_mismatch")
                 _valid, _uid, _reason, _app, _tok, _from_query = _extract_and_validate_token(
                     request, port

@@ -554,7 +554,10 @@
           "pattern_one": "{{count}} pattern",
           "pattern_other": "{{count}} patterns",
           "pending": "pending",
-          "read_namespace": "Read namespace {{name}}"
+          "read_namespace": "Read namespace {{name}}",
+          "invalid_namespace_name": "Namespace names become folder names, so they can use only lowercase Latin letters (a–z), digits (0–9), dots, hyphens and underscores, must start and end with a letter or digit, and must be 2 to 64 characters long.",
+          "invalid_namespace_name_char": "“{{char}}” can’t be used in a namespace name. Namespace names become folder names, so they can use only lowercase Latin letters (a–z), digits (0–9), dots, hyphens and underscores, must start and end with a letter or digit, and must be 2 to 64 characters long.",
+          "invalid_namespace_name_letter": "“{{char}}” isn’t a Latin letter (a–z), so it can’t be used in a namespace name. Namespace names become folder names, so they can use only lowercase Latin letters (a–z), digits (0–9), dots, hyphens and underscores, must start and end with a letter or digit, and must be 2 to 64 characters long."
         },
         "leftRail": {
           "code_review_sage": "Code Review Sage",
@@ -1424,7 +1427,8 @@
         "settingsSection": {
           "connect_repo": "Connect repo",
           "general": "General",
-          "repository_settings": "Repository settings"
+          "repository_settings": "Repository settings",
+          "gitlab_groups": "GitLab groups"
         },
         "depsSection": {
           "title": "Dependencies",
@@ -1520,6 +1524,22 @@
             "settings": "Settings",
             "your": "Your"
           },
+          "gitlabGroups": {
+            "title": "GitLab groups",
+            "intro": "Follow a GitLab group to list the merge requests waiting for your review across the group and all its subgroups, under Dashboards › Review requests. Projects added to the group later are included automatically.",
+            "list_error": "Couldn't load your GitLab groups — {{error}}",
+            "empty": "You aren't following any GitLab groups yet.",
+            "group_label": "Group path or link",
+            "group_placeholder": "For example, acme/platform",
+            "follow": "Follow group",
+            "following": "Following…",
+            "group_hint": "A path is looked up on gitlab.com. For a self-managed instance, paste the group's link.",
+            "open_reviews": "Open Review requests",
+            "unfollow": "Unfollow",
+            "unfollowing": "Unfollowing…",
+            "unfollow_group": "Unfollow {{path}}",
+            "unfollow_error": "Couldn't unfollow this group — {{error}}"
+          },
           "repoSettings": {
             "browse_for_workspace_folder": "Browse for workspace folder",
             "browse": "Browse",
@@ -1606,7 +1626,8 @@
           "what_you_see_below_is_the_previous_result_not_th": "what you see below is the previous result, not the current state."
         },
         "registry": {
-          "graph": "Graph"
+          "graph": "Graph",
+          "reviews": "Review requests"
         },
         "graphView": {
           "header": "DEPENDENCIES",
@@ -1647,6 +1668,19 @@
           "empty_unavailable_title": "Dependency data unavailable",
           "empty_unavailable_blurb": "The dependency graph could not be loaded. The backend deps route may not be enabled yet on this repo. Retry once it is available.",
           "retry": "RETRY"
+        },
+        "groupReviewsView": {
+          "title": "Review requests",
+          "intro": "Open merge requests waiting for your review across the GitLab groups you follow, subgroups included.",
+          "empty": "You aren't following any GitLab groups yet. Follow one in Settings to see its review requests here.",
+          "follow_a_group": "Follow a GitLab group",
+          "loading": "Loading…",
+          "count": "Waiting for you: {{total}}",
+          "count_capped": "Waiting for you: more than {{total}}",
+          "refresh_group": "Refresh {{path}}",
+          "no_reviews": "Nothing in this group is waiting for your review.",
+          "capped": "Showing the newest {{limit}}.",
+          "see_all": "See all on GitLab"
         }
       },
       "welcomeCarousel": {
@@ -1664,6 +1698,16 @@
       },
       "api": {
         "assignees_changed_elsewhere": "The assignees changed elsewhere since you loaded this issue."
+      },
+      "lib": {
+        "gitlabGroups": {
+          "invalid_group": "That isn't a GitLab group path. Use a path like acme/platform, or paste the group's link.",
+          "group_not_found": "GitLab has no group at that path, or your GitLab CLI (glab) session can't see it. Check the path and your access.",
+          "group_forbidden": "Your GitLab CLI (glab) session can't read this group. Ask a group owner for access.",
+          "setup_required": "The GitLab CLI (glab) isn't signed in to this GitLab instance. Run glab auth login, then try again.",
+          "no_login": "The GitLab CLI (glab) couldn't tell which GitLab user you are. Run glab auth status to check your session.",
+          "unreachable": "Couldn't reach GitLab — {{error}}"
+        }
       }
     },
     "mdNotebook": {
@@ -3130,7 +3174,10 @@
         "start_a_paper": "Start a paper",
         "start_a_paper_tip": "Create an empty paper from a standard article template, or clone one from a git remote — anything with a .tex file works.",
         "verifying_compiler": "Verifying…",
-        "your_papers": "Your papers"
+        "your_papers": "Your papers",
+        "invalid_project_name": "Paper names become folder names, so they can use only lowercase Latin letters (a–z), digits (0–9), dots, hyphens and underscores, must start with a letter or digit, and can be at most 64 characters.",
+        "invalid_project_name_char": "“{{char}}” can’t be used in a paper name. Paper names become folder names, so they can use only lowercase Latin letters (a–z), digits (0–9), dots, hyphens and underscores, must start with a letter or digit, and can be at most 64 characters.",
+        "invalid_project_name_letter": "“{{char}}” isn’t a Latin letter (a–z), so it can’t be used in a paper name. Paper names become folder names, so they can use only lowercase Latin letters (a–z), digits (0–9), dots, hyphens and underscores, must start with a letter or digit, and can be at most 64 characters."
       },
       "preview": {
         "compile_to_see_the_pdf": "Compile to see the PDF.",
@@ -4779,7 +4826,8 @@
       "remote_media_sites": "Sites: <host/>",
       "remote_media_gateway_refused": "Media not loaded: its address goes through this dashboard's own server, so the site it would reach can't be shown.",
       "closed_session_open_failed": "Couldn't open {{name}}.",
-      "closed_session_try_again": "Try again"
+      "closed_session_try_again": "Try again",
+      "unclosed_diff_warning": "The formatting broke here, so the rest of the reply may appear inside this diff."
     },
     "markdownToc": {
       "contents": "Contents",
@@ -4931,12 +4979,33 @@
       "highlighting_unavailable_content_readable_reload": "Syntax highlighting is unavailable until you reload. Content remains readable.",
       "highlighting_unavailable_reload": "Syntax highlighting is unavailable. Save or copy your draft, then reload to restore syntax highlighting; editing remains available."
     },
+    "projectAwsProfile": {
+      "bound_title": "AWS profile for this project: {{profile}}",
+      "inherited_from": "Set on parent folder {{dir}}",
+      "expired_title": "The SSO sign-in for {{profile}} has expired. Run aws sso login --profile {{profile}} in a terminal.",
+      "unavailable_title": "{{profile}} can't sign in to AWS right now. Check its credentials.",
+      "default_chain": "No profile (use the gateway's AWS sign-in)",
+      "none_short": "No profile",
+      "other_profile": "Other profile name",
+      "bind": "Use profile",
+      "invalid_name": "A profile name is up to 128 letters, digits, underscores, dots, plus signs or hyphens, and does not start with a hyphen.",
+      "inherited_note": "Set on parent folder {{dir}}. Picking a profile here overrides it for this folder only. To clear it, open a chat in that folder and choose No profile.",
+      "save_failed": "Could not save this AWS profile. Try again.",
+      "save_failed_typed": "Could not save this AWS profile. Check the name and try again.",
+      "applies_next": "Picking one runs nothing now. It only sets which AWS profile new chats in this folder use.",
+      "read_failed": "Could not read this project's AWS profile",
+      "row_title": "AWS profile for {{name}}"
+    },
     "projectPicker": {
       "add_favorite": "Add {{path}} to favorites",
       "all_drives": "All drives",
       "back": "Back",
       "back_to": "Back to {{path}}",
       "browse": "Browse",
+      "system_folder_picker": "Open system folder picker…",
+      "system_folder_picker_failed": "The system folder picker couldn't open. Pick a folder from the list, or type a path in Browse.",
+      "system_folder_refused": "{{failed}} can't be used as the project folder. Choose another folder.",
+      "system_folder_refused_timed_out": "Checking {{failed}} timed out. Open the system folder picker again, or pick a folder from the list.",
       "drive_example_d": "D:\\",
       "drive_example_e": "E:\\",
       "drives_failed": "Could not show the list of drives — the list below still shows {{path}}. To use another drive, type it above, such as {{example}}, or try All drives again.",
@@ -6492,6 +6561,7 @@
         "warning": "Warning"
       },
       "compactionCard": {
+        "after_turn": "Context at {{pct}}, past the {{limit}} auto-compact threshold — the chat will be summarized when this turn ends",
         "no_summary": "Done — no summary to show",
         "summary_hint": "Summary folded — expand to read",
         "title": "Context compacted"
@@ -6727,6 +6797,7 @@
       "previous_chats": "Previous chats",
       "regenerate_title_with_llm": "Regenerate title with LLM — the current name can be restored with Undo",
       "rename_session_title": "{{title}} (rename session)",
+      "rename_title_hint": "Enter saves · Esc cancels",
       "session_renamed_to": "Session renamed to {{title}}",
       "auto_title": "Regenerate title",
       "regenerating_title": "Generating title",
@@ -6869,8 +6940,8 @@
       "stale_collapse_paused_hint": "Paused while the list is searched, filtered, or sorted by anything other than newest first.",
       "stale_collapse_row_hidden_one": "{{count}} dormant session hidden",
       "stale_collapse_row_hidden_other": "{{count}} dormant sessions hidden",
-      "stale_collapse_row_hint": "Not used in over {{window}}. Click to show.",
-      "stale_collapse_row_hint_open": "Not used in over {{window}}. Click to hide.",
+      "stale_collapse_row_hint": "Dormant: not used in over {{window}}. Click to show.",
+      "stale_collapse_row_hint_open": "Dormant: not used in over {{window}}. Click to hide.",
       "stale_collapse_row_shown_one": "{{count}} dormant session shown",
       "stale_collapse_row_shown_other": "{{count}} dormant sessions shown",
       "stale_collapse_row_ungrouped": "outside folders",
@@ -6908,7 +6979,16 @@
       "crew_enable": "Enable",
       "crew_enable_named": "Enable {{name}}",
       "crew_spaces_unavailable": "Folders from {{name}} could not be loaded. Its chats are listed without them.",
-      "crew_enable_failed": "Could not enable {{name}}"
+      "crew_enable_failed": "Could not enable {{name}}",
+      "models": "Filter by model",
+      "model_default_label": "No model chosen (agent default)",
+      "show_only_sessions_using_model": "Show only sessions using {{name}}",
+      "stop_filtering_by_model": "Stop filtering by {{name}}",
+      "hide_sessions_on_these_models": "Hide sessions on these models",
+      "hide_sessions_on_these_models_hint": "Show all sessions except those on the selected models",
+      "tick_a_model_first": "Select a model first",
+      "not_models": "Not {{models}}",
+      "hide_sessions_using_model": "Hide sessions using {{name}}"
     },
     "contextBreakdown": {
       "axis_turn_n": "Turn {{n}}",
@@ -6993,6 +7073,7 @@
       "kept": "Kept",
       "last_commit_activity": "Last commit activity",
       "live": "live",
+      "live_unverified": "live?",
       "main": "· main",
       "manage_the_git_worktrees_of_your_main_checkout_s": "Manage the git worktrees of your main checkout — sync, rebase, QA pods, and cleanup in one place.",
       "mb": "MB",
@@ -7042,6 +7123,7 @@
       "synced": "Synced",
       "syncing": "Syncing",
       "the_live_gateway_on_this_port_runs_from_this_che": "The live gateway on this port runs from this checkout",
+      "marked_live_but_this_install_cant_confirm_it": "Packaged install: can't confirm this checkout is running.",
       "tickets": "Tickets:",
       "toggle_log": "Toggle log",
       "toggle_provision_log": "Toggle provision log",
@@ -7227,7 +7309,7 @@
       "manage_agent_workspace_memory_store_bindings": "Separate assistants for separate jobs. Each agent keeps its own files.",
       "memory_store": "Memory Store",
       "model": "Model",
-      "model_inherited_from_default": "taken from your default setting.",
+      "model_inherited_from_default": "Inherited from your default setting.",
       "name": "Name",
       "new_workspace_action": "+ New workspace…",
       "no_crews_match_your_filter": "No crewmates match your filter",
@@ -7485,32 +7567,20 @@
       "notes_unsupported": "Notes can't be read on this computer.",
       "notes_collision": "Two crewmates share this short name, so their notes can't be told apart. Rename one of them to see its notes here.",
       "notes_agent_only": "{{name}} writes these notes for itself as it works. You can read them here, but not change them.",
+      "notes_upkeep_heading": "Dashboard upkeep",
+      "notes_upkeep_lead": "What {{name}} is told about its Dashboard page: what each field means, when to update it, and how. Generated by {{productName}}; you can't edit it.",
+      "notes_upkeep_pointer_label": "The line in {{name}}'s prompt that points here reads: {{line}}",
+      "notes_upkeep_scripts": "Helper scripts: {{names}}",
+      "notes_upkeep_means": "Means: {{value}}",
+      "notes_upkeep_when": "When: {{value}}",
+      "notes_upkeep_how": "How: {{value}}",
+      "notes_upkeep_none": "Every field on this page fills itself. Nothing here is {{name}}'s to write.",
       "notes_empty": "{{name}} hasn't written any notes yet.",
       "notes_updated": "Updated {{when}}",
       "notes_redacted_notice": "Something that looks like a secret was hidden here. The file itself is untouched.",
       "notes_truncated_notice": "These notes are longer than the panel shows; the rest is only in the file.",
-      "webview_collapse": "Collapse the published view",
-      "webview_open": "Expand published view",
-      "webview_value_yes": "yes",
-      "webview_value_no": "no",
-      "webview_contained": "Contained",
-      "webview_contained_detail": "filled in by this crewmate, isolated from this page and blocked from sending data out",
-      "webview_published_ago": "Published {{ago}}",
-      "webview_published_ago_newer": "New version published {{ago}}",
-      "webview_empty": "This crewmate has not published a view yet.",
-      "webview_setup": "Use Edit crewmate in the header to set it up",
-      "webview_error": "The published view could not be rendered.",
-      "webview_refresh_error": "Couldn’t refresh the published view. Showing the last version that loaded.",
-      "webview_refresh_error_aged": "Couldn’t refresh the published view. Showing the version from {{ago}}.",
-      "webview_frame_title": "Published view by {{crew}}",
       "webview_rendering": "Rendering the published view…",
-      "webview_docked_rendering": "Rendering the status card…",
-      "webview_docked_error": "The status card could not be rendered. The full dashboard may still open below.",
-      "webview_docked_refresh_error": "Couldn't refresh the status card. Showing the last version that loaded.",
       "webview_retry": "Try again",
-      "webview_newer_dashboard_hint": "This tab shows the published view. This crewmate also has a dynamic dashboard: turn on Dynamic Dashboard in Feature Previews to see it.",
-      "webview_newer_dashboard_hint_empty": "This tab shows published views, and none exists yet. This crewmate's dynamic dashboard appears once you turn on Dynamic Dashboard in Feature Previews.",
-      "webview_newer_dashboard_open": "Open Feature Previews",
       "activity_chat_count_one": "{{count}} run",
       "activity_chat_count_other": "{{count}} runs",
       "activity_routed_count_one": "{{count}} auto-picked",
@@ -7535,7 +7605,6 @@
       "filters_clear": "Clear filters",
       "star": "Star {{name}}",
       "unstar": "Unstar {{name}}",
-      "default_agent_failed_title": "Couldn't read the default crewmate, so every crewmate is shown",
       "all_hidden_hint": "Crewmates you haven't used yet are hidden. Search to find them.",
       "star_failed_title": "Star not saved",
       "star_failed": "Could not update this crewmate's star.",
@@ -7590,8 +7659,8 @@
       "roster_load_retry": "Try again",
       "empty_title": "No crewmates yet",
       "empty_body": "Your AI teammate. Give it a job; it keeps working while you are away.",
-      "built_from_default": "{{agent}} — the standard setup (default)",
-      "built_from_hint": "The starting setup it copies — tools, connections and instructions. You can change it later.",
+      "built_from_default": "{{agent}} (default)",
+      "built_from_hint": "The starting setup it copies — tools, connections and instructions. {{agent}} is the standard one. You can change it later.",
       "create_name": "Name",
       "create_name_placeholder": "e.g. Radar or Dr. Eggbot",
       "create_name_required": "Give your crewmate a name.",
@@ -7615,8 +7684,6 @@
       "add_member_pending_roster": "Refresh the list for {{name}} before adding another crewmate.",
       "add_member_settling": "Finishing {{name}}'s first message before adding another crewmate.",
       "create_options_failed": "Couldn't load the {{list}} choices; the default is shown.",
-      "greeting_seed": "Hi {{name}}, welcome to the team. Say hello in a couple of lines and tell me how you plan to start.",
-      "greeting_seed_with_job": "Hi {{name}}, welcome to the team. Your job: {{job}}. Say hello in a couple of lines and tell me how you plan to start.",
       "resume_title": "Where we left off",
       "resume_counts": "Finished {{finished}} · Running {{running}} · Idle {{idle}} · Needs a look {{attention}}",
       "resume_reason_question": "{{title}} has a question waiting",
@@ -7639,11 +7706,8 @@
       "welcome_ask": "Reply with the one to pick up, or ask for something new.",
       "welcome_dismiss": "Hide recap",
       "welcome_failed": "Couldn't read what {{name}} was working on.",
-      "create_job_hint": "Plain words are fine. If it should run on its own, you can add a schedule after creating, on the Schedule page.",
+      "create_job_hint": "Plain words are fine. If it should run on its own, your crewmate can set up a schedule with you once it's created.",
       "create_roster_failed": "{{name}} was created, but the list didn't refresh.",
-      "create_greeting_failed": "{{name}} was created, but its first message didn't send.",
-      "create_retry_greeting": "Send it again",
-      "create_greeting_dismiss": "Dismiss — Send it again won't be offered after this",
       "create_retry_roster": "Refresh your crewmates",
       "create_workspace_hint": "Pick an existing workspace only to share files with another crewmate.",
       "team_none": "No team",
@@ -7730,13 +7794,6 @@
       "profile_sessions_tab": "Sessions",
       "profile_goals_tab": "Goals",
       "profile_goals_soon": "Goals are coming soon: set what {{name}} is working toward and follow its progress here.",
-      "dashboard_empty_region": "{{name}}'s dashboard: nothing published yet",
-      "dashboard_empty_bubble_title": "I haven't published a dashboard yet.",
-      "dashboard_empty_bubble_body": "Once I publish one, it shows here: key numbers, where things stand, what needs your decision. Tell me in the chat what you want on it.",
-      "dashboard_empty_prompts_lead": "Or start from one of these. It goes into your chat box for you to edit and send.",
-      "dashboard_empty_prompt_publish": "Publish a dashboard showing what you're working on, how it's going, and what's next.",
-      "dashboard_empty_prompt_update": "Each time you finish a piece of work, update the dashboard: what you did, the key numbers, and anything you need me to decide.",
-      "dashboard_empty_prompt_pick": "Choose the three numbers I should keep an eye on. Publish just those, with a one-line reason for each.",
       "profile_permissions": "Permissions",
       "profile_effort_hint": "Higher levels think longer, answer slower, and cost more.",
       "profile_settings_waiting": "These unlock once the chat with this crewmate is open.",
@@ -7760,6 +7817,7 @@
       "schedule_load_failed": "Could not load this crewmate’s schedules.",
       "schedule_open_all": "All schedules",
       "panel_toggle": "Dashboard & files",
+      "create_advanced_settings": "Advanced settings",
       "dashboard_kept_last_good": "A newer version of this dashboard did not load, so this is the last one that did.",
       "dashboard_none_yet": "No dashboard set up for this crewmate yet.",
       "dashboard_unavailable": "This dashboard could not be loaded.",
@@ -7773,7 +7831,8 @@
       "profile_dashboard_lock_hint": "While locked, {{name}} can't replace its dashboard with a different layout or restore an older one. The values on it keep updating.",
       "profile_dashboard_lock_failed": "Couldn't lock the dashboard. It's still unlocked. Try again.",
       "profile_dashboard_unlock_failed": "Couldn't unlock the dashboard. It's still locked. Try again.",
-      "profile_dashboard_lock_unreadable": "Couldn't read whether the dashboard is locked. Try refreshing the page."
+      "profile_dashboard_lock_unreadable": "Couldn't read whether the dashboard is locked. Try refreshing the page.",
+      "dashboard_owner_only": "Only this crewmate's owner can see its dashboard."
     },
     "migrationPage": {
       "app_migration": "App Migration",
@@ -8866,6 +8925,8 @@
         "confirm_before_closing_session": "Confirm Before Closing Session",
         "compact_empty_folders": "Compact Empty Folders",
         "a_folder_with_no_chats_takes_one_row_instead_of": "A folder with no chats takes one row instead of two, and its New chat button moves onto the folder's own row",
+        "full_titles_on_scroll": "Show Full Titles While Scrolling",
+        "full_titles_on_scroll_description": "While you scroll the session list, titles cut off by the sidebar show in full over it; they hide when the pointer leaves or shortly after scrolling stops",
         "content_width": "Content Width",
         "context": "Context",
         "turns": "Turns",
@@ -9758,10 +9819,8 @@
       "credits": "Credits",
       "credits_col": "Credits",
       "credits_this_period": "Last {{days}}d",
-      "d": "d ·",
       "daily_p50_trend": "Daily p50 — cold above, warm below",
       "daily_trend_point": "{{date}} · cold {{cold}} · warm {{warm}} · {{count}} starts",
-      "days": "days.",
       "detail_col": "Detail",
       "distribution_col": "Distribution",
       "duration_col": "Duration",
@@ -9784,7 +9843,6 @@
       "no_occupancy_samples": "No occupancy samples in this window",
       "no_spend_recorded": "No spend recorded in this window",
       "no_startups_recorded": "No startups recorded in this window",
-      "no_telemetry_recorded_yet_in_the_last": "No telemetry recorded yet in the last",
       "no_turns_yet": "No turns yet",
       "occupancy_p50": "Occupancy (p50)",
       "occupancy_p90": "Occupancy (p90)",
@@ -9847,7 +9905,6 @@
       "warm_label": "warm",
       "warm_start_p50": "Warm start (p50)",
       "was_value": "was {{value}}",
-      "window_last": "OTEL sections · window: last",
       "window_tokens_col": "Window (tokens)",
       "off_body": "Enable with <settingRef/>. Metrics stay local (<metricsDir/>) — nothing leaves this machine.",
       "gauges": "Gauges",
@@ -9856,7 +9913,20 @@
       "credits_by_model": "Credits by model",
       "top_sessions": "Top sessions",
       "other_group": "Other ({{n}})",
-      "full_table": "Full table"
+      "full_table": "Full table",
+      "window_range": "{{start}} – {{end}}",
+      "measured_from_token_records_range": "Measured locally from the sessions listed here over {{range}} — kept regardless of the telemetry switch",
+      "period_last_hours": "Last {{n}}h",
+      "range_hours": "{{n}}h",
+      "range_days": "{{n}}d",
+      "range_label": "Period",
+      "range_default": "Default",
+      "range_custom": "Custom",
+      "range_from": "Start date",
+      "range_to": "End date",
+      "no_telemetry_in_window": "No telemetry recorded in this period ({{period}}).",
+      "otel_retention_cap": "Turn, latency and startup figures cover only the last {{days}}d; older metrics are deleted (<settingRef/>).",
+      "window_footer": "OTEL sections · period: {{period}} ·"
     },
     "terminalPopoutFrame": {
       "return": "Return to dock",

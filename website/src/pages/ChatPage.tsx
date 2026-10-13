@@ -217,9 +217,10 @@ import { useFilteredDropdown } from '../hooks/useFilteredDropdown'
 import { effortToCarry, filterInteractiveModels, legacyCodexEffort, shouldSeparateModelEffort, switchGroupedModel, useModelPickerConfigured, useModelPickerHiddenModelsQuery } from '../hooks/useInteractiveModels'
 import { isUnpinnedModel, JEV_ROUTE_MODEL, jevRouteOffered, jevRouteShownModel, withJevRoute } from '../lib/jevRoute'
 import { useListboxKeyboard } from '../hooks/useListboxKeyboard'
-import AgentDropdownList, { DefaultAgentRow, ManageAgentsFooter } from '../components/AgentDropdownList'
+import AgentDropdownList, { DefaultAgentRow, ManageAgentsFooter, defaultWriteKind, isCrewmateChat } from '../components/AgentDropdownList'
 import { agentSwitchFailureMessage } from '../utils/agentSwitchFeedback'
 import ProjectPicker from '../components/ProjectPicker'
+import { ProjectAwsProfileSection } from '../components/ProjectAwsProfile'
 import InboundLinkChip from '../components/InboundLinkChip'
 import ModelEffortDropdown from '../components/ModelEffortDropdown'
 
@@ -270,8 +271,6 @@ import SessionTitleControl from './chat/SessionTitleControl'
 import { useChatNavigation } from '../hooks/useChatNavigation'
 import { useChatPins } from '../hooks/useChatPins'
 import SubagentProgressBar from './chat/SubagentProgressBar'
-import { usePreviewFlag } from '../hooks/usePreviewFlag'
-import { PREVIEW_DASHBOARD } from '../utils/previewFlags'
 import TaskProgressBar from './chat/TaskProgressBar'
 import SidePanel, { CHAT_PANE_MIN_W, sidePanelFillWidth } from './chat/SidePanel'
 import { useSidePanelDock } from '../hooks/useSidePanelDock'
@@ -314,6 +313,7 @@ import type { ParsedSubagentCompletion } from './chat/subagentCompletion'
 import { useConnectionsUiEnabled } from '../hooks/useConnectionsUi'
 import TurnBlock from './chat/TurnBlock'
 import Clickable from '../components/Clickable'
+import { useLabelTip } from '../components/InstantTip'
 import WorkflowProgressBar from './chat/WorkflowProgressBar'
 import { tryQuickSend } from '../lib/quickSend'
 import { rewindWithRollback } from '../lib/rewindCall'
@@ -396,6 +396,7 @@ const REFUSED_PRESS_TITLE_KEYS = {
   side_open: 'pages.chatPage.could_not_open_side_chat',
   side_turn: 'pages.chatPage.could_not_send_to_side_chat',
   agent_switch: 'pages.chatPage.could_not_switch_agent',
+  fresh_session: 'pages.chatPage.could_not_start_fresh_session',
 } as const
 type RefusedPressAction = keyof typeof REFUSED_PRESS_TITLE_KEYS
 
@@ -1641,6 +1642,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     sourceHostsRef,
     jiraSourceHosts,
     jiraSourceHostsRef,
+    githubSourceHostsRef,
     panelSources,
     panelIssues,
     selectedSourceUrl,
@@ -1763,7 +1765,6 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     activeSlot,
     activeSlotRef,
     connected,
-    defaultAgent,
     dispatch,
     drafts,
     embedMode,
@@ -1922,7 +1923,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     if (!activeSlot) return
     const s = slots.find(s => s.key === activeSlot)
     if (!s) return
-    dispatch(syncSlotRunningFromServer({ slot: s.key, running: s.running, stopping: s.stopping ?? false }))
+    dispatch(syncSlotRunningFromServer({ slot: s.key, running: s.running, stopping: s.stopping ?? false, turn: s.turn, turn_gen: s.turn_gen }))
   }, [slots, activeSlot, dispatch])
 
   // Raw send — sends pre-built text directly to the server
@@ -2153,9 +2154,14 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
       // paste blocks and attachments, surface the failure, and bail.
       let created: { key: string } | null = null
       try {
+        // No agent when none is pending: the server stamps the default custom
+        // agent (a template) on an agent-less create, the same name
+        // `defaultAgent` (the catalog's `default_template`) reads; sending it
+        // would only pin a stamp the server already makes, and in the member
+        // namespace when the slot kind is unset.
         // A project picked on the fresh composer is applied right after the
         // create below, so the server must not make a session folder for it.
-        created = await dispatch(createSlot({ agent: pendingAgentRef.current || defaultAgent || undefined, agent_kind: pendingAgentRef.current ? pendingAgentKindRef.current : undefined, model: pendingModelRef.current || undefined, mode: modeRef.current, ...(pendingProjectRef.current ? { sessionFolder: false } : {}) })).unwrap()
+        created = await dispatch(createSlot({ agent: pendingAgentRef.current || undefined, agent_kind: pendingAgentRef.current ? pendingAgentKindRef.current : undefined, model: pendingModelRef.current || undefined, mode: modeRef.current, ...(pendingProjectRef.current ? { sessionFolder: false } : {}) })).unwrap()
       } catch (e: unknown) {
         sendingRef.current = false
         if (isolated) {
@@ -2800,10 +2806,6 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   // Refs so the "run in terminal" listener (registered once) always sees the
   // live panel controller + this chat's working directory.
   const tabsCtlRef = useRef(tabsCtl); tabsCtlRef.current = tabsCtl
-  // The Dynamic Dashboard is a Feature Preview (Settings > Developer). While it
-  // is off a persisted `command-center` tab is withheld from the strip
-  // (SidePanel), and the menu offers no entry onto it.
-  const dashboardPreview = usePreviewFlag(PREVIEW_DASHBOARD)
 
   /** Bring an app's panel tab back — focusing it if open, re-creating it if the
    *  user closed it (`openApp` upserts).
@@ -3263,7 +3265,8 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   const {
     continuable, interrupted, sendUnconfirmed, continuing, handleContinue,
     openModelPickerFromError, openDefaultModelSetting, openKiroSignIn, openMemberCapabilities, openTurnLimitSetting,
-    featureRequestRefused, sessionStartRepeated,
+    featureRequestRefused, sessionStartRepeated, contextOverflowed,
+    freshSession, handleFreshSession,
   } = useTurnRecovery({
     activeSlot,
     slotRunning,
@@ -4527,6 +4530,8 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
       onOpenSignIn: embedded || popout ? undefined : openKiroSignIn,
       onOpenTurnLimit: embedded || popout ? undefined : openTurnLimitSetting,
       onOpenCapabilities: embedded || popout ? undefined : openMemberCapabilities,
+      onFreshSession: handleFreshSession,
+      freshSession,
       onSessionOpen: selectSessionTab,
       sessions: connected ? sessionTitles : undefined,
       activeSession: activeSlot || undefined,
@@ -4564,7 +4569,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
       bubble,
     ])
     return { renderers, fallback: bubble }
-  }, [slotRunning, handleFileOpen, handleArtifactOpen, selectSessionTab, sessionTitles, connected, handleFork, handleQuote, handleAsk, quoteWholeMessage, handleJumpToQuote, chatConfig, activeSlot, regenerating, activeSlotRemoteBound, handleRegenerate, handleEditResend, editLast, handleEditConsumed, slotHasMore, loadingOlder, cursorIsForActiveSlot, slotOldestIndex, handleLoadEarlier, renderUserContentCb, highlightTs, activeSlotTitle, mode, embedded, popout, handleOpenDiff, planTaskId, artifactPaths, automationId, toolDisclosure, setToolDisclosureFor, linkPreviewsOn, socialShareOn, voiceRecoverySlot, handleSubagentPanelOpen, isPinned, handleTogglePinForMessage, showRefusedPress, transcriptHot, revealAppInPanel, continuable, interrupted, continuing, handleContinue, openModelPickerFromError, openDefaultModelSetting, openKiroSignIn, openMemberCapabilities, openTurnLimitSetting, handleFolderOpen, handleSpeak, handleApplyPlan, mcpAppPanel, redactionCoachTs, setAutomationOpen])
+  }, [slotRunning, handleFileOpen, handleArtifactOpen, selectSessionTab, sessionTitles, connected, handleFork, handleQuote, handleAsk, quoteWholeMessage, handleJumpToQuote, chatConfig, activeSlot, regenerating, activeSlotRemoteBound, handleRegenerate, handleEditResend, editLast, handleEditConsumed, slotHasMore, loadingOlder, cursorIsForActiveSlot, slotOldestIndex, handleLoadEarlier, renderUserContentCb, highlightTs, activeSlotTitle, mode, embedded, popout, handleOpenDiff, planTaskId, artifactPaths, automationId, toolDisclosure, setToolDisclosureFor, linkPreviewsOn, socialShareOn, voiceRecoverySlot, handleSubagentPanelOpen, isPinned, handleTogglePinForMessage, showRefusedPress, transcriptHot, revealAppInPanel, continuable, interrupted, continuing, handleContinue, openModelPickerFromError, openDefaultModelSetting, openKiroSignIn, openMemberCapabilities, openTurnLimitSetting, handleFreshSession, freshSession, handleFolderOpen, handleSpeak, handleApplyPlan, mcpAppPanel, redactionCoachTs, setAutomationOpen])
 
   const renderMessage = useCallback((i: number, m: ChatMessage) => {
     // Key identity rules (clientTs preference + streaming->assistant role
@@ -4944,9 +4949,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   const activitySlot = useShellSlot('activity-bar-slot', !isMobile && !embedMode)
   /** The inline panel's mount predicate, shared by the overlay phase effect
    *  and the render below so the two cannot disagree. */
-  // A persisted dashboard tab holds the panel mounted only while the preview
-  // offers it; off, the tab is withheld and must not keep the panel on screen.
-  const hasTaskDashboard = dashboardPreview && tabsCtl.tabs.some(tab => tab.kind === 'command-center')
+  const hasTaskDashboard = tabsCtl.tabs.some(tab => tab.kind === 'command-center')
   const sidePanelWantsMount = shouldMountSidePanel({ activityOpen, hasLiveAppTab, hasBrowserTab, hasTaskDashboard, searchOpen: search.isOpen })
     && !isSidePanelHidden({ activityOpen, hasLiveAppTab, hasBrowserTab, hasTaskDashboard, searchOpen: search.isOpen })
   // Mobile right-panel overlay: slide in when the panel wants the screen,
@@ -5113,7 +5116,12 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
    *  empty if it fails), so every self-hosted chip parses to null in that window
    *  even though the backend scan accepted it. */
   const revealSourceLink = useCallback((slot: string, chip: { url: string; kind: SourceLinkKind }): boolean => {
-    const link = parseSourceLinkUrl(chip.url, sourceHostsRef.current, jiraSourceHostsRef.current)
+    const link = parseSourceLinkUrl(
+      chip.url,
+      sourceHostsRef.current,
+      jiraSourceHostsRef.current,
+      githubSourceHostsRef.current,
+    )
     if (!link) return false
     const view = link.kind === 'issue' ? 'issues' : 'changes'
     // Durable BEFORE the state update, and one key at a time. Writing inside the
@@ -5256,8 +5264,9 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     // `focusComposerAfter`, not a bare dispatch + rAF: there is one composer and
     // it is bound to the ACTIVE slot, so focusing before creation fulfils puts
     // the caret on the old session and loses whatever is typed. See the module.
-    focusComposerAfter(dispatch(createSlot({ agent: defaultAgent || undefined, mode: mode || '' })).unwrap())
-  }, [dispatch, defaultAgent, mode, flyout])
+    // Agent-less: the server stamps the default custom agent (a template).
+    focusComposerAfter(dispatch(createSlot({ mode: mode || '' })).unwrap())
+  }, [dispatch, mode, flyout])
 
   // Force the list open when there is nothing in it, so a user with no sessions
   // still has the surface that creates one. Skipped while expand mode owns the
@@ -5352,9 +5361,9 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
       showActionError(errMessage(error) || i18nT('pages.chatPage.unknown_error'), title)
     if (mobileNewFolderId && !chatFoldersLoaded) return fail(chatFoldersError)
     const folderId = mobileNewFolder ? mobileNewFolderId : ''
-    const agent = folderId
-      ? resolveFolderAgent(chatFolders, folderId, defaultAgent)
-      : (defaultAgent || undefined)
+    // Only a folder's own pin names an agent; otherwise the server stamps the
+    // default custom agent (a template), never the default crewmate alias.
+    const agent = folderId ? resolveFolderAgent(chatFolders, folderId, '') : undefined
     const project = folderId ? resolveFolderProjectDir(chatFolders, folderId) : undefined
     mobileNewSessionInFlightRef.current = true
     setMobileNewSessionBusy(true)
@@ -5402,7 +5411,8 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     // the recreated slot keeps its identity and placement.
     const old = currentSlot
     const opts = {
-      agent: old?.agent || defaultAgent || undefined,
+      agent: old?.agent || undefined,
+      agent_kind: old?.agent ? old?.agent_kind || undefined : undefined,
       model: old?.model || undefined,
       mode,
       memory_mode: newMode,
@@ -5435,6 +5445,11 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     dismissTip,
   })
   const composerSessionControls = useSessionControlChips({ sessionControls, openSessionControl, activeSlot, sessionControlStatuses })
+  // The two icon-only controls at the header bar's right end look alike, so
+  // each shows its own aria-label in an InstantTip on hover or focus, at once,
+  // instead of a native title the browser holds back for about a second.
+  const popOutTip = useLabelTip(i18nT('pages.chatPage.pop_out_session_to_its_own_window'))
+  const activityTip = useLabelTip(i18nT('pages.chatPage.open_activity_panel'))
 
   return (
     <RunInTerminalScope.Provider value={runInTerminalScope}>
@@ -5648,6 +5663,14 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
           // the chip — see canStageSessionRef for why this is a named predicate.
           chatDropTarget={canStageSessionRef ? chatPaneEl : null}
           onDropSessionRef={stageSessionRef}
+          // Desktop-only by design (the narrow-viewport-required exemption):
+          // the scroll peek draws a clipped title in full past the sidebar's
+          // edge, over the chat beside it. On a phone the sessions pane is a
+          // near-full-width drawer with no chat beside it, so titles are not
+          // clipped by a narrow sidebar and there is nothing to draw over; the
+          // full title stays reachable there through the row's title tooltip
+          // and the rename box.
+          scrollPeek={!isMobile}
         />
         )
         return isMobile && mobileNavRail ? (
@@ -5857,7 +5880,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                   newSlotMutation.mutate()
                   return
                 }
-                dispatch(createSlot({ agent: pendingAgent || defaultAgent || undefined, agent_kind: pendingAgent ? pendingAgentKindRef.current : undefined, model: pendingModel || undefined, mode }))
+                dispatch(createSlot({ agent: pendingAgent || undefined, agent_kind: pendingAgent ? pendingAgentKindRef.current : undefined, model: pendingModel || undefined, mode }))
               }}
             >
               {i18nT('pages.chatPage.start_a_new_chat')}
@@ -5963,8 +5986,9 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                   <ExternalLink size={13} /> {i18nT('pages.chatPage.popped_out')}
                 </Clickable>
               ) : (
-                <Clickable className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-bg-hover transition-colors bg-transparent border-none cursor-pointer shrink-0 text-muted hover:text-text pointer-events-auto" onClick={() => openActivePopout(activeSlot, currentSlot?.title)} title={i18nT('pages.chatPage.pop_out_to_window')} aria-label={i18nT('pages.chatPage.pop_out_session_to_its_own_window')}>
+                <Clickable className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-bg-hover transition-colors bg-transparent border-none cursor-pointer shrink-0 text-muted hover:text-text pointer-events-auto" onClick={() => openActivePopout(activeSlot, currentSlot?.title)} aria-label={i18nT('pages.chatPage.pop_out_session_to_its_own_window')} {...popOutTip.handlers}>
                   <ExternalLink size={15} />
+                  {popOutTip.bubble}
                 </Clickable>
               ))}
               {/* Activity panel open toggle — relocated here from the top bar
@@ -5978,11 +6002,12 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                 <Clickable
                   className="pi-morph flex items-center justify-center w-7 h-7 rounded-md transition-colors bg-transparent border-none shrink-0 pointer-events-auto text-muted hover:text-text hover:bg-bg-hover cursor-pointer"
                   onClick={toggleAct}
-                  title={i18nT('pages.chatPage.open_activity_panel')}
                   aria-label={i18nT('pages.chatPage.open_activity_panel')}
                   {...uiLocation('chat.side-panel-open')}
+                  {...activityTip.handlers}
                 >
                   <SidePanelGlyph size={15} />
+                  {activityTip.bubble}
                 </Clickable>
               )}
               {!embedMode && splitFeatureEnabled && (splitAnchorForActive && !activeIsSplitAnchor ? (
@@ -6593,8 +6618,11 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                  the ordinary Send button; typing still works.
                  `sessionStartRepeated` is the same rule for a session start
                  that failed twice in a row: the card names the remedy and
-                 withholds Resume, so the composer falls back to Send. */
-              continuable={continuable && interrupted && !featureRequestRefused && !sessionStartRepeated}
+                 withholds Resume, so the composer falls back to Send.
+                 `contextOverflowed` is the same rule for a conversation too
+                 big for the model: Resume re-sends it, the card offers a fresh
+                 session instead. */
+              continuable={continuable && interrupted && !featureRequestRefused && !sessionStartRepeated && !contextOverflowed}
               continueIsRecovery={interrupted}
               onContinue={handleContinue}
               continuing={continuing}
@@ -6658,7 +6686,8 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                     no /capabilities route for the footer, and the footer is what carries the
                     failed-write alert — offering the write without its error path would make
                     a rejected request indistinguishable from a successful one. */}
-                {!embedded && <DefaultAgentRow agentName={activeAgentName} isDefault={activeAgentName === defaultAgent} onSetDefault={() => toggleDefaultAgent(activeAgentName)} />}
+                {/* The default for new sessions is a template; a crewmate's chat offers no such write. */}
+                {!embedded && !isCrewmateChat(currentSlot?.agent_kind, activeAgentName, installedAgents) && <DefaultAgentRow agentName={activeAgentName} isDefault={activeAgentName === defaultAgent} onSetDefault={() => toggleDefaultAgent(activeAgentName, defaultWriteKind(currentSlot?.agent_kind))} />}
                 {!embedded && <ManageAgentsFooter error={defaultAgentFailed} onManage={() => { setAgentDropdown(false); navigate('/capabilities?tab=crews') }} />}
               </div>,
               document.body
@@ -6720,6 +6749,9 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
               onSelect={path => { setProject(path); setProjectPickerOpen(false) }}
               startPath={_slotProject}
               errorHandoff
+              footer={_slotProject
+                ? <ProjectAwsProfileSection project={_slotProject} errorHandoff onHandoff={() => setProjectPickerOpen(false)} />
+                : undefined}
             />
             {/* App-contributed session control popover — triggered from input bar.
                 Only the open one is mounted, so an app's control costs nothing

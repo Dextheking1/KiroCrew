@@ -461,6 +461,75 @@ Both local defaults (`system` for TTS, `local` for STT) need no AWS account and 
 confirmation. `system` additionally needs nothing installed on macOS and Windows,
 which is why it is the TTS default rather than `piper`.
 
+### An AWS profile per project
+
+`aws.project_profiles` binds an AWS named profile to a project directory. A
+session working in that directory starts its agent with `AWS_PROFILE` (and
+`AWS_DEFAULT_PROFILE`, which some tools read first) set to the profile, so `aws`,
+the SDKs and tools built on them reach that account without a `--profile` on every
+command. It works with any profile in your own AWS config:
+IAM keys, SSO or `credential_process`.
+
+Set it from the chat composer: click the project folder in the project pill, and
+the project picker carries an **AWS profile for this project** row once you have
+AWS profiles registered in AWS Control or the project is bound. Pick a profile,
+type another name in **Other profile name** and click **Use profile**, or pick
+**No profile** to go back to the gateway's own AWS sign-in. The pill itself then
+shows the bound profile. You can also edit the map directly:
+
+```bash
+kirocrew config set aws.project_profiles '{"/home/me/src/billing": "billing-prod", "/home/me/src/sandbox": "dev"}'
+```
+
+How a session's directory is matched:
+
+- **The deepest mapped directory wins.** A key covers the directory itself and
+  everything under it, so `/home/me/src` and `/home/me/src/billing` can both be
+  bound and `billing` gets its own profile.
+- **Matching is on whole path components after resolving symlinks.**
+  `/a/proj` does not cover `/a/project2`, and a symlink counts as the
+  directory it points to.
+- **An unmapped directory keeps today's behaviour:** the agent gets whatever
+  credential chain the gateway itself has.
+- **A profile the caller sets itself wins**, for example a scheduled job's
+  `env` with its own `AWS_PROFILE` or `AWS_DEFAULT_PROFILE`.
+- **A change reaches sessions started after it.** A session that is already
+  running keeps the environment it started with.
+- **A subagent follows its own directory.** It shares its parent's agent process
+  only when its directory binds the same profile as the parent's. Otherwise it
+  starts a process of its own, with the profile its directory binds or with none.
+
+When a bound profile's sign-in no longer works, the profile in the pill turns amber.
+For an SSO profile its tooltip gives the `aws sso login --profile <name>` command to
+run.
+
+The profile is set on the agent's harness process itself, not only on the commands
+the agent runs: kiro-cli, KAS, Claude Code, Codex, OpenCode, Pi and Goose all start
+with it. A harness that signs its own model calls through the AWS credential chain
+signs them with the bound profile too. Claude Code set up for Amazon Bedrock
+(`CLAUDE_CODE_USE_BEDROCK=1`) is one, and the bound account then needs access to the
+Bedrock model. Under the `strict` and `cc` sandbox modes `~/.aws` is hidden from
+the agent (`cc` keeps a read-only `~/.aws/config`), so there a profile that needs
+`~/.aws/credentials` or the SSO cache does not resolve for the harness either.
+kiro-cli and KAS sign in with Kiro's own login, and Codex,
+OpenCode, Pi and Goose call whichever provider their own configuration names. Kiro
+Crew does not check whether any of them also reads `AWS_PROFILE` for its model calls.
+
+A profile name must be 1 to 128 letters, digits, `_`, `.`, `+` or `-`, and must not
+start with `-`. A bad name or a relative directory is refused when you save it, and
+ignored with a warning if a hand edit puts it in `config.json`.
+
+The binding is a default, not a boundary. Only the profile **name** is stored and
+passed on, and no credential is read or copied. The agent can still name another
+profile. The binding is read only from your own `config.json`, never from a file
+inside the project, so a cloned repository cannot choose which account its agent
+uses. For separation beyond picking the account:
+
+- A [crew](crew-members.md) gives a project its own workspace, memory store and
+  approval mode.
+- A separate Kiro Crew instance, with its own `KIROCREW_HOME` and port, keeps
+  everything apart.
+
 ### Memory and embeddings
 
 Embeddings are always on and run in-process through the bundled
@@ -474,6 +543,7 @@ them, so there is no enable switch here: only knobs for *which* model runs.
 | `memory.embedding_threads` | CPU threads llama.cpp may use per embedding call; explicit settings are clamped to the CPUs the process may run on, which a CPU-set restriction (`--cpuset-cpus`, `taskset`) narrows below the host's cores | `4` |
 | `memory.embedding_bulk_threads` | Threads used for background embedding; `0` inherits `embedding_threads` | `1` |
 | `memory.embedding_bulk_duty` | Target fraction of worker time spent on background embedding; interactive queries take priority | `0.2` |
+| `memory.embedding_idle_evict_secs` | Unload the embedding model after this many seconds with no embedding; the next search loads it again. `0` keeps it loaded | `3600` |
 | `memory.embed_model_url` | Override HTTPS URL for the embedding-model GGUF download (mirrored or airgapped hosts). Empty uses the public Kiro Crew CDN. `KIROCREW_EMBED_MODEL_URL` wins over both. Downloads are sha256-verified regardless of source | `""` |
 | `memory.embed_model_path` | Absolute path to a local GGUF to run **instead of** the bundled Qwen3-Embedding-0.6B. When set, the default model is never downloaded, so a custom model survives a default-model version change. Set `embedding_dim` to the model's output width. Changing the model changes the vector space, so stored embeddings are regenerated in the background. A configured-but-unreadable path fails closed (keyword search still works) rather than silently reverting to the default and re-embedding your corpus. Editable from the dashboard (Memory → Embedding Model). `KIROCREW_EMBED_MODEL_PATH` wins over this | `""` |
 | `memory.embed_model_id` | Optional label for a custom model. The vector-space identity is `<label>:sha256:<digest>` of the model file's bytes, so two different models of identical name and size are always told apart and this key cannot pin or override that identity. Applying a model from the dashboard writes the resulting id together with `memory.embed_model_stamp` (the file's device, inode, size and timestamps); an unchanged file reuses the stored digest at startup instead of re-hashing the weights | `""` |
@@ -743,6 +813,20 @@ Crew rewrites the file. A file saved as UTF-16 or UTF-32 (PowerShell's default
 `>` / `Out-File`) is not read: every credential in it reads as unset, the log
 warns once, and a dashboard channel save answers 409 until the file is re-saved
 as UTF-8.
+
+To add directories to the `PATH` the agent's shell starts with, put a `PATH` line
+in the same file. List only the directories to add, as absolute paths separated the
+way `PATH` is on your platform (`:` on macOS and Linux, `;` on Windows):
+
+```
+PATH=/opt/tools/bin:/opt/other-tools/bin
+```
+
+They are appended behind the `PATH` the gateway already has, so a directory here
+can supply a tool the gateway cannot find but never replaces one it can. `~`
+expands; `$HOME` and other shell syntax do not, and an entry that is not an
+absolute directory is dropped with a warning in the log. Restart the gateway after
+editing the file.
 
 ## Denied Commands
 

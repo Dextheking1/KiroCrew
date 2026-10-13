@@ -30,6 +30,7 @@ from typing import Any, Iterable
 # ``artifact_store.rules`` loads the record dataclasses and the slug hash
 # fallback, never ``kiro_crew.artifacts`` (the service module whose import from
 # here would close the ``artifacts -> hooks -> webhooks -> validation`` cycle).
+from kiro_crew.artifact_store.rules import ALLOWED_KINDS as _ARTIFACT_KINDS
 from kiro_crew.artifact_store.rules import MAX_TAG_LEN as ARTIFACT_TAG_MAX
 from kiro_crew.artifact_store.rules import normalize_tag as _normalize_artifact_tag
 
@@ -305,9 +306,20 @@ def is_registered_agent_name(value: object) -> bool:
 # end of the string.
 ARTIFACT_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?\Z")
 
-# Valid model names include bounded provider qualifiers (for example,
-# ``gpt-6-astra[high]``) as well as ordinary dotted and dashed identifiers.
-_MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(?:\[[a-zA-Z0-9._-]+\])?$")
+# Valid model names are an ordinary dotted and dashed identifier with at most one
+# trailing bounded qualifier (``gpt-6-astra[high]``), or a provider-qualified id as a
+# backend that resolves its model from its advertised list spells it
+# (``provider/org/model``, ``ollama/qwen3:8b``). Every segment starts alphanumeric, so
+# an id is never an option flag, an absolute path or a ``.``/``..`` hop; only the last
+# segment may carry a ``:tag``. The Settings model pins share the qualified branch.
+_MODEL_SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+QUALIFIED_MODEL_PATTERN = rf"{_MODEL_SEGMENT}(?:/{_MODEL_SEGMENT})+(?::{_MODEL_SEGMENT})?"
+# The bound ``model_registry`` keeps on an advertised id.
+_QUALIFIED_MODEL_MAX_CHARS = 256
+_MODEL_NAME_RE = re.compile(
+    rf"(?:{_MODEL_SEGMENT}(?:\[[A-Za-z0-9._-]+\])?"
+    rf"|(?=.{{1,{_QUALIFIED_MODEL_MAX_CHARS}}}\Z){QUALIFIED_MODEL_PATTERN})\Z"
+)
 
 # Content-bound theme-persona consent hash: sha256 rendered as EXACTLY 64
 # lowercase hex chars. This value flows into hmac.compare_digest at the
@@ -2378,7 +2390,22 @@ WORKFLOW_RERUN_SCHEMA = ToolSchema(
 # only the tag count and length caps as fields and check each tag's characters
 # in ``_validate_artifact_tags`` through the store's own ``normalize_tag``.
 _ARTIFACT_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$")
-_ARTIFACT_KIND_RE = re.compile(r"^(widget|html|markdown|svg|json|text|image|webapp)$")
+# BUILT FROM THE STORE'S OWN SET, not spelled again. This pattern decides only
+# whether a kind REACHES the store, so a name the store accepts and this list
+# omits is a kind advertised nowhere and refused "invalid format" with no rule
+# behind it. Sorted so the pattern is stable whatever order the frozenset
+# iterates in, and ``re.escape`` because the alternation is built rather than
+# written: a kind carrying a regex metacharacter would otherwise change what
+# this matches instead of being rejected by the store's own name rules.
+#
+# What the content has to be stays the store's question. ``kind="dashboard"``
+# is a layout package, and ``ArtifactStore.create`` / ``.update`` run every one
+# of those writes through ``artifact_store.dashboard_package``, which is the
+# single gate on it; spelling any of those rules here would make a second
+# vocabulary that could drift from the gate that holds.
+_ARTIFACT_KIND_RE = re.compile(
+    "^(" + "|".join(re.escape(k) for k in sorted(_ARTIFACT_KINDS)) + ")$"
+)
 
 # Model identifiers passed to kiro-cli ``--model`` (AcpRuntime). First char
 # must be alphanumeric so a value can never be parsed as a CLI flag, and the
@@ -2930,6 +2957,16 @@ CHAT_SESSION_PIN_SCHEMA = ToolSchema(
         # A real JSON boolean: the string "false" is truthy, so a coerced value
         # would pin a session the caller asked to unpin.
         FieldSpec("pinned", bool, required=True),
+    ],
+)
+
+SESSION_MOVE_TO_COLUMN_SCHEMA = ToolSchema(
+    tool_name="session_move_to_column",
+    fields=[
+        # Same session-reference shape as ``chat_session_pin.session``, and the
+        # column-reference bound the ``chat_tag_column_*`` schemas use.
+        FieldSpec("session", str, required=True, max_len=512),
+        FieldSpec("column", str, required=True, max_len=_CHAT_TAG_REF_MAX),
     ],
 )
 
@@ -4033,6 +4070,13 @@ SESSION_RETRY_SCHEMA = ToolSchema(
     ],
 )
 
+SESSION_CONTINUE_SCHEMA = ToolSchema(
+    tool_name="session_continue",
+    fields=[
+        FieldSpec("target", str, required=True, max_len=MAX_SHORT_STRING),
+    ],
+)
+
 
 def _validate_session_set_model(args: dict[str, Any]) -> None:
     # Both are optional, but a call naming neither changes nothing. Only
@@ -4055,6 +4099,13 @@ SESSION_SET_MODEL_SCHEMA = ToolSchema(
 
 SESSION_RELOAD_SCHEMA = ToolSchema(
     tool_name="session_reload",
+    fields=[
+        FieldSpec("target", str, required=True, max_len=MAX_SHORT_STRING),
+    ],
+)
+
+SESSION_GENERATE_TITLE_SCHEMA = ToolSchema(
+    tool_name="session_generate_title",
     fields=[
         FieldSpec("target", str, required=True, max_len=MAX_SHORT_STRING),
     ],
@@ -4413,9 +4464,11 @@ MCP_DASHBOARD_SCHEMAS: dict[str, ToolSchema] = {
     "session_stop": SESSION_STOP_SCHEMA,
     "session_end_wait": SESSION_END_WAIT_SCHEMA,
     "session_retry": SESSION_RETRY_SCHEMA,
+    "session_continue": SESSION_CONTINUE_SCHEMA,
     "session_set_model": SESSION_SET_MODEL_SCHEMA,
     "session_reload": SESSION_RELOAD_SCHEMA,
     "session_rename": SESSION_RENAME_SCHEMA,
+    "session_generate_title": SESSION_GENERATE_TITLE_SCHEMA,
     "session_close": SESSION_CLOSE_SCHEMA,
     "session_revive": SESSION_REVIVE_SCHEMA,
     "session_send": SESSION_SEND_SCHEMA,
@@ -4440,6 +4493,7 @@ MCP_DASHBOARD_SCHEMAS: dict[str, ToolSchema] = {
     "chat_tag_column_list": CHAT_TAG_COLUMN_LIST_SCHEMA,
     "chat_tag_column_create": CHAT_TAG_COLUMN_CREATE_SCHEMA,
     "chat_tag_column_move": CHAT_TAG_COLUMN_MOVE_SCHEMA,
+    "session_move_to_column": SESSION_MOVE_TO_COLUMN_SCHEMA,
 }
 
 # ── Tool Schemas (MCP crew log — server ``kirocrew-crew-log``) ──
@@ -4689,8 +4743,9 @@ WORK_LEDGER_RECORD_SCHEMA = ToolSchema(
         FieldSpec("goal", str, max_len=2000),
         FieldSpec("round", int, min_val=0, max_val=1_000_000),
         FieldSpec("fails", int, min_val=0, max_val=1_000_000),
-        # The store re-checks the same range; refusing here names the field early.
+        # The store re-checks the same ranges; refusing here names the field early.
         FieldSpec("item_cap", int, min_val=1, max_val=256),
+        FieldSpec("concurrency_cap", int, min_val=1, max_val=32),
         FieldSpec("new_goal", bool),
     ],
 )

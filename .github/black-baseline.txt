@@ -124,7 +124,6 @@ src/kiro_crew/apps/cron_sdk.py
 src/kiro_crew/apps/dependencies.py
 src/kiro_crew/apps/dependency_ledger.py
 src/kiro_crew/apps/dev_mode.py
-src/kiro_crew/apps/execution.py
 src/kiro_crew/apps/manager.py
 src/kiro_crew/apps/manifest.py
 src/kiro_crew/apps/module_loader.py
@@ -172,7 +171,6 @@ src/kiro_crew/dashboard/stale_asset_watchdog.py
 src/kiro_crew/dashboard/tailnet_serve.py
 src/kiro_crew/dashboard/terminal_commands.py
 src/kiro_crew/dashboard/theme_validate.py
-src/kiro_crew/dashboard/token_secret.py
 src/kiro_crew/dashboard/ws_event_scope.py
 src/kiro_crew/deploy/engine.py
 src/kiro_crew/deploy/handlers.py
@@ -440,7 +438,6 @@ test/test_dashboard_server_coverage.py
 test/test_dashboard_sessions_memory.py
 test/test_dashboard_sessions_search.py
 test/test_dashboard_start_site.py
-test/test_dashboard_state_ws.py
 test/test_dashboard_themes_coverage.py
 test/test_dashboard_worktree_coverage.py
 test/test_dashboard_ws_offloop_fanout.py
@@ -551,7 +548,6 @@ test/test_heartbeat_retention.py
 test/test_heartbeat_sel_prune_offload.py
 test/test_history.py
 test/test_history_atomic_rewrite.py
-test/test_history_coverage.py
 test/test_history_locking_remediation.py
 test/test_history_race.py
 test/test_hook_matcher_modes.py

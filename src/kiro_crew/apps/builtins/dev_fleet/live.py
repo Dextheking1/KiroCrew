@@ -53,12 +53,18 @@ class PointerState:
     target (``live_target.read_previous_target``) or ``None``. One value object rather
     than four calls so a backend fetching it over the broker pays one round trip and
     cannot see a torn view.
+
+    ``live_verified`` is False when ``live`` came from the pointer alone: the gateway
+    runs from a packaged / site-packages install, so ``_running_checkout()`` cannot
+    confirm the pointer's checkout is the code being executed. The fleet view shows
+    that row as "live?" rather than "live".
     """
 
     live: str | None
     staged: str | None
     staged_cancel_available: bool
     previous: str | None = None
+    live_verified: bool = True
 
 
 class PointerUnavailable(RuntimeError):
@@ -99,6 +105,9 @@ async def pointer_state(*, fresh: bool = False) -> PointerState:
         return await _POINTER_PROVIDER(fresh)
     loop = asyncio.get_running_loop()
     live_path = await _live_worktree_path(fresh=fresh)
+    # Set in the same synchronous step as ``_LIVE_WORKTREE`` and read before the next
+    # await, so it describes the path just returned.
+    live_verified = _LIVE_VERIFIED
 
     def _pointer_fields() -> tuple[str | None, str | None]:
         # Staged target and undo history come from the same pointer read: one hop,
@@ -112,7 +121,11 @@ async def pointer_state(*, fresh: bool = False) -> PointerState:
     # exists — with none, the control it gates cannot render and the answer is False.
     cancel = await _staged_cancel_available() if staged is not None else False
     return PointerState(
-        live=live_path, staged=staged, staged_cancel_available=cancel, previous=previous
+        live=live_path,
+        staged=staged,
+        staged_cancel_available=cancel,
+        previous=previous,
+        live_verified=live_verified,
     )
 
 
@@ -480,6 +493,9 @@ async def confirm_removal_lease(path: str) -> bool:
 # Which checkout powers the live gateway (the upstream reference showed this
 # per-row as is_live; users need to see what occupies the main instance).
 _LIVE_WORKTREE: str | None = None
+# False only when ``_LIVE_WORKTREE`` is the pointer's target taken on trust because
+# the running checkout could not be resolved (see ``_live_worktree_path``).
+_LIVE_VERIFIED: bool = True
 _LIVE_CHECK_AT: float = 0.0
 _LIVE_TTL = 30.0
 
@@ -585,7 +601,7 @@ async def _live_worktree_path(*, fresh: bool = False) -> str | None:
     """
     if _POINTER_PROVIDER is not None:
         return (await _POINTER_PROVIDER(fresh)).live
-    global _LIVE_WORKTREE, _LIVE_CHECK_AT
+    global _LIVE_WORKTREE, _LIVE_CHECK_AT, _LIVE_VERIFIED
     now = time.monotonic()
     if not fresh and _LIVE_CHECK_AT and (now - _LIVE_CHECK_AT) < _LIVE_TTL:
         return _LIVE_WORKTREE
@@ -605,22 +621,29 @@ async def _live_worktree_path(*, fresh: bool = False) -> str | None:
     # prevent. ``_running_checkout()`` is authoritative for what is executing, so
     # the pointer is only "live" when the two agree; otherwise it is staged
     # (see ``_staged_target``) and resolution falls through to the definition.
-    def _resolve_from_pointer() -> str | None:
+    #
+    # A packaged install has no running checkout to compare with. The pointer is
+    # still the best answer for which row is live (removal guards keep protecting
+    # it), but it is unverified: ``_LIVE_VERIFIED`` goes False so the fleet view
+    # says "live?" instead of asserting it.
+    def _resolve_from_pointer() -> tuple[str | None, bool]:
         # Pointer read, ``_running_checkout`` (resolves this process's path) and the
         # comparison all touch the filesystem: one executor hop for the lot.
         pointed = live_target.read_target()
         if pointed is None:
-            return None
+            return None, True
         running = _running_checkout()
-        if running is None or repository._same_path(str(pointed), str(running)):
-            return str(pointed)
-        return str(running)
+        if running is None:
+            return str(pointed), False
+        if repository._same_path(str(pointed), str(running)):
+            return str(pointed), True
+        return str(running), True
 
-    resolved = await asyncio.get_running_loop().run_in_executor(
+    resolved, verified = await asyncio.get_running_loop().run_in_executor(
         subprocess_executor(), _resolve_from_pointer
     )
     if resolved is not None:
-        _LIVE_WORKTREE = resolved
+        _LIVE_WORKTREE, _LIVE_VERIFIED = resolved, verified
         return _LIVE_WORKTREE
 
     def _service_manager() -> str | None:
@@ -640,12 +663,13 @@ async def _live_worktree_path(*, fresh: bool = False) -> str | None:
         # the agent's ProgramArguments symlink currently points at. Reading the
         # link is authoritative, needs no service query, and reflects a make-live
         # swap immediately.
-        _LIVE_WORKTREE = await asyncio.get_running_loop().run_in_executor(
+        launchd_path = await asyncio.get_running_loop().run_in_executor(
             subprocess_executor(), _launchd_live_worktree
         )
+        _LIVE_WORKTREE, _LIVE_VERIFIED = launchd_path, True
         return _LIVE_WORKTREE
     if manager != "systemd":
-        _LIVE_WORKTREE = None
+        _LIVE_WORKTREE, _LIVE_VERIFIED = None, True
         return None
     # Prefer WorkingDirectory: make-live always writes it alongside ExecStart,
     # and the baseline unit sets it too. ``--value`` prints the bare path with
@@ -690,9 +714,8 @@ async def _live_worktree_path(*, fresh: bool = False) -> str | None:
         except OSError:
             return None
 
-    _LIVE_WORKTREE = await asyncio.get_running_loop().run_in_executor(
-        subprocess_executor(), _normalise
-    )
+    normalised = await asyncio.get_running_loop().run_in_executor(subprocess_executor(), _normalise)
+    _LIVE_WORKTREE, _LIVE_VERIFIED = normalised, True
     return _LIVE_WORKTREE
 
 

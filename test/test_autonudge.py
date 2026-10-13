@@ -3552,6 +3552,311 @@ def test_runtime_budget_exceeded_predicate():
     assert runtime_budget_exceeded(orphan, now=1e12) is False
 
 
+class _BudgetClock:
+    """Stands in for the model's ``time``: seconds pass only when the test says so."""
+
+    def __init__(self) -> None:
+        self._wall = 1_800_000_000.0
+        self._mono = 5_000.0
+
+    def time(self) -> float:
+        return self._wall
+
+    def monotonic(self) -> float:
+        return self._mono
+
+    def advance(self, passed: float, *, step: float = 0.0) -> None:
+        self._mono += passed
+        self._wall += passed + step
+
+
+@pytest.mark.parametrize(
+    ("passed", "step", "spent"),
+    [
+        (5.0, 0.0, False),
+        (5.0, 2 * 3600.0, False),
+        (2 * 3600.0, 0.0, True),
+        (2 * 3600.0, -3 * 3600.0, True),
+    ],
+    ids=["fresh", "fresh_forward_step", "spent", "spent_backward_step"],
+)
+def test_runtime_budget_is_measured_on_the_monotonic_clock(monkeypatch, passed, step, spent):
+    """A wall-clock step while the loop runs neither spends its budget nor gives it back.
+
+    Before the fix the budget was ``time.time() - created_ts``: a 2 h forward
+    step stopped a loop armed seconds earlier as ``runtime_budget``, and a 3 h
+    backward step let a loop 2 h into a 1 h budget buy more unattended turns.
+    """
+    from kiro_crew.autonudge_service import model
+
+    clock = _BudgetClock()
+    monkeypatch.setattr(model, "time", clock)
+    loop = NudgeLoop(
+        id="x", slot_key="s", message="m", created_ts=clock.time(), max_runtime_secs=3600
+    )
+    assert runtime_budget_exceeded(loop) is False
+    clock.advance(passed, step=step)
+    assert runtime_budget_exceeded(loop) is spent
+
+
+def test_runtime_budget_counts_the_time_spent_before_a_load(monkeypatch):
+    """The stored ``created_ts`` still carries the budget across a restart."""
+    from kiro_crew.autonudge_service import model
+
+    clock = _BudgetClock()
+    monkeypatch.setattr(model, "time", clock)
+    loop = NudgeLoop(
+        id="x", slot_key="s", message="m", created_ts=clock.time() - 1800, max_runtime_secs=3600
+    )
+    assert runtime_budget_exceeded(loop) is False
+    clock.advance(1801.0)
+    assert runtime_budget_exceeded(loop) is True
+
+
+def test_a_suspend_spends_no_runtime_budget_until_a_restart(monkeypatch):
+    """The runtime budget is awake time while the gateway runs, and wall time across a restart.
+
+    On Linux and macOS a host suspend moves the wall clock and not the monotonic one.
+    A loop 30 min into a 1 h budget that sleeps 8 h wakes with its 30 min left; a
+    restart after the same sleep reads the stored ``created_ts`` on the wall clock
+    and finds the budget spent.
+    """
+    from kiro_crew.autonudge_service import model
+
+    clock = _BudgetClock()
+    monkeypatch.setattr(model, "time", clock)
+    created = clock.time() - 1800
+    loop = NudgeLoop(id="x", slot_key="s", message="m", created_ts=created, max_runtime_secs=3600)
+    assert runtime_budget_exceeded(loop) is False
+    clock.advance(0.0, step=8 * 3600.0)
+    assert runtime_budget_exceeded(loop) is False, "the suspend spent the budget"
+    restarted = NudgeLoop(
+        id="x", slot_key="s", message="m", created_ts=created, max_runtime_secs=3600
+    )
+    assert runtime_budget_exceeded(restarted) is True, "the restart lost the time before it"
+
+
+class _SteppedTime:
+    """The ``time`` module with ``time()`` held at *base* plus ``step``; every other name is real.
+
+    Bound as a module's own ``time``, never over the stdlib clock, so the event loop and
+    every other module keep the real one. ``time()`` moves only when the test sets
+    ``step``, so a test that measures from ``base`` reads no live clock.
+    """
+
+    def __init__(self, base: float) -> None:
+        self.base = base
+        self.step = 0.0
+
+    def time(self) -> float:
+        return self.base + self.step
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+
+def _held_wall_clock(monkeypatch) -> _SteppedTime:
+    """Hold the wall clock the budget code reads at one base; the test steps it via ``step``."""
+    from kiro_crew.autonudge_service import model, mutations
+
+    clock = _SteppedTime(time.time())
+    for module in (model, mutations):
+        monkeypatch.setattr(module, "time", clock)
+    return clock
+
+
+@pytest.mark.parametrize("step", [0.0, -1200.0], ids=["no_step", "backward_step"])
+@pytest.mark.asyncio
+async def test_resume_re_anchors_a_budget_the_timer_reads_as_spent(svc, monkeypatch, step):
+    """A Resume press on a loop past its budget gives it a fresh one, whatever the wall clock says.
+
+    The loop was paused 65 minutes into a 60 minute budget. Read as
+    ``time.time() - created_ts``, a 20 minute backward step makes that 45 minutes: the
+    resume keeps the spent budget, and the timer stops the loop on its first tick.
+    """
+    loop = await svc.add("s1", "check the PR", idle_secs=600, max_runtime_secs=3600)
+    try:
+        clock = _held_wall_clock(monkeypatch)
+        loop.created_ts = clock.base - 3900
+        runtime_budget_exceeded(loop)  # the timer's read in this process
+        paused_created_ts = loop.created_ts
+        await svc.update(loop.id, active=False)
+        clock.step = step
+
+        resumed = await svc.update(loop.id, active=True, fresh_run=True)
+
+        assert resumed is not None and resumed.active is True
+        assert resumed.created_ts > paused_created_ts, "the resume kept the spent budget"
+        assert runtime_budget_exceeded(resumed) is False
+    finally:
+        svc.stop()
+
+
+@pytest.mark.parametrize("step", [0.0, 7200.0], ids=["no_step", "forward_step"])
+@pytest.mark.asyncio
+async def test_resume_keeps_the_budget_left_at_the_pause(svc, monkeypatch, step):
+    """A loop paused with half its budget left resumes with that half, not a fresh budget.
+
+    Read as ``time.time() - created_ts``, a 2 hour forward step makes the 30 minute old
+    loop look spent, and the resume re-anchors it to a full hour.
+    """
+    loop = await svc.add("s1", "check the PR", idle_secs=600, max_runtime_secs=3600)
+    try:
+        clock = _held_wall_clock(monkeypatch)
+        loop.created_ts = clock.base - 1800
+        runtime_budget_exceeded(loop)  # the timer's read in this process
+        await svc.update(loop.id, active=False)
+        clock.step = step
+
+        resumed = await svc.update(loop.id, active=True, fresh_run=True)
+
+        assert resumed is not None and resumed.active is True
+        # Measured from the held base, which the step does not move.
+        left = resumed.max_runtime_secs - (clock.base - resumed.created_ts)
+        assert 1700 < left < 1900
+    finally:
+        svc.stop()
+
+
+class _HoldClock:
+    """``time`` for the budget and both holds: seconds pass only when the test says so.
+
+    ``monotonic()`` follows the time the test says really passed; ``time()``
+    follows it too, plus any wall-clock step. Every other name is the real module's.
+    """
+
+    def __init__(self) -> None:
+        self._wall = 1_800_000_000.0
+        self._mono = 5_000.0
+
+    def time(self) -> float:
+        return self._wall
+
+    def monotonic(self) -> float:
+        return self._mono
+
+    def advance(self, passed: float, *, step: float = 0.0) -> None:
+        self._mono += passed
+        self._wall += passed + step
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+
+@pytest.mark.parametrize("hold", ["approval", "person_wait"])
+@pytest.mark.parametrize(
+    ("before", "during"),
+    [(0.0, 0.0), (2 * 3600.0, 0.0), (0.0, 2 * 3600.0), (0.0, -3 * 3600.0)],
+    ids=[
+        "no_step",
+        "forward_step_before_hold",
+        "forward_step_during_hold",
+        "backward_step_during_hold",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_released_hold_hands_back_the_time_it_really_held(
+    svc, monkeypatch, hold, before, during
+):
+    """A hold's release gives the budget back the time it held, whatever the wall clock did.
+
+    The loop runs 20 min of a 40 min budget, is held 30 min, and is released: it
+    has 20 min left. Read from the wall clock at the release, a 2 h forward step
+    before the hold spends the budget, and a 3 h backward step during the hold
+    (past its start, so the wall clock credits nothing) charges the 30 min held.
+    Crediting the anchor with the wall-clock span instead would hand a forward step
+    during the hold back as budget, so the loop must also be spent 20 min later.
+    """
+    from kiro_crew.autonudge_service import firing, model, timers
+
+    loop = await svc.add("s1", "check the PR", idle_secs=600, max_runtime_secs=2400)
+    try:
+        clock = _HoldClock()
+        for module in (model, timers, firing):
+            monkeypatch.setattr(module, "time", clock)
+        loop.created_ts = clock.time()
+        assert runtime_budget_exceeded(loop) is False  # the timer's read in this process
+        clock.advance(1200.0, step=before)
+        if hold == "approval":
+            await timers._record_approval_hold(svc, loop.slot_key)
+            assert loop.approval_stalled is True
+        else:
+            assert await firing._commit_person_wait(svc, loop, held=True)
+        clock.advance(1800.0, step=during)
+        if hold == "approval":
+            assert await svc.release_approval_hold(loop.slot_key, why="test", arm=False)
+        else:
+            assert await firing._commit_person_wait(svc, loop, held=False)
+
+        assert runtime_budget_exceeded(loop) is False, "the release left the budget spent"
+        clock.advance(1201.0)
+        assert runtime_budget_exceeded(loop) is True, "the release handed back more than it held"
+    finally:
+        svc.stop()
+
+
+@pytest.mark.parametrize(
+    ("stopped", "raised", "age", "passed", "step", "spent"),
+    [
+        (None, None, 3300.0, 600.0, 0.0, True),
+        (None, None, 3300.0, 600.0, -1200.0, True),
+        (RUNTIME_BUDGET_REASON, 7200, 3900.0, 300.0, 7200.0, False),
+    ],
+    ids=["no_step", "backward_step", "forward_step"],
+)
+@pytest.mark.asyncio
+async def test_a_failed_resume_write_leaves_the_budget_clock_as_it_was(
+    svc, monkeypatch, stopped, raised, age, passed, step, spent
+):
+    """A Resume whose write fails leaves the runtime budget reading what it read before.
+
+    The press on a budget the pause ran out, or that the timer stopped, re-anchors it,
+    and the rollback of the failed write puts ``created_ts`` back. The budget's anchor
+    is keyed to ``created_ts`` and kept outside the fields that rollback restores, so
+    one left for the re-anchored value is not the loop's any more: the next read takes
+    the spent time from the wall clock, with every step the wall clock took since the
+    anchor it replaced. A 20 min backward step then hands back 20 min of a spent
+    budget, and a 2 h forward step spends a budget that was raised past the loop's age.
+    """
+    from kiro_crew.autonudge import nudge_cycle_header
+    from kiro_crew.autonudge_service import model, mutations
+
+    loop = await svc.add("s1", "check the PR", idle_secs=600, max_runtime_secs=3600)
+    try:
+        clock = _HoldClock()
+        for module in (model, mutations):
+            monkeypatch.setattr(module, "time", clock)
+        loop.created_ts = clock.time() - age
+        runtime_budget_exceeded(loop)  # the timer's read in this process
+        await svc.update(loop.id, active=False, stopped_reason=stopped)
+        if raised:
+            await svc.update(loop.id, max_runtime_secs=raised)
+        paused_created_ts = loop.created_ts
+        clock.advance(passed, step=step)
+        header = nudge_cycle_header(loop)
+        assert runtime_budget_exceeded(loop) is spent, "the setup must leave the case's verdict"
+
+        real_write = svc._write_state
+
+        def _refuse(_payload):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(svc, "_write_state", _refuse)
+        with pytest.raises(OSError):
+            await svc.update(loop.id, active=True, fresh_run=True)
+
+        assert loop.active is False and loop.created_ts == paused_created_ts
+        assert nudge_cycle_header(loop) == header, "the failed press moved the clock"
+        assert runtime_budget_exceeded(loop) is spent, "the failed press changed the verdict"
+
+        monkeypatch.setattr(svc, "_write_state", real_write)
+        resumed = await svc.update(loop.id, active=True, fresh_run=True)
+        assert resumed is not None and resumed.active is True
+        assert runtime_budget_exceeded(resumed) is False, "the press that landed kept it spent"
+    finally:
+        svc.stop()
+
+
 @pytest.mark.asyncio
 async def test_runtime_budget_deactivates_and_emits_expired(svc, monkeypatch):
     """A spent wall-clock budget stops the loop BEFORE it buys another turn,

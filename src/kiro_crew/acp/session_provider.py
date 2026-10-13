@@ -72,6 +72,7 @@ from kiro_crew.runtime_ownership import (
     release_runtime_tenancy,
 )
 from kiro_crew.session_token_sig import schedule_session_token_publish
+from kiro_crew.trust_patterns import GrantDeadline
 
 logger = logging.getLogger(__name__)
 
@@ -762,13 +763,23 @@ class AcpSessionProvider(LLMProvider):
             raise AcpError(str(exc)) from exc
 
     async def approve_tool(
-        self, request_id: str | int, option_id: str | None = None, *, always: bool = False
+        self,
+        request_id: str | int,
+        option_id: str | None = None,
+        *,
+        always: bool = False,
+        deadline: GrantDeadline | None = None,
     ) -> bool:
         """Approve a pending tool permission request. Accepts an explicit
         option_id (signature parity with AcpClient.approve_tool); falls back to
-        allow_always/allow_once from `always`."""
+        allow_always/allow_once from `always`. A ``deadline`` is passed on to
+        the handle, which raises ``GrantEnded`` rather than send once it passes."""
         resolved = option_id or ("allow_always" if always else "allow_once")
-        return await self._guarded(self._handle.approve_tool(request_id, option_id=resolved))
+        if deadline is None:
+            return await self._guarded(self._handle.approve_tool(request_id, option_id=resolved))
+        return await self._guarded(
+            self._handle.approve_tool(request_id, option_id=resolved, deadline=deadline)
+        )
 
     async def reject_tool(self, request_id: str | int) -> None:
         """Reject a pending tool permission request."""
@@ -1437,3 +1448,12 @@ class AcpSessionProvider(LLMProvider):
     def _start_time(self) -> int | None:
         """Process start time (for PID recycle detection)."""
         return getattr(self._runtime, "_start_time", None)
+
+    async def refresh_process_tree(self) -> None:
+        """Record descendants the runtime started since its last snapshot, before a teardown.
+
+        The kill handle reads ``_child_pids`` through this provider from the
+        runtime (above), so the refresh is the runtime's: its own guarded walk,
+        which verifies the root before and after and writes before it publishes.
+        """
+        await self._runtime.refresh_process_tree()

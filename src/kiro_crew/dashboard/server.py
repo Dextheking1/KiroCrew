@@ -455,6 +455,12 @@ _STT_SWEEP_BOOT_DELAY_SECS = 30.0
 # listener, serving the first page, or restoring sessions.
 _STT_PREWARM_BOOT_DELAY_SECS = 5.0
 
+# How recent a real decode must be for the boot prewarm to load the speech model.
+# The weights are one anonymous native buffer (1.6 GB for large-v3-turbo) held for
+# `stt.idle_evict_secs`, so a host that does not dictate skips the boot warm and keeps
+# the pointer-down prewarm.
+_STT_BOOT_PREWARM_RECENT_USE_SECS = 14 * 86400
+
 
 async def _prune_browser_snapshots_loop() -> None:
     """Keep the browser snapshot directory bounded for as long as we run.
@@ -595,9 +601,9 @@ _STRICT_INTERNAL_API_PATHS = frozenset(
         # runs behind a sandbox with its own user namespace, so its shells cannot
         # connect the systemd user bus every pod verb needs; the gateway holds the
         # host bus and does the systemd part on the agent's behalf. Without these
-        # entries the tools 403: an agent has no dashboard cookie,
-        # ``KIROCREW_INTERNAL_SECRET`` is stripped from its env, and
-        # ``.local_secret`` is on the sensitive-path denylist.
+        # entries the tools 403: an agent has no dashboard cookie, the gateway
+        # mints its internal secret in-process and never puts it in an agent's
+        # env, and ``.local_secret`` is on the sensitive-path denylist.
         #
         # STRICT, not mixed: no browser calls these. The dashboard's own pod
         # buttons go to the app backend through the ``/apps/dev-fleet/api/*``
@@ -721,9 +727,11 @@ _STRICT_INTERNAL_API_PATHS = frozenset(
         "/api/session-control/stop",
         "/api/session-control/end-wait",
         "/api/session-control/retry",
+        "/api/session-control/continue",
         "/api/session-control/set-model",
         "/api/session-control/reload",
         "/api/session-control/rename",
+        "/api/session-control/generate-title",
         "/api/session-control/close",
         "/api/session-control/revive",
         "/api/session-control/send",
@@ -820,8 +828,8 @@ _MIXED_INTERNAL_API_PATHS = frozenset(
         # Issue Radar investigation record — the ONE app route reachable with the
         # internal secret, for the ``issue_radar_record_investigation`` MCP tool.
         # An investigating chat agent has no dashboard token (cookies are
-        # httpOnly, ``KIROCREW_INTERNAL_SECRET`` is stripped from agent env by
-        # ``sandbox._AGENT_DENIED_ENV_KEYS``, and ``.local_secret`` is on the
+        # httpOnly, the gateway mints its internal secret in-process and never
+        # puts it in an agent's env, and ``.local_secret`` is on the
         # ``security.py`` sensitive-path denylist), so the PUT the Investigate
         # seed prompt asks for would 403 unconditionally and no investigation
         # could record its findings. Deliberately the FULL path, not the
@@ -886,8 +894,9 @@ _MIXED_INTERNAL_API_PATHS = frozenset(
         # app hands the agent batched click-anchored comments and the agent
         # applies them, but it cannot update the preview's comment-thread
         # bubbles: posting to ``/thread`` needs a dashboard credential, and an
-        # agent session holds none (cookies are httpOnly, the IPC secret is
-        # stripped from agent env, and the CLI credential mint is denied by the
+        # agent session holds none (cookies are httpOnly, the gateway mints its
+        # internal secret in-process and never puts it in an agent's env, and
+        # the CLI credential mint is denied by the
         # builtin ``credential-exfil`` rules — the same trust model as the
         # ``/api/apps/issue-radar/investigation`` and Ops Mission Control
         # entries above). So the documented raw POST 403s unconditionally and
@@ -2221,7 +2230,7 @@ async def start_dashboard(
     # handshake subprocess per configured MCP server, so under cautious boot it
     # gets its own launch window instead of landing on top of the app backends.
     await cautious_boot.pause_before("MCP server probe")
-    asyncio.create_task(handlers._bg_mcp_probe())
+    asyncio.create_task(handlers._bg_mcp_probe(state.sessions))
 
     # Refresh config.json's meta stamp when an upgrade left it naming the
     # previous build. Post-bind and fire-and-forget (never awaited on

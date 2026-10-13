@@ -135,8 +135,11 @@ from kiro_crew.cron import (  # noqa: F401
     effective_wake_budget,
 )
 from kiro_crew.cron_script import delivery_fingerprint, run_command_sandboxed, run_script_sandboxed
-from kiro_crew.dashboard import cautious_boot, start_dashboard
-from kiro_crew.dashboard.chat_persistence import rehydrate_slot_from_history_async
+from kiro_crew.dashboard import cautious_boot, start_dashboard, token_secret
+from kiro_crew.dashboard.chat_persistence import (
+    rehydrate_slot_from_history_async,
+    wait_for_unwinding_turns,
+)
 from kiro_crew.dashboard.chat_runner import (
     _arm_queued_delivery_settlement,
     _auto_approve_reason,
@@ -476,6 +479,7 @@ from kiro_crew.subagent import (  # noqa: F401
     _TRANSIENT_CONTINUE_MSG,
     DIGEST_HOLD_SECS,
     INJECTION_TIMEOUT,
+    ORPHAN_NOTICE_OWED,
     SpawnApprovalUnreachable,
     SubagentDelivery,
     SubagentInfo,
@@ -929,6 +933,116 @@ async def _pinned_kiro_cli(purpose: str) -> str | None:
     if pinned is None and unpinned_exists:
         logger.warning("%s is skipped: %s.", purpose, PATH_ONLY_INSTALL_NOTE)
     return pinned
+
+
+# Restart step named by the boot refusal. Deliberately static: probing for the
+# installed service would stat HOME, which may be a hung network mount.
+BOOT_RESTART_HINT = "kirocrew restart"
+
+# Boot deadline for the signing-key preflight. Its lstat and key load normally
+# take milliseconds (the loader's own retry budget is well under a second), so a
+# preflight still running at this point is stuck on the filesystem.
+_SIGNING_KEY_PREFLIGHT_TIMEOUT_SECS = 30.0
+
+
+async def _run_signing_key_preflight_bounded(timeout: float | None = None) -> None:
+    """Run :func:`signing_key_preflight` off the loop, with a deadline.
+
+    A daemon thread rather than ``asyncio.to_thread``: a default-executor worker
+    stuck in a filesystem call is joined at interpreter exit, so the timeout's
+    ``SystemExit`` would itself hang. A daemon thread is abandoned at exit, which
+    is what lets the boot fail closed when the data home stops answering.
+
+    Raises whatever the preflight raised (its ``SystemExit`` refusal included),
+    ``TimeoutError`` at the deadline, and ``RuntimeError`` when no thread can be
+    started.
+    """
+    loop = asyncio.get_running_loop()
+    outcome: asyncio.Future[BaseException | None] = loop.create_future()
+
+    def _settle(exc: BaseException | None) -> None:
+        if not outcome.done():
+            outcome.set_result(exc)
+
+    def _worker() -> None:
+        result: BaseException | None = None
+        try:
+            signing_key_preflight()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the loop
+            result = exc
+        try:
+            loop.call_soon_threadsafe(_settle, result)
+        except RuntimeError:
+            pass  # the loop already closed: the boot gave up on this thread
+
+    threading.Thread(target=_worker, name="kc-signing-key-preflight", daemon=True).start()
+    exc = await asyncio.wait_for(
+        outcome, _SIGNING_KEY_PREFLIGHT_TIMEOUT_SECS if timeout is None else timeout
+    )
+    if exc is not None:
+        raise exc
+
+
+def signing_key_preflight() -> None:
+    """Refuse to boot on a truncated dashboard signing key.
+
+    A ``token_signing.key`` shorter than 32 bytes is never accepted as a key. The
+    loader's fallback for it is a random in-memory secret, so the gateway would come
+    up, every dashboard browser would be asked for a fresh login token, every
+    HMAC-certified tag grant would be quarantined, and the same would happen again
+    on the next restart, with one WARNING line and nothing else saying why. The file
+    is deliberately NOT repaired here: an in-place heal races an operator's restore,
+    a sibling gateway and the sandbox, and each guard against one of those opens a
+    seam for the next, while the operator holding the file is the one actor who can
+    move it safely. So this fails loud, early and
+    with the manual repair steps, the way the persistence preflight does.
+
+    Absent (first boot), non-regular (``other``) and sandbox-masked keys pass
+    through: the first is normal and the loader publishes a key; the others are
+    reported by ``doctor`` and by the loader's own WARNING.
+
+    Two looks, and the second is the one that counts. The ``lstat`` probe supplies
+    the path and a first shape verdict, which decides only whether the load runs.
+    It can be stale in either direction: an in-place rewrite
+    that begins after it and stays short through the loader's retry budget would
+    still reach the ephemeral fallback, and a short answer can be a sibling
+    gateway's momentary empty file from the in-place creator on a link-less home,
+    which the loader waits out and then reads. So every ok, absent, short or
+    unstatable key is LOADED here, through the memoized getter the dashboard signs
+    with. A load that fell back on a truncated file refuses with the manual repair
+    steps. A load that fell back for any other reason (a key this process cannot
+    read or stat) boots on the loader's WARNING and is reported by ``doctor``,
+    unless the probe already saw a short key, which still refuses: the
+    loader treats a Windows sharing violation as transient, and a lock held past
+    its retry budget must not leave the gateway unable to start. The probe decides
+    alone when an earlier caller already memoized the secret.
+    Blocking filesystem I/O: call it off the event loop.
+    """
+    state, key_path = token_secret.signing_key_health()
+    if state in ("ok", "absent", "short", "unstatable"):
+        loaded = token_secret.load_boot_secret()
+        if loaded in ("loaded", "short"):
+            state = loaded
+    if state != "short":
+        return
+    # The literal hint, not restart_command_hint(): that helper stats the
+    # per-user unit file under HOME, which can block without bound on a
+    # disconnected network mount, and the boot must refuse rather than hang.
+    steps = token_secret.signing_key_remedy(key_path, BOOT_RESTART_HINT)
+    logger.critical(
+        "Signing key preflight failed — refusing to start: %s is shorter than 32 "
+        "bytes, so every restart would sign with an ephemeral secret and log every "
+        "dashboard session out. Repair it by hand: %s",
+        key_path,
+        " ".join(steps),
+    )
+    print(
+        f"❌ Truncated token signing key at {key_path}. Repair it by hand:",
+        *(f"   {step}" for step in steps),
+        sep="\n",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 class GatewayOrchestrator:
@@ -7695,6 +7809,11 @@ class GatewayOrchestrator:
                 if callback is not None:
                     callback()
                 _append_nudge()
+                # The row now names the turn's opener. Its frame was queued on
+                # every socket before this push's, and a socket sends in order,
+                # so no client sees the mark drop before the row arrives.
+                turn_slot._wake_starting_task = None
+                dashboard_state.push_slots_update()
                 _settle_admission(MonitorDispatchResult.DISPATCHED)
 
             completion_hook = MonitorCompletionHook(
@@ -7786,6 +7905,12 @@ class GatewayOrchestrator:
         # Mirror dashboard /api/chat/send path so slot.running == True and sidebar
         # shows the "turn active" three-dots indicator immediately.
         slot.task = task
+        if completion_hook is not None:
+            # A structured wake writes its row only once the runner accepts the
+            # turn, so the push below shows the slot running while the newest
+            # opener is still an older row. Mark the turn as a starting wake
+            # first: that same frame then says who is opening it.
+            slot._wake_starting_task = task
         self._session_tasks[slot.key] = task
         self.dashboard_state.push_slots_update()
         if admission is not None:
@@ -8853,7 +8978,7 @@ class GatewayOrchestrator:
             # SHORT of its goal. A terminal subject is not short of anything, so it
             # outranks all of them -- expressed ONCE here rather than as a guard added to
             # each branch after a reviewer finds it, which is how the cap and then the
-            # wall-clock budget each came to preempt it in turn.
+            # runtime budget each came to preempt it in turn.
             #
             # An OWED terminal turn is terminal news too, and it is the third way this
             # same precedence has been lost. A CHANNEL-bound loop deliberately does not
@@ -8879,7 +9004,9 @@ class GatewayOrchestrator:
                 title = "Monitoring loop spent its time budget"
                 body = (
                     f"The loop stopped after {loop.cycle_count} cycles because "
-                    f"its {loop.max_runtime_secs}s wall-clock budget ran out "
+                    f"its {loop.max_runtime_secs}s runtime budget (awake time "
+                    "while the gateway runs; a restart counts the time since "
+                    "created_ts on the wall clock) ran out "
                     "without it reporting done, so its goal may still be "
                     "unmet. Restart it from the goal popover, or ask the agent "
                     "to raise the budget (monitor_update)."
@@ -9927,6 +10054,26 @@ class GatewayOrchestrator:
                 # below — that would inject a completion turn for an agent that
                 # never ran.
                 return
+            # The one await on the wave-accounting path runs BEFORE this
+            # member touches the wave record. Everything from reading
+            # ``_batch_progress`` to the hold-or-flush decision below is then a
+            # single synchronous block, so a sibling completion can never close
+            # the wave between this member writing its result line and deciding
+            # how that line is delivered: the closer's settle set always carries
+            # every member its digest names. While this member awaits, its own
+            # report hold is still armed, so no sibling closes the wave on it.
+            # The lookup is skipped when this member's count alone closes the
+            # wave; nothing can interleave between the peek and the block.
+            _no_batch_pending = False
+            if _batch_id and not _flush_only and self.subagent_mgr:
+                _peek = self._batch_progress.get(_batch_id)
+                _peek_done = _peek["done"] if _peek is not None else 0
+                if not (_batch_total > 0 and _peek_done + 1 >= _batch_total):
+                    try:
+                        _members = await _subagent_batch_pending(self.subagent_mgr, _batch_id)
+                        _no_batch_pending = not _members
+                    except Exception:
+                        _no_batch_pending = False
             if _batch_id:
                 if _flush_only:
                     # Nothing to release (wave already closed / already flushed
@@ -9969,6 +10116,17 @@ class GatewayOrchestrator:
                         },
                     )
             if _batch_id and not _flush_only:
+                # This member's report has been consumed: its contribution is
+                # about to land in the wave's done-count, so it stops holding
+                # the wave-close fallback open (batch_reports_in_flight).
+                # Release in the same synchronous block as the
+                # increment so the hold and the count can never be observed
+                # apart. The release goes to the manager-level registry -- NOT
+                # an agent-record flag -- so an operator clear (DELETE
+                # /api/spawn) popping this member from ``_agents`` mid-flight
+                # cannot have dropped the hold before this line lands it.
+                if self.subagent_mgr is not None:
+                    self.subagent_mgr.consume_report_hold(_batch_id, info.id)
                 bp["done"] += 1
                 _oc = info.outcome
                 if _oc == "stopped":
@@ -10029,10 +10187,23 @@ class GatewayOrchestrator:
                     # stagger gate) — an unrelated agent under the same
                     # parent must neither hold the digest hostage nor
                     # release it early.
+                    #
+                    # A member whose ``done`` flag has flipped but whose
+                    # terminal report has not reached this consumer yet is
+                    # OUTSTANDING too: ``batch_members_pending`` does not
+                    # count it while its contribution to bp["done"] is still
+                    # in flight, so without the reports-in-flight check a
+                    # sibling landing in that window finalizes the wave early
+                    # and the in-flight report then finalizes it again.
+                    #
+                    # The membership lookup ran before this block (see
+                    # ``_no_batch_pending``); the in-flight read is synchronous
+                    # and runs after this member released its own hold above.
                     try:
                         _last = bool(
                             self.subagent_mgr
-                            and not await _subagent_batch_pending(self.subagent_mgr, _batch_id)
+                            and _no_batch_pending
+                            and not self.subagent_mgr.batch_reports_in_flight(_batch_id)
                         )
                     except Exception:
                         _last = False
@@ -10099,7 +10270,10 @@ class GatewayOrchestrator:
                         # separate from _digest_held (the restart-safety flag the
                         # run loop reads) so the sweep never mutates that
                         # contract; cleared when this member's chunk fires.
-                        info._digest_held_at = time.time()
+                        # Monotonic, as the sweep's ``now`` is: a wall-clock step
+                        # must not force a partial digest out, or hold one past
+                        # its deadline.
+                        info._digest_held_at = time.monotonic()
                         bp.setdefault("held_infos", []).append(info)
                         if _oc == "completed":
                             bp["held_ok_deliveries"].append(
@@ -11158,6 +11332,21 @@ class GatewayOrchestrator:
                         failure_msg, _ = redact_exfiltration_urls(failure_msg)
                         failure_msg, _ = redact_credentials(failure_msg)
                         slot._pending_subagent_failures.append(failure_msg)
+                        # A completed run keeps no delivered tombstone while its
+                        # report is undelivered, and the drain that hands this
+                        # notice to the parent writes it, keyed on the text.
+                        if info.outcome == "completed":
+                            try:
+                                slot.note_pending_subagent_delivery(
+                                    failure_msg,
+                                    [SubagentDelivery(info.id, info.elapsed, info.credits)],
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "Subagent %s: could not record the notice's delivery",
+                                    info.id,
+                                    exc_info=True,
+                                )
                     self.dashboard_state.push_slots_update()
                     logger.warning(
                         "Injected timeout error for subagent %s into slot %s", info.id, slot_name
@@ -11202,7 +11391,12 @@ class GatewayOrchestrator:
                 if etype in ("subagent_spawn", "subagent_done", "subagent_queued"):
                     _schedule_slots_push()
 
-        async def _orphan_notify(parent_session: str, msg: str, meta: dict | None = None) -> bool:
+        async def _orphan_notify(
+            parent_session: str,
+            msg: str,
+            meta: dict | None = None,
+            delivery: SubagentDelivery | None = None,
+        ) -> bool | str:
             """Inject an orphan notification into the parent dashboard slot.
 
             Mirrors the subagent_injection_failed delivery: visible transcript
@@ -11214,6 +11408,9 @@ class GatewayOrchestrator:
 
             ``meta`` carries the structured completion facts so the
             orphan row renders as a card without re-parsing its prose header.
+            *delivery* is the tombstone the notice owes. It is recorded on the
+            slot's ledger under the queued text, for the drain of that text to
+            write, and ``ORPHAN_NOTICE_OWED`` tells the manager it was taken.
             """
             # Deliver to whichever tab shows the parent conversation, including a
             # channel-born one; only a parent with no tab wants the owner DM.
@@ -11237,9 +11434,20 @@ class GatewayOrchestrator:
                 meta={SUBAGENT_COMPLETION_META_KEY: meta} if meta else None,
             )
             slot._pending_subagent_failures.append(safe_msg)
+            owed = False
+            if delivery is not None:
+                try:
+                    slot.note_pending_subagent_delivery(safe_msg, [delivery])
+                    owed = True
+                except Exception:
+                    logger.debug(
+                        "Could not record orphan %s's notice delivery",
+                        delivery.agent_id,
+                        exc_info=True,
+                    )
             self.dashboard_state.push_slots_update()
             logger.info("Orphan notification injected into slot %s", slot_name)
-            return True
+            return ORPHAN_NOTICE_OWED if owed else True
 
         async def _orphan_dm(msg: str) -> bool:
             """Owner-DM fallback for orphan notifications (bell + Slack DM)."""
@@ -11383,6 +11591,8 @@ class GatewayOrchestrator:
             lesson_store=LessonStore(),
             max_parallel_steps=self._cfg.taskrunner.max_parallel_steps,
             workspace_dir=self._cfg.taskrunner.workspace_dir,
+            test_cmd=self._cfg.taskrunner.test_command,
+            require_verification=self._cfg.taskrunner.require_verification,
         )
         self.task_runner._on_tool_approval = self._interactive_approval("taskrunner")
 
@@ -11778,6 +11988,12 @@ class GatewayOrchestrator:
             await asyncio.to_thread(self.subagent_mgr.close)
 
         await asyncio.to_thread(self._stop_memory_startup)
+
+        # close_all() above ended every ACP session, so a dashboard turn that was
+        # mid-reply is now unwinding, and it saves the text its user watched stream
+        # before it ends; the hard exit after this method would beat the save. Last,
+        # so the steps above keep their share of the shutdown deadline.
+        await wait_for_unwinding_turns(self.dashboard_state)
 
     # ------------------------------------------------------------------
     # Auto-update
@@ -12176,6 +12392,10 @@ class GatewayOrchestrator:
                 logger.warning("Update restart fence lost to real shutdown; deferring restart")
                 return
             await sessions.close_all()
+            # close_all() cut every dashboard turn that was mid-reply, and each one
+            # saves the text its user watched stream as it unwinds, after the save
+            # above. The exec below would beat that save.
+            await wait_for_unwinding_turns(self.dashboard_state)
 
         # The broker this gateway spawned dies with it, the same as ``_shutdown``
         # does on a clean exit; an adopted daemon belongs to its own owner and is
@@ -13679,6 +13899,37 @@ class GatewayOrchestrator:
             )
             raise SystemExit(1)
 
+        # Refuse to boot on a truncated signing key (see signing_key_preflight).
+        # Off-loop for the same reason as the persistence probe, and bounded: a
+        # key leaf on a disconnected mount must refuse the boot, not stall it.
+        try:
+            await _run_signing_key_preflight_bounded()
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            logger.critical(
+                "Signing key preflight failed — refusing to start: it did not finish "
+                "within %.0fs (unresponsive data home?)",
+                _SIGNING_KEY_PREFLIGHT_TIMEOUT_SECS,
+            )
+            print(
+                f"❌ The signing key preflight did not finish within "
+                f"{_SIGNING_KEY_PREFLIGHT_TIMEOUT_SECS:.0f}s. Check that the data "
+                f"home is reachable, then restart: {BOOT_RESTART_HINT}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
+        except RuntimeError as exc:
+            # No worker thread at boot (executor exhaustion/shutdown). Running
+            # the preflight inline would put its lstat and key load on the event
+            # loop, so a stalled data home would wedge boot instead of refusing
+            # it. Exit loud, the way the persistence preflight above does.
+            logger.critical(
+                "Signing key preflight failed — refusing to start: cannot run it off the "
+                "event loop: %s",
+                exc,
+            )
+            print(f"❌ Cannot run the signing key preflight: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+
         # Clean up orphaned kiro-cli processes from previous runs
         from kiro_crew.session import cleanup_orphaned_sessions
 
@@ -14200,7 +14451,7 @@ class GatewayOrchestrator:
         # would pay a deepcopy plus a full nested-dataclass rebuild for one scalar.
         _probe_t = self._cfg.dashboard.mcp_probe_timeout_secs + 15
         try:
-            await asyncio.wait_for(_bg_mcp_probe(), timeout=_probe_t)
+            await asyncio.wait_for(_bg_mcp_probe(self.sessions), timeout=_probe_t)
         except asyncio.TimeoutError:
             print("👻 MCP probe timed out — continuing without full probe")
 
@@ -14696,6 +14947,14 @@ class GatewayOrchestrator:
                 callback=self._on_slack_config_change,
                 name="GatewayOrchestrator.slack",
             ),
+            # Its own subscription: a deferral is merged per subscription, so a
+            # discarded ``agent`` section is retried without keeping the Slack
+            # paths stale beside it.
+            live.subscribe(
+                "agent.default_agent",
+                callback=self._on_default_agent_config_change,
+                name="GatewayOrchestrator.default_agent",
+            ),
         ]
 
     # gateway_runtime/channel_lifecycle.py
@@ -14712,6 +14971,8 @@ class GatewayOrchestrator:
     _close_channel_locked = _channel_lifecycle._close_channel_locked
 
     _on_slack_config_change = _channel_lifecycle._on_slack_config_change
+
+    _on_default_agent_config_change = _channel_lifecycle._on_default_agent_config_change
 
     _adopt_channel_sections_from_watcher = _channel_lifecycle._adopt_channel_sections_from_watcher
 

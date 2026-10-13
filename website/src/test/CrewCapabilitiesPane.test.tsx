@@ -186,6 +186,65 @@ describe('crew capability draft editor with mocked HTTP', () => {
     expect(result.dirty).toHaveBeenLastCalledWith(false)
   })
 
+  it('warns on review and after save when the member backend cannot apply the spec, and still saves', async () => {
+    view = { ...view, backend_warning: null }
+    server.use(http.post(`${endpoint}/preview`, async ({ request }) => {
+      const body = await request.json() as CapabilityDraft
+      previewBodies.push(body)
+      return HttpResponse.json({ ...view, backend_warning: { code: 'tool_limits_unsupported', backend: 'kas', setting: 'agent.member_acp_backend', servers: ['search'] }, preview_token: 'signed-preview', impact: [] })
+    }), http.put(endpoint, async ({ request }) => {
+      saveBodies.push(await request.json() as CapabilityDraft & { preview_token: string })
+      view = { ...view, revision: 'r2', backend_warning: { code: 'harness_unsupported', backend: 'codex', setting: 'agent.member_acp_backend' } }
+      return HttpResponse.json(view)
+    }))
+    const result = mount(); await ready()
+    expect(screen.queryByTestId('capability-backend-warning')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Tools', exact: true }))
+    await pickState('Search read', 'Removed')
+    await review()
+    expect(screen.getByTestId('capability-backend-warning')).toHaveTextContent("Saving works, but new chats with crewA won't start. Their backend (kas) can't turn off individual tools inside the search connection. To fix it, go to MCP Servers and turn that whole connection off, or turn those tools back on.")
+    expect(screen.queryByTestId('capability-backend-command')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save reviewed changes' }))
+    await waitFor(() => expect(result.saved).toHaveBeenCalledOnce())
+    expect(saveBodies).toHaveLength(1)
+    const notes = screen.getAllByTestId('capability-backend-warning')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toHaveAttribute('role', 'note')
+    expect(notes[0]).toHaveTextContent("Saving works, but new chats with crewA won't start. They use a backend (codex) that ignores saved capabilities. To fix it, run the command below in a terminal, then start a new chat.")
+    // The command sits on its own line as a copy button, never inside the sentence.
+    expect(within(screen.getByTestId('capability-backend-command')).getByRole('button')).toHaveTextContent('kirocrew config set agent.member_acp_backend kas')
+  })
+
+  it('names the second fix when the harness fix would hit the tool limits next', async () => {
+    view = { ...view, backend_warning: { code: 'harness_unsupported', backend: 'codex', setting: 'agent.member_acp_backend', servers: ['search'] } }
+    mount(); await ready()
+    const note = screen.getByTestId('capability-backend-warning')
+    expect(within(screen.getByTestId('capability-backend-command')).getByRole('button')).toHaveTextContent('kirocrew config set agent.member_acp_backend kas')
+    expect(note).toHaveTextContent('Then go to MCP Servers and turn the search connection off, or turn its tools back on')
+    expect(screen.getByTestId('capability-backend-open-tab')).toHaveTextContent('MCP Servers')
+  })
+
+  it('scopes a default-backend refusal to Slack, scheduled and spawned work and offers no one-line switch', async () => {
+    view = { ...view, backend_warning: { code: 'harness_unsupported', backend: 'claude', setting: 'agent.acp_backend', servers: ['search'] } }
+    mount(); await ready()
+    const note = screen.getByTestId('capability-backend-warning')
+    expect(note).toHaveTextContent("Saving works, but crewA's Slack threads, scheduled jobs and spawned tasks won't start. They use the default backend (claude), which ignores saved capabilities. Chats with crewA are not affected.")
+    expect(screen.queryByTestId('capability-backend-command')).not.toBeInTheDocument()
+    expect(note).not.toHaveTextContent('Then go to')
+    expect(screen.queryByTestId('capability-backend-open-tab')).not.toBeInTheDocument()
+  })
+
+  it('scopes a default-backend tool-limit refusal to the same entry points and opens MCP Servers', async () => {
+    view = { ...view, backend_warning: { code: 'tool_limits_unsupported', backend: 'kas', setting: 'agent.acp_backend', servers: ['search'] } }
+    mount(); await ready()
+    fireEvent.click(screen.getByRole('tab', { name: 'Tools', exact: true }))
+    const note = screen.getByTestId('capability-backend-warning')
+    expect(note).toHaveTextContent("Saving works, but crewA's Slack threads, scheduled jobs and spawned tasks won't start. Their default backend (kas) can't turn off individual tools inside the search connection. Chats with crewA are not affected.")
+    expect(note).not.toHaveTextContent('new chats with crewA')
+    fireEvent.click(screen.getByTestId('capability-backend-open-tab'))
+    expect(screen.getByRole('tab', { name: 'MCP Servers', exact: true })).toHaveAttribute('aria-selected', 'true')
+  })
+
   it('keeps drafts and previews through pane hiding and invalidates preview after an edit', async () => {
     const result = mount(); await ready()
     fireEvent.click(screen.getByRole('tab', { name: 'Tools', exact: true }))

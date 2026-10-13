@@ -979,6 +979,13 @@ from kiro_crew.dashboard.handlers.aws_consent import (  # noqa: E402, F401
     api_aws_consent_post,
 )
 
+# Project AWS profile binding (aws.project_profiles) — the composer's project
+# chip reads and sets which named profile a project's sessions start with.
+from kiro_crew.dashboard.handlers.aws_project_profile import (  # noqa: E402, F401
+    api_aws_project_profile_get,
+    api_aws_project_profile_put,
+)
+
 # Computer use — the Settings config pair (browser, cookie-authed) plus the two
 # loopback legs: ``invoke`` (the ``kirocrew-computer`` MCP shim's forward) and
 # ``frame`` (the live-view PiP mirror of an already-captured screenshot).

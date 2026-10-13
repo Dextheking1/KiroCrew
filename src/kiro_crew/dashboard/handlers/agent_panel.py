@@ -23,6 +23,7 @@ Two halves with deliberately different auth, because they are different acts:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from collections.abc import Mapping
@@ -1167,6 +1168,26 @@ def _published_record(slot: str, slug: str, owner_key: str) -> dict[str, Any] | 
     return newest
 
 
+def _owned_by(record: Mapping[str, Any], owner_key: str) -> bool:
+    """Whether *record* belongs to *owner_key*. An unowned record belongs to nobody."""
+    return bool(owner_key) and str(record.get("crew_key") or "") == owner_key
+
+
+def owned_panel_record(slot: str, slug: str, owner_key: str) -> dict[str, Any] | None:
+    """*owner_key*'s own published record, by the read route's rule, or ``None``.
+
+    :func:`_published_record` picks the record, the file first when it is this
+    owner's, and :func:`_owned_by` is the ownership check the read route makes on
+    it. The dashboard page reads through here, so it shows what the route shows.
+    """
+    if not owner_key:
+        return None
+    record = _published_record(slot, slug, owner_key)
+    if record is None or not _owned_by(record, owner_key):
+        return None
+    return record
+
+
 def _read_and_compose(
     slot: str,
     slug: str,
@@ -1319,12 +1340,10 @@ async def api_member_panel(request: web.Request) -> web.Response:
     denied = await _deny_app_caller(request, "members.panel")
     if denied is not None:
         return denied
-    # The READ is served to any dashboard caller, exactly as it was before this card
-    # existed: the crew page's webview (`website/.../CrewWebview.tsx:memberPanel`) is
-    # reachable by a non-owner dashboard subject, and gating the whole route would turn
-    # their webview into a 403. Only the derived-card WRITE below is owner-gated, because
-    # that write mutates the owner-facing dynamic-card store; see its guard. This keeps the
-    # read's backwards compatibility while closing the non-owner-write hole.
+    # The READ is served to any dashboard caller: a non-owner dashboard subject may read
+    # a crew's published record, and gating the whole route would turn that read into a
+    # 403. Only the derived-card WRITE below is owner-gated, because that write mutates
+    # the owner-facing dynamic-card store; see its guard.
     slug = request.match_info.get("slug", "")
     try:
         members_mod.validate_slug(slug)
@@ -1394,8 +1413,7 @@ async def api_member_panel(request: web.Request) -> web.Response:
     # with no crew binding (``no_crew``), and :func:`publish` rejects an empty crew
     # outright. A forgery is the only thing left that can write one, which is
     # exactly what must not render.
-    owner_key = str((record or {}).get("crew_key") or "")
-    if record is not None and (not owner_key or owner_key != mine):
+    if record is not None and not _owned_by(record, mine):
         # Another crew owns this slug's record. Reported as "nothing published"
         # rather than as a refusal: from this crew's point of view it HAS no panel,
         # and naming the other crew would disclose a colliding name the viewer of
@@ -1669,16 +1687,21 @@ async def api_dashboard_fields(request: web.Request) -> web.Response:
     values, written_at = await asyncio.to_thread(
         _current_values, slug, crew_name, instance, "" if crew_name else slot
     )
-    return web.json_response(
-        dashboard_agentic.fields_for_agent(
+    # Off the loop: the upkeep rows read the shipped catalog (every built-in
+    # directory), the same scan `_templates_for_agent` already runs on a thread.
+    payload = await asyncio.to_thread(
+        functools.partial(
+            dashboard_agentic.fields_for_agent,
             instance,
             mistakes,
             history=rows,
             rollback_versions=retained,
             values=values,
             written_at=written_at,
+            slug=slug,
         )
     )
+    return web.json_response(payload)
 
 
 async def api_dashboard_types(request: web.Request) -> web.Response:
@@ -1867,12 +1890,26 @@ async def api_dashboard_write(request: web.Request) -> web.Response:
         # this product already serves. Only a read of a real PACKAGE names the half the
         # display cannot draw yet.
         #
-        # Fails CLOSED, and it costs no crewmate anything today: a package exists only
-        # once an agent composes one through the gate on this stack, so the population
-        # this refuses is empty until the display can draw it. The change that makes
-        # the display read the same package is what lifts this, and it is also where
-        # the package's field table is first translated into something to check against
-        # -- which is why a package read carries no Model here.
+        # Fails CLOSED, over a population that is REAL: ``artifact_save`` accepts
+        # ``kind="dashboard"``, so any agent can bind a package to a crewmate and every
+        # agentic field write to that crewmate arrives here. What that costs the
+        # crewmate is bounded in three ways, and a reader weighing this refusal should
+        # have all three. The values already in the crew log stay there and the page
+        # goes on drawing them from its template instance, so nothing a person is
+        # looking at changes. The refusal carries its own remedy sentence and is
+        # recorded under its own code, so an agent is told what to do rather than left
+        # to retry. And deleting the package artifact leaves the binding unclaimed,
+        # which puts the member back on the fall-through to its template instance, so
+        # the pause is undone in product by the artifact store's own delete.
+        #
+        # WHAT LIFTS IT, named so a reader does not have to go looking: the change
+        # that makes ``api_member_dashboard`` render a bound package instead of the
+        # template instance, carried on the ``feat/19060-page-host`` branch. It lifts
+        # this for every crewmate at once, and it is also where the package's field
+        # table is first translated into something to check against -- which is why a
+        # package read carries no Model here. Until it lands, a crewmate with a bound
+        # package has its dashboard field writes refused, and the remedies above are
+        # the whole of what an agent or a person can do about that.
         if package.from_package:
             raise dashboard_agentic.display_pending_refusal(field)
         entry = dashboard_agentic.check_write(package.model, field, value, mistakes)
@@ -2225,7 +2262,7 @@ async def api_dashboard_preview(request: web.Request) -> web.Response:
         preview = instance_store.stage_preview(
             slug, template_id=template_id, html=html, manifest=manifest
         )
-        wire = preview.wire()
+        wire = preview.wire(crew_name)
         if not crew_name:
             # A session's page is read by its SLOT, and the store key is a one-way
             # digest of it, so the link is built from the slot this caller resolved to.
@@ -2237,6 +2274,13 @@ async def api_dashboard_preview(request: web.Request) -> web.Response:
     except Exception as exc:
         return _instance_refusal(exc)
     return web.json_response({"ok": True, "preview": staged})
+
+
+def _dashboard_block(slug: str) -> str:
+    """The new page's ``[DASHBOARD]`` block, upkeep pointer included."""
+    from kiro_crew import dashboard_agentic
+
+    return dashboard_agentic.turn_block(slug)
 
 
 async def api_dashboard_apply(request: web.Request) -> web.Response:
@@ -2272,6 +2316,10 @@ async def api_dashboard_apply(request: web.Request) -> web.Response:
             "ok": True,
             "instance_version": record.instance_version,
             "template_id": record.template_id,
+            # The member section is built at session start and after a compaction,
+            # not every turn, so the new page's block and upkeep pointer ride this
+            # reply until then.
+            "dashboard": await asyncio.to_thread(_dashboard_block, slug),
         }
     )
 
@@ -2316,6 +2364,7 @@ async def api_dashboard_rollback(request: web.Request) -> web.Response:
             "instance_version": record.instance_version,
             "restored_from": to_version,
             "template_id": record.template_id,
+            "dashboard": await asyncio.to_thread(_dashboard_block, slug),
         }
     )
 

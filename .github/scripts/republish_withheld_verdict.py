@@ -2,13 +2,23 @@
 """Re-run the advisory review lane(s) whose withheld verdict never reached a PR.
 
 A whole-design review lane -- Design, UX, First Principles -- can compute a
-verdict for the current head and fail to publish it, because the lane's shared
-comment-write primitive refuses to overwrite a comment slot an earlier head
-still occupies. The lane completes ``success`` and reports honestly that it
-published nothing, the verdict is retained as a workflow artifact, and PR
-Readiness scores the lane as a NAMED PENDING -- ``(verdict not published,
-re-run this lane)`` -- rather than passed. Without a re-run of the lane the
-pull request reads as unreviewed for its own head until a human intervenes.
+verdict for the current head and fail to publish it. The lane first looks up its
+own comment slot. When that lookup finds the occupant, the lane takes the
+REPLACE path: the shared comment-write primitive overwrites an occupant left by
+an older head, and stands down when the slot already holds a verdict for the
+current head. When the lookup misses the occupant (a degraded, unretried read),
+the lane takes the CREATE path, and the primitive's own slot read then finds the
+occupied slot and refuses to write beside it. That create-path refusal is the
+withhold. The lane completes ``success`` and reports honestly that it published
+nothing, the verdict is retained as a workflow artifact, and PR Readiness scores
+the lane as a NAMED PENDING -- ``(verdict not published, re-run this lane)`` --
+rather than passed. Without a re-run of the lane the pull request reads as
+unreviewed for its own head until a human intervenes.
+
+A re-run helps when the lookup failure was transient: the fresh run's lookup
+finds the occupant and publishes through the replace path. It cannot help when
+the cause persists -- a lookup or slot read that stays unreadable, a write that
+keeps failing -- which is why re-runs are capped at ``MAX_RERUN_ATTEMPTS``.
 
 This script is that recovery, driven by ``pr-readiness-sweep.yml``. The sweep is
 the right engine for it -- it already holds ``actions: write``, runs on a 5-minute
@@ -45,7 +55,9 @@ Run-location follows the two review paths, exactly as the human-override handler
   * FORK: the lane runs via ``workflow_run`` from the default branch, so no run
     query by the PR head finds it. The lane writes its own run id into the
     check-run it posts on the head, as ``<!-- ai-review-fork-lane run=<id> -->``
-    in ``output.text``; that marker is read back from the head's check-runs.
+    in ``output.text``; that marker is read back from the check-run row whose
+    ``external_id`` is ``<lane>-pr-<PR>-<fast-gate run>-<attempt>``, so a
+    sibling pull request on the same fork head can never be the one re-run.
 
 Nothing here is fatal to the sweep. Every failure to re-run one lane is reported
 and the script moves on; the sweep tries again on its next tick.
@@ -79,21 +91,26 @@ _GATE = (
 # can own its run -- the same-repo lane and the fork Stage-2 lane. This mirrors
 # the lane table in ai-review-human-override.yml; test_republish_withheld_verdict
 # pins the two against each other so a lane rename cannot drift them apart.
+# ``fork_lane`` is the prefix the fork lane writes into its check-run's
+# ``external_id`` (``<fork_lane>-pr-<PR>-<run>-<attempt>``).
 LANES = {
     "DESIGN": {
         "check_name": "Design Review",
         "same_repo": "design-review.yml",
         "fork": "fork-design-review.yml",
+        "fork_lane": "design",
     },
     "UX": {
         "check_name": "UX Review",
         "same_repo": "ux-review.yml",
         "fork": "fork-ux-review.yml",
+        "fork_lane": "ux",
     },
     "FIRST-PRINCIPLES": {
         "check_name": "First Principles Review",
         "same_repo": "first-principles-review.yml",
         "fork": "fork-first-principles-review.yml",
+        "fork_lane": "first-principles",
     },
 }
 
@@ -114,6 +131,14 @@ _FORK_LANE_MARKER_PREFIX = "<!-- ai-review-fork-lane run="
 # small enough to bound the fail-open cost.
 MAX_RERUN_ATTEMPTS = 3
 
+# Wall-clock bound, in seconds, on every child process. The sweep runs in a
+# shared concurrency group with a 15-minute job timeout, so one hung ``gh`` call
+# would otherwise hold that group for every PR until the job is killed. A
+# timed-out call is treated like any other failed read: report, move on, retry
+# next tick. A paginated read or the disposition gate's comment walk fits well
+# inside it.
+SUBPROCESS_TIMEOUT_SECONDS = 120
+
 
 def _gh_json(args: list[str]) -> object | None:
     """Run a read-only ``gh api`` call and parse its JSON, or ``None`` on any
@@ -124,7 +149,11 @@ def _gh_json(args: list[str]) -> object | None:
             ["gh", *args],
             capture_output=True,
             text=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(f"gh call timed out after {SUBPROCESS_TIMEOUT_SECONDS}s\n")
+        return None
     except OSError:
         return None
     if proc.returncode != 0:
@@ -156,8 +185,9 @@ def owed_lanes(repo: str, pr: str, head: str) -> list[str] | None:
             ],
             capture_output=True,
             text=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
         return None
@@ -215,17 +245,72 @@ def _same_repo_run_id(
     return (str(best_id), best_attempt) if best_id is not None else None
 
 
+def _fork_trigger(repo: str, head: str, head_repo: str, head_ref: str) -> str | None:
+    """``<run id>-<attempt>`` of the Fast Gate run a fork PR's lanes are bound
+    to: the newest ``fast-gate.yml`` ``pull_request`` run for ``head`` on THIS
+    pull request's head repository and branch. The same binding PR Readiness and
+    ``ai-review-human-override.yml``'s ``bind_fork_trigger`` use. ``None`` when
+    the head repository or branch is gone (a deleted fork binds no run) or no
+    such run is found."""
+    if not head_repo or not head_ref:
+        return None
+    data = _gh_json(
+        [
+            "api",
+            "--method",
+            "GET",
+            "--paginate",
+            f"repos/{repo}/actions/runs?event=pull_request&head_sha={head}&per_page=100",
+        ]
+    )
+    if not isinstance(data, dict):
+        return None
+    runs = data.get("workflow_runs")
+    if not isinstance(runs, list):
+        return None
+    best: dict | None = None
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        if run.get("path") != ".github/workflows/fast-gate.yml":
+            continue
+        if (run.get("head_repository") or {}).get("full_name") != head_repo:
+            continue
+        if run.get("head_branch") != head_ref:
+            continue
+        rid = run.get("id")
+        if isinstance(rid, int) and (best is None or rid > best["id"]):
+            best = run
+    if best is None:
+        return None
+    attempt = best.get("run_attempt")
+    return f"{best['id']}-{attempt if isinstance(attempt, int) and attempt >= 1 else 1}"
+
+
 def _fork_run_id(
-    repo: str, check_name: str, fork_workflow: str, head: str
+    repo: str,
+    pr: str,
+    spec: dict[str, str],
+    head: str,
+    head_repo: str,
+    head_ref: str,
 ) -> tuple[str, int] | None:
     """The fork Stage-2 lane's run id, read from the lane-run marker the lane
-    writes into its check-run's ``output.text`` on the head. The resolved run is
-    then VERIFIED to be that fork workflow before it is returned, so a check-run
-    of this name posted by anything else cannot redirect the re-run.
+    writes into its check-run's ``output.text`` on the head. Only the row whose
+    ``external_id`` is ``<lane>-pr-<pr>-<fast-gate run>-<attempt>`` is read, so
+    a sibling pull request sharing this fork head cannot be the lane re-run.
+    The resolved run is then VERIFIED to be that fork workflow before it is
+    returned, so a check-run of this name posted by anything else cannot
+    redirect the re-run.
 
     Returns ``(run_id, run_attempt)`` -- the attempt count comes from the same
     ``actions/runs/{id}`` read the verification already makes -- or ``None``."""
-    enc = check_name.replace(" ", "%20")
+    trigger = _fork_trigger(repo, head, head_repo, head_ref)
+    if trigger is None:
+        return None
+    want = f"{spec['fork_lane']}-pr-{pr}-{trigger}"
+    fork_workflow = spec["fork"]
+    enc = spec["check_name"].replace(" ", "%20")
     data = _gh_json(
         [
             "api",
@@ -240,11 +325,14 @@ def _fork_run_id(
     rows = data.get("check_runs")
     if not isinstance(rows, list):
         return None
-    # Newest check-run row by id (distinct per POST, monotonically increasing).
+    # Newest check-run row bound to this PR's trigger, by id (distinct per POST,
+    # monotonically increasing).
     best = None
     best_id = None
     for row in rows:
         if not isinstance(row, dict):
+            continue
+        if row.get("external_id") != want:
             continue
         cid = row.get("id")
         if isinstance(cid, int) and (best_id is None or cid > best_id):
@@ -286,8 +374,9 @@ def _rerun(repo: str, run_id: str) -> bool:
             ["gh", "api", "--method", "POST", f"repos/{repo}/actions/runs/{run_id}/rerun"],
             capture_output=True,
             text=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return proc.returncode == 0
 
@@ -309,19 +398,9 @@ def _resolve_pr_meta(repo: str, pr: str) -> tuple[bool, str, str] | None:
     return is_fork, head_repo, head_ref
 
 
-def republish(
-    repo: str,
-    pr: str,
-    head: str,
-    is_fork: bool | None = None,
-    head_repo: str = "",
-    head_ref: str = "",
-) -> int:
+def republish(repo: str, pr: str, head: str) -> int:
     """Re-run every owing advisory lane for ``head``. Returns the number of lanes
-    re-run; 0 when none was owed or none could be located/re-run.
-
-    ``is_fork``/``head_repo``/``head_ref`` are resolved from the PR when not
-    supplied (the sweep passes only repo/pr/head); tests pass them explicitly."""
+    re-run; 0 when none was owed or none could be located/re-run."""
     lanes = owed_lanes(repo, pr, head)
     if lanes is None:
         print(
@@ -332,21 +411,20 @@ def republish(
     if not lanes:
         print(f"PR #{pr}: no advisory lane owes {head} a verdict; nothing to re-run.")
         return 0
-    if is_fork is None:
-        meta = _resolve_pr_meta(repo, pr)
-        if meta is None:
-            print(
-                f"PR #{pr}: could not read the pull request to locate its lane runs; "
-                f"the next sweep retries."
-            )
-            return 0
-        is_fork, head_repo, head_ref = meta
+    meta = _resolve_pr_meta(repo, pr)
+    if meta is None:
+        print(
+            f"PR #{pr}: could not read the pull request to locate its lane runs; "
+            f"the next sweep retries."
+        )
+        return 0
+    is_fork, head_repo, head_ref = meta
     rerun = 0
     for name in lanes:
         spec = LANES[name]
         check_name = spec["check_name"]
         if is_fork:
-            located = _fork_run_id(repo, check_name, spec["fork"], head)
+            located = _fork_run_id(repo, pr, spec, head, head_repo, head_ref)
             which = spec["fork"]
         else:
             located = _same_repo_run_id(repo, spec["same_repo"], head, head_repo, head_ref)
@@ -389,7 +467,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", required=True, help="pull request number")
     parser.add_argument("--head", required=True, help="current head SHA")
     args = parser.parse_args(argv)
-    # is_fork / head repo / head ref are resolved from the PR inside republish().
     republish(args.repo, args.pr, args.head)
     # Always 0: a failure to re-run a lane is reported and retried next tick,
     # never surfaced as an error that could redden the sweep.

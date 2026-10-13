@@ -28,6 +28,8 @@ vi.mock('react-virtuoso', () => ({
 }))
 vi.mock('../api/client', () => ({
   api: {
+    // The composer's project pill reads the project's AWS profile binding.
+    projectAwsProfile: vi.fn().mockResolvedValue({ path: '/repo', profile: null, boundDir: null, profiles: [], status: null }),
     // Both slots: the created one must be listed or `switchSlot` cannot activate it.
     chatSlots: vi.fn().mockResolvedValue([
       { key: 'chat-1', messages: 1, running: false, mode: '', project: '/repo' },

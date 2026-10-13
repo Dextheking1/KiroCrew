@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         os,
         process_handle_of,
         process_survived_async,
+        refresh_live_process_tree,
         sel,
         spawn_in_flight,
         teardown_capture,
@@ -284,6 +285,52 @@ class TerminalCoordinator(ManagerComponent):
         info.done = True
         if info._credit_accounting is not None:
             info._credit_accounting.settle()
+        # Arm the done-but-unreported hold in the same synchronous block as
+        # the flip, so the hold and the flip can never be observed apart: from
+        # this line until the completion consumer lands the member's
+        # contribution, ``batch_reports_in_flight`` holds the wave-close
+        # fallback open.
+        self._manager.arm_report_in_flight(info)
+        try:
+            return await self._report_terminal_guarded_impl(
+                info,
+                source=source,
+                injection_timeout_reason=injection_timeout_reason,
+                mark_delivered_on_success=mark_delivered_on_success,
+                settle_digest=settle_digest,
+                teardown_done=teardown_done,
+            )
+        finally:
+            # ONE structural release replacing the former per-arm clears: by
+            # the time the report coroutine ends -- success (the consumer
+            # already released the hold inside its accounting block; this is
+            # an idempotent no-op), injection timeout, announce failure,
+            # cancellation, or the no-consumer early return -- the report is
+            # not in flight. A hold that outlived its report would
+            # strand the wave-close fallback forever; releasing here keeps the
+            # wave's degraded a-sibling-can-close liveness instead.
+            self._manager.consume_report_hold(info.batch_id, info.id)
+
+    async def _report_terminal_guarded_impl(
+        self,
+        info: SubagentInfo,
+        *,
+        source: str,
+        injection_timeout_reason: str,
+        mark_delivered_on_success: bool,
+        settle_digest: bool = False,
+        teardown_done: "asyncio.Event | None" = None,
+    ) -> bool:
+        """Body of :meth:`_report_terminal_impl` past the terminal transition.
+
+        Split out so the done-flip + hold-arm in :meth:`_report_terminal_impl`
+        can wrap the ENTIRE remainder -- every await, every failure arm, every
+        early return -- in one structural ``try/finally`` release without
+        re-indenting the report machinery. Only :meth:`_report_terminal_impl`
+        may call this. (The ``_impl`` suffix keeps it inside
+        ``bind_component_globals``' rebind set, like every other coordinator
+        body that touches ``subagent`` module globals.)
+        """
         await self._manager._fire_event(
             "subagent_done",
             info,
@@ -400,6 +447,11 @@ class TerminalCoordinator(ManagerComponent):
                 and not info.error
                 and not info._digest_held
                 and not info._delivery_queued
+                # A report the gateway gave up on reached the parent at most as a
+                # notice queued in the slot's memory, so the folder stays visible
+                # to restart reconciliation until the drain of that notice
+                # settles it.
+                and not info._report_undelivered
             ):
                 # The teardown has decided by now (this report waited for it
                 # before publishing), so an empty error means the reset ended
@@ -572,10 +624,28 @@ class TerminalCoordinator(ManagerComponent):
             self._manager._report_tasks.discard(t)
             owner = self._manager._report_owners.pop(t, None)
             self._manager._run_events._forget_finished_live_state(info)
-            if owner is not None and not t.cancelled():
+            if owner is None:
+                # This task was DISOWNED: another path (a reap or Stop
+                # teardown) took over reporting for the same agent and
+                # relinquished this task. The hold is keyed by
+                # ``(batch_id, agent_id)``, so the winning report shares this
+                # agent's hold -- releasing it here would clear the hold the
+                # winner still needs and reopen the premature-finalize window.
+                # The winner owns the release (its own body/consumer or its own
+                # ``_forget``). Return before touching the hold.
+                return
+            if not t.cancelled():
                 # Retrieve the outcome so a failed report never logs
                 # "Task exception was never retrieved".
                 t.exception()
+            # Strand-guard for the flip-site arms: a report task cancelled
+            # BEFORE its first execution step never runs its body's structural
+            # release, and a hold that nothing releases pins
+            # ``batch_reports_in_flight`` -- making even the reaper's deadline
+            # sweep skip the wave forever. By task-done time an OWNED report is
+            # not in flight on ANY path, so this release is always correct (and
+            # an idempotent no-op when the body or consumer already released).
+            self._manager.consume_report_hold(info.batch_id, info.id)
 
         task.add_done_callback(_forget)
         return task
@@ -852,6 +922,9 @@ class TerminalCoordinator(ManagerComponent):
                     # to act on it), a session another path is tearing down, and a
                     # session still live under the key -- the run's own, or a successor
                     # this reset pops too. Each is verified and killed on its own handle.
+                    # The live tree is re-walked first so the run's late children are
+                    # recorded and can vouch for the group once the leader exits.
+                    await refresh_live_process_tree(self._manager._sessions, session_key)
                     pairs = self._manager._sessions_under(session_key)
                     handles = self._manager._retain_process_handles(agent_id, session_key, pairs)
                     seen = [session for session, _handle in pairs]
@@ -974,6 +1047,12 @@ class TerminalCoordinator(ManagerComponent):
             # the outcome it excludes from orphan recovery.
             if not info.done:
                 info.done = True
+                # Terminal done transition: arm with the flip. The reap's own
+                # report is launched for this record, but the finalize-claim
+                # award and the SEL/teardown bookkeeping sit between the flip
+                # and that report reaching the consumer -- keep the hold and
+                # the flip observable only together.
+                self._manager.arm_report_in_flight(info)
                 # Neutrality follows the FIRST stopper (``stop_is_neutral`` reads
                 # ``_reap_reason``): a Stop that arrived while this deadline reap was
                 # already tearing the run down does not turn its failure neutral.

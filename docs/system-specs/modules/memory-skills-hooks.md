@@ -463,7 +463,7 @@ The prefs path does NOT advance the persisted `last_consolidated` marker — onl
 
 Idle detection: `_last_activity[key]` updated on every `maybe_consolidate()` call. `check_idle_sessions()` called every heartbeat tick (60s), fires history consolidation when `now - last_activity > history_idle_secs` and there are unconsolidated messages.
 
-A key whose idle read found nothing left to consolidate is skipped while its transcript is unchanged: `_idle_clean[key]` holds the stamp `_read_messages` validates a cache hit with (the file's stat identity and the key's invalidation generation), taken before the read, so a finished session costs one `stat` per sweep and a row from any writer, including a turn that skips `maybe_consolidate` and another process, changes the stamp and is swept. A key whose transcript no longer exists (the session was deleted) is dropped by `_forget_key` from `_last_activity`, `_seeded_keys`, `_history_consolidated` and `_idle_clean`, once no pass for it is running; a stat that fails for any other reason leaves the key tracked and read.
+A key whose idle count found nothing left to consolidate is skipped while its transcript is unchanged: `_idle_clean[key]` holds the stamp `_read_messages` validates a cache hit with (the file's stat identity and the key's invalidation generation), taken on the loop before the off-loop count, and recorded only by a count that found nothing left (a failed count, or one inside the retry deadline, records nothing), so a finished session costs one `stat` per sweep and a row from any writer, including a turn that skips `maybe_consolidate` and another process, changes the stamp and is swept. A key whose transcript no longer exists (the session was deleted) is dropped by `_forget_key` from `_last_activity`, `_seeded_keys`, `_history_consolidated` and `_idle_clean`, once no pass and no off-loop count for it is running; a stat that fails for any other reason leaves the key tracked and counted.
 
 After a restart `_last_activity` starts empty, so the first `check_idle_sessions()` seeds it once, off the event loop, from the transcripts on disk: each persistent transcript with an unconsolidated tail is tracked under its LIVE session key (`dashboard:<slot>` for a dashboard stem, the session map's key for a channel stem; a stem with no exact key is skipped), so a member-memory receipt committed before the restart is found, with the file mtime as last activity. A transcript older than `_SEED_MAX_AGE_SECS` (7 days) is not seeded; older stranded work is left to `kirocrew consolidate`. A seeded pass that finds nothing left to consolidate drops the seed. A transcript is skipped when its header or the session map marks it incognito or temporary, and nothing is seeded when no session map is available. A seed that speaks again stops being a seed; a seed that consolidation refuses (private, or inside its retry backoff) waits one idle window before it is tried again; the sweep never reads a seed's transcript on the event loop, leaving that to `_consolidate`; at most `_SEEDED_PER_SWEEP` seeds are examined per sweep, re-queued in turn. Every in-process entry point treats two keys naming the same transcript file as one running consolidation (`_busy`).
 
@@ -1110,6 +1110,8 @@ The keyword half's ROW side — the regex scan, set build, and Snowball expansio
 
 For repeated query-aware context builds, `_SemanticScoringSet` holds exactly the active non-lesson columns used for ranking and rendering (`key`, `value_json`, `updated_at`, `embedding`) rather than scanning `semantic_memory` each time. Its `(in-process generation, PRAGMA data_version)` token refreshes after this store's semantic upserts, deletes, embedding writes/backfills, and embedding-space reconciliation, or after another process commits to the same database. Each local writer advances the generation before it releases `_db_lock`, so a reader cannot observe a committed semantic change while still accepting the prior resident set. The snapshot is capped at `_SEMANTIC_SCORING_MAX_BYTES` (64 MiB); an oversized store or SQLite without `data_version` keeps the established per-call scan, preserving freshness without unbounded gateway-process retention.
 
+**Work derived from the resident set lives on the set.** `_SemanticScoringSet.derived` holds, for the set's lifetime, the row token sets (a memo keyed on the text, so the LRU-width bypass above does not apply to it, capped at `_SCORING_TOKEN_MEMO_MAX_BYTES` (64 MiB) of estimated retention; past the cap rows are tokenized per call) and, per query width, references to the rows' own embedding blobs with their float64 norms (no second copy of the embeddings). A warm V1 fact scan then widens 128 rows at a time to float64 and takes the same 1-D float64 dot and per-row norm the per-row scorer takes, so every cosine is bit-identical to it (`test_memory_recall_resident_paths.py` pins this); a batched mat-vec is deliberately not used because it sums in a different order and moves the last bits of every score. It also copies only the rows it returns, and runs one set intersection per row. The per-call scan stays the fallback and runs the same scoring loop: the two rungs differ only in where row tokens and cosines come from. Both derived parts are pure functions of the immutable rows, so replacing the set is the only invalidation. The lesson renderer memoizes each row's `(text, scope)` on `(key, value_json)` (`_lesson_render_fields`, 16,384 entries, bypassed for a wider population), and `memory_record_metadata.ineligible_record_ids` settles a non-`active` status without parsing a timestamp, taking one `now` per pass for the windowed rows.
+
 ### Episodic Memory
 
 SQLite table `episodic_memories` — conversation fragments with optional embeddings:
@@ -1668,7 +1670,8 @@ Containment is judged on resolved paths on both sides: a declared root (the
 project root, or the owner's home for a resource outside it) is normalized the
 same way an admitted document is, so a root reached through a symlink -- a
 symlinked `$HOME` -- admits its documents, while a document that is, or sits
-under, a link below the root is still refused. The managed-state isolation
+under, a link below the root is still refused (a declared steering glob leaves out
+a link that stays inside the root instead, below). The managed-state isolation
 (`_refuse_managed_source`) compares its admin and workspace roots in the same
 resolved spelling, so it fires for resolved candidates on symlinked-home hosts
 exactly as it does elsewhere.
@@ -1703,7 +1706,17 @@ The implicit global and project `.kiro/steering/**/*.md` scan treats a link the
 same way: a linked steering file or directory is not followed or read, and one
 `essential-context#linked-skipped` note names it, so a member whose steering is
 symlinked into a repository still starts. kiro-cli follows the link natively. A
-template that declares a glob reaching the same link still refuses. There is no mtime-only content cache or automatic
+declared steering glob (a `steering` component in the pattern, such as the shipped
+`file://.kiro/steering/**/*.md` or the global one a skill projection copies into an
+agent definition) does the same for a link whose target the path screen resolves
+inside the glob's root: the snapshot and the KAS document reader
+(`projected_resource_documents`) leave it out unread, and the snapshot names it in
+that note. A link that resolves outside the root, or that the screen refuses, still
+refuses, and so does a link under any other declared glob. The launch-record size
+check (`_declared_files_fit`, `projected_launch_paths`) does not opt in: it measures
+what kiro-cli loads and cannot measure a link it does not follow, so a link still
+withholds that record (the size check reports unfit, the path read refuses) and the
+folder sends every guide itself. There is no mtime-only content cache or automatic
 retrieval on the warm path.
 
 Structural-marker scanning copies contiguous ASCII segments without per-character
@@ -2439,7 +2452,8 @@ not coordinate, so reason about them separately:
 Embeddings run in-process via the vendored llama-cpp-python 0.3.34 runtime (`kiro_crew/_vendor/llama_cpp`) — no external server, no HTTP hop, no runtime pip install. There is no remote embedding URL, so no URL validation or SSRF hardening is needed on this path; see `../post-launch-removals.md` for why a network embedding client must not come back.
 
 - `LlamaCppEmbedder.embed(text)` / `embed_batch(texts)` → returns 1024-dim vectors or `None` on any failure (graceful degradation)
-- **Non-blocking model load**: the GGUF load runs on a background daemon thread (`_kick_background_load()`, thread name `kc-embed-load`) — `embed()`/`embed_batch()` NEVER block on the load. When the model isn't in memory yet, the call kicks the background load and returns `None` immediately; memory degrades to keyword search until the load lands. The gateway/dashboard event loop is never stalled by embedding work. `wait_ready(timeout)` exists for sync contexts (tests, one-shot CLI flows) that legitimately want to block — never call it from an event-loop thread
+- **Background model load, bounded cold-load wait**: the GGUF load runs on a background daemon thread (`_kick_background_load()`, thread name `kc-embed-load`). On an event-loop thread, and for `PRIORITY_BULK` work anywhere, `embed()`/`embed_batch()` NEVER block on the load: when the model isn't in memory the call kicks the load and returns `None` immediately, and the caller degrades to keyword search. A normal or interactive embed off the event loop (`_caller_may_wait_for_load()`) waits for the load it kicked (`_wait_for_cold_load()`), bounded by `_COLD_LOAD_WAIT_SECS` (30 s) and by the caller's own `embedding_work` deadline, then returns `None` if the model is still not there; nothing waits when no load is running (missing file, failed load in cooldown). This covers every default-priority caller off the loop, including sync memory writes through `make_sync_embed_fn()`: such a caller already blocks for the inference itself, and waiting once for the load is what keeps an idle unload from silently storing a row without a vector. The gateway/dashboard event loop is never stalled by embedding work. `wait_ready(timeout)` exists for sync contexts (tests, one-shot CLI flows) that legitimately want to block — never call it from an event-loop thread
+- **Idle unload**: once loaded, a daemon evictor (`kc-embed-evict`) unloads the model after `memory.embedding_idle_evict_secs` (default 3600; `0` never unloads) with no embed and nothing queued or running (`evict_if_idle()`), freeing ~1 GB (GGUF mapping ~600 MB plus context ~400 MB) and trimming the native heap; the next embed reloads it. A reload must map the same file the backend first published (`_published_stamp`: device, inode, size, mtime, ctime); a file changed in place is refused with one ERROR and the load is marked failed, because `model_id` was fixed when the backend was built. `can_load_on_demand()` reports a not-in-memory model as loadable (file present, not protected, no failed load since the last `close()`), which is what lets the knowledge availability check answer yes without starting a load. `InProcessEmbedder.model_resident_async()` is a pure `is_ready()` check: the knowledge watcher's bulk self-heal asks it every pass and must never bring an unloaded model back. Memory preparation calls `prefetch()` at startup so the first recall does not pay the load on its own path
 - The underlying `Llama` object is NOT thread-safe — inference on a loaded model is serialized behind a lock (tens of ms per short text)
 - `get_shared_embedder()` — process-wide singleton (~700MB RSS when loaded), shared by vector memory AND the knowledge library; `close()` unloads the model to free RSS
 - **Metadata-sized llama.cpp context and bounded scratch memory**: before constructing the native context, a custom GGUF reads `general.architecture`, `<architecture>.attention.causal` and `<architecture>.context_length` from its KV header. The file's `pooling_type` key is not read: every model, custom encoders included, is loaded with last-token pooling passed explicitly, the pooling every earlier release produced, so this metadata never changes stored vectors (honouring a declared `pooling_type` is tracked separately). Measured with the vendored runtime on two BERT-family f16 GGUFs (`all-MiniLM-L6-v2`, trained for mean pooling, and `bge-small-en-v1.5`, trained for cls pooling): under last-token pooling two paraphrase pairs scored cosine 0.745 and 0.791 against 0.112 for an unrelated pair (MiniLM) and 0.765 and 0.787 against 0.382 (bge), the same ordering mean pooling gave (0.638 and 0.612 against 0.005; 0.752 and 0.793 against 0.328), and over twelve sentences from six paraphrase pairs each sentence's nearest neighbour was its paraphrase 12/12 times under both poolings on both models. A model is non-causal when its GGUF declares `<architecture>.attention.causal = false` (the boolean llama.cpp reads into `hparams.causal_attn` for every architecture, `llama-embed` included; absent, the runtime defaults to causal) or when its architecture is one the vendored llama.cpp runs without a KV cache (`_ENCODER_ARCHITECTURES`, a verbatim mirror of the `res = nullptr` cases of `llama_model::create_memory` plus `t5encoder`). That mirror is checked mechanically: `test/test_encoder_architecture_mirror.py` opens every vendored `libllama` binary and requires each listed name as a NUL-terminated string, so a runtime bump that removes or renames a cache-less architecture fails the test unless the name is the suffix of another listed name (`bert` inside `modern-bert`: GNU ld tail-merges such strings, so only the terminating NUL can be required and the longer name still satisfies the check); an architecture the bump adds is invisible to it, so the bump procedure in `_vendor/README.md` re-reads the `res = nullptr` cases by hand and confirms suffix names there. The accepted context and logical batch remain 2,048 tokens for every decoder model, which also retains a physical decode micro-batch (`n_ubatch`) of 512; non-causal models use one physical micro-batch the size of their whole context because llama.cpp aborts when their token count exceeds `n_ubatch` — cache-less architectures in `encode()` (`encoder requires n_ubatch >= n_tokens`) and declared-non-causal cached models in `decode()` (`non-causal attention requires n_ubatch >= n_tokens`). The 512 micro-batch is kept for custom decoders on measurement, and it is the only reason the cache-less architecture set exists (giving every custom file `n_ubatch = n_batch` would need no list): with the vendored runtime, four compute threads and a 2,048/2,048 window, the shipped Qwen3-Embedding-0.6B Q8_0 file standing in for a custom decoder, one 5,000-character embedding (936 tokens) took the process's peak resident memory (Linux `VmHWM`) from 1,826 MiB at `n_ubatch` 512 to 2,098 MiB at 2,048, 272 MiB more (two runs each, within 0.5 MiB), and an input filling the whole 2,048-token batch took it from 2,493 MiB to 3,502 MiB, 1,009 MiB more; constructing the context alone showed no difference (0.2 MiB) because the reserved compute arena is not resident until the first graph runs. The same comparison on the `gpt2` Q8_0 file cost 37 MiB at 2,048/2,048 (655 tokens) and 98 MiB between `n_ubatch` 512 and 1,024 at its clamped 1,024 window (935 tokens). That cost, paid by every process holding a custom decoder embedder, outweighs maintaining the mirrored list, which the binary pin and the bump procedure keep honest. For every custom GGUF the context and logical batch are additionally clamped to the trained position count the file declares in `<architecture>.context_length` (llama.cpp's `n_ctx_train`): a model with learned absolute positions — encoder families, but causal `gpt2` and `starcoder` as well — indexes a position table of that many rows, and a token past it aborts the process in ggml's `get_rows` (`GGML_ASSERT(i01 >= 0 && i01 < ne01)`) whatever the model's causality, so `n_ctx` and `n_batch` are set to `min(2048, context_length)` (2,048 when the key is absent), a non-causal model's `n_ubatch` equals that count and a decoder's stays 512 bounded by it, and a longer input is truncated to its first `n_batch` tokens by the vendored binding's `create_embedding()` → `embed(truncate=True)` path, a default `test_vendored_embed_truncates_to_the_logical_batch_by_default` pins. The truncation is stated as one WARNING when the model loads, naming the file and the count, never per embed call; a GGUF whose KV header cannot be read is loaded with the decoder sizes after one WARNING naming the file. Because the header is read before the native constructor opens the same path again, the loader stamps the file (device, inode, size, mtime, ctime) before the header read and re-checks the stamp once the constructor returns: a file replaced in between is closed unpublished after one WARNING and the load is retried after the failure cooldown, so a context sized from a previous header never serves. Measured with the vendored runtime on a 5,000-character input: `bge-small-en-v1.5` (`bert`, `context_length` 512, 895 tokens) aborted with that assertion at a 2,048/2,048/2,048 sizing and returns a 384-dimensional vector at 512/512/512; `gpt2` Q8_0 (causal, `context_length` 1,024) aborted with the same assertion at 2,048/2,048/512 and returns a 768-dimensional vector at 1,024/1,024/512; `nomic-embed-text-v1.5` Q2_K (`nomic-bert`, `context_length` 2,048) keeps 2,048/2,048/2,048 and its 768-dimensional vector. The shipped Qwen model declares 32,768 positions, so it keeps 2,048/2,048/512 and produces byte-identical vectors: a 6,000-character input gave the same 1,024-dimensional vectors at a 512 and a 2,048 micro-batch (`cosine=1.0`, max absolute difference `0.0`) while 512 reduced Linux peak/resident RSS by approximately 419 MiB for that pass. Do not lower `n_ctx` or `n_batch` below the policy-selected window as a memory shortcut: either would reduce the semantic input the model can accept.
@@ -2448,7 +2462,7 @@ Embeddings run in-process via the vendored llama-cpp-python 0.3.34 runtime (`kir
 - **The artifact verifier needs only the Python standard library.** `scripts/verify_vendored_payload.py` reads both `_LIBS_DIR_NAME` and `_REQUIRED_VENDORED_LIBS` from their literals in the one stdlib-only leaf `_llama_lib_path.py`, with `ast.parse` and `ast.literal_eval`. It never imports the embedding runtime or its config dependencies, and it opens one file — the declaration lives in the leaf rather than in `embeddings.py` so no import has to be followed to reach it. Both declarations must stay literal top-level assignments in that file; a missing or computed declaration fails the gate. `embeddings` re-exports `_REQUIRED_VENDORED_LIBS` for its own readers, and `_BUNDLED_LIBS_DIR_NAMES` (the platform names `_is_bundled_libs_dir` matches) is `frozenset(_REQUIRED_VENDORED_LIBS)`, so the two cannot drift. Tests run the real script with `python -I -S`, checking complete archives and missing members in the wheel, sdist, or both.
 - Failed model loads (corrupt file, bad native libs) are retried only after a 300s cooldown so a broken state can't spawn a loader thread per embed call
 
-**Embedding backend abstraction** (`EmbeddingBackend` ABC): the public swap seam for future runtimes (Ollama again, remote endpoints, ONNX) and user-defined models. Surface: `model_id`, `dim`, `is_ready()`, `embed()`, `embed_batch()`, `close()`. Consumers (vector memory, knowledge library) depend only on this interface; everything llama.cpp-specific lives in `LlamaCppEmbedder`. Swap flow: `register_embedding_backend(factory)` + `reset_shared_embedder()` replaces the singleton (pass `None` to restore the default). A backend with a different `model_id`/`dim` produces incomparable vectors — the knowledge library's `embed_signature` is derived from `embedding_space_signature` and so folds BOTH in, meaning a swap (including a width change at a constant model id) automatically triggers the sig-gated knowledge re-embed; vector memory re-embeds via `migrate`.
+**Embedding backend abstraction** (`EmbeddingBackend` ABC): the public swap seam for future runtimes (Ollama again, remote endpoints, ONNX) and user-defined models. Surface: `model_id`, `dim`, `is_ready()`, `prefetch()` (a no-op hint by default), `embed()`, `embed_batch()`, `close()`. Consumers (vector memory, knowledge library) depend only on this interface; everything llama.cpp-specific lives in `LlamaCppEmbedder`. Swap flow: `register_embedding_backend(factory)` + `reset_shared_embedder()` replaces the singleton (pass `None` to restore the default). A backend with a different `model_id`/`dim` produces incomparable vectors — the knowledge library's `embed_signature` is derived from `embedding_space_signature` and so folds BOTH in, meaning a swap (including a width change at a constant model id) automatically triggers the sig-gated knowledge re-embed; vector memory re-embeds via `migrate`.
 
 **Shared embedding budget.** Native inference has one shared worker and model.
 The normal interactive default is four native threads, capped at one core below
@@ -2838,7 +2852,7 @@ before reading transcript bodies, opening learned memory or billing a model.
 | PUT | `/api/memory/history` | Overwrite today's summary file (gated) |
 | GET | `/api/memory/semantic` | List all semantic entries |
 | PUT | `/api/memory/semantic` | Create/update (validates key, allowlist, injection; gated) |
-| DELETE | `/api/memory/semantic/{key}` | Tombstone + log event (gated) |
+| DELETE | `/api/memory/semantic/{key}` | Tombstone + log event (gated). Optional JSON body for `kirocrew memory forget`: `expect_value_json` (compare-and-delete, 409 `value_changed`) and `superseded_by` (must be live and differ from the key: 409 `superseded_by_absent` / 400 `superseded_by_self`); other fields 400 `invalid_forget_body`. The dashboard sends no body |
 | GET | `/api/memory/events` | Recent audit trail |
 | GET | `/api/memory/graph` | All memory as nodes and edges for the graph view |
 | GET/PUT | `/api/memory/settings` | Consolidation settings; see the memory settings card above |
@@ -4268,13 +4282,20 @@ canonical rule as `resolve_ledger_aliases` (real file beats symlink, then
 alphabetical), so a read through a symlinked skill lands on the key the Context
 Budget screen displays instead of splitting one file's cost.
 
-Observation sits in the **ACP client**, registered process-wide via
+Observation sits in the **ACP layer**, registered process-wide via
 `set_global_skill_read_observer` — the same module-level-slot pattern as
 `get_global_hook_store`. That layer is the only one that sees every surface's
 tool calls (dashboard, Slack, subagents, task runner); wiring it per surface
 would have left subagent reads uncounted, which is a skewed ledger rather than a
-partial one. The per-surface permission gate (`HookManager.on_tool_call`) is NOT
-usable here: file reads are auto-approved and never reach it.
+partial one. A session reaches that layer by one of two transports — `AcpClient`
+(one process per session) or `AcpSessionHandle` on the shared `AcpRuntime`
+process (kiro-cli, KAS, codex) — and both own one `acp/skill_reads.py`
+`SkillReadTracker` fed from their dispatch loops, so the credit a backend earns
+does not depend on the transport that serves it. Wiring only the client left
+every shared-runtime read uncounted: the same route-dependent bias, by
+transport instead of surface. The per-surface permission gate
+(`HookManager.on_tool_call`) is NOT usable here: file reads are auto-approved and
+never reach it.
 
 Registration goes through one helper, `register_skill_read_observer` in
 `skill_usage.py` — a leaf module, so no runtime imports another surface just to
@@ -4294,14 +4315,14 @@ pre-existing undercount. A call whose arguments clearly name a `SKILL.md` yet
 yields no candidate is therefore logged at debug — the one signal that separates
 tool-name drift from a legitimately non-reading call.
 
-`_maybe_note_skill_read` resolves at the tool call and **offloads to a thread** —
+`SkillReadTracker.note` resolves at the tool call and **offloads to a thread** —
 resolution resolves every served skill, which on the event loop would stall every
 session in the gateway. It does not walk the tree after cache expiry (the
 snapshot serves the list and expiry only schedules a re-walk), but the resolution
 itself is still per-skill filesystem work and stays off the loop. Both the
 initial `tool_call` and its `tool_call_update` refinement are observed, since
 which one carries `rawInput` is provider-specific, deduped by `tool_call_id`.
-`_maybe_credit_skill_read` then records only on a `status == "completed"` result
+`SkillReadTracker.credit` then records only on a `status == "completed"` result
 (`tool_final`), so a read that was denied, errored, or never ran leaves no
 delivery; that call is in-memory and safe inline. A cheap `SKILL.md` substring
 gate runs before the offload, so a tool call touching no skill costs a substring
@@ -6265,6 +6286,21 @@ for those thread limits and replay; these values do not grant more old-activity
 capacity. The native model input, provider-owned resources and external MCP
 serialization are outside this boundary and remain UNKNOWN, not estimated from
 the Crew string.
+
+Those limits scale with `model_registry.model_window(model)`, which resolves a model
+id through the live window, then `agent.model_context_tokens` (the window an operator
+declares an EXACT, backend-qualified model id is served with; source `operator`), the
+Kiro-list cache, the static registry, the supplementary map and the `[1m]` heuristic.
+An id none of them lists is unknown, and unknown keeps the 1,000,000-token reference:
+nothing shrinks an undeclared model. A fresh session has no live window, so a
+declared one is what budgets its first prompt. The declaration is the operator's
+statement and is never probed or measured. `coerce_model_context_tokens`
+(`config/sections.py`) bounds it: a real integer from 1,024 to 10,000,000 per key, a
+non-empty id of at most 256 characters with no surrounding whitespace as the key, the
+first 64 entries read, a warning per dropped entry. The dashboard server's config
+watcher installs it through `model_registry.apply_operator_windows` at boot and on each
+reload; that replaces the previous set, and a degraded `agent` section defers the
+change instead of dropping the declarations.
 
 The full agent contract is still injected through the existing path. Native
 prompt/resource configuration alone is not proof that the native provider received

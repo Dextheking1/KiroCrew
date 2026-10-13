@@ -17,6 +17,8 @@ interface CatalogSkill {
   key: string
   name: string
   description?: string
+  /** Other keys that name this same file (see AgentSkillsEditor's CatalogSkill). */
+  aliases?: string[]
 }
 
 interface Props {
@@ -39,11 +41,14 @@ export default function SkillsMultiSelect({ selected, onChange }: Props) {
   const byKey = useMemo(() => {
     const m = new Map<string, CatalogSkill>()
     for (const s of catalog) m.set(s.key, s)
+    for (const s of catalog) for (const a of s.aliases ?? []) if (!m.has(a)) m.set(a, s)
     return m
   }, [catalog])
 
   const candidates = useMemo(
-    () => catalog.filter(s => !selected.includes(s.key)).sort((a, b) => compareText(a.name, b.name)),
+    () => catalog
+      .filter(s => !selected.includes(s.key) && !(s.aliases ?? []).some(a => selected.includes(a)))
+      .sort((a, b) => compareText(a.name, b.name)),
     [catalog, selected],
   )
 

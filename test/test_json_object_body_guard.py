@@ -227,6 +227,9 @@ _CAP_REGISTER: dict[str, tuple[str, str]] = {
     "handlers/memory.py::api_memory_history": ("None", _UNBOUNDED_USER_CONTENT),
     "handlers/memory.py::api_memory_import": ("None", _UNBOUNDED_USER_CONTENT),
     "handlers/memory.py::api_memory_semantic_write": ("None", _UNBOUNDED_USER_CONTENT),
+    # The forget body is two strings: a key and the stored value it expects,
+    # which the store caps at 4 KB, so the shared default ceiling is ample.
+    "handlers/memory.py::api_memory_semantic_delete": ("<default>", _BOUNDED_CONTROL_FIELDS),
     "handlers/memory.py::api_memory_settings": ("None", _CONTROL_FIELDS_CAP_PENDING),
     "handlers/memory.py::api_memory_consolidate": ("None", _CONTROL_FIELDS_CAP_PENDING),
     "handlers/memory.py::api_memory_promote": ("None", _CONTROL_FIELDS_CAP_PENDING),

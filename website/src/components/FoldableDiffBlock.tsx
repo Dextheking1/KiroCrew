@@ -1,5 +1,5 @@
-import { memo, useCallback, useId, useMemo, useState } from 'react'
-import { ChevronDown, FileDiff } from 'lucide-react'
+import { memo, useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { AlertTriangle, ChevronDown, FileDiff } from 'lucide-react'
 
 import DiffBlock, { extractFilePath } from './DiffBlock'
 import { countDiffStats } from '../utils/diffLineCounts'
@@ -41,18 +41,31 @@ import { pathBasename } from '../utils/pathBasename'
  */
 const expandedDiffFences = new Set<string>()
 
+/**
+ * Warned fences that have already opened themselves once, keyed by `foldKey`.
+ * Without it a re-mount runs the auto-open effect again and re-opens a chip
+ * the user folded.
+ */
+const autoOpenedDiffFences = new Set<string>()
+
 /** Exported for tests: forget every remembered expansion. */
 export function resetExpandedDiffFences(): void {
   expandedDiffFences.clear()
+  autoOpenedDiffFences.clear()
 }
 
-export default memo(function FoldableDiffBlock({ code, complete, onFileOpen, pathHint, foldKey }: {
+export default memo(function FoldableDiffBlock({ code, complete, onFileOpen, pathHint, foldKey, warning }: {
   code: string
   complete: boolean
   onFileOpen?: (path: string) => void
   pathHint?: string
   /** Stable identity for remembering the open state; omit to keep it local. */
   foldKey?: string
+  /** Set when the fence may hold text that belongs after it (a finished reply
+   * whose fence never closed). The chip stays mounted, opens itself, and shows
+   * this line above it, so the user sees the chip they were watching expand
+   * rather than a different block replace it. */
+  warning?: string
 }) {
   useLanguageGeneration() // memo() bails out of the provider-level repaint; subscribe directly
   const [expanded, setExpanded] = useState(() => !!foldKey && expandedDiffFences.has(foldKey))
@@ -72,6 +85,20 @@ export default memo(function FoldableDiffBlock({ code, complete, onFileOpen, pat
       return next
     })
   }, [foldKey])
+  // Open once when the warning arrives, and only once per fence: the effect
+  // keys on whether a warning exists, not on its text, so a language switch
+  // does not re-run it, and a re-mount finds the fence in
+  // `autoOpenedDiffFences` and leaves the user's fold alone.
+  const warned = !!warning
+  useEffect(() => {
+    if (!warned) return
+    if (foldKey) {
+      if (autoOpenedDiffFences.has(foldKey)) return
+      autoOpenedDiffFences.add(foldKey)
+      expandedDiffFences.add(foldKey)
+    }
+    setExpanded(true)
+  }, [warned, foldKey])
 
   const stats = useMemo(() => countDiffStats(code), [code])
   const headerPath = useMemo(() => extractFilePath(code)?.path, [code]) ?? pathHint ?? null
@@ -90,7 +117,13 @@ export default memo(function FoldableDiffBlock({ code, complete, onFileOpen, pat
   ].join(' · ')
 
   return (
-    <div>
+    <div data-testid={warning ? 'unclosed-diff' : undefined}>
+      {warning && (
+        <p role="note" className="my-1 flex items-center gap-1.5 text-[12px] font-medium text-warn">
+          <AlertTriangle size={12} className="shrink-0" aria-hidden />
+          {warning}
+        </p>
+      )}
       {/* Open look mirrors ToolCallLine's tool-card chip: filled background,
           full-strength text, chevron turned up. Colour alone did not read as a
           state. */}

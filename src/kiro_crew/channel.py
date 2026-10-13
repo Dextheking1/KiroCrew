@@ -24,13 +24,17 @@ from typing import Any
 
 from kiro_crew import name_grant, permission_floor
 from kiro_crew.atomic_write import atomic_write
-from kiro_crew.config import live
+from kiro_crew.config import KiroCrewConfig, live
+from kiro_crew.config.fields import _safe_int
+from kiro_crew.config.loader import config_local_path, config_path, read_config_text
 from kiro_crew.config.paths import config_dir
+from kiro_crew.config.resolution import _deep_merge
 from kiro_crew.constants import (
     DENY_CAUSE_APPROVAL_OVERSIZE,
     DENY_CAUSE_APPROVAL_TIMEOUT,
     DENY_CAUSE_POLICY,
     DENY_CAUSE_SURFACE_POLICY,
+    TOOL_APPROVAL_TIMEOUT,
 )
 from kiro_crew.llm_helpers import (
     SESSION_NOT_FOUND_GIVE_UP_TEXT,
@@ -39,6 +43,7 @@ from kiro_crew.llm_helpers import (
     _steer_host_deny,
     acp_error_is_session_not_found,
     is_prompt_busy,
+    unfinished_turn_error,
 )
 from kiro_crew.messaging.renderer import count_redaction_tags, redaction_notice
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
@@ -57,8 +62,10 @@ _MAX_MESSAGES = 200
 # sees the whole command, and a cut title beside a live Approve button is an
 # approval of a suffix nobody read. The refusal notice is itself bounded.
 _APPROVAL_FIELD_MAX_CHARS = 500
-# How long a posted approval card waits for a reader before the HOST declines
-# it. Named so the in-band notice can quote the same figure the wait used.
+# The longest a posted approval card waits for a reader before the HOST
+# declines it, and the wait while ``agent.tool_approval_timeout_secs`` is left at
+# its default (see :func:`_channel_approval_window_secs`). The in-band notice
+# quotes the window the wait actually used.
 _APPROVAL_TIMEOUT_SECS = 3600
 # The card title of a grantable shell command is this prefix plus the command;
 # the exact tier sends the title back (minus the prefix) as its consent proof.
@@ -160,6 +167,8 @@ CHANNEL_AGENT_BLOCKED_TOOLS: tuple[str, ...] = (
     # Re-running a turn spends the target's model and tools on work a channel
     # message did not ask for; same containment reason as stop.
     "session_retry",
+    # Continuing a thread spends the target's model and tools the same way.
+    "session_continue",
     # Changing a session's model decides what the user's next turn there runs
     # on and spends; same containment reason as stop.
     "session_set_model",
@@ -169,6 +178,9 @@ CHANNEL_AGENT_BLOCKED_TOOLS: tuple[str, ...] = (
     # Renaming relabels a session in the person's sidebar, named from thread text
     # other people wrote; same containment reason as the tree verbs below.
     "session_rename",
+    # Retitling spends a model call and relabels a session in the person's
+    # sidebar; same containment reason as stop.
+    "session_generate_title",
     "session_send",
     "session_read_message",
     # A digest of the same transcript `session_read_message` returns, so it is
@@ -205,6 +217,10 @@ CHANNEL_AGENT_BLOCKED_TOOLS: tuple[str, ...] = (
     # ``chat_tag_column_list`` stays available: the layout names no session.
     "chat_tag_column_create",
     "chat_tag_column_move",
+    # Moving a card between board columns retags another session, which a
+    # channel agent would name from thread text; the handler also refuses a
+    # ``channel:`` caller at dispatch.
+    "session_move_to_column",
     "session_revive",
     # Renaming a folder changes the person's sidebar the same way, and a channel
     # caller reaches the endpoint with the person's folder authority. The
@@ -301,6 +317,23 @@ def _shell_base_binary(cmd: str) -> str | None:
     return base
 
 
+def _offerable_base_binary(cmd: str) -> str | None:
+    """The base a "Trust all <base> commands" consent may name, else None.
+
+    ``_shell_base_binary`` tokenizes in POSIX mode, where a backslash is an
+    escape, so the Windows path ``.\\deploy.bat`` derives ``.deploy.bat``: a
+    name the user never typed, and one that also covers a different file
+    literally called ``.deploy.bat``. A consent label must name what the user
+    read, so a first token holding a backslash gets no base offer and no base
+    grant; the exact-command tier still covers that command.
+    """
+    stripped = cmd.lstrip() if cmd else ""
+    first = stripped.split(None, 1)[0] if stripped else ""
+    if "\\" in first:
+        return None
+    return _shell_base_binary(cmd)
+
+
 # Anything that makes a command more than ONE plain invocation. Deliberately
 # broader than the enforcement splitter's operator set: over-matching here
 # fails toward "no per-command grant available", never toward a wider grant.
@@ -334,11 +367,15 @@ def _match_trusted_channel_command(cmd: str, agent: "ChannelAgent") -> str | Non
     Compound commands never match a base grant and only match an exact grant
     granted for that identical compound; there is no pattern language and no
     per-segment matching, so a grant can never cover text the user did not
-    read. Returns an audit label or None.
+    read. The base is derived with ``_offerable_base_binary``, the same rule the
+    card offers from: a first token holding a backslash has no base, because
+    POSIX tokenizing drops the backslash and ``n\\pm`` would otherwise match a
+    ``npm`` grant while Windows runs a different file. Returns an audit label
+    or None.
     """
     if cmd in agent._trusted_commands:
         return f"command:{cmd}"
-    base = _shell_base_binary(cmd)
+    base = _offerable_base_binary(cmd)
     if base is not None and base in agent._trusted_bases:
         return f"base:{base}"
     return None
@@ -1258,6 +1295,58 @@ async def _recover_busy_agent(
     return None
 
 
+def _written_approval_window() -> int:
+    """``agent.tool_approval_timeout_secs`` as ``config.json`` and ``config.local.json`` state it.
+
+    The two documents merge the way the load merges them, the overlay winning key by
+    key. The number is read the way the load reads an integer (a numeric string or an
+    integral float counts, anything else reads as the default) and BEFORE the load's
+    clamps, so a number the loader pulls under the turn ceiling is still the number
+    that was written. The field default when neither document states a usable one.
+    """
+    default = int(TOOL_APPROVAL_TIMEOUT)
+    merged: dict = {}
+    for path in (config_path(), config_local_path()):
+        try:
+            document = json.loads(read_config_text(path))
+        except (OSError, ValueError):
+            continue
+        if isinstance(document, dict):
+            merged = _deep_merge(merged, document)
+    agent = merged.get("agent")
+    written = agent.get("tool_approval_timeout_secs") if isinstance(agent, dict) else None
+    return _safe_int(written, default)
+
+
+def _channel_approval_window_secs() -> int:
+    """How long an unanswered channel approval card waits before it is declined.
+
+    The loaded ``agent.tool_approval_timeout_secs``, capped at
+    :data:`_APPROVAL_TIMEOUT_SECS`, once the operator has written a number other than
+    its default. While the setting is absent or holds the default the card waits the
+    cap, and so it does when config cannot be read.
+
+    Whether a number was chosen is read from the documents
+    (:func:`_written_approval_window`), never from the loaded number or from the
+    key's presence. ``KiroCrewConfig.save`` writes every field, so a config nobody
+    edited carries the default. The loader pulls a window under
+    ``agent.chat_turn_timeout_secs``, which rewrites the number: under a 300 s ceiling
+    a saved 600 and a written 500 both load as 240, and an omitted key loads as 600.
+    Exactly the default cannot be pinned on a channel while any other number can.
+
+    The wait is the loaded number, so it carries the loader's clamps: into 30..7200 s,
+    then under the turn ceiling. A configured zero arrives as 30 s. Reads
+    ``config.json`` and ``config.local.json``: call it off the loop.
+    """
+    try:
+        window = KiroCrewConfig.load().agent.tool_approval_timeout_secs
+        chosen = _written_approval_window() != int(TOOL_APPROVAL_TIMEOUT)
+    except Exception:
+        logger.debug("channel approval window: config unavailable; using the cap", exc_info=True)
+        return _APPROVAL_TIMEOUT_SECS
+    return min(_APPROVAL_TIMEOUT_SECS, window) if chosen else _APPROVAL_TIMEOUT_SECS
+
+
 async def _stream_task(
     agent: ChannelAgent,
     channel: Channel,
@@ -1614,7 +1703,7 @@ async def _stream_task(
                 # ``_APPROVAL_FIELD_MAX_CHARS`` (the title was refused above if
                 # it would not fit, and the base is one token of that title);
                 # the raw command never leaves this scope.
-                _base_binary = _shell_base_binary(_cmd) if _command_grantable else None
+                _base_binary = _offerable_base_binary(_cmd) if _command_grantable else None
                 approval_meta: dict[str, str] = {
                     "tool_title": sanitized_name,
                     "tool_input": sanitized_input,
@@ -1623,10 +1712,14 @@ async def _stream_task(
                     "base_command": _base_binary or "",
                 }
                 _approval_timed_out = False
+                _approval_window = _APPROVAL_TIMEOUT_SECS
                 try:
                     # Posting and waiting are one ownership scope. If the post
                     # itself fails, neither the Future nor its command authority
                     # may leak onto the next approval handled by this agent.
+                    # The window is read here, inside that scope, for the same
+                    # reason: a cancel while it is read still clears the Future.
+                    _approval_window = await asyncio.to_thread(_channel_approval_window_secs)
                     await channel.post(
                         agent.id,
                         f"⚠️ Approval needed: **{sanitized_name}**\n```\n{sanitized_input}\n```",
@@ -1635,9 +1728,7 @@ async def _stream_task(
                         thread_id=thread_id,
                         meta=approval_meta,
                     )
-                    decision = await asyncio.wait_for(
-                        approval_future, timeout=_APPROVAL_TIMEOUT_SECS
-                    )
+                    decision = await asyncio.wait_for(approval_future, timeout=_approval_window)
                 except asyncio.TimeoutError:
                     # Nobody answered: the HOST declines, not the reader.
                     # Recorded apart from the decision so the reject below can
@@ -1698,8 +1789,7 @@ async def _stream_task(
                         await _steer_host_deny(
                             client,
                             event,
-                            "the channel approval card went unanswered for "
-                            f"{_APPROVAL_TIMEOUT_SECS}s",
+                            f"the channel approval card went unanswered for {_approval_window}s",
                             cause=DENY_CAUSE_APPROVAL_TIMEOUT,
                             title=event.text or event.title or "",
                         )
@@ -1724,6 +1814,11 @@ async def _stream_task(
                     )
 
             elif event.kind == EVENT_COMPLETE:
+                # A turn the backend never finished is not the agent's reply:
+                # the error branch below posts its notice instead of this text.
+                unfinished = unfinished_turn_error(event, "".join(chunks))
+                if unfinished is not None:
+                    raise unfinished
                 break
     except Exception as exc:
         if is_prompt_busy(exc):

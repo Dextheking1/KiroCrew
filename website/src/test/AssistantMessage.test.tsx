@@ -1154,9 +1154,11 @@ describe('action footer touch sizing', () => {
     expect(footer.className).not.toContain('[&_button]:p-3')
     expect(footer.className).toContain('[@media(hover:none)]:[&_svg]:h-4')
     expect(footer.className).toContain('[@media(hover:none)]:[&_svg]:w-4')
-    // With timestamps off the row opens with a button; pull its glyph back onto
-    // the text column instead of 12px in.
-    expect(footer.className).toContain('[@media(hover:none)]:[&>button:first-child]:-ms-2.5')
+    // With timestamps off the row opens with a button. It starts ON the column:
+    // the footer sits in an overflow-hidden `.chat-message-body`, so a cell
+    // pulled start-side of the column (`-ms-2.5` here, `-ms-[7px]` on pointer)
+    // loses that much of its hover paint.
+    expect(footer.className).not.toMatch(/first-child\]:-m/)
     // A grown row can still exceed a phone's width, so it must wrap rather than
     // crush the timestamp and clip the trailing actions.
     expect(footer.className).toContain('[@media(hover:none)]:flex-wrap')
@@ -1168,7 +1170,9 @@ describe('action footer touch sizing', () => {
     expect(footer.className).toContain('[&_button]:h-7')
     expect(footer.className).toContain('[&_button]:w-7')
     expect(footer.className).toContain('[&_button:hover]:bg-bg-hover')
-    expect(footer.className).toContain('[&>button:first-child]:-ms-[7px]')
+    // The leading cell starts on the column, so its whole hover paint is inside
+    // the clipping `.chat-message-body` with both start corners rounded.
+    expect(footer.className).not.toMatch(/first-child\]:-m/)
     // Column gap is zero on every pointer; only the wrap gap survives.
     expect(footer.className).toContain('gap-y-1')
     expect(footer.className).not.toMatch(/(^|\s)gap-1(\s|$)/)

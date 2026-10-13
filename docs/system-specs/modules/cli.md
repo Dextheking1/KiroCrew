@@ -460,6 +460,7 @@ module outside the snapshot family imports an owner.
 | `kirocrew memory export/import/migrate` | Export one store's rows to JSON, import them back, or migrate legacy markdown memory into the vector store. Both `export` and `import` take `--store <name>` (default: the default store), so a named store's rows are reachable in either direction as they already are for `backups`, `restore` and `carve`. `--include-markdown` adds the markdown layer and is DEFAULT-STORE ONLY: a named store's markdown root is under the fenced `memory_stores/` subtree, whose refusal `markdown_snapshot` cannot distinguish from an empty file, so the combination is refused rather than reported as empty. `export` writes at most 10,000 episodes and 1,000 events (`_EXPORT_EPISODIC_LIMIT`, `_EXPORT_EVENTS_LIMIT`) and warns on stderr when it stops at a cap |
 | `kirocrew memory backup/backups/restore` | Take hot copies of Global, declared named V1 and actively owned V2 stores (`--keep <n>`), list a store's copies newest-first (`--store`), or stage a restore (`--store`, `--from <file>`, defaulting to that store's newest). Both V1 and V2 activate restoration at gateway restart. Archived V2 stores are excluded from routine backups. `restore --store <member-store> --cancel-pending` cancels a staged intent while preserving current memory and its backup; it is mutually exclusive with `--from`. A failed activation still requires restart after cancellation. All three dispatch BEFORE the shared vector store is opened, because opening it raises on exactly the corrupt file these verbs recover. See [memory-skills-hooks](memory-skills-hooks.md#automatic-backups-memory_backuppy) |
 | `kirocrew memory retired` | List the episodes a semantic write superseded and restore one (`--restore <id>`, `--limit`). Default store only — it has no `--store`, so restoring a retirement inside a silo is a dashboard action. See [memory-skills-hooks](memory-skills-hooks.md#supersession-retirement-and-why-it-is-bounded) |
+| `kirocrew memory forget <key>` | Delete one semantic key from the default store. It prints the value, asks you to type the key again, then sends `DELETE /api/memory/semantic/{key}` to the running gateway over its owner-only dashboard socket with a credential from `/api/token/local`. Both connections send nothing unless the kernel-reported peer pid is the gateway pid recorded for that port, with its recorded start identity. So the delete passes the same owner gate as a dashboard delete (`_memory_write_gate`); with no gateway reachable it deletes nothing. The request carries the shown value as `expect_value_json`, so a value that changed after it was shown is kept. `--superseded-by <key>` records the winner and is refused when it is not live or is the key itself. An absent key exits 1. Before any store opens the verb also refuses from an agent session's shell (`mcp_caller.resolve_own_identity()` names a session or cannot answer) and without an interactive terminal. Those two keep an agent from running the verb; they do not authorize the delete. Not on Windows (no dashboard socket): use the dashboard Memory page |
 | `kirocrew memory create-store <name>` | Create the directory of a named V1 store declared in `memory_stores` (`memory_stores.create_declared_store`). This is the only creator of such a directory: use never creates one, because `require_memory_store` refuses a missing directory before `ensure_memory_store_dir` is reached, so a deleted store stays missing rather than coming back empty. An existing directory is left untouched. Refuses the default store, an undeclared name and a V2 member store (provisioned with its member). `kirocrew doctor` names this command for a declared V1 binding whose only defect is the missing directory. It does not move a pre-`memory_stores/` tree; that stays a manual step |
 | `kirocrew memory carve --store <name>` | Filter or count a crew store's rows by their carve facets: one flag per facet (`--scope/--surface/--crew/--session-key/--derived-from`), `--kind`, `--count-by <axis>` for grouped counts, `--limit`/`--offset`. Facets exist only on a crew memory store, so the default store answers with a named refusal rather than an empty list. See [memory-skills-hooks](memory-skills-hooks.md#who-reads-a-facet) |
 | `kirocrew policy show/validate/explain/profile` | Inspect the effective enterprise security policy, load-check it and all profiles, explain one tool/scope decision for a surface, or print a profile. `show` also summarizes the built-in denied-command catalog as grouped counts (`--ids` lists each category's rule ids), on every install regardless of whether an enterprise policy is active — the one place an agent can learn a class of work is hard-denied before planning around it. |
@@ -504,7 +505,12 @@ A gateway that takes the request but does not answer within the 20 s budget
 (`_TOKEN_REQUEST_TIMEOUT`) is reported as busy (`Gateway on port N is up but did
 not answer within 20 s (busy)`), also never as `Could not reach gateway`. A read
 timeout and a `URLError` wrapping a timeout both count as busy; a refused
-connection stays `Could not reach gateway`. A loop thread starved of the GIL
+connection stays `Could not reach gateway`, followed by a second line naming the
+remedy (`kirocrew gateway` for this login, `kirocrew service install` for a
+gateway that survives logout) — nothing is listening, and on a host an installer
+provisioned without starting a gateway this line, carried back by a remote mint,
+is the first thing the operator sees. Only the refused class carries it: a
+gateway that answered 403 or is busy is running. A loop thread starved of the GIL
 answers in 12-14 s while healthy, and calling that unreachable sends the
 operator to restart a gateway that works.
 
@@ -977,7 +983,9 @@ The answer is matched **exactly**, not by first letter: a prefix match reads
 
 Denial is **not** an error: the request is answered, the turn runs to completion,
 and the exit code is unchanged. Only the existing transport failures
-(`AcpTimeoutError`, `AcpError`) exit non-zero.
+(`AcpTimeoutError`, `AcpError`) exit non-zero. A turn the backend never finished (stop
+reason `timeout` or `stale_recover`) is one of them: the text was already printed as it
+streamed, so the timeout notice follows it and the exit code is 1.
 
 Every decision is written to the SEL log **before** the matching
 `approve_tool`/`reject_tool`, so a transport failure cannot erase a decision

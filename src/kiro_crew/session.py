@@ -1091,6 +1091,12 @@ class _Session:
     # factory's default backend). Carried by ``allocation_identity`` so a reset
     # successor or a compaction restart starts on the same harness.
     backend_override: str | None = None
+    # The profile ``aws.project_profiles`` set on this session's process at its
+    # cold start; ``None`` when the binding set none (no map, an unbound
+    # directory, a caller that chose its own profile, a pooled process). A
+    # subagent shares this process only when its own directory binds the same
+    # profile (``aws_profile_differs_from_parent``).
+    aws_project_profile: str | None = None
     # True while the lease is held for a LIFETIME rather than a turn -- see
     # ``session_lifecycle._turn_in_flight``, which is what asks.
     lifecycle_lease: bool = False
@@ -1109,6 +1115,8 @@ class _Session:
     # site and read by ``reset``: a session popped while its permit is held
     # remembers WHO held it, so that task's later key-only ``release`` is
     # absorbed instead of unlocking whatever successor now occupies the key.
+    # The release that ends a recorded holding clears it in the same step, so it
+    # never names a task that has let the permit go.
     turn_owner: Any = None
     # Set by the allocation layer when a claim or registration adopted entries a
     # forced stop parked (``session_lifecycle.adopt_parked_queue``); ``release``
@@ -1266,6 +1274,12 @@ def _unlink_session_queue(session: "_Session") -> None:
     """
     for _, _, kwargs in session.queue:
         unlink_queued_temp_paths(kwargs)
+
+
+def process_shutdown_requested(sessions: SessionManager | None) -> bool:
+    if shutdown_event.is_set():
+        return True
+    return sessions is not None and sessions.final_drain_started is True
 
 
 class SessionManager:
@@ -2144,6 +2158,8 @@ class SessionManager:
         "agents",
         "workspaces",
         "default_workspace",
+        # aws.project_profiles is read off ``_cfg`` at each spawn.
+        "aws",
     )
     _FACTORY_CONFIG_PATHS: tuple[str, ...] = (
         "agent.model",
@@ -2442,6 +2458,22 @@ class SessionManager:
         """Return whether the exact parent can share a runtime."""
         return self._allocation_boundary().is_session_sharing_eligible(parent_session_key)
 
+    def aws_profile_split_possible(self, parent_session_key: str) -> bool:
+        """Whether a subagent of the parent could bind another AWS profile; reads no path."""
+        return self._allocation_boundary().aws_profile_split_possible(parent_session_key)
+
+    def project_aws_profile(self, cwd: str) -> str | None:
+        """The profile *cwd* is bound to; resolves paths, so call it off the event loop."""
+        return self._allocation_boundary().project_aws_profile(cwd)
+
+    def aws_profile_differs_from_parent(
+        self, parent_session_key: str, child_profile: str | None
+    ) -> bool:
+        """Whether a resolved *child_profile* differs from the parent process's profile."""
+        return self._allocation_boundary().aws_profile_differs_from_parent(
+            parent_session_key, child_profile
+        )
+
     async def _fill_warm_pool(self) -> None:
         """Delegate warm-provider creation."""
         await self._pool._fill_warm_pool()
@@ -2650,6 +2682,19 @@ class SessionManager:
         ``start_priority`` orders a cold start in the start queues; a caller passes
         FOREGROUND only where a person waits on it (rule: ``kiro_crew.start_priority``).
         """
+        if (
+            key == BACKGROUND_KEY
+            # Consolidation and the skill judges name the background agent
+            # explicitly; they must take the same creation path as a bare call.
+            and agent in (None, BACKGROUND_AGENT)
+            and key not in self._sessions
+            and self._bg_backend_supports_runtime()
+        ):
+            # The persistent background session is created on first use rather
+            # than at boot when the backend serves one-liners from the shared
+            # runtime (``start_pool``). Created through the same path the boot
+            # used, so it keeps the background agent and its start stamping.
+            await self._ensure_background(start_priority=start_priority)
         return await self._allocation_boundary().get_or_create(
             key,
             agent=agent,
@@ -2795,6 +2840,16 @@ class SessionManager:
         self._sync_autocompact_pct()
         return self._compaction.effective_autocompact_pct(key)
 
+    def compaction_due_after_turn(self, key: str, provider: LLMProvider) -> bool:
+        """Delegate: would the end-of-turn check compact *key* if the turn ended now?
+
+        Read-only, for a caller inside a running turn. Adopts a newly published
+        threshold first, as :meth:`effective_autocompact_pct` does, so the answer is
+        measured against the number the turn-end check will use.
+        """
+        self._sync_autocompact_pct()
+        return self._compaction.compaction_due_after_turn(key, provider)
+
     def agent_autocompact_default(self, key: str) -> tuple[str, float] | None:
         """The crew behind *key*'s live session and the threshold it declares.
 
@@ -2844,6 +2899,10 @@ class SessionManager:
     def is_compacting(self, key: str) -> bool:
         """Whether an automatic compaction is in flight on *key* right now."""
         return self._compaction.is_compacting(key)
+
+    def compaction_waits_for_turn(self, key: str) -> bool:
+        """Whether *key*'s compaction still waits for the turn holding the session."""
+        return self._compaction.compaction_waits_for_turn(key)
 
     def mark_needs_reinjection(self, key: str) -> None:
         """Mark a live session for one-shot context reinjection."""
@@ -2954,11 +3013,25 @@ class SessionManager:
         or a reset suppresses it, so a pre-output failure the transient path
         re-queues onto the same live session rebuilds history instead of
         replaying bare.
+
+        The debt is in memory and does not survive a restart, so it is also
+        written onto the session map as the mapped sid's unlanded marker
+        (``SessionMap.mark_sid_unlanded``). After a restart ``SessionMap.get``
+        then refuses that sid on a backend it cannot stat, and the next turn
+        cold-starts with the replay instead of loading an empty native session.
+        The write is scheduled, not awaited: the caller awaits :meth:`aflush`
+        before the turn goes out when :meth:`unlanded_marker_pending` says a
+        marker is owed, so the marker is on disk off the event loop.
         """
-        session = self._sessions.get(self._fold_key(key))
+        folded = self._fold_key(key)
+        session = self._sessions.get(folded)
         if session is None:
             return False
         session.first_turn_history_owed = True
+        if _is_acp_provider(session.provider):
+            sid = getattr(getattr(session.provider, "client", None), "_session_id", None)
+            if isinstance(sid, str) and sid:
+                self._session_map.mark_sid_unlanded(folded, sid)
         return True
 
     def first_turn_history_owed_pending(self, key: str) -> bool:
@@ -2971,14 +3044,24 @@ class SessionManager:
         session = self._sessions.get(self._fold_key(key))
         return bool(session is not None and session.first_turn_history_owed)
 
+    def unlanded_marker_pending(self, key: str) -> bool:
+        """Whether *key*'s mapped sid carries an unlanded marker that must reach disk.
+
+        Only a backend whose resume :meth:`SessionMap.get` gates on the marker
+        ever has one, so a turn on any other backend has nothing to await.
+        """
+        return self._session_map.sid_unlanded_pending(self._fold_key(key))
+
     def consume_first_turn_history_owed(self, key: str) -> bool:
         """Settle the FRESH first-turn history debt once a non-slash
         context-bearing turn delivers its history (assembled and accepted) or a
         reset suppresses it."""
-        session = self._sessions.get(self._fold_key(key))
+        folded = self._fold_key(key)
+        session = self._sessions.get(folded)
         if session is None or not session.first_turn_history_owed:
             return False
         session.first_turn_history_owed = False
+        self._session_map.clear_sid_unlanded(folded)
         return True
 
     def consume_replay_suppression(self, key: str) -> bool:

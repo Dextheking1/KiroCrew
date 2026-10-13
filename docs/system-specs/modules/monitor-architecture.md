@@ -304,7 +304,26 @@ then ends only through the probe's terminal settlement (every item closed) or a
 user or agent stop. The runaway backstop is the same
 `monitoring.max_runtime_secs` ceiling, measured as the loop's age from
 `created_ts`: past it nothing is extended, the bound stops the loop as before,
-and the refusal is logged at WARNING.
+and the refusal is logged at WARNING. The age is read from `created_ts` once per
+process (on the first read after a load) and advances on the monotonic clock
+from there, so a wall-clock step while the gateway runs neither spends a loop's
+runtime budget nor gives it back. A writer of `created_ts` in the running
+gateway moves that reading with it instead of having it read again: a new loop
+and a resume of a spent budget start it at zero, and a released approval or
+person-wait hold hands back the span it held, measured on the monotonic clock
+from the hold's start, while `created_ts` moves by the wall-clock span, which
+is what a restart reads. A step before or during a hold therefore changes the
+budget only across a restart.
+`test_autonudge.py::test_a_released_hold_hands_back_the_time_it_really_held`
+pins the hold cases. The
+budget is awake time while the gateway runs, the clock the loop's own
+`asyncio` waits use: `time.monotonic()` stops while the host is suspended on
+Linux and macOS, so a suspend there spends none of the budget, and it keeps
+counting on Windows, where a suspend is spent. Time before a restart is read
+back from the stored `created_ts` on the wall clock, so a suspend or a step that
+came before a restart counts in full.
+`test_autonudge.py::test_a_suspend_spends_no_runtime_budget_until_a_restart`
+pins both readings.
 
 A work-ledger watch also HOLDS while every open item waits on a person: each is
 `blocked` or `question` with the worker's `reason` `approval` or `needs_human`,
@@ -730,7 +749,11 @@ keeps reaching the same conclusion.
 fingerprint against `last_wake_fingerprint`), is the budget spent
 (`monitor_budget_reason`), is this error retryable (`_provider_error_decision`
 against `_RETRYABLE_PROVIDER_ERRORS`). It takes the clock as a value through its
-`now` parameter and performs no IO at all.
+`now` parameter and performs no IO at all. A failed supplemental read on an
+otherwise readable subject goes through the same kind gate in
+`_supplemental_provider_error_decision`: only `TRANSIENT` and `RATE_LIMITED` are
+retried, under the same `max_provider_errors` budget, and every other kind stops
+the watch at once rather than spending the budget on a failure that cannot heal.
 
 **A skip is a third outcome, and it reaches three places.** A shared `github:api`
 cooldown makes a probe return WITHOUT calling the API, and it borrows the shape of a

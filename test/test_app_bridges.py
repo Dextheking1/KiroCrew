@@ -10,7 +10,7 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 from hypothesis import HealthCheck, assume, given, settings
@@ -2004,6 +2004,46 @@ class TestStdioInterpreterResolution:
             )
         assert "resolves to no existing executable" not in caplog.text
 
+    def test_a_secret_uri_env_value_logs_a_warning_and_registers_unchanged(
+        self, tmp_path, app_env, monkeypatch, caplog
+    ):
+        # kiro-cli never resolves secret://, so an app stdio server it spawns
+        # gets the literal. The warning states that gap without prescribing a
+        # route to vault access (that trust model is undecided), names the env
+        # KEY only, never the secret name, and leaves the declared value as is.
+        with caplog.at_level("WARNING", logger="kiro_crew.apps.bridges"):
+            entry = self._register_stdio(
+                tmp_path, app_env, monkeypatch,
+                {
+                    "command": "python3",
+                    "args": [],
+                    "env": {"API_TOKEN": "secret://hidden-name-10641", "MODE": "x"},
+                },
+                setup=_fake_venv_python,
+            )
+        assert entry["env"]["API_TOKEN"] == "secret://hidden-name-10641"
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        hits = [w for w in warnings if "secret://" in w]
+        assert len(hits) == 1
+        assert "test-app" in hits[0] and "'srv'" in hits[0]
+        assert "'API_TOKEN'" in hits[0]
+        assert "'MODE'" not in hits[0]
+        assert "hidden-name-10641" not in caplog.text
+        assert "kiro-cli spawns the server directly" in hits[0]
+        assert "undecided" in hits[0]
+        assert "stub" not in hits[0].lower()
+
+    def test_a_plain_env_logs_no_secret_uri_warning(
+        self, tmp_path, app_env, monkeypatch, caplog
+    ):
+        with caplog.at_level("WARNING", logger="kiro_crew.apps.bridges"):
+            self._register_stdio(
+                tmp_path, app_env, monkeypatch,
+                {"command": "python3", "args": [], "env": {"MODE": "secret:/not-a-ref"}},
+                setup=_fake_venv_python,
+            )
+        assert "secret:// reference" not in caplog.text
+
     def test_one_bad_server_does_not_block_its_siblings(self, tmp_path, app_env, monkeypatch):
         import kiro_crew.apps.bridges as bmod
 
@@ -3316,6 +3356,7 @@ class TestCronServiceBridge:
             timeout=0,
             timeout_secs=0,
             folder_id="",
+            app_manifest_digest=ANY,
         )
 
     def test_cron_without_timezone_passes_the_empty_sentinel(self, tmp_path, app_env, monkeypatch):
@@ -3492,6 +3533,7 @@ class TestCronServiceBridge:
             timeout=0,
             timeout_secs=0,
             folder_id="",
+            app_manifest_digest=ANY,
         )
 
     def test_rejects_malicious_command(self, tmp_path, app_env, monkeypatch):
@@ -3545,9 +3587,13 @@ class TestCronServiceBridge:
         mock_sdk.add_job_if_absent_async.assert_not_called()
 
     def test_idempotent_skips_existing(self, tmp_path, app_env, monkeypatch):
+        """A job stamped with the current manifest entry's digest is not touched."""
         from unittest.mock import MagicMock, patch
 
-        from kiro_crew.apps.bridges import register_app_crons_with_service
+        from kiro_crew.apps.bridges import (
+            app_cron_manifest_digest,
+            register_app_crons_with_service,
+        )
 
         cron_defs = [{"name": "test-app/refresh", "every": 600, "message": "go"}]
         self._write_app_crons(tmp_path, "test-app", cron_defs)
@@ -3555,6 +3601,7 @@ class TestCronServiceBridge:
         mock_cron_service = MagicMock()
         existing_job = MagicMock()
         existing_job.name = "test-app/refresh"
+        existing_job.app_manifest_digest = app_cron_manifest_digest(cron_defs[0])
         mock_sdk = MagicMock()
         mock_sdk.list_jobs.return_value = [existing_job]
 
@@ -3563,6 +3610,42 @@ class TestCronServiceBridge:
 
         assert result == []
         mock_sdk.add_job_if_absent_async.assert_not_called()
+        mock_sdk.update_job_async.assert_not_called()
+        mock_sdk.remove_job_async.assert_not_called()
+
+    def test_changed_manifest_updates_existing_in_place(self, tmp_path, app_env, monkeypatch):
+        """A stamp from an older entry sends the current fields through update_job_async."""
+        from unittest.mock import MagicMock, patch
+
+        from kiro_crew.apps.bridges import register_app_crons_with_service
+
+        cron_defs = [{"name": "test-app/refresh", "every": 600, "message": "new words"}]
+        self._write_app_crons(tmp_path, "test-app", cron_defs)
+
+        existing_job = MagicMock(
+            id="job-1", command="", script="", agent_sequence=[], env={}, enabled=True
+        )
+        existing_job.name = "test-app/refresh"
+        existing_job.app_manifest_digest = "stale"
+        mock_sdk = MagicMock()
+        mock_sdk.list_jobs.return_value = [existing_job]
+        mock_sdk.update_job_async = AsyncMock(return_value=existing_job)
+
+        with patch("kiro_crew.apps.bridges.CronSDK", return_value=mock_sdk):
+            result = _run(register_app_crons_with_service("test-app", MagicMock()))
+
+        assert result == [], "a re-applied job is not newly registered"
+        mock_sdk.add_job_if_absent_async.assert_not_called()
+        mock_sdk.remove_job_async.assert_not_called()
+        kwargs = mock_sdk.update_job_async.call_args.kwargs
+        assert mock_sdk.update_job_async.call_args.args == ("job-1",)
+        assert kwargs["message"] == "new words"
+        assert kwargs["every_secs"] == 600
+        assert kwargs["app_manifest_digest"] not in ("", "stale")
+        # The pause state is the person's: never sent by the manifest path.
+        assert "enabled" not in kwargs and "user_paused" not in kwargs
+        # Create-only fields never reach the update gate.
+        assert not {"command", "script", "agent_sequence", "env"} & set(kwargs)
 
     def test_returns_empty_when_no_cron_service(self, tmp_path, app_env):
         from kiro_crew.apps.bridges import register_app_crons_with_service

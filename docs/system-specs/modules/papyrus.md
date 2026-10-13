@@ -73,6 +73,21 @@ argv could read as an option. Normalization never launders a traversal into an
 accepted name — pinned by
 `test/test_papyrus_store.py::TestSafeProjectDir::test_normalize_does_not_make_a_traversal_safe`.
 
+The slug is lowercase ASCII on purpose, not by oversight: the name is a directory and
+a `git`/`pdflatex` argument, so it must mean one thing on every platform and
+filesystem, with no normalization form, case folding or case-insensitive collision to
+reason about. A name typed in another script (`论文`, `Отчет`, `München`) is therefore
+refused, and the refusal says why: create, clone and open answer a JSON 400
+`{"code": "invalid_project_name", "char": …}`, where `char` is the first character of
+the name as the user typed it (after NFC, before lowercasing) that the slug cannot
+hold, so `Отчет` reports the capital `О` they typed rather than a lowercase letter
+that looks like an allowed Latin `o`. A bidi override, zero-width or other invisible
+character is sent as its `U+XXXX` code point instead, so it cannot hide or reorder the
+message, and `char` is `""` when the name failed on its length or first character.
+The dashboard renders that code as the rule in the user's own language; the English
+`error` is for logs. Pinned by `test/test_papyrus_store.py::TestProjectNameStaysAscii`
+and the `test_create_explains_*` tests in `test/test_papyrus_routes.py`.
+
 ## Security model
 
 ### Caller authorization (owner only)

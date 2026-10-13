@@ -16,7 +16,7 @@ import ErrorNotice from '../../components/ErrorNotice'
 import InfoTip from '../../components/InfoTip'
 import { fmtBytes, fmtDateTime } from '../../i18n/format'
 import { papyrusApi, type Project } from './api'
-import { pruneSlots } from './lib'
+import { projectErrorText, pruneSlots } from './lib'
 
 import { i18nT } from '../../i18n/t'
 import { useImeGuard } from '../../hooks/useImeGuard'
@@ -118,7 +118,7 @@ export default function ProjectList({ onOpenProject }: ProjectListProps) {
       await invalidate()
       onOpenProject(result.name)
     },
-    onError: (err: Error) => setError(err.message),
+    onError: (err: Error) => setError(projectErrorText(err)),
   })
 
   const cloneMutation = useMutation({
@@ -129,7 +129,7 @@ export default function ProjectList({ onOpenProject }: ProjectListProps) {
       await invalidate()
       onOpenProject(result.name)
     },
-    onError: (err: Error) => setError(err.message),
+    onError: (err: Error) => setError(projectErrorText(err)),
   })
 
   const deleteMutation = useMutation({

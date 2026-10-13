@@ -36,7 +36,7 @@ representative seams of each kind.
 | `config/fields.py` | `_meta` field metadata, the `_safe_*` value coercers every section shares, and `field_default`, the one reader of a DTO field's declared default (`SectionReader` reads through it). An integer coercer keeps a legacy numeric string or integral float already in a config file (`"5"` -> 5, `5.0` -> 5) and rejects booleans and non-integral, malformed or non-finite values in favour of the default. A leaf: it imports nothing from `kiro_crew`. |
 | `config/sections.py` | The DTOs other specs and tests anchor here: agent, crew record, workspace, session, dashboard (with `TailscaleConfig` and its parser), the messaging channels, `wakatime`, speech-to-text and its degradation rules, telemetry, decisions, resource limits, and the bounds constants. It is also the facade for the three section owners below. It also holds `SectionReader`, which resolves a builder's omitted key and coercer fallback to the DTO field's declared default. |
 | `config/memory_sections.py` | `memory`, `knowledge`, `skills`, `session_summary` and the named `memory_stores` records. |
-| `config/integration_sections.py` | `mcp`, `mcp_gateway` (with the MCP stub roster readers the gateway seed shares), `instances`, `tunnel`, `publish`, `computer_use` and the external app `registries`. |
+| `config/integration_sections.py` | `mcp`, `mcp_gateway` (with the MCP stub roster readers the gateway seed shares), `instances`, `tunnel`, `publish`, `computer_use`, `aws` and the external app `registries`. |
 | `config/service_sections.py` | `taskrunner`, `messaging`, `cron_history`, `monitoring`, `heartbeat` and `watchdog`. |
 | `config/section_builders.py` | The `_build_*` helper of 27 sections, grouped by the module that owns each section's DTO. Each reads its section through `sections.SectionReader`, so an omitted key builds the DTO field's default and a `read()` coercer falls back to it; the values a builder keeps of its own and the deliberate departures are listed under "Defaults come from the DTO fields". Four `_build_*` helpers stay in the loader (agent, session, telemetry, dashboard). Sections with no helper are built inline in the loader's `build_config` (`heartbeat`, the external app `registries`, `memory_stores`, the `agents` crew roster, `workspaces`) or by their DTO (`DecisionsConfig.from_raw`, `ResourceLimitsConfig.from_raw`, `ChannelConfig.from_dict` for `slack_channels`). |
 | `config/migration.py` | The write-back migration ids, the document transform `apply_document_migrations`, the one-shot `connections_ui` marker name, the legacy `skills.lazy_load` cohort test, superseded-default reporting, and the in-memory half of an adoption. |
@@ -382,6 +382,22 @@ none" is the single on-disk representation and a PATCH with `[]` clears it.
   signal. Clearing to `[]` stays allowed for every principal (it only removes
   reads). The person may still declare steering on a folder an app or member
   owns; delivery then routes it to that principal's chats as described below.
+  A call on the internal credential every MCP tool call carries
+  (`request["internal_auth"]`) is refused the same way, at both write sites.
+- **Agent surface** is a `folder.steering` change card
+  (`change_card_catalog.py`): `propose_change(kind="folder.steering",
+  params={folder, steering_dirs})` resolves each directory the way the route
+  stores it (`_validate_steering_dirs`, refusing what the route would refuse),
+  then shows the person the folder, its current list and the resolved new one,
+  and the person's own browser applies it as
+  `PATCH /api/chat/folders/{id}` `{"steering_dirs": [...]}` through the card
+  hook, so the gates above are the only authority. Adding a directory is
+  `widen`, only removing is `tighten`; Undo writes the previous list back while
+  the folder still holds what the card stored. The card hook arms each Apply
+  and Undo step with the list it replaces (a request attribute, never a body
+  field), which the route compares under the store lock
+  (`409 steering_dirs_changed` when another save landed first).
+  `chat_folder_tree` renders each folder's declared list (`steering=[…]`).
 - **Resolution** (`_resolve_folder_steering_dirs`) is ACCUMULATIVE up the
   `parent_id` chain (root ancestor first, then descendants), unlike the
   nearest-wins `project_dir` resolver: an org-standards folder above a per-repo
@@ -412,9 +428,12 @@ none" is the single on-disk representation and a PATCH with `[]` clears it.
 The reserved `agents.default` assistant uses the existing Global Memory **V1**.
 Explicit creation of a new Crew Member allocates one **V2** memory store.
 Automatic discovery and existing V1 members retain their V1 bindings. Changing
-`default_agent` selects the member with its existing memory version and binding;
-it never converts member memory to Global. A materialized provider template which
-is not a Crew Member continues to use V1.
+`default_agent` picks the roster's default crewmate (the badge, the undeletable
+row) with its existing memory version and binding; it never converts member
+memory to Global, and it does not change what a session that picked no crewmate
+reads: that session is a template session on Global Memory V1 (see
+`resolve_agent_bindings` below). A materialized provider template which is not a Crew Member
+continues to use V1.
 
 ### Separate files preserve V1
 
@@ -1556,7 +1575,10 @@ a present value the reader cannot use takes the reader's value:
   stub set a legacy install was running, whatever the field defaults are. When
   `mcp_gateway` omits `stub_servers`, it reads an omitted or non-boolean `enabled`
   as off and the roster as empty, and with `enabled: true` an omitted
-  `poolable_servers` as an empty roster.
+  `poolable_servers` as an empty roster. `_resolve_stub_base` layers
+  `MANAGED_STUB_FOLLOWERS` on top of that roster whenever `kirocrew-core` is
+  stubbed; `_resolve_stub_servers` applies `stub_overrides` to that base. Neither
+  the base nor the followers are ever written back to `stub_servers`.
 
 This list describes the build stage. Values that the read stage's schema
 validation rejects never reach it. The deliberate departures, all unchanged by the
@@ -1710,17 +1732,54 @@ surface would have it accepted by the picker and by `spawn_run`, then fail at
 Resolves the workspace, memory store and **kiro agent** a session runs under.
 Resolution order:
 
-1. `agent_name` is a key in `config.agents` — use that alias's bindings.
-2. `agent_name` is a **materialized kiro agent config** — a `*.json` under
-   `~/.kiro/agents/` or, when `project_dir` is given, under
-   `<project>/.kiro/agents/` — whose **declared `name`** matches (the filename stem
-   only when the config declares no name) — take the *default* alias's
-   workspace/memory bindings but dispatch **that agent itself**. `kiro-cli agent
-   list` enumerates agents by declared name, so a namespaced filename stem such as
-   `mochi--mochi` is NOT a name kiro-cli can resolve and must not be treated as
-   dispatchable.
-3. otherwise `config.default_agent`, then the first available alias, then bare
-   defaults.
+1. `agent_name` is a key in `config.agents` (and the stated namespace is not
+   `template`) — use that alias's bindings: template, workspace, memory store
+   and model pin.
+2. otherwise a **template session** (#18328): `default_workspace`, Global Memory
+   V1 (`DEFAULT_MEMORY_STORE`), no crewmate model pin, `resolved_alias` empty,
+   `selection_kind="template"`. The template dispatched is `agent_name` when it
+   is a **materialized kiro agent config** — a `*.json` under `~/.kiro/agents/`
+   or, when `project_dir` is given, under `<project>/.kiro/agents/` — whose
+   **declared `name`** matches (the filename stem only when the config declares
+   no name); `kiro-cli agent list` enumerates agents by declared name, so a
+   namespaced filename stem such as `mochi--mochi` is NOT a name kiro-cli can
+   resolve and must not be treated as dispatchable. Otherwise it is the
+   **default template**, `default_template(config)` = `agent.default_agent` or
+   `kirocrew`, which always counts as resolved. A non-empty name that matched
+   neither reports `requested_resolved=False`.
+
+A plain session — no `agent_name` — is rung 2 with the default template. It is
+never the `default` crewmate: `config.default_agent` names the roster's default
+crewmate and is not read here, so that row's workspace, store and model pin stay
+its own. There is no "first available alias" fallback any more.
+
+Before plain sessions were template sessions they ran the template of the
+roster default's row (the top-level `default_agent`), and an upgraded document
+holds that template only there: the reserved `default` crewmate bound to a
+template of its own (`default` → `default-2`), a template a ★ enrolled as an
+alias, or an existing crewmate the ★ pointed at because it already ran the
+chosen template. The write-back carries it into `agent.default_agent` once
+(`MIGRATE_STAR_DEFAULT_TEMPLATE`, predicate `migration.star_default_template_due`)
+when `agent.default_agent` is unset (any stored value, `kirocrew` included, is a
+choice the ★ or `config set` already made), the top-level `default_agent` names
+a row, and that row's template is not `kirocrew`: the load sets
+`agent.default_agent` to that `kiro_agent` (through `dispatch_kiro_agent`) in
+memory at once and in `config.json` under the write lock, re-detected there like
+every other delta. Only the template is carried, whatever the row is called: its
+folder, store and model pin stay the crewmate's own, so a plain session runs
+that template on the default workspace and Global memory with no crewmate model
+pin, and a crewmate with a store of its own keeps it for its DM thread and
+explicit picks. The row and the roster default are left alone. One-shot by
+state: once the field holds any value the predicate is false, and the ★ writes
+the field directly, so resetting it to `kirocrew` is never undone by a later
+load. A roster default this load seeded (to `default`, or the first-alias
+fallback) is carried like a stored one: it is the row plain sessions read, and
+once stored it is indistinguishable from a pick. The
+overlay wins where it supplies the field, so the seed is skipped there. The warm
+pool resolves a blank `session.pool_agent` through the same path as a plain
+session (`pool_kiro_agent`), never through the alias table, so an
+`agent.default_agent` that spells a crewmate alias binding another template
+prewarms what the session runs.
 
 `selection_kind="template"` restricts an existing conversation to the materialized
 template namespace even if discovery has imported a same-named member.
@@ -1733,16 +1792,16 @@ The session resolver rejects a different agent name when a execution record
 exists. Live provider switches publish their validated template choice before
 history changes; ordinary resolution cannot replace provenance from metadata.
 
-Rung 2 exists because an app's agents are materialized into `~/.kiro/agents/` by
-`bridges._register_agents` under a namespaced FILENAME (`<app>--<agent>.json`)
-while the config inside keeps the app's own bare `name`, and **nothing adds them
-to `config.agents`** — that mapping is authored by setup / the user. Without it an
-app-bound session fell through to `default_agent` and the DEFAULT agent answered
+The materialized half of rung 2 exists because an app's agents are materialized
+into `~/.kiro/agents/` by `bridges._register_agents` under a namespaced FILENAME
+(`<app>--<agent>.json`) while the config inside keeps the app's own bare `name`,
+and **nothing adds them to `config.agents`** — that mapping is authored by setup /
+the user. Without it an app-bound session fell through to the default template
 while the slot still advertised the requested name, with none of the app's MCP
-tools. The rung is deliberately wider than app agents: **any** parseable config in
-those directories dispatches with default bindings, because they *are* the
-kiro-cli agent registry and narrowing to app-registered names would require
-provenance they do not record.
+tools. It is deliberately wider than app agents: **any** parseable config in those
+directories dispatches with default bindings, because they *are* the kiro-cli
+agent registry and narrowing to app-registered names would require provenance
+they do not record.
 
 `project_dir` must be the directory the session actually runs in (the same value
 passed as the kiro-cli cwd).
@@ -1936,9 +1995,14 @@ nothing dispatches it, because rewriting the stored name was destructive: the
 resolution behind the rewrite can be momentarily stale while the overwrite is
 permanent. `resolve_effective_agent(agent_name, project_dir)` is the
 non-destructive other half — it names the agent that will actually answer, and
-`""` for "nothing to report".
+`""` for "nothing to report". The name it reports is the one the runtime
+resolver binds an unhonored request to: the **default template**
+(`default_template(config)`, published in the alias snapshot at load), never a
+crewmate alias — a plain or unhonored session is a template session on the
+default workspace and Global memory, so a marker naming the `default` crewmate
+would advertise a store and a model pin the session does not use.
 
-Two properties, both pinned by tests:
+Three properties, all pinned by tests:
 
 - **No filesystem I/O**, for the same reason rung 2 has none: it is called from
   `_ChatSlot.to_dict()` for every slots frame on the event loop. It reads only the
@@ -1949,6 +2013,9 @@ Two properties, both pinned by tests:
   and a cold project cache all report no divergence. A false "your agent was
   substituted" marker sends the user chasing a substitution that never happened,
   so silence during a boot window is the correct answer, not a guess.
+- **Agrees with `resolve_agent_bindings`.** The alias snapshot's fallback slot is
+  `default_template(config)`, so the marker and the runtime name the same
+  template; the template's own name and every crewmate alias report `""`.
 
 Consumers: the sidebar's session-row marker, and `mochi`'s `ensureSlot`, which
 refuses to send into a slot whose effective agent is someone else.
@@ -2445,7 +2512,8 @@ nothing to diff (`_retry_stale` on the empty-diff and unchanged-fingerprint
 paths), so the roster catches up with the repair. `_section_applier`,
 `_object_applier`, the `bind()` leaf applier (a discarded section holds a leaf's
 DEFAULT, and a bound setter handed that default would reset a cap or a ceiling),
-`_on_slack_config_change`, `_on_channel_config_change` and the session manager's
+`_on_slack_config_change`, `_on_default_agent_config_change`,
+`_on_channel_config_change` and the session manager's
 applier all raise it; the channel applier raises only the DEGRADED channels'
 paths after scheduling the healthy channels' restarts, so the retry never
 restarts a channel twice.
@@ -2477,11 +2545,15 @@ object's constructor (session manager, subagent manager, each channel
 dispatcher; `WorkflowService` binds `agent.workflow_run_timeout_secs` to its
 `set_timeout_secs` and `ChannelManager` binds `agent.max_channels` /
 `agent.max_channel_agents` to its cap setters, both with `live.bind`). Only the
-ones whose holder is `DashboardState`, or that must rebuild agent artifacts,
+ones whose holder is `DashboardState`, that must rebuild agent artifacts, or that set
+process-wide registry state
 live in `dashboard/server_runtime/config_watch.py::_register_config_watch` — `agent.provider`,
 `agent.model`, `agent.role_models.background`, `agent.log_level`
-(→ `handlers/updates.py::apply_log_level_from_config`), and
-`dashboard.dynamic_dashboard_cards` (→ `DashboardState.set_dynamic_cards_enabled`). The log-level applier
+(→ `handlers/updates.py::apply_log_level_from_config`),
+`dashboard.dynamic_dashboard_cards` (→ `DashboardState.set_dynamic_cards_enabled`), and
+`agent.model_context_tokens` (→ `model_registry.apply_operator_windows`, process state of
+the model registry rather than of any holder, so it is also installed once from the boot
+document: the first tick reports only what changed since boot). The log-level applier
 shares `apply_log_level` with the Logs page's `POST /api/logs/level`, and that
 one function moves the `kiro_crew` logger only — which is the ONLY level gate
 on the way to `gateway.log`: the file handler and the queue handler
@@ -2703,6 +2775,7 @@ class AgentConfig:
     approval_mode: str = "auto"    # "auto" or "interactive"
     streaming: bool = True
     model: str = "auto"            # resolved from agent config
+    model_context_tokens: dict[str, int] = {}  # operator-declared served context window per EXACT agent.model id, e.g. {"server-a/org/model-7b": 32768}; value an int in [1024, 10000000], first 64 entries read, a warning per dropped entry (coerce_model_context_tokens); live via model_registry.apply_operator_windows
     provider: str = "acp"          # fixed to "acp" (kiro-cli) — the only provider
     bot_name: str = ""             # the name the agent identifies as in conversations (the {bot_name} placeholder in prompts); "" = the provider's default (Kiro). Loaded through _sanitize_bot_name (sections.py): NFC-normalized, capped at 50 code points (_BOT_NAME_MAX), then filtered to Unicode letters (Lu/Ll/Lt/Lm/Lo), the combining marks that attach to them (Mn/Mc), decimal digits (Nd) and letter numbers (Nl, the ideographic zero) in any script, plus the ASCII space, "_", "-" and "." -- the character policy of the artifact tag rule (artifacts.md § Validation & Limits), applied as a filter that drops instead of a validator that refuses. Everything else is dropped: braces (the placeholder must not recurse), other punctuation, symbols and emoji, enclosing marks (the keycap), other numbers (², ½), controls, format characters (zero-width, bidi), the letters and marks that render as nothing (variation selectors, Hangul fillers: terminal_safe._is_invisible, the one shared table), surrogates and private-use. A non-ASCII space (NO-BREAK SPACE, IDEOGRAPHIC SPACE) becomes the plain space; a space run a removal leaves behind folds to one and a leading or trailing one is stripped; a double space the user typed is kept; the result is NFC-normalized again, since a removal can leave a composable pair adjacent. Three tag rules are not applied: compatibility forms (full-width ｋｉｒｏ) are kept as typed because a drop cannot name the plain spelling; a name may open with a separator; and a run of combining marks is not bounded, since the bound guards a chip's width and nothing draws this name. A name that filters to "" takes the default. Nothing is logged when a name changes, and the CLI `config set` echo shows the raw value (#18728 follow-ups). dashboard.bot_name is a separate field and is not filtered.
     sandbox: str = "auto"          # "auto" (default: standard tier -- namespace on Linux, seatbelt on macOS; leaves ~/.aws, ~/.ssh, ~/.kube visible for credential tooling; delegates to kiro-cli's internal sandbox on macOS when enabled) | "strict" (opt-in: also hides ~/.aws incl. sso/cache, ~/.ssh bar known_hosts, ~/.kube, ~/.config/gh and the _CC_FILES credential files; applies to sessions started after the change) | "off" (skips Kiro Crew's sandbox). Any other value falls back to "auto"
@@ -2759,6 +2832,8 @@ class SessionConfig:
 class TaskRunnerConfig:
     max_parallel_steps: int = 0    # 0 = auto; a positive value only lowers the host-safe cap
     workspace_dir: str = ""       # empty = per-run workspace; otherwise the validated absolute target directory
+    test_command: list[str] = []  # argv run after each step, no shell; malformed = []; restart=True (taskrunner.md "Test verification")
+    require_verification: bool = False  # only an exit-0 test run lets a step pass; strict `is True`; restart=True
 
 @dataclass
 class MemoryConfig:
@@ -2823,6 +2898,10 @@ class ComputerUseConfig:
     cursor_motion: bool = False         # macOS-only cosmetic overlay; draws a fake cursor and grants no capability
 
 @dataclass
+class AwsConfig:
+    project_profiles: dict[str, str] = {}   # absolute project dir -> AWS named profile; see "Project AWS profiles" below
+
+@dataclass
 class MessagingConfig:
     use_transport: bool = True     # route inbound Slack through SlackTransport → TurnDriver → SlackRenderer (the canonical path); false falls back to the native handle_message monolith
 
@@ -2851,7 +2930,7 @@ class DashboardConfig:
     onboarded: bool = False         # whether the "Choose your look" onboarding modal was completed
     import_onboarded: bool = False  # whether foreign-agent import was completed or skipped
     terminal: dict                  # the built-in Terminal tab: shell ("" = $SHELL), max_sessions (12, server-wide ceiling), cwd ("" = $HOME), reuse_current (false; true = Run-in-terminal focuses the selected terminal and copies the command, never runs it), completion.enabled (true). PATCH-able via /api/config/kirocrew
-    crewmates_onboarded: bool = False  # whether the first-run Meet CrewMates flow was finished or dismissed
+    crewmates_onboarded: bool = False  # legacy record of the retired Meet CrewMates flow; nothing reads it
     tips_enabled: bool = True      # feature-discovery tips (GET /api/tips/next); live-read
     tips_cadence_hours: float = 6.0    # min hours between surfaced tips (server-side gate; clamped >= 0)
     tips_snooze_hours: float = 48.0    # hours before a snoozed tip is eligible again (clamped >= 0)
@@ -2882,6 +2961,7 @@ class KiroCrewConfig:
     knowledge: KnowledgeConfig
     stt: SttConfig
     computer_use: ComputerUseConfig
+    aws: AwsConfig
     hooks: dict                    # raw hooks from config.json
     dashboard: DashboardConfig     # dashboard.url, e.g. "http://my-host.example.com:8080"
     auto_update: bool = True
@@ -3078,6 +3158,76 @@ path is that the model must NAME the method (`auto` never resolves onto it) and 
 use is SEL-audited under its own `tool_kind`. Do not re-document the flag without
 re-implementing it. See [security.md](security.md), [governance.md](governance.md)
 and [computer-use.md](computer-use.md).
+
+### Project AWS profiles (`aws.project_profiles`)
+
+`aws.project_profiles` is an operator-owned map from an absolute project
+directory to an AWS named profile (`aws_project_profiles.py`). It guards against
+running a command on the wrong account. It is not isolation: the agent can still
+pass `--profile`.
+
+- **Validation.** Keys must be absolute paths, and values must match
+  `constants.AWS_PROFILE_NAME_RE`.
+  - At load, `coerce_project_profiles` drops a bad entry with a warning that names
+    the directory only. It normalizes keys with `os.path.normpath`, and the first
+    of two keys naming one directory wins.
+  - At save, `write_config_atomically` refuses a write that introduces a bad entry
+    (`_refuse_aws_project_profiles` raises `ConfigWriteRefused`), scoped like the
+    `deepseek_env` floor: a bad entry already on disk, in a mapping the write leaves
+    unchanged, publishes with a warning.
+  - The refusal never carries the profile value.
+- **Match.** `resolve_project_binding` runs `os.path.realpath` (plus `normcase`)
+  on the session cwd and on every key, then compares them component by component.
+  The deepest containing key wins. `/a/proj` never matches `/a/project2`, and a
+  symlink is judged by its target.
+- **Injection.** `SessionAllocation._get_or_create_impl` resolves the binding
+  against the final `effective_cwd`. This happens after capability preparation and
+  before the warm-pool decision. `bound_profile_env` sets both `AWS_PROFILE` and
+  `AWS_DEFAULT_PROFILE` in `extra_env` to the bound name, unless the caller's
+  `extra_env` already names either one. Setting both matters because botocore and
+  the AWS CLI v1 read `AWS_DEFAULT_PROFILE` first, so an inherited one would
+  otherwise outrank the binding.
+  - When nothing binds (an empty map, no cwd, or an unmapped directory), the
+    caller's `extra_env` object is handed through as-is, so the spawn environment
+    and pool decision are unchanged.
+  - A bound session takes `bypass_env` rather than a pooled process spawned
+    without the profile.
+  - `open_task_session` sends a step in a bound directory to `get_or_create`,
+    because the run's shared runtime has one environment.
+  - The profile the binding set is stamped on the registered `_Session` as
+    `aws_project_profile` (`None` when it set none). A subagent run resolves its
+    own `cwd`'s binding off the event loop (`SessionManager.project_aws_profile`
+    through `asyncio.to_thread`, since `realpath` over the keys can block on a
+    stalled mount) and hands it to `_sharing_plan`, which reads
+    `SessionManager.aws_profile_differs_from_parent(parent_key, child_profile)`
+    (no path) and takes the dedicated arm when the child binds another profile,
+    or none, than the binding set on the parent, so `get_or_create` sets the
+    child's own profile. A caller-chosen profile on the parent is not stamped, so
+    its unbound children keep sharing it. An empty map with an unstamped parent
+    (`aws_profile_split_possible` False) resolves no path and takes no thread
+    hop. The synchronous admission probe resolves no path either: while a split
+    is possible it prices the start dedicated.
+  - The applied profile is logged by name only.
+  - The name reaches the child only as the `AWS_PROFILE` / `AWS_DEFAULT_PROFILE` value. It is never put in
+    an argv or a shell string. `scrub_agent_subprocess_env` still strips
+    `AWS_SECRET*` / `AWS_SESSION*`.
+- **Sources.** Only `config.json` is read. No file inside the project checkout
+  and no credential material is consulted. A repository-supplied binding was
+  rejected because it would let a cloned repo choose credentials.
+- **Live.** `SessionManager` subscribes to `aws`, so an edit is adopted into
+  `_cfg` and reaches the next spawn. A running session keeps its environment.
+- **Dashboard.** `GET/PUT /api/aws/project-profile`
+  (`dashboard/handlers/aws_project_profile.py`) backs the read-only profile shown
+  in the composer's project pill and the AWS profile row of the project picker.
+  - Both verbs are owner-only, through the audited
+    `require_owner_dashboard_request` gate.
+  - The GET returns the binding (`profile`, `boundDir`), the picker's names
+    (AWS Control registry names plus mapped values, charset-checked) and a health
+    word. The health word is `ok`, `expired` (an SSO profile whose
+    `aws_consent.probe_identity` fails) or `unavailable`. No account id, ARN or CLI
+    text is returned.
+  - The PUT binds exactly the given directory, or unbinds it with `profile: ""`,
+    through `update_config_locked` under `run_config_write`.
 
 ### Decisions: no `enabled` field here either
 
@@ -3513,8 +3663,7 @@ Two consequences fall out of naming in a non-latin script:
   rule's trailing-whitespace requirement (those scripts do not space after
   punctuation). Both ceilings are parameters, because the prompts differ: the
   title defaults (12 words / 24 characters) sit above its 3-6 word contract,
-  and the 18-word session summary passes its own. A short refusal with no
-  terminator remains a documented false negative for those unspaced scripts.
+  and the 18-word session summary passes its own.
   Korean is spaced, so the word ceiling bounds its long sentences, but a SHORT
   Korean refusal clears every other check -- and Korean puts the refusal verb
   last, so English-style prefix openers cannot catch it. `looks_like_prose`
@@ -3531,6 +3680,20 @@ Two consequences fall out of naming in a non-latin script:
   with `sentence_shape=False` and without the conversation-referring openers,
   since "the conversation covers ..." is its legitimate shape and a false
   positive there is re-spent on a model turn at every later list.
+  Every other shipped language is covered by one language-neutral rule,
+  `label_guard.ends_like_sentence`: a reply that ENDS in a sentence terminator
+  of any script (`.` `!` `?`, the danda `।`, the Arabic `؟`, `。` and kin) and
+  holds a comma of any script or `SENTENCE_MIN_WORDS` (4) words is a sentence,
+  not a name -- the prompts ask for no punctuation, and a name never closes a
+  clause. A name of three words or fewer with a stray final period stays a
+  name. The danda and the other spaced terminators also count mid-reply, like
+  the ASCII ones, so a two-sentence Hindi or Bengali refusal is caught. Paths
+  that strip a final period before checking (`chat_title._validate_title_reply`,
+  `messaging/auto_title.clean_title`) read this shape from the reply line
+  before the strip; the session summary runs with `sentence_shape=False` and
+  skips it. A short refusal with NO terminator in a language other than
+  English or Korean is the remaining documented false negative: without the
+  terminator it has a name's shape.
 - **The reveal animation needs characters.** The sidebar types a new title in one
   word at a time; a single-token title skipped the animation entirely, so
   `_title_reveal_prefixes` steps unspaced scripts two characters at a time
@@ -3634,97 +3797,12 @@ config sections cannot enter configuration through this path.
 
 ### Meet CrewMates first-run state
 
-`DashboardConfig.crewmates_onboarded` records completion of the "Meet CrewMates"
-creation flow (`website/src/components/MeetCrewmatesFlow.tsx`). It gates automatic
-presentation but does not trigger it: the first-run host owns automatic entry
-and the Crewmates page owns explicit creation (`useMeetCrewmatesGate`). The flow
-opens automatically at the first of the first-run tour's end (while the Crew
-preview is on and `crewmates_onboarded` is unset) or the first Crewmates visit
-(while the seen flag is unset), and the page's own create action opens it through
-`START_MEET_CREWMATES_EVENT`.
-The embedded steps collect a goal, choose a name, review the run schedule and
-confirm the result. They reuse the chapter shell without a portal or modal focus
-trap. Technical template selection stays under Advanced. The default is
-on-demand, so completing creation alone never schedules background work.
-Unfinished draft fields, step and errors survive returning to chat and reopening
-the still-mounted flow. Leaving the page warns before discarding an edited draft;
-a later crewmate proposal cannot silently replace it. After completion, the
-next opening starts fresh. The standalone shell retains its existing behavior
-for callers that explicitly request that presentation.
-The shared chapter shell hides floating decorative mascots below `sm` so they
-cannot overlap the headline or body in the stacked mobile header.
-Examples describe outcomes (issue triage, current release notes, passing checks),
-not event triggers. The introduction explains chats, dashboards, notes and
-requests for a human decision; it does not promise uninterrupted execution.
-The daily schedule accepts a minute-precision `HH:mm` time, defaulting to
-`09:00`, with the browser's IANA timezone displayed beside it. Daily jobs set
-`strict_schedule: true` so random jitter cannot shift the chosen time. That zone is
-captured once per opening and used for both the cron and confirmation. An
-empty or invalid daily time prevents both button and Enter submissions before
-any create request. Hourly and on-demand choices do not require a time.
-Back preserves the selected time; a fresh creation resets it. The ready screen repeats
-the submitted goal as plain text and formats the chosen time in the UI locale.
-The today/tomorrow label is calculated when creation completes, at minute
-precision; the selected minute itself counts as passed. Failed schedule writes
-show their recovery notice without a next-run claim. This flow creates a crew
-and optional recurring schedule, not a separate goal-completion control loop.
-`useMeetCrewmatesGate` opens on the explicit create event
-(`START_MEET_CREWMATES_EVENT`) and automatically: `tourEndDue` fires at first-run
-tour completion while the Crew preview is on and `crewmates_onboarded` is unset,
-and `pageEntryDue` fires on the first Crewmates visit while the seen flag is
-unset. It reads the roster (`membersRosterQuery`) to hold the flow for a pending
-Mate, so it does inspect tour completion, the seen flags and the roster before
-opening. The crewmate name is free-form: `POST /api/agents` keeps it as the crew's
-label and derives an id-shaped key from it (`members.key_new_crew`), so spaces
-and CJK are accepted. The flow disables Next only on a blank name; the server's
-`validate_member_name` is the gate, and a 400 `invalid_member_name` or
-`credential_shaped_name`, or a 409 `agent_exists`, lands as an `ErrorNotice`
-under the name field.  Notices
-follow `errors-use-error-notice`: the agent hand-off is on where nothing can be
-lost (the step-4 schedule notices, the "done" notice on
-steps 1 and 4) and closes the flow the way that step's own exit does, since the
-chat it opens sits behind the dialog; it is off beside the unsaved name and job
-on steps 2-3, each such notice naming the draft. Its Create step is two
-existing writes — `POST /api/agents` (the crewmate, job text stored as
-`description`) and `POST /api/crons` with `member_id` naming the crewmate so the
-schedule runs on the crewmate's own memory. Delivery is mechanical, never an
-instruction to the model: the job is created non-`silent`, so every run rings
-the dashboard bell and — when Slack is connected — reaches the owner's Slack DM
-through the runtime's own leg (the flow's Slack row therefore only states that
-fact; it is not a switch), and "Its own chat" maps to `hide_in_chat`, the one
-delivery choice the runtime actually offers. The crewmate's identity is held
-only from a clean create response -- the immutable `member_id` the server
-allocates with its member memory, which `POST /api/agents` returns beside
-`memory_store` -- and it is the one thing the flow binds to or reconciles
-against later; nothing is ever claimed by display NAME, because two
-openings prefill the same example name and a same-named crewmate the flow
-cannot prove it made is someone else's. So a 409 `agent_exists` is a taken name
-on every attempt (step 2, error under the field, with a button to the Crew
-Members page where that crewmate lives -- leaving dismisses the flow -- and the
-suggestion chip carrying that name marked "already exists"), a create the server refused
-(any other 4xx) says "could not be created" inline, and a create with no usable
-answer (a dropped response, a 5xx) stops on step 3 with a block notice that the
-crewmate "may or may not have been created", posts no schedule, and carries a
-button to the Crewmates page (leaving completes the flow) so the user checks
-before making a second one. The schedule is posted with `member_id` = that
-identity, never the display name (a name is late-resolved on the server, so a
-crewmate deleted and remade under the same name between the two writes would
-otherwise receive the job; the identity resolves to exactly the crewmate just
-made, or to nothing). A schedule write the server refused
-(4xx) is reported as "not saved"; any other failure after the request left (a
-dropped response, a 5xx) is reconciled against `GET /api/crons`, and only a job
-that IS the one asked for counts -- `member_id` equal to the held identity, the
-same name, the same message and the same schedule; an older or foreign job on
-the crewmate is not evidence that this write landed -- so only when nothing matches, or that read fails, is it
-reported as "may not have been saved", with a button to the Schedule page on
-the notice (leaving completes the flow) rather than inviting a duplicate. "Only when I ask" posts no schedule and step 4 then
-says nothing about reports or the Schedule page. An exit never waits for the
-server: `onDone` closes the page-owned flow immediately. Creation and completed
-exits persist `crewmates_onboarded` asynchronously; dismissing an unfinished
-draft writes nothing. A refusal remains visible through `persistFailed`, while
-the local completion cache is changed only after the server accepts the write.
-`GET /api/theme/boot` and the existing localStorage mirrors retain the legacy
-completion record for compatibility, but none of those flags auto-opens the flow.
+`DashboardConfig.crewmates_onboarded` is a legacy completion record of the
+retired guided create flow. Nothing reads it to decide what to show: entering
+Crewmates opens Mate's chat or the remembered one, and creating a crewmate
+happens on the New crewmate card (see [crew-mode](crew-mode.md)), which neither
+reads nor writes the flag. `GET /api/theme/boot` and `PUT /api/config/theme`
+keep carrying it for compatibility; the dashboard neither reads nor writes it.
 
 ### `ChannelConfig.from_dict(data: dict) -> ChannelConfig`
 Parses a channel config entry from JSON. Invalid activation values fall back to `"mention"`.

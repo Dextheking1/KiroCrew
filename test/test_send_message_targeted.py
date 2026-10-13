@@ -1293,7 +1293,7 @@ class TestChannelTypeDelivery:
                 data = await resp.json()
                 assert data["delivered_to"] == "telegram"
                 transport.send_message.assert_awaited_once_with(
-                    "99887766", "nightly report", thread_id="17"
+                    "99887766", "nightly report\n\nSent by cron: nightly", thread_id="17"
                 )
                 slack.post_message.assert_not_called()
 
@@ -1605,7 +1605,7 @@ class TestChannelTextIsNotTheNotificationText:
                 assert resp.status == 200
                 assert (await resp.json())["delivered_to"] == "telegram"
                 sent = transport.send_message.await_args[0][1]
-                assert sent == "report body"
+                assert sent == "report body\n\nSent by cron: nightly"
                 # The bell keeps the suffix it always had.
                 notified = state.notify.call_args[0][2]
                 assert "session closed" in notified

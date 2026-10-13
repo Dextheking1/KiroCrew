@@ -99,8 +99,8 @@ with no row here.
    * - ``ACP_BACKENDS_STEER``
      - pre-session registry query (whether ``_session/steer`` exists)
    * - ``ACP_BACKENDS_STEERING_REQUEST``
-     - pre-session registry query (whether a user steer travels on codex-acp's
-       ``_session/steering`` request instead)
+     - pre-session registry query (whether a user steer travels on the
+       ``_session/steering`` request of codex-acp and claude-agent-acp instead)
    * - ``ACP_BACKENDS_COMPACT``
      - pre-session registry query (whether manual ``/compact`` is offered at all)
    * - ``ACP_BACKENDS_INLINE_COMPACTION``
@@ -1146,7 +1146,8 @@ ACP_BACKENDS_MEMBER_PANEL = frozenset(
 
 # Backends implementing the ``_session/steer`` extension (mid-turn steer).
 # claude-agent-acp does not implement it, so a steer sent there is answered with
-# method-not-found rather than reaching the turn.
+# method-not-found rather than reaching the turn. It takes a user's steer over
+# ``_session/steering`` instead (see ``ACP_BACKENDS_STEERING_REQUEST``).
 # codex-acp (1.11.0) has a steering channel, but not this one and not usable for
 # what membership buys. Measured against a real adapter: it is a different method
 # (``_session/steering``, ``{sessionId, prompt: [ContentBlock]}``, answered with
@@ -1193,9 +1194,9 @@ ACP_BACKENDS_STEER = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_KAS})
 # ``startedNewTurn`` is cancelled first so the text cannot run twice. The result
 # is at-least-once: codex orders the answer against the turn's terminal in no
 # way, so a steer injected just as its turn ends can be queued as well and run a
-# second time, visibly, as its own turn. Only the
-# shared-runtime path speaks it -- ``AcpSessionHandle`` -- because only there can
-# a request be awaited without competing with the turn for the adapter's stdout.
+# second time, visibly, as its own turn. For codex
+# the shared-runtime path speaks it -- ``AcpSessionHandle`` -- whose reader routes
+# the answer without competing with the turn for the adapter's stdout.
 #
 # Deliberately NOT ``ACP_BACKENDS_STEER``: the deny-notice path needs a steer
 # that survives the refusal, and codex discards an injected steer with a turn
@@ -1208,14 +1209,34 @@ ACP_BACKENDS_STEER = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_KAS})
 # such an entry, so membership here also means ``steer_needs_loss_recovery``: the
 # provider wrapper that the messaging channels, Side Chat and ``spawn_steer``
 # steer refuses, so those queue instead.
-ACP_BACKENDS_STEERING_REQUEST = frozenset({ACP_BACKEND_CODEX})
+#
+# claude-agent-acp takes the same request, on its own evidence: read from the
+# adapter's ``dist/acp-agent.js`` and driven live on 0.65.0 and 0.89.1 (the real
+# adapter, Agent SDK and native ``claude`` binary, with the model API served
+# locally). ``initialize`` advertises ``_meta.steering.supported: true``.
+# ``steer()`` finds the session's unsettled turn and pushes the text onto the
+# streaming input the Agent SDK query reads, answering ``injected``; the turn is
+# held open until a result answers the steer, so the model's next request carries
+# the steered text and the ``session/prompt`` terminal comes after its reply. A
+# steer sent with ``_meta.steering.idleBehavior: "promptRequired"`` to a session
+# with no running turn is answered ``promptRequired`` and starts nothing. 0.64.x
+# answers ``injected`` and then ends the turn without running the text, which is
+# why ``AcpClient`` speaks the request only from 0.65.0. A permission
+# awaiting the user is not cancelled by a steer (it is delivered at the SDK's
+# ``later`` priority), and Crew's reject is the adapter's ``reject`` option, a
+# ``deny`` without ``interrupt`` that does not end the turn. So unlike codex a
+# denial drops nothing, and the steer is reported consumed when the turn ends
+# with ``end_turn``; a cancelled or failed turn queues it. claude runs one adapter per
+# session, so ``AcpClient`` speaks the request for it, and only when the handshake
+# advertised it.
+ACP_BACKENDS_STEERING_REQUEST = frozenset({ACP_BACKEND_CODEX, ACP_BACKEND_CLAUDE})
 
 # Backends that can serve a MANUAL ``/compact`` (the user-typed slash command).
 # Every member acts on the ``/compact`` prompt that ``AcpProvider.compact()``
 # sends. They do not all answer it the same way, and that split is
 # ``ACP_BACKENDS_INLINE_COMPACTION``: kiro-cli ACKs the prompt then emits
 # ``_kiro.dev/compaction/status``, which ``wait_for_compaction()`` picks up, while
-# claude-agent-acp, codex-acp, opencode and goose finish the whole compaction inside
+# claude-agent-acp, codex-acp, opencode, goose and pi finish the whole compaction inside
 # the ``session/prompt`` turn.
 #
 # opencode is a member on a LIVE capture against opencode 1.18.30, and it joins
@@ -1257,24 +1278,16 @@ ACP_BACKENDS_STEERING_REQUEST = frozenset({ACP_BACKEND_CODEX})
 # drive did: ``Agent::reply`` routes ``/compact`` through ``execute_command`` to
 # ``handle_compact_command``, and ``command_starts_turn("/compact")`` is false.
 #
-# pi is NOT a member, and the reason is the evidence CLASS rather than the feature.
-# It advertises a ``compact`` built-in and dispatches it before any model turn --
-# pi-acp 0.0.33 intercepts it in ``prompt()``, awaits ``session.proc.compact(...)``
-# and returns ``{ stopReason: "end_turn" }``. So the source says inline.
-#
-# What it lacks is a driven capture, and this set asks for one: the bar opencode and
-# goose met is a live session whose ``usage_update.used`` was seen to fall. Source
-# says what the code WOULD do; a capture says what the harness DID. For a membership
-# whose wrong answer makes ``wait_for_compaction`` report a completion that did not
-# happen, the second is the bar, and holding every member to it is what keeps this
-# set's memberships comparable to each other. pi could not be driven where this was
-# written -- it answers ``Authentication required`` -- so it waits for someone who can
-# drive it rather than entering on the weaker class.
-#
-# Until then pi is unclassified, which is a better position than the one it held: it
-# takes the ``COMPACT_ARM_UNCLASSIFIED`` refusal, which promises nothing, and the gate
-# logs a WARNING naming the memberships it lacks, instead of being told its harness
-# manages compaction itself on no evidence at all.
+# pi is a member on a LIVE drive against pi-acp 0.0.34 over pi 1.2.0, taken with
+# ``scripts/capture_acp_compaction.py`` and a locally served model named in pi's own
+# ``models.json``. Over four ordinary turns its ``usage_update.used`` climbed
+# 12773 -> 25127 -> 37481 -> 49834. A ``/compact`` prompt then answered pi's own
+# ``Compaction completed`` chunk and returned ``stopReason: end_turn`` with no
+# ``usage_update`` and no status frame after it, and the next ORDINARY turn -- which
+# added another ~12k-token prompt -- read 37518, below the pre-compact peak. The
+# drive is committed as evidence: ``test/fixtures/acp_frames/pi/compact-live.jsonl``.
+# The source agrees: pi-acp intercepts ``/compact`` in ``prompt()``, awaits
+# ``session.proc.compact(...)`` and returns ``{ stopReason: "end_turn" }``.
 #
 # kas is a member on a LIVE drive against kiro-cli 2.29.0's relay (``--agent-engine
 # v3``), and it is the one member that is not handed the ``/compact`` prompt. Sent
@@ -1291,7 +1304,7 @@ ACP_BACKENDS_STEERING_REQUEST = frozenset({ACP_BACKEND_CODEX})
 # :data:`ACP_BACKENDS_HARNESS_MANAGED_COMPACTION` too: membership here opens the
 # MANUAL command, and the threshold still leaves KAS to its own summarization.
 #
-# deepseek is the other non-member, and it is not the same case as pi:
+# deepseek is the one non-member:
 # :data:`ACP_BACKENDS_CONTEXT_RECYCLE` carries the consequence, because deepseek
 # reports no compaction at all, so a decline leaves its context unbounded.
 ACP_BACKENDS_COMPACT = frozenset(
@@ -1302,6 +1315,7 @@ ACP_BACKENDS_COMPACT = frozenset(
         ACP_BACKEND_OPENCODE,
         ACP_BACKEND_GOOSE,
         ACP_BACKEND_KAS,
+        ACP_BACKEND_PI,
     }
 )
 
@@ -1354,8 +1368,7 @@ ACP_BACKENDS_COMPACT = frozenset(
 # by exclusion would be the same unproven claim this set exists to remove, only
 # louder. What such a harness gets instead is a WARNING from the gate naming both
 # memberships it lacks, and the refusal arm that promises nothing -- so the leak is
-# reported rather than either denied or answered by ending the conversation. pi is
-# that case today.
+# reported rather than either denied or answered by ending the conversation.
 ACP_BACKENDS_HARNESS_MANAGED_COMPACTION = frozenset({ACP_BACKEND_KAS})
 
 # Backends whose FULL context is answered by recycling the session, because no
@@ -1423,14 +1436,16 @@ ACP_BACKENDS_CONTEXT_RECYCLE = frozenset({ACP_BACKEND_DEEPSEEK})
 # ``Compaction complete`` chunk and ends with ``stopReason: end_turn``, with no status
 # frame after it.
 #
-# pi is absent for the reason recorded on ``ACP_BACKENDS_COMPACT``: its source says
-# inline, no capture confirms it, and the two memberships move together when one does.
+# pi is a member on the capture recorded on ``ACP_BACKENDS_COMPACT``: its ``/compact``
+# turn carries the ``Compaction completed`` chunk and ends with ``stopReason:
+# end_turn``, with no status frame after it.
 ACP_BACKENDS_INLINE_COMPACTION = frozenset(
     {
         ACP_BACKEND_CLAUDE,
         ACP_BACKEND_CODEX,
         ACP_BACKEND_OPENCODE,
         ACP_BACKEND_GOOSE,
+        ACP_BACKEND_PI,
     }
 )
 
@@ -1809,13 +1824,19 @@ def model_refusal_phrase(backend: str) -> str:
 # for: the same ``session/new`` result that advertises its ``model`` select
 # advertises a ``mode`` select beside it and no ``effort`` option at all.
 #
-# goose is NOT a member, though it advertises an effort option: ``thinking_effort``
-# sits on its ``session/new`` result (``test/fixtures/acp_frames/goose/
-# handshake-live.jsonl``). goose 1.50.1 offers that option PER MODEL. Driven against a
-# local model with no extended thinking, it offered only ``off``, accepted a write of
-# ``high`` without error, and read the option back as ``off``. So a Crew write there is
-# a silent no-op, and no capture shows the levels a thinking model is offered. goose
-# waits for that capture rather than joining on the option's name.
+# goose IS a member, under its own spelling ``thinking_effort``, and the option is
+# PER MODEL. ``test/fixtures/acp_frames/goose/effort-live.jsonl`` carries both halves
+# off one live session. On a model goose treats as thinking-capable the select offers
+# off, low, medium, high and max, and a write of ``high`` reads back as ``high``. On a
+# model with no extended thinking the same select offers ``off`` alone, and a write of
+# ``high`` is accepted without error and reads back as ``off``. goose re-advertises the
+# select in a ``config_option_update`` after every write and every model switch, so the
+# client's stored copy follows the model. The levels it shares with Crew are spelled
+# identically; ``xhigh`` has no counterpart and is hidden, as on deepseek. Its
+# ``-32602`` was checked on the same build: a value it cannot parse, a request missing
+# ``configId`` and an unknown option id all answer ``-32602``. Crew's request shape is
+# fixed and the id is gated on ``supports_config_option``, so only the first can reach
+# ``_is_config_value_rejection``, which reads it correctly as a value refusal.
 #
 # pi IS a member, and joins under its OWN spelling rather than the default one: the
 # option beside its ``model`` select is ``thought_level``, offering off, minimal,
@@ -1847,6 +1868,7 @@ ACP_BACKENDS_EFFORT_VIA_CONFIG_OPTION = frozenset(
         ACP_BACKEND_CLAUDE,
         ACP_BACKEND_CODEX,
         ACP_BACKEND_DEEPSEEK,
+        ACP_BACKEND_GOOSE,
         ACP_BACKEND_KAS,
         ACP_BACKEND_PI,
     }
@@ -1867,7 +1889,8 @@ ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS = frozenset({ACP_BACKEND_CODEX})
 # The ``configId`` each backend spells its reasoning-effort option with. One home
 # for a fact that is per-harness vocabulary, not a constant: claude-agent-acp
 # advertises ``effort``, codex-acp advertises ``reasoning_effort``, KAS advertises
-# ``effortLevel`` and pi-acp advertises ``thought_level``, and a session that writes another one's spelling is
+# ``effortLevel``, pi-acp advertises ``thought_level`` and goose advertises
+# ``thinking_effort``, and a session that writes another one's spelling is
 # answered with "unknown config option" and silently keeps whatever effort it
 # already had.
 #
@@ -1882,6 +1905,7 @@ ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS = frozenset({ACP_BACKEND_CODEX})
 EFFORT_CONFIG_OPTION_IDS: Mapping[str, str] = {
     ACP_BACKEND_CODEX: "reasoning_effort",
     ACP_BACKEND_DEEPSEEK: "reasoning_effort",
+    ACP_BACKEND_GOOSE: "thinking_effort",
     ACP_BACKEND_KAS: "effortLevel",
     ACP_BACKEND_PI: "thought_level",
 }
@@ -1892,9 +1916,9 @@ DEFAULT_EFFORT_CONFIG_OPTION_ID = "effort"
 
 # Backends whose ADVERTISED effort option answers two questions Crew's model
 # registry answers everywhere else: whether this session takes an effort level at
-# all, and which levels may be written. A member advertises the option per
-# SESSION rather than per model, so the option served on ``session/new`` is the
-# authority and the registry cannot speak for it.
+# all, and which levels may be written. A member advertises the option itself --
+# per session, or per model where the harness rebuilds it (goose) -- so the option
+# it last served is the authority and the registry cannot speak for it.
 #
 # Membership is what makes the channel above REACHABLE, and the two are separate
 # claims rather than one: ``ACP_BACKENDS_EFFORT_VIA_CONFIG_OPTION`` says a change
@@ -1924,13 +1948,22 @@ DEFAULT_EFFORT_CONFIG_OPTION_ID = "effort"
 # advertised. The levels it does share with Crew are spelled identically, so
 # ``EFFORT_CONFIG_OPTION_VALUES`` carries no deepseek row.
 #
+# goose is a member because its select is the only thing that knows which of its
+# models think: goose decides that itself, per model, and serves the operator's own
+# provider ids. A select offering ``off`` alone is goose saying the current model
+# takes no level, and ``AcpProvider.supports_effort`` reads it that way rather than
+# offering a control whose every write reads back as ``off``. Like deepseek it omits
+# ``xhigh``, which is hidden the same way, so it needs no values row either.
+#
 # The kiro family and claude are NOT members, and that is the split this set
 # exists for: there the level rides the MODEL. kiro-cli refuses effort with
 # "Effort configuration is currently not available on <model>", and
 # claude-agent-acp rebuilds its effort options per model from
 # ``supportedEffortLevels`` -- so the registry, which knows which model families
 # take a level, is the right authority for them.
-ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION = frozenset({ACP_BACKEND_DEEPSEEK, ACP_BACKEND_PI})
+ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION = frozenset(
+    {ACP_BACKEND_DEEPSEEK, ACP_BACKEND_GOOSE, ACP_BACKEND_PI}
+)
 
 
 def effort_config_option_id(backend: str) -> str:

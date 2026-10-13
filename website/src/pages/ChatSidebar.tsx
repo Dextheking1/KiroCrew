@@ -15,7 +15,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { usePreviewFlag } from '../hooks/usePreviewFlag'
-import { PREVIEW_DASHBOARD, PREVIEW_FOLDER_CONDUCTOR } from '../utils/previewFlags'
+import { PREVIEW_FOLDER_CONDUCTOR } from '../utils/previewFlags'
 import { shallowEqual, useStore } from 'react-redux'
 import { useAppDispatch, useAppSelector } from '../store'
 import type { RootState } from '../store'
@@ -126,7 +126,10 @@ import { useStaleCollapse, useStaleMoveWatcher, useStaleNarrowBridge } from './c
 import { useFolderSort, useFolderVisibility, useFolderFilterReveal, useFolderFilterRows, useFolderMutations, useFolderTree, useRootFolderLanes } from './chat-sidebar/folders'
 import FolderCleanupPanel from './chat-sidebar/FolderCleanupPanel'
 import { useSidebarResize } from './chat-sidebar/resize'
+import { useSidebarScrollPeek, useFullTitlesOnScrollSetting } from './chat-sidebar/scrollPeek'
+import ScrollPeekLayer from './chat-sidebar/ScrollPeekLayer'
 import { useSidebarTags } from './chat-sidebar/tags'
+import { useSidebarModels, modelFilterLabel } from './chat-sidebar/models'
 import { useBoardColumns, useColumnPopover, useBoardColumnMutations, useColumnMatches, useBoardFolderCollapse } from './chat-sidebar/board'
 import { useHoverHold, useHoverPinLiveness } from './chat-sidebar/hoverHold'
 import { useLineageAvailable, useConductorLane, citedCreatorOf } from './chat-sidebar/conductor'
@@ -397,10 +400,11 @@ function SourceLinkIcon({ provider }: { provider: SidebarSourceLink['provider'] 
  *
  *  A component rather than a block inside the row's render callback because the
  *  overflow chip is interactive and therefore needs per-row state. The slots
- *  payload deliberately serializes at most three links PER KIND (state.py's
- *  `_SERIALIZED_SOURCE_LINKS_PER_SLOT`) so a broadcast carrying dozens of rows
- *  stays small, which means the links behind "+N" are not on the client at all
- *  and expanding has to fetch them. */
+ *  payload deliberately serializes at most three links IN TOTAL per card,
+ *  pull requests first and issues only in the slots left over (state.py's
+ *  `_SERIALIZED_SOURCE_LINKS_PER_SLOT`), so the strip stays short and a
+ *  broadcast carrying dozens of rows stays small -- which means the links
+ *  behind "+N" are not on the client at all and expanding has to fetch them. */
 function SessionSourceChips({ slotKey, links, total, connected, isActive, onOpenSource, onActivateSlot }: {
   slotKey: string
   /** The budgeted links from the slots payload — what the collapsed strip shows. */
@@ -874,12 +878,15 @@ function RemoteCrewNamesError() {
     enabled: topBarAbsent,
   })
   if (!topBarAbsent || !error || isInstancesDisabledError(error)) return null
+  // Lead with what failed in product terms; the server's text follows it.
+  const detail = errMessage(error)
   return (
     <div className="mx-2 mt-2 shrink-0">
       <ErrorNotice
         variant="inline"
         className="flex-wrap w-full"
-        message={errMessage(error) || i18nT('components.instanceTabBar.instances_load_failed')}
+        title={detail ? i18nT('components.instanceTabBar.instances_load_failed') : undefined}
+        message={detail || i18nT('components.instanceTabBar.instances_load_failed')}
         askAgent
         testId="remote-crew-names-error"
       />
@@ -2352,6 +2359,13 @@ interface ChatSidebarProps {
   /** Where a crew row's window opens, for a host with no chat pane of its
    *  own (embed/sessions). Omit to open it over this page's pane. */
   onOpenPeerSession?: (instanceId: string, key: string) => void
+  /** Opts the list into the scroll peek: while the user scrolls the session
+   *  lane, titles the row clips are shown in full in a floating layer laid
+   *  over them. Rows keep the stored width. Omit (mobile drawer, embedded
+   *  view) to turn it off: a phone's near-full-width drawer leaves no room
+   *  beside the pane for an overflowing title, and the embedded view has no
+   *  chat beside it either. See chat-sidebar/scrollPeek. */
+  scrollPeek?: boolean
 }
 
 /** Sort options, in menu order. The label lives in `SORT_LABEL_KEY`. */
@@ -2420,7 +2434,7 @@ function ChatSidebar({
   // to say which collection it means.
   slots: localSlots, activeSlot, unreadSlots, history, historyHasMore,
   defaultAgent, installedAgents, rowAgents, mode, onWidthChange, onDragChange, fillsHost, onSelectSlot, onOpenSlotInNewTab, onOpenSource, onOpenPeerSession, collapsible,
-  chatDropTarget, onDropSessionRef, staticRows,
+  chatDropTarget, onDropSessionRef, staticRows, scrollPeek,
 }: ChatSidebarProps) {
   useLanguageGeneration() // memo() bails out of the provider-level repaint; subscribe directly
   const dispatch = useAppDispatch()
@@ -2563,6 +2577,7 @@ function ChatSidebar({
     showAllFolders, filterTagIds, toggleTagFilter, clearTagFilter, foldersShelved, setFoldersShelved,
     toggleFoldersShelved, toggleFilter, disableFilter, enableFilter,
     hiddenFilters, toggleHideFilter, clearHiddenFilters,
+    filterModelKeys, filterModelsExcluded, toggleModelFilter, setModelFilterExcluded, clearModelFilter,
   } = useSessionFilterState()
   const {
     slotsLoaded, workflowActiveSet, automationRunningSet, subagentCounts, subagentStartedCounts, subagentApprovalCounts, unreadSet,
@@ -2839,6 +2854,11 @@ function ChatSidebar({
   const {
     tagsData, tagsQueryFailed, refetchTags, tagById, activeTagIds, tagFilterRows, activeTagNames,
   } = useSidebarTags({ filterTagIds, localSlots })
+  const { modelFilterRows, activeModelKeys, activeModelRows, modelFilterPasses } = useSidebarModels({ filterModelKeys, filterModelsExcluded, localSlots })
+  // The direction is only ON when it has something to invert: a stored exclude
+  // whose keys no session uses any more must not draw a ticked invert row (or
+  // mark rows as hidden) while the next tick would narrow to "only X".
+  const modelFilterInverted = filterModelsExcluded && activeModelKeys.size > 0
   const {
     rawColumns, tagColumnsSettled, columnsFailed, columnsError, refetchColumns, tagColumnsEnabled,
     hideEmptyFolderBody, orderedColumns,
@@ -2847,6 +2867,7 @@ function ChatSidebar({
   const {
     paintedSidebarWidth, rootStyle, sidebarMax, paintedWidthRef, sidebarResize, nudgeSidebar, widenForBoard, restorePreBoardWidth,
   } = useSidebarResize({ onWidthChange, onDragChange, fillsHost, boardActive: orderedColumns.length > 0 })
+  const fullTitlesOnScroll = useFullTitlesOnScrollSetting()
   // Which edges of the board's lane strip hide lanes. A window too narrow for
   // every lane clips the strip at the sidebar's edge, and an overlay scrollbar
   // leaves no standing sign that more lanes sit past it, so the strip paints an
@@ -2924,11 +2945,12 @@ function ChatSidebar({
     },
     filters: {
       tags: { resolved: activeTagIds, raw: filterTagIds },
+      models: { passes: modelFilterPasses, active: activeModelKeys.size > 0 },
       search: { text: slotFilter, folderMatches: folderNameMatchIds },
       status: { active: activeFilters, hidden: hiddenFilters, paused: filtersPaused, recentWindowMs },
       folders: { hiddenSubtree: filterHiddenSubtree, active: folderFilterActive },
     },
-    clears: { tags: clearTagFilter, search: clearSearch, status: clearAllFilters, folder: clearFolderHide, hides: clearHiddenFilters },
+    clears: { tags: clearTagFilter, models: clearModelFilter, search: clearSearch, status: clearAllFilters, folder: clearFolderHide, hides: clearHiddenFilters },
     crewGroups: shownCrewGroups,
     sortKey,
     clock: Date.now,
@@ -3088,6 +3110,18 @@ function ChatSidebar({
   } = useLaneCycle({ lineageAvailable, boardLaneActive, folders, lane, setLanePersisted })
 
   const sidebarRootRef = useRef<HTMLDivElement>(null)
+  // Scroll peek (desktop list lanes only); see chat-sidebar/scrollPeek.
+  // Desktop-only by design (the narrow-viewport-required exemption): the peek
+  // draws a clipped title in full past the sidebar's edge, over the chat
+  // beside it. The phone sessions pane is a near-full-width drawer that leaves
+  // no room right of the pane for an overflowing title, and nothing beside it
+  // to draw over; there the row's `title` attribute and the rename box stay
+  // the path to the full string. The board lane has no list rows to peek.
+  const peekTitles = useSidebarScrollPeek({
+    enabled: fullTitlesOnScroll && !!scrollPeek && !isMobile && !boardLaneActive,
+    rootRef: sidebarRootRef,
+    laneRef: laneScrollRef,
+  })
   const { digitModifierHeld, shortcutDigitByKey } = useShortcutOrder({ sidebarRootRef, dispatch, localSlots })
 
   const {
@@ -3164,18 +3198,14 @@ function ChatSidebar({
   } = useSidebarDragHandlers({ releaseHoverPin, setDragFrozen, hideFolderReorderHint, setActiveDrag, activeDrag, dragFrozen, folderReorderable, folderSortRead, showFolderReorderHint, moveFolderByDrag, reorderFolders, searchRanked, pinned, reorderPinned, localSlots, activeSlot, onDropSessionRef, moveByDrag, folders, boardFolderCollapsed, updateFolderMutation, clearBoardCollapse })
   const {
     folderCreateError, setFolderCreateError, createChatInFolder,
-  } = useFolderChatCreate({ folders, defaultAgent, mode, dispatch, dropSlotMutation, onOpenSlotInNewTab, updateFolderMutation, clearBoardCollapse })
+  } = useFolderChatCreate({ folders, mode, dispatch, dropSlotMutation, onOpenSlotInNewTab, updateFolderMutation, clearBoardCollapse })
 
   const {
     crewPreview, openCrewMembers, remoteCrewChatPreview,
     createChatMutation, createRemoteChatMutation, createEphemeralChatMutation,
-  } = useSessionCreate({ setNewChatError, dispatch, defaultAgent, mode, onOpenSlotInNewTab, setRemoteCrewError, setNewChatMenuOpen, onOpenPeerSession })
+  } = useSessionCreate({ setNewChatError, dispatch, mode, onOpenSlotInNewTab, setRemoteCrewError, setNewChatMenuOpen, onOpenPeerSession })
   // A conductor-lane member anchor opens on the Members page (see renderSessionRow).
   const navigate = useNavigate()
-  // The Dynamic Dashboard is a Feature Preview (Settings > Developer): the
-  // kebab's "All dashboards" door is offered only once it is on. The page it
-  // opens stays routable either way, like every preview's route.
-  const dashboardPreview = usePreviewFlag(PREVIEW_DASHBOARD)
 
   // Session colors
   const { paletteColors, boost, boostFor, colorMode } = useSessionPalette()
@@ -4530,6 +4560,9 @@ function ChatSidebar({
     // The region is the session picker a guide's "choose the session" step
     // points at (`sessions.list`): both layouts draw their rows inside it.
     <div role="region" aria-label={i18nT('pages.chatSidebar.sessions')} {...uiLocation('sessions.list', sidebarRootRef)} onPointerOver={onRootPointerOver} onPointerLeave={releaseHoverPin} className={`${LIST_SHELL_CLS} flex flex-col shrink-0 relative h-full`} style={rootStyle}>
+      {/* Scroll peek: full titles in a floating, click-through layer. The
+          card itself keeps `sidebarWidth`. */}
+      <ScrollPeekLayer titles={peekTitles} />
       {/* Drag handle — the shared column grip (components/ResizeHandle), so
           this edge looks and behaves exactly like the Crew Members roster's and
           the app workspaces'. Positioned absolutely on the card's right border
@@ -4569,10 +4602,10 @@ function ChatSidebar({
               <button className="mc-touch-hit w-7 h-7 rounded-md border border-border bg-transparent text-muted cursor-pointer flex items-center justify-center hover:border-border-strong hover:text-text transition-all" title={i18nT('pages.chatSidebar.more_options')} aria-label={i18nT('pages.chatSidebar.more_options')} {...uiLocation('sessions.list-menu')}><MoreVertical size={14} /></button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[180px]">
-              {dashboardPreview && <DropdownMenuItem onSelect={() => navigate('/session-dashboards')} {...uiLocation('sessions.list-menu.dashboards')}>
+              <DropdownMenuItem onSelect={() => navigate('/session-dashboards')} {...uiLocation('sessions.list-menu.dashboards')}>
                 <Monitor size={14} className="text-muted" />
                 {i18nT('commandCenter.all_title')}
-              </DropdownMenuItem>}
+              </DropdownMenuItem>
               <DropdownMenuItem disabled={seedStateLanesMutation.isPending} onClick={() => {
                 if (seedStateLanesMutation.isPending) return
                 const isActive = tagColumnsEnabled && rawColumns.length > 0
@@ -5561,6 +5594,100 @@ function ChatSidebar({
                     ))}
                   </>
                 )}
+                {/* Models. Lists only the models some session uses, most used
+                    first, so the section is also the quickest read of what the
+                    sessions run on. A session property like tags, so it is not
+                    gated on the lane either. */}
+                {modelFilterRows.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <FilterMenuLabel>
+                      {i18nT('pages.chatSidebar.models')}
+                    </FilterMenuLabel>
+                    {/* The invert row sits FIRST, under the heading, so the mode
+                        that changes what every tick below it means is read before
+                        the ticks, not discovered at the bottom of a menu that may
+                        be clipped on a short window. Always listed so the "every
+                        session not on model X" option can be found before anything
+                        is ticked, but disabled until a model is selected:
+                        with nothing selected it would flip a flag that changes
+                        nothing on screen. Enabled on the RESOLVED selection, so
+                        a stored key no session uses cannot arm it either.
+                        "Hide" names what the list does. */}
+                    <>
+                      <DropdownMenuItem
+                        disabled={activeModelKeys.size === 0}
+                        title={i18nT('pages.chatSidebar.hide_sessions_on_these_models_hint')}
+                        onSelect={e => { e.preventDefault(); setModelFilterExcluded(!modelFilterInverted) }}
+                        data-testid="model-filter-exclude"
+                        role="menuitemcheckbox"
+                        aria-checked={modelFilterInverted}
+                      >
+                        {/* The same checkbox square as the model rows: the on
+                            state must be legible as a shape, not only as a
+                            colour, and a reader who sees a tick knows a second
+                            click clears it. */}
+                        <span
+                          aria-hidden="true"
+                          className={`w-3.5 h-3.5 shrink-0 rounded-[3px] border flex items-center justify-center ${modelFilterInverted ? 'border-accent bg-accent text-accent-fg' : 'border-border bg-transparent'}`}
+                        >
+                          {modelFilterInverted && <Check size={10} strokeWidth={3} />}
+                        </span>
+                        <span className="flex-1 truncate">{i18nT('pages.chatSidebar.hide_sessions_on_these_models')}</span>
+                        {/* A disabled row says why, in the row: a title tooltip is
+                            not shown reliably on a disabled item. Once a model is
+                            ticked the note is hidden, not removed: it is the widest
+                            row in the menu, and dropping it would shrink the menu
+                            and slide every row sideways under the pointer. */}
+                        <span
+                          className={`text-muted text-[11px] shrink-0 ${activeModelKeys.size === 0 ? '' : 'invisible'}`}
+                          aria-hidden={activeModelKeys.size === 0 ? undefined : true}
+                          data-testid="model-filter-exclude-note"
+                        >{i18nT('pages.chatSidebar.tick_a_model_first')}</span>
+                      </DropdownMenuItem>
+                      {/* Set apart from the model rows: it is a mode, not another
+                          model. */}
+                      <DropdownMenuSeparator />
+                    </>
+                    {modelFilterRows.map(row => {
+                      const name = modelFilterLabel(row)
+                      // The tooltip names what the click DOES: with the selection
+                      // inverted, ticking a row hides its sessions.
+                      const unselectedTitle = modelFilterInverted
+                        ? i18nT('pages.chatSidebar.hide_sessions_using_model', { name })
+                        : i18nT('pages.chatSidebar.show_only_sessions_using_model', { name })
+                      return (
+                        <DropdownMenuItem
+                          key={row.key}
+                          title={row.selected ? i18nT('pages.chatSidebar.stop_filtering_by_model', { name }) : unselectedTitle}
+                          // Keep the menu open so several models can be selected.
+                          onSelect={e => { e.preventDefault(); toggleModelFilter(row.key, modelFilterRows.map(r => r.key)) }}
+                          data-testid={`model-filter-row-${row.key}`}
+                          role="menuitemcheckbox"
+                          aria-checked={row.selected}
+                        >
+                          {/* The square always shows the tick for a selected row, so
+                              a click's effect stays legible. Once the selection is
+                              inverted the row reads as "hidden" through a muted name
+                              and a trailing eye-off glyph (not a strike-through,
+                              which reads as "deleted"). */}
+                          <span
+                            aria-hidden="true"
+                            className={`w-3.5 h-3.5 shrink-0 rounded-[3px] border flex items-center justify-center ${row.selected ? 'border-accent bg-accent text-accent-fg' : 'border-border bg-transparent'}`}
+                          >
+                            {row.selected && <Check size={10} strokeWidth={3} />}
+                          </span>
+                          <span
+                            className={`flex-1 truncate ${row.selected && modelFilterInverted ? 'text-muted' : ''}`}
+                            data-excluded={row.selected && modelFilterInverted ? 'true' : undefined}
+                          >{name}</span>
+                          {row.selected && modelFilterInverted && <EyeOff size={12} className="text-muted shrink-0" aria-hidden="true" />}
+                          <span className="text-muted text-[11px] shrink-0">{row.count}</span>
+                        </DropdownMenuItem>
+                      )
+                    })}
+                  </>
+                )}
                 {/* Folders sit LAST on purpose: the list grows with the user's
                     folder count, so anything below it would get pushed out of
                     easy reach. Being last, it can simply overflow into the
@@ -5673,6 +5800,24 @@ function ChatSidebar({
           </button>
         </div>
       )}
+      {/* The model filter's one chip, in its own row for the same AUTOSDE reason
+          as the tag chip above. The label carries the direction: "Not Fable 5"
+          when the selection is inverted, else the model names. */}
+      {activeModelRows.length > 0 && (() => {
+        const models = fmtList(activeModelRows.map(row => modelFilterLabel(row)), { type: 'disjunction' })
+        const label = modelFilterInverted ? i18nT('pages.chatSidebar.not_models', { models }) : models
+        return (
+          <div className="px-3 pb-1">
+            <FilterChip
+              aggregate
+              testId="model-filter-chip"
+              label={label}
+              clearLabel={i18nT('pages.chatSidebar.clear_named_filter', { filter: label })}
+              onClear={clearModelFilter}
+            />
+          </div>
+        )
+      })()}
       {activeFilters.size > 0 && (
         <div className={FILTER_CHIP_ROW_CLS}>
           {SESSION_FILTERS.filter(filterDef => activeFilters.has(filterDef.key)).map(filterDef => {

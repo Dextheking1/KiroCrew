@@ -145,10 +145,12 @@ class TestReleaseClearsEveryField:
             "generation",
             "started_monotonic",
             "jitter",
+            "job",
             "task",
             "taken",
             "cancelled",
             "reaped",
+            "outcome_reset",
         }
 
     def test_release_of_an_unstored_claim_is_a_noop(self) -> None:

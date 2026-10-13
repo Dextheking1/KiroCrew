@@ -762,6 +762,16 @@ Their steps, permissions and triggers are unchanged.
 Sensitive Change Review uses the fleet on every PR and review event, not just
 `opened`/`synchronize`: it checks out only default-branch scripts and runs no
 PR code, so the "actor did not supply the code" reason does not apply.
+PR Readiness uses the same reasoning on its `pull_request_target` runs, about
+2,500 a day, with the fork check on `github.event.pull_request.head.repo.full_name`.
+Its `workflow_run` runs stay hosted: they carry the `in_progress` merge-guard
+hold, and a hold stuck on a fleet runner would leave a green verdict up over a
+re-running lane. Its `workflow_dispatch` runs stay hosted too: that payload
+names no head, and the sweep dispatches as github-actions[bot], which is not
+listed. So a lost fleet runner never leaves the required status unpublished or
+stale: the hosted hold and sweep paths still land.
+It needs no fleet setup step: the image ships gh, python3 and coreutils, and
+the readiness step tests pass on the image's jq 1.6.
 
 The repository variable is a JSON array of string actor IDs matching the fleet
 webhook filter. The maintainer changing either fleet project's actor filter owns
@@ -1608,7 +1618,13 @@ PR-time proof only, no publishing.
   script.
 - **`build-windows-installer`** assembles the real python-build-standalone backend
   payload, builds and silently installs the NSIS artifact, then runs the installed
-  gateway and bytecode-floor checks. See [e2e-gate.md](e2e-gate.md#buildymls-installer-job-boots-the-gateway-it-installed-on-every-pr).
+  gateway and bytecode-floor checks. See [e2e-gate.md](e2e-gate.md#buildymls-installer-job-boots-the-gateway-it-installed-on-every-qualifying-pr).
+  It is hosted-only, so on a PR it runs only when `desktop-matrix`'s
+  `windows_installer` filter matched a Windows-packaging input (Electron config,
+  `packaging/`, the installer test, the wheel's packaging metadata, the
+  gateway leg's entry modules). A merge group always runs it; a push to main
+  runs it unless `MERGE_QUEUE_ENABLED` is `'true'`. Other `src/` changes are
+  covered per PR by `backend-test-windows` and proven installed at merge.
 
 **Only the smoked legs RUN the bundled backend.** `build-desktop` here and
 `build-desktop.yml` in the release lane both build the real `kirocrew-backend`

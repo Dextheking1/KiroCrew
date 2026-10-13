@@ -331,7 +331,7 @@ export function ContextUsageControl({ contextPct, contextUsedTokens, contextWind
 /** The model chip. It names the level in force beside the model; the level is
  *  CHANGED inside the model picker the chip opens (model and effort are one
  *  control, docs/decisions/2026-06-14-chat-composer-model-and-effort-are-one-control.md). */
-export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault, modelIsAutoChosen, reasoningEffort, effortIsDefault, hasEffort, isRunning, shelfCompact, shelfTiny, composerControl, modelChipPressedFromComposerRef, onModelClick }: {
+export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault, modelIsAutoChosen, reasoningEffort, effortIsDefault, hasEffort, isRunning, shelfTiny, composerControl, modelChipPressedFromComposerRef, onModelClick }: {
   modelName: string
   modelIsJevRouted?: boolean
   modelIsInheritedDefault?: boolean
@@ -340,7 +340,6 @@ export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault
   effortIsDefault: boolean
   hasEffort?: boolean
   isRunning: boolean
-  shelfCompact: boolean
   shelfTiny: boolean
   composerControl: () => ComposerControl | null
   /** Owned by the composer, so a press outlives a remount of the chip exactly as it did. */
@@ -391,10 +390,9 @@ export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault
     disabled={isRunning}
     data-testid="composer-model-chip"
     {...uiLocation('chat.model-picker')}
-    // Inherited default: mirror the agent chip -- ` · default` marker on
-    // the label, and the explanation on hover (title) AND keyboard
-    // focus / screen readers (aria-label), because a bare served id
-    // reads exactly like a pin. A pinned chip keeps the plain hint.
+    // Inherited default: the explanation rides on hover (title) AND keyboard
+    // focus / screen readers (aria-label); the chip itself shows only the id.
+    // A pinned chip keeps the plain hint.
     // The effort level rides along on both: `aria-label` REPLACES the
     // chip's content in the accessible name, so without it a screen
     // reader never hears the level the chip shows, and the tooltip is
@@ -409,30 +407,27 @@ export function ModelChip({ modelName, modelIsJevRouted, modelIsInheritedDefault
         ellipsize its own tail, never the marker beside it. A routed chip
         takes NO marker -- its label is already the policy, and a second
         word next to it would be a marker on a name that is not a model.
-        So the two unpinned states differ by KIND (a policy vs an id with
-        a marker), not by two adjectives a reader has to tell apart. */}
-    {!modelIsJevRouted && (modelIsInheritedDefault || modelIsAutoChosen) && (
+        A model the user picked for themselves -- a pin, or the default
+        they set -- takes no marker either: the id already names the
+        model they chose, and the hover / accessible name above still
+        says it is the inherited default. Only `auto` is marked, because
+        there the id is one the user never chose. */}
+    {!modelIsJevRouted && !modelIsInheritedDefault && modelIsAutoChosen && (
       <>
         <span className="opacity-30 select-none shrink-0" aria-hidden="true">·</span>
-        <span className="opacity-60 shrink-0">{modelIsInheritedDefault
-          ? i18nT('components.agentSelector.default')
-          : i18nT('components.jobForm.auto')}</span>
+        <span className="opacity-60 shrink-0">{i18nT('components.jobForm.auto')}</span>
       </>
     )}
-    {/* A default and an override show the same level, and a glance
-        at "High" alone could not tell which one set it. So the chip
-        says so where there is room -- the picker's own "Default ·
-        High" -- and keeps the bare level only in a compact shelf,
-        where the hover / accessible name above still carries it.
-        An inherited-default MODEL already put one "Default" on the
-        chip; a second, meaning the effort, right after it would be
-        the same word twice for two unrelated facts, so that chip
-        keeps the bare level as well (the name above still says
-        "Reasoning effort: Default · High"). */}
-    {hasEffort && !shelfTiny && (
+    {/* The chip shows the concrete level in force and never the word
+        "Default": whether a default or an override set it is not
+        something the user needs at a glance, and the hover / accessible
+        name above still says which. With no level known (the model
+        decides), there is nothing concrete to show, so the segment is
+        left out. */}
+    {hasEffort && !shelfTiny && !!reasoningEffort && (
       <>
         <span className="opacity-30 select-none shrink-0" aria-hidden="true">·</span>
-        <span className="opacity-60 shrink-0">{shelfCompact || modelIsInheritedDefault ? effortLabel(reasoningEffort || '') : effortShown}</span>
+        <span className="opacity-60 shrink-0">{effortLabel(reasoningEffort)}</span>
       </>
     )}
   </button>

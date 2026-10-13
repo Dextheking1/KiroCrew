@@ -148,3 +148,20 @@ def test_a_worker_status_reads_in_the_readers_language() -> None:
     assert "statusLabel(ask[j].status)" in script
     assert "worker_status', { v: statusLabel(status) }" in script
     assert "' \\u2014 ' + ask[j].status" not in script
+
+
+def test_the_whole_board_numbers_count_forgotten_items() -> None:
+    """The fold keeps only open items and the newest closed ones, so the accepted
+    count, the state bar and the item count add the fold's ``forgotten`` counts."""
+    manifest = (TEMPLATE.parent / "manifest.json").read_text(encoding="utf-8")
+    assert (
+        '"forgotten": { "type": "object", "source": { "fold": "work", "path": "forgotten" } }'
+        in manifest
+    )
+    loop = _function("drawLoop")
+    assert "d: acc + gone.accepted, n: list.length + gone.items" in loop
+    states = _function("drawStates")
+    assert "var total = list.length + gone.items;" in states
+    assert "counts[state] / total" in states
+    assert "counts[closing[c]] += gone[closing[c]];" in states
+    assert "String(list.length + forgotten().items)" in _script()

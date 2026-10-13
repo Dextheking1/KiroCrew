@@ -561,6 +561,20 @@ DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 # home directory, for a service unit) is imported instead of the real module and
 # fails later with an unrelated-looking TypeError. -s does not cover this: it
 # removes the user site, not the launch entry.
+#
+# An inherited PYTHONPATH/PYTHONHOME is the other way a foreign tree gets in:
+# a development shell exporting PYTHONPATH=<checkout>/src makes this bundled
+# interpreter import checkout code mixed into the shipped backend, and
+# PYTHONHOME points it at another Python's stdlib. The desktop shell scrubs
+# both for the gateway it spawns (website/electron/gateway-env.js), but this
+# launcher is also run directly -- `kirocrew token`, `kirocrew stop`, the
+# ~/.local/bin/kirocrew shim -- so the scrub has to live here, at the entry
+# point every caller shares. Only these two are dropped: PYTHONUTF8,
+# PYTHONIOENCODING and the bytecode knobs the shell hands down stay in force,
+# and -E would discard them too. Children spawned by the backend (operator
+# Python, MCP servers, cron) inherit this scrubbed environment, exactly as they
+# do under the desktop shell.
+unset PYTHONPATH PYTHONHOME
 exec "$DIR/python3.12" -s -P -m kiro_crew "$@"
 LAUNCH
   chmod +x "$out/bin/kirocrew"
@@ -739,8 +753,14 @@ build_backend_windows() {
   # so the interpreter resolves relative to the bundle wherever it lands.
   # -P for the same reason as the POSIX launcher above: keep the caller's cwd
   # off sys.path so a stdlib-named directory there cannot shadow the stdlib.
+  # PYTHONPATH/PYTHONHOME are cleared for the same reason as the POSIX launcher
+  # too: a dev shell's checkout must not be imported into the bundled backend.
+  # `set "NAME="` deletes the variable, and cmd's environment is
+  # case-insensitive, so a mixed-case `PythonPath` goes with it. `setlocal`
+  # keeps the deletion inside this shim: a user running kirocrew.cmd from an
+  # interactive cmd window keeps their own PYTHONPATH afterwards.
   mkdir -p "$out/bin"
-  printf '@echo off\r\n"%%~dp0..\\python.exe" -s -P -m kiro_crew %%*\r\n' > "$out/bin/kirocrew.cmd"
+  printf '@echo off\r\nsetlocal\r\nset "PYTHONPATH="\r\nset "PYTHONHOME="\r\n"%%~dp0..\\python.exe" -s -P -m kiro_crew %%*\r\n' > "$out/bin/kirocrew.cmd"
 
   log "Verifying self-containment ($(basename "$out"))…"
   PYTHONNOUSERSITE=1 "$out/python.exe" -s -P -m kiro_crew --version >/dev/null \

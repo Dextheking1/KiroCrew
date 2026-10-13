@@ -100,16 +100,26 @@ export const LinkUnfurlCtx = createContext<LinkUnfurl>({ enabled: false, live: f
  *
  * `InlineCode` consults it so a code span used as a link label —
  * ``[`https://example.com/x`](https://example.com/x)`` — stays inert instead of
- * becoming a click-to-copy chip. The chip's handler calls `preventDefault`, and
- * that cancels the anchor's default action from anywhere in propagation, so
- * without this the label copied and the link silently stopped navigating (a
- * regression from #4433, which gave non-path spans a primary-click copy).
+ * becoming a chip. Every chip's handler calls `preventDefault`, and that
+ * cancels the anchor's default action from anywhere in propagation, so without
+ * this the label copied (#5730, a regression from #4433, which gave non-path
+ * spans a primary-click copy) or, on a link to a web page whose label named a
+ * real local path, opened that path (#5745), and the link silently stopped
+ * navigating.
  *
  * Provided only where `MdAnchor` places `children` inside an `<a>`. The Jira and
  * forge chips render a parsed label instead of `children`, and a `LinkOverride`
  * owns its element outright, so neither needs it.
+ *
+ * The value says where the link goes. `'external'`: its href carries a scheme
+ * or is protocol-relative, so the click leaves the dashboard and the link wins
+ * over every chip, a confirmed path chip included. `'local'`: a root-relative,
+ * relative or fragment href. Such an href is often the very file the label
+ * names (``[`README.md`](README.md)``) and the anchor cannot always open it
+ * itself, so a confirmed path chip keeps the click there.
  */
-export const InsideLinkCtx = createContext(false)
+export type InsideLink = false | 'external' | 'local'
+export const InsideLinkCtx = createContext<InsideLink>(false)
 
 /**
  * Whether inline-code chips may issue stat probes.

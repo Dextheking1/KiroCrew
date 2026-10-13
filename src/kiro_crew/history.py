@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Literal, overload
 
 from kiro_crew import platform_compat
-from kiro_crew.atomic_write import append_line, atomic_write, atomic_write_at
+from kiro_crew.atomic_write import append_line, atomic_write, atomic_write_at, fsync_dir
 from kiro_crew.chat_attachments import persist_inline_images, same_text_modulo_images
 from kiro_crew.config.loader import KiroCrewConfig, config_dir
 
@@ -43,6 +43,7 @@ from kiro_crew.frontmatter import (  # noqa: F401 - facade re-exports
 )
 from kiro_crew.history_cache import (
     _METADATA_CACHE_MAX,
+    _TRANSCRIPT_CACHE_IDLE_TTL,
     _TRANSCRIPT_CACHE_MAX,
     HistoryCacheCoordinator,
     _FileChangeCacheEntry,
@@ -1077,7 +1078,17 @@ def _archive_dir(base: Path | None = None) -> Path:
 def _archive_lines(
     key: str, lines: list[str], reason: str, base: Path | None = None
 ) -> Path | None:
-    """Append dropped message lines to archive/{key}.{YYYYMMDD-HHMMSS}.jsonl. Returns path or None."""
+    """Append dropped message lines to archive/{key}.{YYYYMMDD-HHMMSS}.jsonl. Returns path or None.
+
+    Durable on return: the file, the directory entry naming it and the parent
+    entry naming the directory are synced before this returns, and a sync
+    failure raises. Every caller archives lines its next transcript rewrite
+    removes, so until the archive is on disk the transcript holds their only
+    copy, and an unsynced archive could be lost to a crash that the rewrite
+    survives. The parent is synced on every call, not only when this call made
+    the directory: a directory that exists was not necessarily synced into its
+    parent (an earlier call may have created it and then failed that sync).
+    """
     if not lines:
         return None
     import itertools
@@ -1108,9 +1119,13 @@ def _archive_lines(
         try:
             with open(candidate, "x", encoding="utf-8", opener=owner_only_opener) as f:
                 f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
             break
         except FileExistsError:
             continue
+    fsync_dir(adir)
+    fsync_dir(adir.parent)
     logger.info(
         "Archived %d lines from session %s to %s (reason=%s)",
         len(lines),
@@ -1713,7 +1728,9 @@ class ConversationLog:
         # parsed-transcript working set without limit. Eviction is
         # least-recently-used and deterministic; writes invalidate per-key via
         # _invalidate_cache so a stale entry can never outlive a file change.
-        self._msg_cache: _LRUCache[tuple[CacheIdentity, int, list[dict]]] = _LRUCache(cache_max)
+        self._msg_cache: _LRUCache[tuple[CacheIdentity, int, list[dict]]] = _LRUCache(
+            cache_max, idle_ttl=_TRANSCRIPT_CACHE_IDLE_TTL
+        )
         #: ``(identity, gen, meta)`` — like the search memos, entries record the
         #: invalidation generation and a warm hit requires both fields to
         #: match, so a same-process metadata edit through another instance
@@ -1729,6 +1746,17 @@ class ConversationLog:
         self._meta_cache: _LRUCache[tuple[CacheIdentity, int, dict]] = _LRUCache(
             _METADATA_CACHE_MAX
         )
+        #: ``((identity, size), gen, title_or_None)`` — the first-user-message
+        #: title ``list_sessions`` derives for a session whose metadata line
+        #: carries no title. Without it every listing would re-open and re-read
+        #: the head of every untitled transcript to compute a value that only
+        #: changes when the file does. Same generation guard and bound as
+        #: ``_meta_cache``, plus the size: the identity alone does not move for
+        #: two writes inside one timestamp tick. ``None`` records "no title in
+        #: the head", which is just as cacheable.
+        self._title_scan_cache: _LRUCache[tuple[tuple[tuple[int, int, int], int], int, object]] = (
+            _LRUCache(_METADATA_CACHE_MAX)
+        )
         #: Bounded identity-keyed LRU of formatted ``recent()`` windows keyed by
         #: (key, max_messages, roles). The tail-read fast path intentionally
         #: never warms ``_msg_cache`` (it returns a partial view), so a session
@@ -1737,7 +1765,9 @@ class ConversationLog:
         #: call. This memoizes the formatted window; the stored identity guards
         #: staleness even when a housekeeping write preserves mtime. Own
         #: ``_LRUCache`` → own internal lock.
-        self._recent_cache: _LRUCache[tuple[CacheIdentity, int, list[dict]]] = _LRUCache(cache_max)
+        self._recent_cache: _LRUCache[tuple[CacheIdentity, int, list[dict]]] = _LRUCache(
+            cache_max, idle_ttl=_TRANSCRIPT_CACHE_IDLE_TTL
+        )
         #: Bounded memo of lightweight message projections containing only
         #: ``ts`` and ``meta.file_changes``. The Artifacts "All" view scans
         #: every session, so routing it through ``_msg_cache`` retains the full
@@ -3390,10 +3420,14 @@ class ConversationLog:
             self._invalidate_cache(key)
 
     def unconsolidated_count(self, key: str) -> int:
-        """Count messages not yet processed by the consolidator."""
-        messages = self._read_messages(key)
+        """Count messages not yet processed by the consolidator.
+
+        Counts without materializing the transcript (see :meth:`_count_messages`):
+        the startup idle-seed scan calls this for every recent transcript.
+        """
+        total = self._count_messages(key)
         offset = self._read_metadata(key).get("last_consolidated", 0)
-        return max(0, len(messages) - offset)
+        return max(0, total - offset)
 
     def consolidation_counts(self, key: str) -> tuple[int, int]:
         """Return ``(total_messages, unconsolidated)`` from a SINGLE read.
@@ -3403,14 +3437,22 @@ class ConversationLog:
         :meth:`consolidation_retry_state` compares the charged span against. Both
         come from one ``_read_messages`` call so the eligibility check costs no
         additional transcript read on the event loop.
+
+        This reads through the message cache on purpose, unlike
+        :meth:`unconsolidated_count`: the idle sweep calls it on the event loop
+        every tick for each tracked session, so a warm entry keeps that a cache
+        hit instead of a full stream of the file per tick.
         """
-        messages = self._read_messages(key)
+        total = len(self._read_messages(key))
+        return total, max(0, total - self.consolidated_offset(key))
+
+    def consolidated_offset(self, key: str) -> int:
+        """Rows already consolidated, from the metadata line; 0 when unreadable."""
         offset = self._read_metadata(key).get("last_consolidated", 0)
         try:
-            offset = int(offset or 0)
+            return int(offset or 0)
         except (TypeError, ValueError, OverflowError):
-            offset = 0
-        return len(messages), max(0, len(messages) - offset)
+            return 0
 
     def consolidation_retry_state(
         self, key: str, message_count: int | None = None
@@ -3992,6 +4034,9 @@ class ConversationLog:
 
     def _read_messages(self, key: str) -> list[dict]:
         return self._read_projection._read_messages(key)
+
+    def _count_messages(self, key: str, *, hold_writer_lock: bool = True) -> int:
+        return self._read_projection._count_messages(key, hold_writer_lock=hold_writer_lock)
 
     @contextlib.contextmanager
     def _cache_fill_lock(self, key: str) -> Iterator[bool]:

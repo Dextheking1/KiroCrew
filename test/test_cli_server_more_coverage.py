@@ -168,6 +168,7 @@ class TestTokenRefusal:
         err = capsys.readouterr().err
         assert "HTTP 403" in err and "could not verify this process as the local owner" in err
         assert "Could not reach gateway" not in err
+        assert "kirocrew service install" not in err
 
     def test_connection_refused_still_reports_unreachable(self, monkeypatch, capsys) -> None:
         def boom(*a, **k):
@@ -180,7 +181,15 @@ class TestTokenRefusal:
         with pytest.raises(SystemExit) as exc:
             cli_server._token(argparse.Namespace(ttl="1h", port=None))
         assert exc.value.code == 1
-        assert "Could not reach gateway on port 5476" in capsys.readouterr().err
+        out, err = capsys.readouterr()
+        assert "Could not reach gateway on port 5476" in err
+        # Nothing listening is a state the operator can fix, and this line is
+        # what a remote mint carries back verbatim: it must name both ways to
+        # get a gateway listening on the host.
+        assert "kirocrew gateway" in err
+        assert "kirocrew service install" in err
+        # The stdout contract (cli.md): failure prose never reaches stdout.
+        assert out == ""
 
     @pytest.mark.parametrize(
         "slow",
@@ -207,6 +216,7 @@ class TestTokenRefusal:
         err = capsys.readouterr().err
         assert "Gateway on port 5476 is up but did not answer within 20 s (busy)" in err
         assert "Could not reach gateway" not in err
+        assert "kirocrew service install" not in err
         assert "status" not in err
         assert seen["timeout"] >= 15
 
@@ -1282,6 +1292,24 @@ class TestRunTask:
         assert taskrunner_env["observed"]  # skill-read observer registered
         out = capsys.readouterr().out
         assert "Task completed" in out and "(3 steps)" in out
+
+    def test_configured_test_command_reaches_the_runner(
+        self, taskrunner_env, tmp_path, monkeypatch
+    ) -> None:
+        from kiro_crew.config import KiroCrewConfig
+
+        cfg = KiroCrewConfig()
+        cfg.taskrunner.test_command = ["python", "-m", "pytest", "-q"]
+        cfg.taskrunner.require_verification = True
+        monkeypatch.setattr(KiroCrewConfig, "load", classmethod(lambda cls: cfg))
+        taskrunner_env["install_runner"](_Result("completed"))
+        args = argparse.Namespace(
+            spec=str(_spec(tmp_path)), no_test=False, fresh=False, timeout=0, name=""
+        )
+        asyncio.run(cli_server._run_task(args))
+        kw = taskrunner_env["runner_kwargs"]
+        assert kw["test_cmd"] == ["python", "-m", "pytest", "-q"]
+        assert kw["require_verification"] is True
 
     def test_builtin_sync_runs_through_the_explicit_seam(
         self, taskrunner_env, tmp_path, monkeypatch

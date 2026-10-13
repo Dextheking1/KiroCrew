@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { EyeOff, Loader, Pen, Pin, Sparkles, Undo2, VenetianMask } from 'lucide-react'
 import { useImeGuard } from '../../hooks/useImeGuard'
 import useHeldWindow from '../../hooks/useHeldWindow'
@@ -372,10 +372,11 @@ export default function SessionTitleControl({
     // the same editing look (#10140).
     return (
       <>
-        <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div className={compact ? "@container flex min-w-0 flex-1 items-center gap-1" : "flex min-w-0 flex-1 items-center gap-1"}>
           {glyphs}
           <TitleEditor
             initial={title}
+            compact={!!compact}
             className={compact
               ? 'text-[13px] font-semibold text-text-strong font-body rounded-l-[2px] rounded-r-md border-accent px-[5px] py-px m-0 min-w-0 flex-1'
               : 'session-header-title text-sm font-semibold text-muted font-body rounded-l-[2px] rounded-r-md border-accent px-[5px] py-px m-0 min-w-0 flex-1 md:max-w-[50vw]'}
@@ -483,9 +484,11 @@ export default function SessionTitleControl({
  * from the title the editor opened on and dies with it, so no stale draft can
  * survive a close and commit against a title that changed in the meantime.
  */
-function TitleEditor({ initial, className, onCommit, onClose }: {
+function TitleEditor({ initial, className, compact, onCommit, onClose }: {
   initial: string
   className: string
+  /** The pane header's variant: decides when the key hint steps aside. */
+  compact: boolean
   onCommit: (draft: string) => void
   /** How the editor closed; the host decides where focus goes from each. */
   onClose: (reason: 'enter' | 'escape' | 'blur') => void
@@ -505,9 +508,27 @@ function TitleEditor({ initial, className, onCommit, onClose }: {
   // Enter-to-commit input: the guard owns both the composition latch and the
   // keypress, so the rename cannot fire on the Enter that commits an IME candidate.
   const ime = useImeGuard()
+  // The keys that end the edit, said once beside the box (#15808): a tester
+  // could not tell what typing would do or how to finish, and nothing on
+  // screen named Enter or Escape. It is the input's description too, so a
+  // screen reader hears it on open. Touch-only devices hide it: their
+  // keyboard has no Escape and its Enter is labelled by the platform. Where
+  // room runs out the hint steps aside so the box holding the title keeps
+  // it (the description stays: a hidden element still describes). A pane's
+  // editing row is `flex-1` and splits the pane's free space with the pane
+  // header's own `flex-1` spacer, so its width never comes from its content:
+  // it is the `@container`, and the hint hides while that share is under
+  // 420px (room for a typical title plus the longest translation). The
+  // main header sizes to its content, which an
+  // inline-size container would collapse to nothing, so there the hint shows
+  // only from `md` up; below it the narrow-window header takes over. Above
+  // either threshold it truncates and shrinks faster than the box.
+  const hintId = useId()
   return (
+    <>
     <Input
       className={className}
+      aria-describedby={hintId}
       size={Math.min(Math.max(draft.length + 2, 6), 80)}
       autoFocus
       maxLength={TITLE_MAX_LENGTH}
@@ -554,5 +575,9 @@ function TitleEditor({ initial, className, onCommit, onClose }: {
         if (e.key === 'Escape') { ime.reset(); cancelRef.current = true; onClose('escape') }
       }}
     />
+    <span id={hintId} className={`ml-1 min-w-0 shrink-[4] truncate text-[11px] leading-none text-muted ${compact ? '@max-[420px]:hidden' : 'hidden md:block'} [@media(hover:none)]:hidden`}>
+      {i18nT('pages.chatPage.rename_title_hint')}
+    </span>
+    </>
   )
 }

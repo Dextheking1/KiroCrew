@@ -135,16 +135,11 @@ slash command, and a real question card for the same session wins.
 No status-tile HUD is drawn above the composer, and no agent-published
 `task-dashboard` artifact is read by the panel or the all-session view.
 
-The whole Dynamic Dashboard surface is a developer Feature Preview
-(`PREVIEW_DASHBOARD`, `website/src/utils/previewFlags.ts`), default OFF and
-gating INGRESS only: with the flag off the + menu entry, a persisted Dashboard
-tab and the Sessions menu's All Dashboards item are withheld, while
-`/session-dashboards` stays routable and every API above is unchanged. The Crew
-chat's Dashboard tab is not withheld: it is the crewmate's own page, a standing
-tab whatever the flag. The **Automatic cards for all sessions** switch lives
-inside that preview's card in Settings > Developer > Feature Previews, shown
-whether the preview is on or off: it is a gateway-wide spend setting, and hiding
-it would leave cards running with no control on this device.
+The Dynamic Dashboard surface is on for every reader: the + menu entry, a
+persisted Dashboard tab, the Sessions menu's All Dashboards item and the Crew
+chat's Dashboard tab are offered with no switch. The **Automatic cards for all
+sessions** switch has its own card in Settings > Developer. It is a gateway-wide
+spend setting and starts off.
 
 The host independently projects live sessions, subagents, workflows and accepted
 conductor work. It never treats idle sessions as completed work, nor worker
@@ -1182,6 +1177,34 @@ What `None` does not rule out is a record whose own `meta.json` will not read.
 its `kind` is exactly what that file holds. A caller that must tell such a
 record apart needs the store to report it, which belongs to the change that has
 such a caller.
+
+**The binding must name something that can be served, and that is asked at the
+HTTP layer.** `dashboard_package.validate_bound_to` checks the SHAPE —
+`crewmate:<slug>` or `session:<slot key>` — and can check nothing else, because
+it runs inside `ArtifactStore`, a library the CLI and cron use with no roster
+loaded and no gateway running. So the eligibility question is asked in
+`dashboard.handlers.artifacts._binding_refusal`, on the one write path both
+doors reach: the browser's `PATCH /api/artifacts/{slug}` and MCP's
+`artifact_save` / `artifact_update` all arrive at `api_artifacts_create` /
+`api_artifact_update`. It asks the serve path's own questions —
+`_member_names_for_slug` for a crewmate (the helper `member_dashboard._resolve`
+uses) and `is_root_session` for a session (the test `api_session_dashboard`
+applies) — so a binding is accepted exactly when the serve path would serve it.
+A crewmate binding needs EXACTLY ONE matching member, the same count
+`member_dashboard._resolve` requires (`!= [member]`): slugification is lossy, so
+a roster holding both `Atlas` and `atlas` derives one slug from two names, and
+ambiguity refuses rather than picking one of them.
+
+It is asked ONLY when the write CHANGES the binding, and that is the whole rule
+for a target that dies later. A session closes or a crewmate is renamed, and the
+package left behind stays as servable as it was: the serve-time refusals
+(`member_not_found`, `dashboard_slug_ambiguous`, `not_root_session`) remain the
+durable gate, because the fact expires and a stored record cannot be re-asked. A
+write-time check only catches the author while the binding is still a typo rather
+than history, so a record written before the check can still be re-themed,
+re-versioned and REBOUND. A revert is exempt for the same reason: it submits a
+past version's whole package and `revert_package` discards the binding in it, so
+the submitted value is one the store was never going to store.
 
 The kind is in `ALLOWED_KINDS` and deliberately NOT in
 `USER_SELECTABLE_KINDS`, and [Kind inference](#kind-inference) never returns it:

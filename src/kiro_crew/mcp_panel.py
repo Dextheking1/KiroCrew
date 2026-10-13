@@ -53,16 +53,6 @@ logger = logging.getLogger(__name__)
 SERVER_NAME = "kirocrew-panel"
 SERVER_VERSION = "1.0.0"
 
-#: Who can see the crewmate's page. The Dashboard tab draws it only for a reader who
-#: turned the 'Dynamic Dashboard' Feature Preview on; with it off, the default, the tab draws
-#: the panel_publish record. A reply that touches the page carries this sentence so an
-#: agent does not tell a person to look at a page their tab does not show.
-DASHBOARD_PREVIEW_NOTE = (
-    "Only readers with the 'Dynamic Dashboard' Feature Preview on (Settings → "
-    "Developer → Feature Previews) see this page; with it off the tab shows "
-    "panel_publish."
-)
-
 
 def _tool_definitions() -> list[dict[str, Any]]:
     """The tool surface: publish a panel, and discover what can render it."""
@@ -70,12 +60,10 @@ def _tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "panel_publish",
             "description": (
-                "Publish what the human watching you should see into YOUR "
-                "crew's webview, stored for readers of GET /panel. With the "
-                "'Dynamic Dashboard' Feature Preview off (the default) the Dashboard "
-                "tab shows this record; the dynamic dashboard (dashboard_apply, "
-                "dashboard_write) shows only for readers who turned the "
-                "preview on. Send "
+                "Publish what the human watching you should see for YOUR "
+                "crew, stored for readers of GET /panel. The Dashboard tab "
+                "shows it only if its page binds the published board; "
+                "dashboard_fields says whether yours does. Send "
                 "DATA, not layout: you "
                 "pass a JSON object and name a template that renders it, so "
                 "the panel keeps a stable shape across cycles and costs you a "
@@ -402,9 +390,11 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
         template = published.get("template") or "default"
         fields = len(data)
         return (
-            f"Published to your crew's webview using the `{template}` template "
+            f"Published using the `{template}` template "
             f"({fields} top-level field{'' if fields == 1 else 's'}). "
-            "It replaced the previous panel."
+            "It replaced the previous panel. The Dashboard tab shows it only "
+            "if its page binds the published board; dashboard_fields says "
+            "whether yours does."
         )
 
     if name == "dashboard_fields":
@@ -452,7 +442,6 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
             f"Wrote `{written.get('field', field)}` "
             f"({written.get('type', 'value')}) to your dashboard."
             + (" It corrected an earlier refused write." if d.get("corrected") else "")
-            + f"\n{DASHBOARD_PREVIEW_NOTE}"
         )
 
     if name == "dashboard_templates":
@@ -501,7 +490,7 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
             return redact(f"Error: {api_err}")
         return redact(
             f"Your crewmate's page is now version {d.get('instance_version')}, "
-            f"from template `{d.get('template_id')}`.\n{DASHBOARD_PREVIEW_NOTE}"
+            f"from template `{d.get('template_id')}`." + _guide_tail(d)
         )
 
     if name == "dashboard_rollback":
@@ -523,10 +512,20 @@ def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
         return redact(
             f"Restored version {d.get('restored_from')} as version "
             f"{d.get('instance_version')} -- a rollback moves forward, so the page you "
-            "were on is still there to go back to."
+            "were on is still there to go back to." + _guide_tail(d)
         )
 
     return f"Error: unknown tool '{name}'"
+
+
+def _guide_tail(d: dict[str, Any]) -> str:
+    """The new page's ``[DASHBOARD]`` block and upkeep pointer, after a blank line.
+
+    The prompt carries them only from the next session start or compaction, so the
+    reply that changed the page hands over the new ones now.
+    """
+    block = d.get("dashboard")
+    return f"\n\n{block}" if isinstance(block, str) and block else ""
 
 
 def _render_templates(payload: dict[str, Any]) -> str:
@@ -703,8 +702,8 @@ def _render_preview(preview: dict[str, Any]) -> str:
     """
     fields = preview.get("fields")
     lines = [
-        f"Staged for a look -- NOTHING has changed yet. Show the person this link: "
-        f"{preview.get('preview_url')}",
+        f"Staged for a look -- NOTHING has changed yet. Give the person this link, "
+        f"as written: [Open the dashboard preview]({preview.get('preview_url')})",
         "",
     ]
     lines.append(
@@ -744,6 +743,9 @@ def _render_fields(payload: dict[str, Any]) -> str:
             f"{template.get('version')}, your copy at version "
             f"{payload.get('instance_version')}."
         )
+        note = payload.get("upkeep_note")
+        if isinstance(note, str) and note:
+            lines.append(note)
         rows = payload.get("fields")
         if isinstance(rows, list) and rows:
             lines.append("")
@@ -753,6 +755,19 @@ def _render_fields(payload: dict[str, Any]) -> str:
                     continue
                 if row.get("source") == "agentic":
                     lines.append(f"  {row.get('field')} ({row.get('type')}) -- YOURS to write")
+                    upkeep = row.get("upkeep")
+                    if isinstance(upkeep, dict):
+                        # What it means, when to write it, how -- and the helper that
+                        # fetches the data when the crew log does not hold it.
+                        lines.append(f"    means: {upkeep.get('means')}")
+                        lines.append(f"    when: {upkeep.get('when')}")
+                        lines.append(f"    how: {upkeep.get('how')}")
+                        if upkeep.get("helper"):
+                            lines.append(
+                                f"    helper: python3 {upkeep['helper']} --help (prints the "
+                                "dashboard_write payload; if you have no shell, write the "
+                                "value you can read instead)"
+                            )
                     schema = row.get("schema")
                     if isinstance(schema, dict) and set(schema) != {"type"}:
                         # The nested shape whole: the write is refused for any key
@@ -810,8 +825,6 @@ def _render_fields(payload: dict[str, Any]) -> str:
         lines.append(
             "Versions dashboard_rollback can still reach: " + ", ".join(str(v) for v in retained)
         )
-    lines.append("")
-    lines.append(DASHBOARD_PREVIEW_NOTE)
     budget = payload.get("retry_budget")
     if budget:
         lines.append("")

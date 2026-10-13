@@ -535,11 +535,46 @@ class TestWarmPool:
     """Tests for warm session pool and background session."""
 
     @pytest.mark.asyncio
-    async def test_start_pool_creates_background(self, cfg):
-        """start_pool() creates background session."""
+    async def test_start_pool_defers_background_on_a_runtime_backend(self, cfg):
+        """Boot spawns no idle background agent on the default backend; first use does."""
+        mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
+        assert mgr._bg_backend_supports_runtime()
+        await mgr.start_pool()
+        assert BACKGROUND_KEY not in mgr._sessions
+
+        await mgr.get_or_create(BACKGROUND_KEY)
+        assert BACKGROUND_KEY in mgr._sessions
+        await mgr.close_all()
+
+    @pytest.mark.asyncio
+    async def test_deferred_background_first_use_with_the_background_agent(self, cfg, monkeypatch):
+        """Consolidation names the background agent; it must still go through
+        ``_ensure_background`` rather than the generic cold start."""
+        from kiro_crew.session import BACKGROUND_AGENT
+
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        assert BACKGROUND_KEY not in mgr._sessions
 
+        calls: list[object] = []
+        real_ensure = mgr._ensure_background
+
+        async def _spy(**kwargs):
+            calls.append(kwargs)
+            await real_ensure(**kwargs)
+
+        monkeypatch.setattr(mgr, "_ensure_background", _spy)
+        await mgr.get_or_create(BACKGROUND_KEY, agent=BACKGROUND_AGENT)
+        assert calls, "first use with the background agent skipped _ensure_background"
+        assert BACKGROUND_KEY in mgr._sessions
+        await mgr.close_all()
+
+    @pytest.mark.asyncio
+    async def test_start_pool_keeps_the_boot_start_without_a_shared_runtime(self, cfg, monkeypatch):
+        """Backends that route every background call through ``_bg`` start it at boot."""
+        mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
+        monkeypatch.setattr(mgr, "_bg_backend_supports_runtime", lambda: False)
+        await mgr.start_pool()
         assert BACKGROUND_KEY in mgr._sessions
         await mgr.close_all()
 
@@ -622,6 +657,7 @@ class TestWarmPool:
 
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         mgr._sessions[BACKGROUND_KEY].last_used = time.monotonic() - 9999
         await mgr._expire_idle(1)
@@ -636,6 +672,7 @@ class TestWarmPool:
 
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         key = "channel:abc123:agent1"
         mgr._sessions[key] = mgr._sessions[BACKGROUND_KEY].__class__.__new__(
@@ -665,13 +702,16 @@ class TestWarmPool:
         assert mgr._session_map._flush_task is None
 
     @pytest.mark.asyncio
-    async def test_start_pool_idempotent(self, cfg):
+    async def test_start_pool_idempotent(self, cfg, monkeypatch):
         """Calling start_pool() twice is a no-op."""
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
+        # A backend without a shared runtime, so the boot start is observable.
+        monkeypatch.setattr(mgr, "_bg_backend_supports_runtime", lambda: False)
         await mgr.start_pool()
+        first = mgr._sessions[BACKGROUND_KEY]
 
         await mgr.start_pool()  # should be no-op
-        assert BACKGROUND_KEY in mgr._sessions
+        assert mgr._sessions[BACKGROUND_KEY] is first
         await mgr.close_all()
 
 
@@ -754,6 +794,7 @@ class TestRecycleBackground:
         """Background session is recycled when context >= 70%."""
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         old_provider = mgr._sessions[BACKGROUND_KEY].provider
         # Simulate high context
@@ -774,6 +815,7 @@ class TestRecycleBackground:
         """Background session is recycled after 40 prompts with no metadata."""
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         old_provider = mgr._sessions[BACKGROUND_KEY].provider
         old_provider.context_usage_pct = lambda: 0.0  # no metadata
@@ -791,6 +833,7 @@ class TestRecycleBackground:
         """Background session is NOT recycled when context is low."""
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         old_provider = mgr._sessions[BACKGROUND_KEY].provider
         old_provider.context_usage_pct = lambda: 30.0
@@ -820,6 +863,7 @@ class TestRecycleBackground:
         """
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         provider = mgr._sessions[BACKGROUND_KEY].provider
         provider.context_usage_pct = lambda: 0.0  # backend reports no metadata
@@ -850,6 +894,7 @@ class TestRecycleBackground:
         """
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         provider = mgr._sessions[BACKGROUND_KEY].provider
         provider.context_usage_pct = lambda: 0.0
@@ -892,6 +937,7 @@ class TestRecycleBackground:
         """
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         sess = mgr._sessions[BACKGROUND_KEY]
         old_provider = sess.provider
@@ -953,6 +999,7 @@ class TestRecycleBackground:
         provider rather than to the torn-down one."""
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         sess = mgr._sessions[BACKGROUND_KEY]
         old_provider = sess.provider
@@ -988,6 +1035,7 @@ class TestRecycleBackground:
 
         mgr = SessionManager(cfg, provider_factory=factory)
         await mgr.start_pool()
+        await mgr._ensure_background()
 
         sess = mgr._sessions[BACKGROUND_KEY]
         old_provider = sess.provider
@@ -4524,10 +4572,12 @@ class TestStartPoolNonBlocking:
     """Tests for start_pool non-blocking path."""
 
     @pytest.mark.asyncio
-    async def test_start_pool_non_blocking(self, cfg):
+    async def test_start_pool_non_blocking(self, cfg, monkeypatch):
         cfg.session.pool_size = 1
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         mgr._pool_size = 1
+        # A backend without a shared runtime, so the boot start is observable.
+        monkeypatch.setattr(mgr, "_bg_backend_supports_runtime", lambda: False)
         await mgr.start_pool(blocking=False)
         # Let background tasks run
         await asyncio.sleep(0.1)
@@ -7021,8 +7071,17 @@ class TestParentEndCancelsItsChildren:
         store_read_raises: bool = False,
         on_store_probe=None,
         fenced_children: dict[str, bool] | None = None,
+        pending_work: dict[str, bool] | None = None,
+        unfinished_reports: dict[str, bool] | None = None,
     ):
         """A handler shaped like ``SubagentManager``'s teardown halves.
+
+        ``pending_work`` drives both halves of the manager's pending-work signal
+        (``has_pending_work_for_async`` and ``has_in_memory_pending_work_for``):
+        work the live/queued probe cannot see, such as a finished child whose
+        terminal report is not yet registered. ``unfinished_reports`` drives
+        ``has_unfinished_report_for``: a registered report still delivering after
+        its run's task ended. Default: none.
 
         Records the keys it was asked to snapshot and the id tuples it was asked
         to cancel, so a test can tell "asked about the right parent" apart from
@@ -7046,8 +7105,19 @@ class TestParentEndCancelsItsChildren:
         owned = children if children is not None else {}
         owned_store = store_children if store_children is not None else {}
         owned_fenced = fenced_children if fenced_children is not None else {}
+        owed = pending_work if pending_work is not None else {}
+        reporting = unfinished_reports if unfinished_reports is not None else {}
 
         class _Handler:
+            def has_in_memory_pending_work_for(self, parent_session_key, *, exclude_id=""):
+                return bool(owed.get(parent_session_key, False))
+
+            async def has_pending_work_for_async(self, parent_session_key: str) -> bool:
+                return bool(owed.get(parent_session_key, False))
+
+            def has_unfinished_report_for(self, parent_session_key: str) -> bool:
+                return bool(reporting.get(parent_session_key, False))
+
             def snapshot_teardown_children(self, parent_session_key: str) -> tuple[str, ...]:
                 snapshotted.append(parent_session_key)
                 return owned.get(parent_session_key, ("run-1",))
@@ -7249,21 +7319,114 @@ class TestParentEndCancelsItsChildren:
         assert seen == [("run-1",)]
         await mgr.close_all()
 
+    @staticmethod
+    async def _armed_unclaimed(mgr, key: str) -> None:
+        """Open *key* as a removable speculative session.
+
+        Removable only while its first turn is armed and unclaimed: the arm is a
+        non-sentinel ``first_turn``, and unclaimed means nothing holds the
+        session's semaphore.
+        """
+        await mgr.get_or_create(key)
+        mgr.release(key)
+        mgr._sessions[key].first_turn = object()
+
     @pytest.mark.asyncio
-    async def test_remove_if_unclaimed_cancels_children(self, cfg):
+    async def test_remove_if_unclaimed_keeps_a_parent_with_a_live_child(self, cfg):
+        """An idle prefetch parent whose child still runs is not reclaimed.
+
+        The free semaphore proves only that the parent's own turn ended; the
+        child runs on the parent's runtime, so a reclaim here cancels it.
+        """
+        key = "dashboard:chat-9"
         mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
         _snapshotted, seen, cb = self._recorder()
         mgr.set_child_teardown_handler(cb)
-        await mgr.get_or_create("dashboard:chat-9")
-        # A speculative session is removable only while its first turn is armed
-        # and unclaimed: the arm is a non-sentinel ``first_turn``, and unclaimed
-        # means nothing holds the session's semaphore.
-        mgr.release("dashboard:chat-9")
-        mgr._sessions["dashboard:chat-9"].first_turn = object()
+        await self._armed_unclaimed(mgr, key)
 
-        assert await mgr.remove_if_unclaimed("dashboard:chat-9") is True
+        assert await mgr.remove_if_unclaimed(key) is False
 
-        assert seen == [("run-1",)]
+        assert mgr.has_session(key)
+        assert seen == []
+        assert cb.fence_released == [key]  # type: ignore[attr-defined]
+        await mgr.close_all()
+
+    @pytest.mark.parametrize(
+        "owes",
+        [
+            "pending_work",
+            "unfinished_reports",
+            "store_children",
+            "fenced_children",
+            "store_read_raises",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_remove_if_unclaimed_keeps_a_parent_that_owes_work(self, cfg, owes):
+        """Work the live-child probe cannot see still keeps the parent.
+
+        ``pending_work``: a finished child whose report is not registered yet.
+        ``unfinished_reports``: a registered report still delivering after its
+        run's task ended (a reaped run's report waits across the reap's awaits).
+        ``store_children``: a row only the task store holds. ``fenced_children``:
+        a child admitted while the read ran. ``store_read_raises``: an unreadable
+        store is read as attached, never as childless.
+        """
+        key = "dashboard:chat-9"
+        kwargs: dict = {
+            "pending_work": {key: True},
+            "unfinished_reports": {key: True},
+            "store_children": {key: True},
+            "fenced_children": {key: True},
+            "store_read_raises": True,
+        }
+        mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
+        _snapshotted, seen, cb = self._recorder({key: ()}, **{owes: kwargs[owes]})
+        mgr.set_child_teardown_handler(cb)
+        await self._armed_unclaimed(mgr, key)
+
+        assert await mgr.remove_if_unclaimed(key) is False
+
+        assert mgr.has_session(key)
+        assert seen == []
+        assert cb.fence_released == [key]  # type: ignore[attr-defined]
+        await mgr.close_all()
+
+    @pytest.mark.asyncio
+    async def test_remove_if_unclaimed_keeps_a_parent_that_gains_work_during_the_read(self, cfg):
+        """Work that appears while the off-loop read is suspended keeps the parent."""
+        key = "dashboard:chat-9"
+        owed: dict[str, bool] = {}
+        mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
+        _snapshotted, seen, cb = self._recorder(
+            {key: ()},
+            pending_work=owed,
+            on_store_probe=lambda k: owed.__setitem__(k, True),
+        )
+        mgr.set_child_teardown_handler(cb)
+        await self._armed_unclaimed(mgr, key)
+
+        assert await mgr.remove_if_unclaimed(key) is False
+
+        assert mgr.has_session(key)
+        assert seen == []
+        await mgr.close_all()
+
+    @pytest.mark.asyncio
+    async def test_remove_if_unclaimed_reclaims_a_parent_that_owes_nothing(self, cfg):
+        key = "dashboard:chat-9"
+        mgr = SessionManager(cfg, provider_factory=_mock_provider_factory())
+        _snapshotted, seen, cb = self._recorder({key: ()})
+        mgr.set_child_teardown_handler(cb)
+        await self._armed_unclaimed(mgr, key)
+
+        assert await mgr.remove_if_unclaimed(key) is True
+
+        assert not mgr.has_session(key)
+        # The promoted fence is the committed one: only the selection half ran,
+        # and no tentative fence is left to release.
+        assert cb.fence_opened == [key]  # type: ignore[attr-defined]
+        assert cb.fence_released == []  # type: ignore[attr-defined]
         await mgr.close_all()
 
     @pytest.mark.asyncio
@@ -8805,6 +8968,9 @@ class TestParentEndCancelsItsChildren:
             # ``first_turn``, and nothing holding the semaphore.
             mgr.release("dashboard:chat-9")
             mgr._sessions["dashboard:chat-9"].first_turn = object()
+            # The reclaim keeps a parent whose child is live, so the probe answers
+            # "nothing owed" while the snapshot still names the run to cancel.
+            handler.has_live_or_queued_children = lambda _key: False  # type: ignore[method-assign]
 
         if verb == "retire_kiro_identity_sessions":
             # The sweep acts only on an idle (released) session whose provider uses the

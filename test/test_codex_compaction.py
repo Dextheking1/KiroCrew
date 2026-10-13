@@ -65,6 +65,7 @@ from kiro_crew.acp.types import (
 from kiro_crew.acp_backends import (
     ACP_BACKEND_CLAUDE,
     ACP_BACKEND_CODEX,
+    ACP_BACKEND_DEEPSEEK,
     ACP_BACKEND_GOOSE,
     ACP_BACKEND_KAS,
     ACP_BACKEND_KIRO,
@@ -178,10 +179,17 @@ class TestMembership:
                 ACP_BACKEND_OPENCODE,
                 ACP_BACKEND_GOOSE,
                 ACP_BACKEND_KAS,
+                ACP_BACKEND_PI,
             }
         )
         assert ACP_BACKENDS_INLINE_COMPACTION == frozenset(
-            {ACP_BACKEND_CLAUDE, ACP_BACKEND_CODEX, ACP_BACKEND_OPENCODE, ACP_BACKEND_GOOSE}
+            {
+                ACP_BACKEND_CLAUDE,
+                ACP_BACKEND_CODEX,
+                ACP_BACKEND_OPENCODE,
+                ACP_BACKEND_GOOSE,
+                ACP_BACKEND_PI,
+            }
         )
 
 
@@ -388,8 +396,8 @@ class TestTheManualCommandIsOffered:
 
     def test_a_non_member_still_refuses(self) -> None:
         """The gate is not disabled, only widened."""
-        provider = AcpProvider(acp_backend=ACP_BACKEND_PI)
-        assert compact_unsupported_backend(provider) == ACP_BACKEND_PI
+        provider = AcpProvider(acp_backend=ACP_BACKEND_DEEPSEEK)
+        assert compact_unsupported_backend(provider) == ACP_BACKEND_DEEPSEEK
 
 
 class TestCrewsOwnThresholdCompactionRuns:
@@ -401,8 +409,8 @@ class TestCrewsOwnThresholdCompactionRuns:
         assert _compact_unsupported_backend(provider) is None
 
     def test_the_gate_still_declines_a_non_member(self) -> None:
-        provider = AcpProvider(acp_backend=ACP_BACKEND_PI)
-        assert _compact_unsupported_backend(provider) == ACP_BACKEND_PI
+        provider = AcpProvider(acp_backend=ACP_BACKEND_DEEPSEEK)
+        assert _compact_unsupported_backend(provider) == ACP_BACKEND_DEEPSEEK
 
 
 # --------------------------------------------------------------------------- #

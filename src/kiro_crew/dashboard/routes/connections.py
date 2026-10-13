@@ -106,6 +106,7 @@ def register(app: web.Application) -> None:
     app.router.add_get(
         "/api/instances/search-sessions", handlers_instances.api_instances_search_sessions
     )
+    app.router.add_get("/api/instances/versions", handlers_instances.api_instances_versions)
     app.router.add_post("/api/instances", handlers_instances.api_instances_add)
     app.router.add_patch("/api/instances/{id}", handlers_instances.api_instances_update)
     app.router.add_delete("/api/instances/{id}", handlers_instances.api_instances_remove)
@@ -125,6 +126,14 @@ def register(app: web.Application) -> None:
         "/api/instances/{id}/disconnect", handlers_instances.api_instances_disconnect
     )
     app.router.add_post("/api/instances/{id}/restart", handlers_instances.api_instances_restart)
+    # Explicit "Update remote": runs the crew's own `kirocrew update`, then a
+    # restart, as a background job polled on the same path.
+    app.router.add_post(
+        "/api/instances/{id}/update", handlers_instances.api_instances_update_remote
+    )
+    app.router.add_get(
+        "/api/instances/{id}/update", handlers_instances.api_instances_update_remote_status
+    )
     app.router.add_post(
         "/api/instances/{id}/send-session", handlers_instances.api_instances_send_session
     )
@@ -135,7 +144,7 @@ def register(app: web.Application) -> None:
     app.router.add_get(
         "/api/instances/{id}/capabilities", handlers_instances.api_instances_capabilities
     )
-    # The peer's YOLO flag and denied approval modes, for the crew window's
+    # The peer's YOLO flag only, for the crew window's
     # approval-mode picker. Its own route so the window's poll reads one peer
     # endpoint, not the whole roster. Also BEFORE the catch-all.
     app.router.add_get(

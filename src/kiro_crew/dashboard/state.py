@@ -143,6 +143,7 @@ if TYPE_CHECKING:
     from kiro_crew.power import SleepInhibitor  # noqa: F401
     from kiro_crew.slack.outbound import PostedOptions  # noqa: F401
     from kiro_crew.subagent import SubagentDelivery
+    from kiro_crew.trust_patterns import GrantDeadline  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -1807,9 +1808,10 @@ _QUESTION_RETIRING_ROLES = frozenset({"user"})
 #: requested while the answer is still streaming (``to_dict``'s ``last_turn_ts``).
 _PROMPT_ROLES = frozenset({"user", "inject"})
 _MAX_SOURCE_LINKS_PER_SLOT = 64
-# How many source links each slot payload actually serializes (the sidebar
-# renders at most this many chips). Shared with the periodic check-status
-# refresh so the driver and the serializer cannot drift.
+# How many source links each slot payload actually serializes, ACROSS kinds:
+# the sidebar renders at most this many chips per session card, pull requests
+# and issues together. Shared with the periodic check-status refresh so the
+# driver and the serializer cannot drift.
 _SERIALIZED_SOURCE_LINKS_PER_SLOT = 3
 # Hard ceiling on a slot's persisted dismissed-source-link set. Additions are
 # gated on an identity being one of the transcript's DISTINCT derived links, so
@@ -1824,18 +1826,21 @@ _MAX_DISMISSED_SOURCE_LINKS = 512
 
 
 def _budgeted_source_links(links: list[dict]) -> list[dict]:
-    """Apply the sidebar chip budget PER KIND, changes first.
+    """Apply the sidebar chip budget: ``_SERIALIZED_SOURCE_LINKS_PER_SLOT`` chips
+    in total, pull requests first.
 
-    Pull requests and issues each get their own
-    ``_SERIALIZED_SOURCE_LINKS_PER_SLOT`` allowance. A single shared budget
-    sliced before the kind filter would let three mentioned issues crowd every
-    PR chip out of the sidebar -- and, because the check-status refresh reads
-    the same slice, would also stop scheduling that PR's CI status updates.
-    Budgeting per kind keeps pre-existing pull-request behaviour unchanged and
-    makes issues purely additive.
+    One shared allowance caps what a session card shows at three chips,
+    however many links the session mentions; the rest sit behind the "+N"
+    overflow chip. The slice is taken AFTER grouping changes
+    ahead of issues, so an issue can only ever occupy a slot no pull request
+    wanted: a session with three pull requests and a dozen issues shows three
+    PR chips and folds every issue into "+N". That ordering is what keeps the
+    check-status refresh honest too -- it reads this same slice, so every PR
+    chip the card renders is also the one whose CI status gets scheduled, and a
+    mentioned issue can never push a PR out of either.
     """
     changes, issues = _source_links_by_kind(links)
-    return changes[:_SERIALIZED_SOURCE_LINKS_PER_SLOT] + issues[:_SERIALIZED_SOURCE_LINKS_PER_SLOT]
+    return (changes + issues)[:_SERIALIZED_SOURCE_LINKS_PER_SLOT]
 
 
 def _source_links_by_kind(links: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -2898,6 +2903,7 @@ class _ChatSlot:
         "_task",
         "_turn_admission_reserved",
         "_turn_generation",
+        "_wake_starting_task",
         "_chunk_seq",
         "event",
         "_pending",
@@ -2916,6 +2922,7 @@ class _ChatSlot:
         "_trust_reads",
         "_member_approval_seeded",
         "_trusted_patterns",
+        "_trusted_pattern_deadlines",
         "_titled",
         "_title_origin",
         "_title_epoch",
@@ -3011,6 +3018,7 @@ class _ChatSlot:
         "_fallback_primary_model",
         "_fallback_slot_model",
         "_model_pick_gen",
+        "_model_runtime_pick_gen",
         "_fallback_pick_gen",
         "_fallback_client_pick_epoch",
         "_refusal_fallback_primary",
@@ -3345,6 +3353,12 @@ class _ChatSlot:
         # None after teardown, so consumers that span awaits cannot distinguish
         # "stayed idle" from "ran and finished" by comparing task references.
         self._turn_generation: int = 0
+        # The turn a structured monitor wake started, until the runner accepts it
+        # and the wake's ``nudge`` row is written. Until then the transcript cannot
+        # say who opened the running turn, so the projection's ``wake_starting``
+        # says it. A refused wake leaves its finished task here, which matches no
+        # later ``task``.
+        self._wake_starting_task: asyncio.Task[Any] | None = None
         # Wire seq of the newest chat_chunk this slot has emitted, across turns:
         # the counter never restarts, so a client's replay floor (the seq its
         # transcript already holds) orders every later chunk above it without
@@ -3404,6 +3418,12 @@ class _ChatSlot:
         # A crewmate thread took its profile's approval mode (members handler).
         self._member_approval_seeded: bool = False
         self._trusted_patterns: set[str] = set()  # session-scoped fnmatch globs
+        # Timed command-scoped grants, kept apart from ``_trusted_patterns`` so
+        # no other writer of that set can end or extend one. Each maps a pattern
+        # to its deadline and is pruned at the first decision after it passes.
+        # In memory only, so a restart drops timed grants along with every other
+        # grant on the slot.
+        self._trusted_pattern_deadlines: dict[str, GrantDeadline] = {}
         self._titled: bool = False  # True once a title has been assigned
         # Provenance of the current title: "auto" (LLM auto-titler or its
         # fallback) or "user" (manual rename). Governs the background title
@@ -3827,6 +3847,12 @@ class _ChatSlot:
         # unpinned slot (heal and restore). _fallback_pick_gen is the value
         # snapshotted when the fallback activated.
         self._model_pick_gen: int = 0
+        # The pick generation a RUNTIME write produced (the provider-switch clear),
+        # or None. That write bumps _model_pick_gen like a pick does, for the
+        # fallback probe's sake, but nobody chose it: a reader that treats a moved
+        # generation as a person's pick (the Issue Radar crew's triage model
+        # switch) skips a generation that equals this one.
+        self._model_runtime_pick_gen: int | None = None
         self._fallback_pick_gen: int = 0
         # The shared client's explicit-pick epoch at fallback activation. The
         # slot-local _fallback_pick_gen is invisible to a pick made through a
@@ -5870,9 +5896,9 @@ class _ChatSlot:
     ) -> dict:
         """Every source link this slot carries — the unbudgeted read.
 
-        ``to_dict`` serializes at most ``_SERIALIZED_SOURCE_LINKS_PER_SLOT`` per
-        kind, so the sidebar's "+N" overflow chip has nothing on the client to
-        expand into. This is what that expand fetches.
+        ``to_dict`` serializes at most ``_SERIALIZED_SOURCE_LINKS_PER_SLOT``
+        links in total, so the sidebar's "+N" overflow chip has nothing on the
+        client to expand into. This is what that expand fetches.
 
         Ordering repeats the budgeted slice's grouping (changes, then issues) so
         the chips already on screen keep their positions and the revealed ones
@@ -7879,12 +7905,14 @@ class DashboardState:
         actions: list[dict[str, Any]] | None = None,
         channel: str | None = None,
         member: dict[str, str] | None = None,
+        publisher_session: str | None = None,
     ) -> None:
         """Validate and deliver a legacy notification without raising.
 
         ``channel`` overrides the system channel ``kind`` maps to (see
         :func:`payload_from_legacy`); ``kind`` still reaches the frontend.
         ``member`` attributes the note to the crewmate that published it.
+        ``publisher_session`` is the attested session publishing it; its mute applies.
         """
         _notifications_for(self).notify(
             self,
@@ -7896,6 +7924,7 @@ class DashboardState:
             actions=actions,
             channel=channel,
             member=member,
+            publisher_session=publisher_session,
         )
 
     def _deliver_note(self, note: dict[str, Any]) -> None:

@@ -125,8 +125,9 @@ def test_running_and_turn_running_slot_readers_are_enumerated() -> None:
         **{
             site: reservation
             for site in {
-                # A crewmate's first greeting must not land on a slot a send has
-                # already reserved, so it reads the reservation, not the turn.
+                # A crewmate's first greeting (Mate's, or a new crewmate's goal
+                # question) must not land on a slot a send has already reserved,
+                # so it reads the reservation, not the turn.
                 ("mate_welcome.py", "maybe_start_first_greeting"),
                 ("chat_folders.py", "api_chat_slot_mode"),
                 ("chat_handlers.py", "_switch_target_busy"),
@@ -134,11 +135,13 @@ def test_running_and_turn_running_slot_readers_are_enumerated() -> None:
                 ("handlers/members.py", "_turn_ends_within"),
                 # The agent route's transaction; the in-turn /agent command shares it.
                 ("chat_handlers.py", "switch_slot_agent"),
-                ("chat_api/slot_detail.py", "api_chat_slot_detail"),
                 ("chat_handlers.py", "api_chat_slot_interrupt"),
                 ("chat_handlers.py", "api_chat_slot_model"),
                 ("chat_handlers.py", "api_chat_slot_note"),
                 ("chat_handlers.py", "api_chat_slot_reasoning_effort"),
+                # Reload refuses a reserved slot or sibling alias through
+                # _switch_target_busy, as the session_reload verb does.
+                ("chat_handlers.py", "api_chat_slot_reload"),
                 ("chat_api/slot_lifecycle.py", "api_chat_slot_reset_conversation"),
                 ("chat_api/resume.py", "api_chat_slot_resume"),
                 ("chat_handlers.py", "api_chat_slot_workspace"),
@@ -200,6 +203,7 @@ def test_running_and_turn_running_slot_readers_are_enumerated() -> None:
         **{
             site: both
             for site in {
+                ("chat_api/slot_detail.py", "api_chat_slot_detail"),
                 ("chat_handlers.py", "api_chat"),
                 ("chat_regenerate.py", "_destructive_history_busy"),
                 ("chat_regenerate.py", "api_chat_slot_edit_resend"),

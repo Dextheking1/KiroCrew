@@ -98,17 +98,14 @@ because a worker that could fill in its own bar could point it at somebody
 else's already-green pull request.
 
 Limits: 32 open items per conductor (an item in a terminal state -- accepted,
-rejected, abandoned -- stays on the board, listed and readable, and does not count
-toward the open cap) and 256 items stored per conductor in total, open and closed
-together, which is also the crew log fold's per-board ceiling, so a board is
-always folded whole. The stored bound is measured against `created_total`, a
-monotonic counter in the conductor header of every item the board has created over
-its life: each create bumps it under the conductor lock, deleting or losing an item
-record does not reclaim capacity, and a create is refused rather than counted when
-the header cannot be read. A rebuild from the crew log sets the counter to the
-records the rebuilt board holds. Closed items stay on the board until that stored
-bound; a board at it refuses further creates (`item_store_full`) until the finished
-ledger is purged (see "Cleaning up finished ledgers"). A conductor may dispatch a
+rejected, abandoned -- does not count toward the open cap). There is no limit on
+how many items a board creates over its life. Every item stays on the board, listed
+and readable. The crew log's fold, which feeds a crew's status and the pipeline
+board, keeps open items and
+the 32 most recently closed items whole and only counts older closed ones, so it is
+bounded by what is open, not by history. Those counts (the conductor header's
+`created_total`, and "N of M items accepted" in a crew's status) still cover every
+item the board ever created. A conductor may dispatch a
 conductor only once — depth is capped at 2, so a second-level conductor's own
 children are workers. A worker holds one open item at a time.
 
@@ -227,16 +224,25 @@ or time budget they set. An item that fails acceptance three times is closed
 `rejected` and the rest keep going. A decision that needs a person parks only
 that item: the conductor asks about it and keeps patrolling the others.
 
-Spend is bounded in code, not only in the prompt. Each goal may create at most
-`item_cap` items, closed ones and every round's re-plans included. The default
-is 20; a `goal` write sets it (`item_cap`, 1 to 256). A `create` past it is
-refused `goal_item_cap_reached`, and the board writes nothing. That is a
-needs-human spend stop: the conductor pauses, asks the user, and raises
-`item_cap` if they agree. The loop is not stopped. Only a goal write with
-`new_goal=true` (a goal the user replaced) starts a new count; rewording the
-goal, moving the round or raising the cap keeps it. A board that never records
-a goal, such as a pipeline or security conductor's queue, has no goal cap. Two rounds in a row with nothing accepted also stop new dispatches
-until the user answers.
+Parallel work is bounded in code, not only in the prompt. Each goal may hold at
+most `concurrency_cap` items open at once. The default is 6; a `goal` write sets
+it (`concurrency_cap`, 1 to 32). A `create` past it is refused
+`goal_concurrency_cap_reached`, and the board writes nothing. That is not a
+stop: the next item that lands frees a seat, and the conductor asks the user
+only when it wants more running at once, raising `concurrency_cap` if they
+agree. Closed items never count toward it.
+
+The total is advisory. Each goal is expected to create at most `item_cap` items,
+closed ones and every round's re-plans included; the default is 20 and a `goal`
+write sets it (`item_cap`, 1 to 256). Nothing is refused past it. The read
+returns `goal_items_used` and `cap_exceeded` on the `conductor` block, compact
+reads included; the conductor puts `items used: N of <item_cap>` in every round
+report and, when `cap_exceeded` is true, tells the user the goal has spent past
+its line. Only a goal write with `new_goal=true` (a goal the user replaced)
+starts a new count; rewording the goal, moving the round or changing a cap
+keeps it. A board that never records a goal, such as a pipeline or security
+conductor's queue, has neither goal cap. Two rounds in a row with nothing
+accepted stop new dispatches until the user answers.
 
 ## Not the same as the session ledger, or subagents
 

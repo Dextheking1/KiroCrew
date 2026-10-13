@@ -59,6 +59,7 @@ from kiro_crew.execution_context import read_session_execution
 from kiro_crew.executors import run_in_embed_pool
 
 if TYPE_CHECKING:
+    from kiro_crew.aws_project_profiles import ResolvedAwsProfile
     from kiro_crew.execution_context import ExecutionContext
     from kiro_crew.acp.runtime import AcpRuntime
     from kiro_crew.providers.base import LLMProvider
@@ -156,6 +157,7 @@ from kiro_crew.process_identity import (  # noqa: F401 - resolved by run.py/term
     kill_verified_process,
     process_handle_of,
     process_survived_async,
+    refresh_live_process_tree,
     spawn_in_flight,
     teardown_capture,
     with_kill_failure,
@@ -216,6 +218,7 @@ from kiro_crew.subagent_manager import (
     copy_component_docs,
 )
 from kiro_crew.subagent_manager.monitoring import (  # noqa: F401 - resolved by monitoring.py via bind_component_globals
+    orphan_carried_fields,
     orphan_resume_hint,
     tombstone_recovery_action,
 )
@@ -1080,12 +1083,24 @@ class SubagentDelivery:
     store owes its report (``TaskStore.owed_reports``) until it reaches the
     parent, and it has no run folder, so settling it clears that mark
     (``taskq_clear_owed_reports``) and writes no ``delivered`` tombstone.
+
+    *tombstone* is the record a restart orphan's notice owes: the fields the boot
+    reconciler would have written, outcome included. Settling writes it in place
+    of the ``delivered`` mark, so a cut-off or failed orphan is not relabelled
+    completed, and *elapsed* and *credits* go unused.
     """
 
     agent_id: str
     elapsed: float
     credits: float
     report_owed: bool = False
+    tombstone: dict[str, Any] | None = field(default=None, hash=False)
+
+
+#: What ``on_orphan_notify`` returns when it queued an orphan's notice for the
+#: parent agent AND took the tombstone that notice owes, which the drain of the
+#: notice writes. Any other truthy value means delivered with no debt taken.
+ORPHAN_NOTICE_OWED = "owed"
 
 
 @dataclass
@@ -2901,7 +2916,8 @@ class SubagentInfo:
     # digest; 0.0 once that hold has been flushed (or never held). Separate from
     # ``_digest_held`` on purpose: that flag is the restart-safety contract read
     # by the run loop, and must not be mutated by the hold-deadline sweep. This
-    # timestamp is the sweep's only input — see ``_sweep_digest_holds``.
+    # timestamp is the sweep's only input — see ``_sweep_digest_holds``. It is a
+    # ``time.monotonic()`` reading, compared with the reaper's monotonic ``now``.
     _digest_held_at: float = 0.0
     # True ONLY for the synthetic record that :meth:`force_digest_flush`
     # announces to release held results whose hold deadline expired. It is NOT a
@@ -3105,8 +3121,10 @@ class SubagentInfo:
     # from this one, or ``SUCCESSOR_PENDING`` while that start is in flight.
     # ``_continued_as``: the FIRST ``spawn_continue`` of this run that landed,
     # never overwritten. ``_continuation_starting``: a continuation start is in
-    # flight. A failed card stays failed for history, so these are what stop a
-    # retry from running its task beside another successor.
+    # flight, set and cleared with the conversation id it claims in
+    # ``SubagentManager._continuations_starting``; ``claim_retry`` reads it. A
+    # failed card stays failed for history, so these are what stop a retry from
+    # running its task beside another successor.
     _retried_as: str = ""
     _continued_as: str = ""
     _continuation_starting: bool = False
@@ -3741,7 +3759,7 @@ class SubagentManager:
         on_spawn_approval: SpawnApprovalCallback | None = None,
         is_yolo: Callable[[], bool] | None = None,
         on_event: SubagentEventCallback | None = None,
-        on_orphan_notify: Callable[..., Awaitable[bool]] | None = None,
+        on_orphan_notify: Callable[..., Awaitable[bool | str]] | None = None,
         on_orphan_dm: Callable[[str], Awaitable[bool]] | None = None,
         completion_keep: str = "head",
         completion_keep_chars: int = COMPLETION_KEEP_DEFAULT_CHARS,
@@ -3902,6 +3920,12 @@ class SubagentManager:
         # prunes completed runs out of `_agents` and an eviction must not silently
         # release the hold.
         self._abandoned_state_writers: dict[str, set[asyncio.Future[Any]]] = {}
+        # Conversation ids whose continuation start is in flight: the start claim for
+        # every continuation, held here and not on the opening run's registry record,
+        # because ``evict_completed_agents`` can drop that record (or a restart left
+        # none) while a start awaits. Taken by ``_claim_continuation`` and released
+        # by ``_settle_continuation``.
+        self._continuations_starting: set[str] = set()
         # state.json is the source of truth for retention: give the
         # SessionManager's in-memory continuable cache a disk fallback so a
         # cache miss (restart window) cannot demote a promoted conversation.
@@ -4069,7 +4093,9 @@ class SubagentManager:
         # fallback see "no pending members" while later submissions are still
         # in flight. Pruned by finalize_batch().
         self._batch_submitted: dict[str, list[int]] = {}
-        # Wave liveness: last submission-progress time.time() per batch_id.
+        # Wave liveness: last submission-progress time.monotonic() per batch_id,
+        # aged against the reaper's monotonic reading so a wall-clock step cannot
+        # move it.
         # Drives the reaper's stuck-wave backstop (a wave with lost
         # submissions and no progress is force-reconciled). Pruned by
         # finalize_batch alongside _batch_submitted.
@@ -4078,6 +4104,16 @@ class SubagentManager:
         # it, recorded by ``_fire_event`` and serialized on each slot as
         # ``subagents_queued`` (see ``subagent_manager.published_depth``).
         self._published_depths = PublishedQueueDepths()
+        # Done-but-unreported holds per wave: batch_id -> agent ids whose
+        # ``done`` has flipped but whose terminal report the completion
+        # consumer has not yet consumed. Held OUTSIDE the agent records
+        # because ``_agents`` membership is operator-mutable (DELETE
+        # /api/spawn pops done members) -- the wave-close fallback must not
+        # lose its hold to a concurrent clear. Armed by the
+        # report machinery at the done-flip, disarmed by the consumer when
+        # the contribution lands or structurally when a report ends without
+        # reaching the consumer. Pruned by finalize_batch.
+        self._reports_in_flight: dict[str, set[str]] = {}
         self._reaper_task: asyncio.Task | None = None  # type: ignore[type-arg]
         # Every ``_force_reap`` that runs OUTSIDE the reaper task -- a dashboard
         # Stop or a parent-end cancel, each awaited inside its
@@ -4539,9 +4575,15 @@ class SubagentManager:
         return await self._monitor._notify_orphan_impl(agent_id, state, has_result)
 
     async def _try_inject_orphan_notification(
-        self, parent_session: str, msg: str, meta: dict | None = None
-    ) -> bool:
-        return await self._monitor._try_inject_orphan_notification_impl(parent_session, msg, meta)
+        self,
+        parent_session: str,
+        msg: str,
+        meta: dict | None = None,
+        delivery: SubagentDelivery | None = None,
+    ) -> bool | str:
+        return await self._monitor._try_inject_orphan_notification_impl(
+            parent_session, msg, meta, delivery
+        )
 
     async def _send_orphan_slack_dm(self, msg: str) -> None:
         return await self._monitor._send_orphan_slack_dm_impl(msg)
@@ -4769,6 +4811,25 @@ class SubagentManager:
             settle_digest=settle_digest,
             teardown_done=teardown_done,
             gate=gate,
+        )
+
+    async def _report_terminal_guarded(
+        self,
+        info: SubagentInfo,
+        *,
+        source: str,
+        injection_timeout_reason: str,
+        mark_delivered_on_success: bool,
+        settle_digest: bool = False,
+        teardown_done: "asyncio.Event | None" = None,
+    ) -> bool:
+        return await self._terminal._report_terminal_guarded_impl(
+            info,
+            source=source,
+            injection_timeout_reason=injection_timeout_reason,
+            mark_delivered_on_success=mark_delivered_on_success,
+            settle_digest=settle_digest,
+            teardown_done=teardown_done,
         )
 
     async def _run_terminal_report(
@@ -5538,7 +5599,7 @@ class SubagentManager:
                 if batch_id and not kwargs.get("_from_queue") and not kwargs.get("_store_accepted"):
                     submitted = self._batch_submitted.setdefault(batch_id, [0, batch_total])
                     submitted[0] += 1
-                    self._batch_progress_ts[batch_id] = time.time()
+                    self._batch_progress_ts[batch_id] = time.monotonic()
                 return self._announce_rejection(
                     SubagentInfo(
                         id=kwargs.get("_preassigned_id") or self._mint_agent_id(),
@@ -5825,24 +5886,29 @@ class SubagentManager:
         A refusal when a retry already claimed the run (its task runs as that
         retry now), or while another continuation's start is still in flight
         (it is not yet visible to the conversation-busy lookup). Otherwise the
-        continuation claims the run before any await, so a retry or a second
-        continuation arriving while this start is in flight is refused.
+        continuation claims *conv_id* in ``_continuations_starting`` before any
+        await, so a retry or a second continuation arriving while this start is
+        in flight is refused. The claim is held by the manager, so it outlasts a
+        registry record that ``evict_completed_agents`` drops during the start,
+        and it covers a run with no record at all (evicted, or from before a
+        restart). A registered run's ``_continuation_starting`` flag is set with
+        it for ``claim_retry``. ``_settle_continuation`` ends both.
         """
         original = self._agents.get(conv_id)
-        if original is None:
-            return None, None
-        if original._retried_as:
+        if original is not None and original._retried_as:
             reason = (
                 f"run {conv_id} was retried as run {original._retried_as}, which "
                 "owns its task now; continue that run's conversation instead"
             )
-        elif original._continuation_starting:
+        elif conv_id in self._continuations_starting:
             reason = (
                 f"another continuation of run {conv_id} is starting — wait for its "
                 "completion event, or use spawn_steer once it is running"
             )
         else:
-            original._continuation_starting = True
+            self._continuations_starting.add(conv_id)
+            if original is not None:
+                original._continuation_starting = True
             return original, None
         refusal = SubagentInfo(
             id=self._mint_agent_id(),
@@ -5853,14 +5919,20 @@ class SubagentManager:
         )
         return original, refusal
 
-    @staticmethod
     def _settle_continuation(
-        original: SubagentInfo | None, result: SubagentInfo | None, *, raised: bool = False
+        self,
+        conv_id: str,
+        original: SubagentInfo | None,
+        result: SubagentInfo | None,
+        *,
+        raised: bool = False,
     ) -> None:
-        """End this start's in-flight claim. A start that landed records its id
-        only when no earlier continuation did; one that did not land leaves an
-        earlier successor in place. A start that RAISED may have accepted its
-        durable row first, so it counts as a continuation of unknown id."""
+        """End the in-flight claim a start took on *conv_id*. A start that landed
+        records its id only when no earlier continuation did; one that did not land
+        leaves an earlier successor in place. A start that RAISED may have accepted
+        its durable row first, so it counts as a continuation of unknown id.
+        Called once per granted claim, by its holder only."""
+        self._continuations_starting.discard(conv_id)
         if original is None:
             return
         original._continuation_starting = False
@@ -5887,6 +5959,8 @@ class SubagentManager:
         original, refusal = self._claim_continuation(conv_id, task, parent_session_key)
         if refusal is not None:
             return refusal
+        result: SubagentInfo | None = None
+        raised = True
         try:
             result = self._continuation.continue_conversation_impl(
                 conv_id,
@@ -5900,10 +5974,10 @@ class SubagentManager:
                 _memory_mode=_memory_mode,
                 _crew_log_asked=_crew_log_asked,
             )
-        except BaseException:
-            self._settle_continuation(original, None, raised=True)
-            raise
-        self._settle_continuation(original, result)
+            raised = False
+        finally:
+            # This call took the claim: every exit (a return, a raise, a cancel) ends it.
+            self._settle_continuation(conv_id, original, result, raised=raised)
         return result
 
     async def continue_conversation_async(
@@ -5922,6 +5996,8 @@ class SubagentManager:
         original, refusal = self._claim_continuation(conv_id, task, parent_session_key)
         if refusal is not None:
             return refusal
+        result: SubagentInfo | None = None
+        raised = True
         try:
             result = await self._continuation.continue_conversation_async_impl(
                 conv_id,
@@ -5935,10 +6011,10 @@ class SubagentManager:
                 _memory_mode,
                 _crew_log_asked,
             )
-        except BaseException:
-            self._settle_continuation(original, None, raised=True)
-            raise
-        self._settle_continuation(original, result)
+            raised = False
+        finally:
+            # This call took the claim: every exit (a return, a raise, a cancel) ends it.
+            self._settle_continuation(conv_id, original, result, raised=raised)
         return result
 
     def _continue_prelude(
@@ -6096,6 +6172,15 @@ class SubagentManager:
     def batch_members_pending(self, batch_id: str) -> bool:
         return self._waves.batch_members_pending_impl(batch_id)
 
+    def batch_reports_in_flight(self, batch_id: str) -> bool:
+        return self._waves.batch_reports_in_flight_impl(batch_id)
+
+    def arm_report_in_flight(self, info: SubagentInfo) -> None:
+        return self._waves.arm_report_in_flight_impl(info)
+
+    def consume_report_hold(self, batch_id: str, agent_id: str) -> None:
+        return self._waves.consume_report_hold_impl(batch_id, agent_id)
+
     async def batch_members_pending_async(self, batch_id: str) -> bool:
         return await self._waves.batch_members_pending_async_impl(batch_id)
 
@@ -6228,6 +6313,9 @@ class SubagentManager:
         return self._run_events.has_in_memory_pending_work_for_impl(
             parent_session_key, exclude_id=exclude_id
         )
+
+    def has_unfinished_report_for(self, parent_session_key: str) -> bool:
+        return self._run_events.has_unfinished_report_for_impl(parent_session_key)
 
     async def queued_count_or_none_async(self, parent_session_key: str) -> int | None:
         return await self._run_events.queued_count_or_none_async_impl(parent_session_key)
@@ -6400,8 +6488,16 @@ class SubagentManager:
     def _should_use_session_sharing(self, info: SubagentInfo) -> bool:
         return self._run_events._should_use_session_sharing_impl(info)
 
-    def _sharing_plan(self, info: SubagentInfo, *, cfg: Any = None) -> _SharingPlan:
-        return self._run_events._sharing_plan_impl(info, cfg=cfg)
+    def _sharing_plan(
+        self,
+        info: SubagentInfo,
+        *,
+        cfg: Any = None,
+        child_aws_profile: ResolvedAwsProfile | None = None,
+    ) -> _SharingPlan:
+        return self._run_events._sharing_plan_impl(
+            info, cfg=cfg, child_aws_profile=child_aws_profile
+        )
 
     async def _ensure_dedicated_start_priced(self, info: SubagentInfo) -> None:
         return await self._run_events._ensure_dedicated_start_priced_impl(info)

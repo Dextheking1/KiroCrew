@@ -1031,6 +1031,65 @@ def test_legitimate_titles_survive_the_new_checks(reply, expected):
     assert _validate_title_reply(reply) == expected
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # One-sentence refusals in shipped spaced languages, each closed by its
+        # script's terminator. None opens with an English opener and none
+        # passes the word ceiling.
+        "Не могу открыть эту ссылку.",
+        "No puedo acceder a ese enlace.",
+        "Lo siento, no puedo abrir el enlace externo.",
+        "Je ne peux pas accéder à ce lien.",
+        "Ich kann diesen Link nicht öffnen.",
+        "Não consigo acessar esse link.",
+        "Non riesco ad accedere a quel link.",
+        "मैं इस लिंक को नहीं खोल सकता।",
+        "আমি এই লিঙ্কটি খুলতে পারছি না।",
+        "لا يمكنني فتح هذا الرابط.",
+        # Unspaced scripts: a comma joins two clauses.
+        "申し訳ありませんが、リンクを開けません。",
+        "抱歉，我无法打开链接。",
+        # Two sentences split by a danda: the danda is followed by a space,
+        # like an ASCII period.
+        "मैं इस लिंक को नहीं खोल सकता। कृपया संदर्भ दें",
+        "আমি লিঙ্কটি খুলতে পারছি না। প্রসঙ্গ দিন",
+        # Quoted, the terminator still closes the sentence.
+        '"No puedo acceder a ese enlace."',
+    ],
+)
+def test_a_terminated_refusal_in_any_script_yields_no_title(reply):
+    """``_clean_title`` strips the final period, so the shape is read from the
+    reply line before that strip. Mutation: drop the ``ends_like_sentence``
+    call in ``_validate_title_reply`` -- red on every period-closed row."""
+    assert _validate_title_reply(reply) == ""
+
+
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        # Real short titles, as the prompt asks: no punctuation.
+        ("Plan de mise à niveau Node", "Plan de mise à niveau Node"),
+        ("Piano di aggiornamento Node", "Piano di aggiornamento Node"),
+        ("Обновление версии Node", "Обновление версии Node"),
+        ("إصلاح خطأ تسجيل الدخول", "إصلاح خطأ تسجيل الدخول"),
+        ("लॉगिन बग सुधार", "लॉगिन बग सुधार"),
+        ("লগইন বাগ সংশোধন", "লগইন বাগ সংশোধন"),
+        ("修复会话标题语言", "修复会话标题语言"),
+        ("チャットタイトルの言語設定", "チャットタイトルの言語設定"),
+        (_KO_REAL_TITLE, _KO_REAL_TITLE),
+        # A stray final terminator on a short name is still a name.
+        ("修复会话标题语言。", "修复会话标题语言"),
+        ("チャットタイトルの言語設定。", "チャットタイトルの言語設定"),
+        ("Fix login bug.", "Fix login bug"),
+        ("लॉगिन बग सुधार।", "लॉगिन बग सुधार।"),
+        ("إصلاح تسجيل الدخول.", "إصلاح تسجيل الدخول"),
+    ],
+)
+def test_short_titles_in_any_script_survive_the_sentence_shape(reply, expected):
+    assert _validate_title_reply(reply) == expected
+
+
 class _StubBgSessions:
     """Background sessions answering ``_PARTIAL_TITLE``, then ending the turn as asked."""
 

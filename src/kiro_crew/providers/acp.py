@@ -108,6 +108,7 @@ from kiro_crew.providers.base import (
 from kiro_crew.providers.cleanup import _is_safe_path
 from kiro_crew.recovery.ladder import InfraError
 from kiro_crew.session_work_dir import mark_run_dir, reclaim_session_work_dir
+from kiro_crew.trust_patterns import GrantDeadline
 from kiro_crew.workspace_cli_settings import (
     CLI_SETTINGS_LOCK_ACTION_TIMEOUT_SECS,
     CLI_SETTINGS_LOCK_TIMEOUT_SECS,
@@ -1850,9 +1851,11 @@ class AcpProvider(LLMProvider):
     def _advertised_effort_levels(self) -> list[str] | None:
         """The vocabulary this harness is the authority on, or None.
 
-        A member of ``ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION`` advertises its
-        effort option per SESSION rather than per model, so the option it served
-        on ``session/new`` answers both which levels exist and whether any do.
+        A member of ``ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION`` advertises the
+        effort option itself, so the option it last served answers both which
+        levels exist and whether any do. That is the ``session/new`` option, or,
+        where the harness rebuilds it per model (goose), the one in the latest
+        ``config_option_update`` or ``session/set_config_option`` result.
         ``None`` -- every other harness -- means the model registry answers, which
         is right where the level rides the model.
         """
@@ -1891,11 +1894,18 @@ class AcpProvider(LLMProvider):
         because the registry carries no entry for the operator's own model ids and
         its name heuristic recognises none of them, so it reports "no effort" for
         every ordinary session on such a harness and the control never appears.
+
+        An advertised option offering ``off`` and nothing else answers False: the
+        harness is saying the current model takes no level (goose does this per
+        model), and every write there reads back as ``off``.
         """
         if self._client.backend in ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION:
-            return self._client.supports_config_option(
+            if not self._client.supports_config_option(
                 effort_config_option_id(self._client.backend)
-            )
+            ):
+                return False
+            advertised = self._client.get_valid_effort_levels()
+            return not advertised or any(level != "off" for level in advertised)
         return model_supports_effort(self._effort_model)
 
     def _resolve_effort(self) -> str | None:
@@ -2774,8 +2784,16 @@ class AcpProvider(LLMProvider):
             async for e in events:
                 yield self._to_llm_event(e)
 
-    async def approve_tool(self, request_id: str | int, *, always: bool = False) -> bool:
-        return await self._client.approve_tool(request_id, always=always)
+    async def approve_tool(
+        self,
+        request_id: str | int,
+        *,
+        always: bool = False,
+        deadline: GrantDeadline | None = None,
+    ) -> bool:
+        if deadline is None:
+            return await self._client.approve_tool(request_id, always=always)
+        return await self._client.approve_tool(request_id, always=always, deadline=deadline)
 
     async def reject_tool(self, request_id: str | int) -> None:
         await self._client.reject_tool(request_id)

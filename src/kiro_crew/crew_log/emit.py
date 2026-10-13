@@ -252,6 +252,15 @@ _last_class: "OrderedDict[str, tuple[str, str, bool, str]]" = OrderedDict()
 #: OUTLIVES the turn that created it, which is the whole reason it exists -- so it
 #: is bounded FIFO and released by the child's own terminal entry.
 _child_origin: "OrderedDict[str, tuple[str, int, bool]]" = OrderedDict()
+#: Superseded crew logs whose tail THIS process has repaired, oldest first, so a
+#: predecessor walk (:func:`_walk_to_predecessor`) stops at one rather than walking
+#: the slot's whole history again on every supersede. Membership is only a
+#: shortcut: a log in here was repaired and its own walk went on from it, and a
+#: superseded log is never resumed, so nothing reopens a tail this process closed.
+#: Bounded FIFO by :data:`_MAX_REPAIR_WALKED`, and an evicted id costs one more
+#: whole-file scan of a tail already closed, never a wrong outcome. Cleared by
+#: ``reset_caches``, because a new process has repaired nothing yet.
+_repair_walked: "OrderedDict[str, None]" = OrderedDict()
 #: Answers "is this ``agent_id`` still running IN THIS PROCESS", registered by the
 #: gateway because it owns the subagent manager and this module cannot reach it.
 #: Consulted only by the resume repair, to decide whether an unmatched
@@ -551,6 +560,7 @@ def reset_caches(*, limits: "WriterLimits | None" = None) -> None:
         _last_class.clear()
         _child_origin.clear()
         _creation_failed.clear()
+        _repair_walked.clear()
         _lost_child_origins = 0
         _lost_origin_reported = False
 
@@ -1838,14 +1848,16 @@ def _durable_previous(session_id: str) -> str:
     return unit_opened_previous(_KIND, session_id) or ""
 
 
-def _queue_tail_repair(previous_sid: str, slot: str) -> None:
+def _queue_tail_repair(previous_sid: str, slot: str, *, walked: "tuple[str, ...]" = ()) -> None:
     """Queue the tail repair for *previous_sid*. The ONE submission site for it.
 
-    Three things reach this: the supersede that names the predecessor, a re-attach
-    recovering a job a crash lost, and a dropped terminal that a stand-down had
-    deferred to. They differ only in what brought them here, never in what is
-    submitted, so the guards, the bucket and the ceiling exemption cannot drift apart
-    between them.
+    Four things reach this: the supersede that names the predecessor, a re-attach
+    recovering a job a crash lost, a dropped terminal that a stand-down had
+    deferred to, and the predecessor walk stepping from a log it just repaired to
+    that log's own predecessor. They differ only in what brought them here, never
+    in what is submitted, so the guards, the bucket and the ceiling exemption cannot
+    drift apart between them. *walked* is the walk's own state -- the logs it has
+    already repaired, newest first -- and is empty for every caller but the walk.
 
     Queued under the PREDECESSOR's id, which IS the deferral: the writer runs a
     session's jobs in submission order, so this cannot run until everything that crew
@@ -1863,7 +1875,7 @@ def _queue_tail_repair(previous_sid: str, slot: str) -> None:
     _hand_over(
         previous_sid,
         WriteJob.follow_on(
-            lambda: _repair_superseded(previous_sid, slot),
+            lambda: _repair_superseded(previous_sid, slot, walked=walked),
             "closing a superseded crew log's interrupted tail",
         ),
     )
@@ -1905,7 +1917,7 @@ def _terminal_dropped(session_id: str) -> "Callable[[], None]":
     return _dropped
 
 
-def _repair_superseded(previous_sid: str, slot: str) -> None:
+def _repair_superseded(previous_sid: str, slot: str, *, walked: "tuple[str, ...]" = ()) -> None:
     """Close *previous_sid*'s interrupted tail. WRITER THREAD, never a caller's.
 
     The repair half of a supersede. The successor's ``session/opened`` only NAMES
@@ -1916,6 +1928,12 @@ def _repair_superseded(previous_sid: str, slot: str) -> None:
     it every gateway restart leaves one permanently open tail per active slot, and
     that turn's cost, duration and outcome are absent from every reading of the
     file for the rest of its life.
+
+    **Then it walks on.** A repair that lands goes on to *previous_sid*'s own
+    predecessor (:func:`_walk_to_predecessor`), so a tail a crash left open further
+    back in the chain is closed by the next cold start rather than never. *walked*
+    is that walk's state, the logs it already repaired, and only the walk passes it.
+    A repair that stands down or refuses below ends the walk with it.
 
     **The deferral is the queue, not a decision.** This job is submitted into
     ``previous_sid``'s OWN bucket, and the writer runs a session's jobs in
@@ -2028,6 +2046,12 @@ def _repair_superseded(previous_sid: str, slot: str) -> None:
     # from one that closed a turn and three calls.
     log = _crew_log().CrewLog.open(_KIND, previous_sid)
     closed = log.repair_interrupted_turn()
+    # Dropping the handle is what releases the write ownership
+    # ``repair_interrupted_turn`` took: the lease is bound to the object's lifetime,
+    # so holding it any longer would keep a crew log nothing is writing owned by
+    # this process. Released BEFORE the walk below queues the next hop, so a long
+    # walk never holds more than the one log it is repairing.
+    del log
     if closed:
         logger.info(
             "session log %s: closed %d dangling entr%s on superseded crew log %s",
@@ -2036,10 +2060,113 @@ def _repair_superseded(previous_sid: str, slot: str) -> None:
             "y" if closed == 1 else "ies",
             previous_sid,
         )
-    # The handle goes out of scope here, which is what releases the write ownership
-    # ``repair_interrupted_turn`` took: the lease is bound to the object's lifetime,
-    # so holding this handle any longer would keep a crew log nothing is writing
-    # owned by this process.
+    _walk_to_predecessor(previous_sid, slot, walked)
+
+
+#: How many crew logs ONE predecessor walk repairs, counting the one it starts on.
+#: Each hop opens and scans a whole crew log on the writer thread, so this is what
+#: keeps one walk's cost finite whatever the chain holds. Far below
+#: :data:`~kiro_crew.crew_log.session_tree.SLOT_CHAIN_CAP`, which bounds a walk over
+#: records already in memory: a tail is left open only when a crash lands between
+#: a supersede's edge and its repair, so reaching a log this far back takes this
+#: many consecutive processes each dying before its own walk finished. A walk that
+#: reaches the bound says so and names the log it stopped before.
+_REPAIR_WALK_HOPS: Final[int] = 32
+#: How many repaired crew logs :data:`_repair_walked` remembers.
+_MAX_REPAIR_WALKED: Final[int] = 4096
+
+
+def _walk_to_predecessor(repaired_sid: str, slot: str, walked: "tuple[str, ...]") -> None:
+    """Queue the repair of *repaired_sid*'s own predecessor. WRITER THREAD.
+
+    The whole durable chain, not one hop. In A -> B -> C, a crash after B's
+    opening entry named A but before A's repair ran loses only the repair: the edge is
+    an append and the repair rode the in-memory buffer. B is never resumed once C
+    supersedes it, so nothing re-queues A's repair from B, and C's supersede names B
+    alone. Following each repaired log's own ``previous`` back is the only way a cold
+    successor reaches A, and a hop whose tail was already closed says nothing about
+    the hop BEFORE it, so the walk goes on past a log that needed no repair.
+
+    The next hop is read from the repaired log's OWN opening entry, the same durable
+    read the re-attach recovery uses, and each hop is a separate job queued into that
+    log's own bucket through :func:`_queue_tail_repair`. So every hop gets every guard
+    the first one got -- the deferral behind what that log still owes, the live-turn
+    stand-down, the same-slot re-check against its immutable header -- and a hop that
+    refuses ends the walk there, because a log not known to be this slot's is not one
+    whose edge may be followed.
+
+    Four stops, checked in this order:
+
+    * **A loop.** The next hop is already on this walk. The emitter refuses to WRITE
+      such an edge, but this reads files any earlier build wrote, and a damaged or
+      hand-edited opening entry can name anything. Logged, because a loop is damage.
+    * **Repaired already in this process** (:data:`_repair_walked`). Its own walk went
+      on from it, so a second supersede on the same slot does not rescan the slot's
+      whole history. Silent, because this is the ordinary case for a long-lived slot.
+    * **The bound** (:data:`_REPAIR_WALK_HOPS`). Logged, naming the log the walk
+      stopped before, so a tail left open past it is reported rather than hidden.
+    * **A hop that is not this slot's.** Its header is read before the hop is
+      queued. A log that is gone, or whose header cannot be read, ends the walk
+      quietly, because retention removing the oldest logs is how an old chain
+      normally ends. A header naming ANOTHER slot is damage and is logged.
+    """
+    walked = (*walked, repaired_sid)
+    with _lock:
+        _repair_walked[repaired_sid] = None
+        _repair_walked.move_to_end(repaired_sid)
+        while len(_repair_walked) > _MAX_REPAIR_WALKED:
+            _repair_walked.popitem(last=False)
+    following = _durable_previous(repaired_sid)
+    if not following:
+        return
+    if following in walked:
+        logger.warning(
+            "session log %s: the predecessor chain loops back on itself -- crew log %s "
+            "names %s, which this walk already repaired -- so the walk stops here; "
+            "the opening entry naming it is damaged",
+            slot,
+            repaired_sid,
+            following,
+        )
+        return
+    with _lock:
+        if following in _repair_walked:
+            return
+    if len(walked) >= _REPAIR_WALK_HOPS:
+        logger.warning(
+            "session log %s: stopped the predecessor walk at the walk's bound of %d "
+            "crew logs, before %s -- its tail, and any older one, is left as it is",
+            slot,
+            _REPAIR_WALK_HOPS,
+            following,
+        )
+        return
+    # The same header comparison `_candidate_is_same_slot` makes, read here so the
+    # two failures can be told apart. The repair re-checks it next to its write.
+    from kiro_crew.crew_log.store import unit_header_slot
+
+    owner = unit_header_slot(_KIND, following)
+    if owner is None:
+        # Retention removing the oldest logs is the ordinary end of a long-lived
+        # slot's chain, so it ends the walk quietly: queueing the hop would only
+        # have the repair warn about a gone log on every restart.
+        logger.debug(
+            "session log %s: the predecessor walk ends at %s -- its crew log is gone "
+            "or its header cannot be read",
+            slot,
+            following,
+        )
+        return
+    if owner != slot:
+        logger.warning(
+            "session log %s: the predecessor walk stops at %s -- crew log %s names it, "
+            "but its own header names another slot, so the edge is not followed",
+            slot,
+            following,
+            repaired_sid,
+        )
+        return
+    _queue_tail_repair(following, slot, walked=walked)
 
 
 def on_session_opened(

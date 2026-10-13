@@ -17,13 +17,37 @@ partition that does not serve it makes it as unusable as any other unentitled id
 
 ## Model-name format
 
-The shared spawn and cron model-name validator accepts an alphanumeric first
-character followed by alphanumerics, dots, underscores or hyphens, optionally
-ending in one nonempty bracketed qualifier using those same characters.
-Empty, unbalanced, nested, repeated or non-trailing qualifiers are rejected;
-shell metacharacters remain invalid. The existing field length limit still
-applies. This format check does not establish entitlement or alter the separate
-`MODEL_ID_RE` grammar or ACP runtime validation.
+The shared spawn, task-batch, cron and session model-name validator accepts an
+alphanumeric first character followed by alphanumerics, dots, underscores or
+hyphens, optionally ending in one nonempty bracketed qualifier using those same
+characters. It also accepts a provider-qualified id, the spelling a backend that
+resolves its model from its advertised list uses (OpenCode, Pi): two or more
+such segments joined by `/` (`provider/model`, `provider/org/model`), with an
+optional `:tag` on the last segment (`ollama/qwen3:8b`), at most 256
+characters, the bound `model_registry` keeps on an advertised id. Every
+segment starts with an alphanumeric, so an id is never an option flag, an
+absolute path or a `.`/`..` hop. Empty segments, a colon anywhere but a
+trailing tag, whitespace, control characters (a trailing newline included) and
+shell metacharacters are rejected, and so are empty, unbalanced, nested,
+repeated or non-trailing bracket qualifiers. The existing field length limit
+still applies. This format check does not establish entitlement or alter the
+separate `MODEL_ID_RE` grammar (the check `AcpRuntime` applies to a `model=`
+argument) or ACP
+runtime validation. The Settings model pins (`_MODEL_PIN_PATTERN`) build their
+qualified branch from the same `QUALIFIED_MODEL_PATTERN`, so a picker cannot
+offer an id one boundary refuses and a sibling accepts.
+
+`POST /api/spawn` also checks a qualified id against the backend the request
+names (each `spawn_run` batch entry is its own request). A backend that does not
+resolve its model from an advertised list refuses it, and once the named backend
+has advertised a list, read the way `GET /api/models` reads it (the newest live
+session, else the namespace cache), an id missing from it is refused too. Both
+refusals answer HTTP 400 with the `model_unavailable` code the chat model switch
+already uses; an empty list cannot be checked and is trusted.
+Bare and bracketed names get no membership gate. A request that names no backend
+(a continuation runs where the original ran), a cron job, a CLI call and a session
+are judged on shape alone, because none of them names a backend when it is
+validated.
 
 ## Resolve, don't guess
 
@@ -70,6 +94,23 @@ startup model apply and `session/set_model` the pick, correcting only the wire
 alone so the warm-pool re-apply and the slot backfill still read "inherit". The
 dashboard carries the corrected id as the slot's `served_model` so the composer
 chip names the model a turn will run on instead of `auto`.
+
+A pooled session is checked a second time when `session/set_mode` activates an
+agent. kiro-cli puts the session on the model the activated agent's spec pins,
+which undoes the first check, and `agent.model` is copied into `kirocrew.json`, so
+an unentitled global default reaches the wire this way. `set_mode` answers `{}`;
+kiro-cli reports the applied model only in the `_kiro.dev/agent/switched` frame it
+sends before that answer (`{"agentName", "previousAgentName", "model", ...}`, seen
+on kiro-cli 2.29.1). The reader loop records that `model` per session
+(`AcpRuntime._note_switched_model`), and `AcpRuntime._served_default_after_mode`
+passes it to `ensure_served_default(activated_model=...)`, which judges it instead
+of the stale `session/new` id. The record is cleared before each start-path
+`set_mode`, so only that activation's frame counts. The spec file is not read
+again: it can change after kiro-cli read it, and only the host knows which copy of
+the agent it loaded. No frame, or a frame without a model, is no evidence and
+changes nothing. Both `create_session` and `load_session` run it. The non-pooled
+`AcpClient._initialize_session` kiro branch sends `set_mode` without waiting for its
+answer and does not run this second check yet.
 
 KAS sends no `models` object; its list is only the `configOptions` `model`
 select, and it defaults a new session to `auto`. The pooled check asks that select
@@ -356,7 +397,9 @@ its own once the cache refreshes with a list that carries it.
   every validated model pin (`agent.role_models.*`, `agent.fallback_model`,
   `agent.refusal_fallback_model` and the `decisions.model_route` tiers) one
   grammar, `_MODEL_PIN_PATTERN` in `dashboard/handlers/core.py`: a bare id, or the
-  slash-joined `provider/model` form OpenCode advertises. It refuses empty
+  provider-qualified `provider/model` form OpenCode advertises, built from the
+  same `QUALIFIED_MODEL_PATTERN` the spawn and cron model-name check uses (so
+  `ollama/qwen3:8b` saves too). It refuses empty
   segments and shell metacharacters; `_validate_role_model` then judges
   entitlement as above. The chat default `agent.model` uses the same grammar
   (its picker lists the same names) without the entitlement check. `decisions.nudge_wake.llm_model` keeps the bare-id
@@ -429,6 +472,13 @@ its own once the cache refreshes with a list that carries it.
   cost cap is that profile's `worker_model` / `worker_reasoning_effort`, where
   `"auto"` is a real pin on the backend default. Until then a dispatched session
   starts on the default like any other.
+- **A served context window** is declared only through `agent.model_context_tokens`, one
+  entry per EXACT model id as `agent.model` carries it (`model_registry.model_window`
+  matches it as written, so two servers of the same weights stay distinct). It is an
+  operator's statement, never a built-in default for a family and never probed: an id
+  nobody declared and no registry tier lists stays unknown and keeps the 1,000,000-token
+  reference. See [memory-skills-hooks](../modules/memory-skills-hooks.md) "Model-window
+  metadata" for the resolution order.
 - **Entitlement checks** always use the shared predicate
   `acp.client.model_is_unusable(id, advertised)` together with
   `advertised_model_ids(...)`. It is one predicate on purpose: two spellings of "can

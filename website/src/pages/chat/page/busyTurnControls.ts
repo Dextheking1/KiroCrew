@@ -289,6 +289,12 @@ export function useBusyTurnControls({
     allQueued: allQueuedMessages,
     visibleQueued: queuedMessages,
     restoreDraft: restoreQueuedDraft,
+    // The restore merges into this composer, so a mention it writes back is
+    // spelled so it cannot collide with a file already staged here.
+    stagedFiles: () => pendingFilesRef.current,
+    // A mention written back for a project file is spelled relative to this
+    // slot's project, the spelling the composer revives a chip for on undo.
+    project: () => currentSlot?.project,
   })
   /** The composer's Stop press: soft stop, then an armed force stop. */
   const stopTurn = () => {

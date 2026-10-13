@@ -134,6 +134,35 @@ METHOD_REQUEST_PERMISSION = "session/request_permission"
 METHOD_SESSION_UPDATE = "session/update"
 METHOD_METADATA = "_kiro.dev/metadata"
 METHOD_COMMANDS_EXECUTE = "_kiro.dev/commands/execute"
+# The ``_session/steering`` request a backend in ``ACP_BACKENDS_STEERING_REQUEST``
+# takes a user's mid-turn message on, and the outcomes that decide delivery.
+METHOD_SESSION_STEERING = "_session/steering"
+STEERING_INJECTED = "injected"
+STEERING_STARTED_NEW_TURN = "startedNewTurn"
+# Bounds on what a session holds for steers it has sent and not settled: at most
+# this many at once, each at most this long. A steer past either bound takes the
+# caller's queue path instead, which has its own limits.
+MAX_STEERING_ANSWERS = 16
+MAX_STEERING_TEXT_CHARS = 64_000
+# How long a steer waits for the adapter's answer. The dashboard composer awaits
+# the steer inside its send request, which the browser aborts after 10s
+# (``SEND_ABORT_MS``), so an answer slower than this sends the steer down the
+# caller's queue path instead of leaving the request to time out.
+STEERING_ANSWER_WAIT_SECS = 8.0
+
+
+def steering_outcome(result: object) -> str:
+    """The ``outcome`` of a ``_session/steering`` answer; "" for any other shape.
+
+    The answer is adapter-authored JSON: a result that is not an object is read as
+    no outcome (undelivered) rather than trusted to have ``.get``.
+    """
+    if not isinstance(result, dict):
+        return ""
+    outcome = result.get("outcome")
+    return outcome if isinstance(outcome, str) else ""
+
+
 METHOD_SESSION_LOAD = "session/load"
 #: The other standard restore verb, for an agent that keeps sessions but does not
 #: implement full loading: it restores the session WITHOUT replaying the previous
@@ -1392,8 +1421,8 @@ class AcpPromptStats:
         counts. No-op once a real usage_update has
         set authoritative counts. ``model_id`` is the caller's resolved id (the
         kiro-agent ``currentModelId``, else the user-picked alias). Resolves the
-        window through ``model_registry.model_window`` (kiro-list cache >
-        registry > heuristic) and only backfills a KNOWN window, leaving 0 for a
+        window through ``model_registry.model_window`` (operator window > kiro-list
+        cache > registry > heuristic) and only backfills a KNOWN window, leaving 0 for a
         genuinely-unknown model so the frontend's own authoritative window drives
         the meter. A real ``usage_update.size`` always wins. A surviving
         ``context_window_tokens`` (e.g. kept across a compaction reset — the

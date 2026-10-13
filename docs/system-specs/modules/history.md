@@ -229,9 +229,10 @@ owners behind it are:
 whole chained transcript. When their newest window misses the rows a tab holds, they
 walk OLDER one `SLOT_DETAIL_MAX_LIMIT` (500-row) page at a time, up to
 `WINDOW_WALK_MAX_PAGES` (8) pages, plus one re-read of the newest page so the
-returned tail is as fresh as the returned status. When the cap is spent, or the held
-rows carry no `meta.mid` to anchor on, the replacing reducer keeps no head: the rows
-above the walked window leave the tab and are one page-back away.
+returned tail and its `running`, `stopping`, `turn`, and `turn_gen` status fields
+come from the same newest edge. When the cap is spent, or the held rows carry no
+`meta.mid` to anchor on, the replacing reducer keeps no head: the rows above the
+walked window leave the tab and are one page-back away.
 
 `loadOlderMessages` stays in the facade. The chat host answers the hook's
 older-page request with it; it reads the page before `slotOldestIndex` and lands
@@ -309,15 +310,16 @@ order, and pins that no owner imports the facade:
 | `rows.ts` | the row model: the one declaration of every filter dimension and what each consumer derives from it (`filteredSlots`, `listNarrowed`, the reveal registry), the status-chip predicates and badge counts, the one lane order, the drag freeze, the split of the filtered rows between the `Local` lanes and the crew groups (each crew group's rows, the folder hide applied), the flat lane, the tree's ungrouped rows and per-folder rows, the board's pool (local rows the folder filter does not conceal), the dormant split's gates, and each rendered row's `SessionRowView` and window |
 | `search.ts` | the debounced backend session search, and the folder-name matches the search box adds |
 | `rowIdentity.ts` | origin-qualified identity for live and history rows, and the peer test on local folder state for the owners that hold their own lists |
-| `persistence.ts` | the browser-stored view preferences (lane, width, filters, fold sets, collapsed crews, pane height): every key except the four status-chip keys, which ride on `SESSION_FILTERS` in `filters.tsx`, and three keys declared beside their own logic (`mc-pinned-session-order` in `utils/pinnedSessionOrder.ts`, `mc-session-sort` in `pages/chat/sessionOrder.ts`, `kc-board-folder-collapsed:*` in `utils/boardFolderCollapse.ts`); and the readers, defaults, validation and migrations of every key except the width and the pre-board width (`resize.ts`), the pane height (`history.ts`), and the status chips and the folders-shelved flag (`filters.tsx`) |
-| `filters.tsx` | the status chips (`SESSION_FILTERS`; a chip's stored value is `'0'` off, `'1'` on, `'2'` on and paused, and the chips and the pause are one state object so a mutation cannot leave a pause with no chip; while paused, the Recent heartbeat stops and the unread auto-drain neither removes the chip nor records the count), the folder and tag filter state (with the reveal's folder un-hide), the Recent window, the local running, recent and unread sets, and the unread auto-drain |
+| `persistence.ts` | the browser-stored view preferences (lane, width, filters, fold sets, collapsed crews, pane height): every key except the four status-chip keys, which ride on `SESSION_FILTERS` in `filters.tsx`, and three keys declared beside their own logic (`mc-pinned-session-order` in `utils/pinnedSessionOrder.ts`, `mc-session-sort` in `pages/chat/sessionOrder.ts`, `kc-board-folder-collapsed:*` in `utils/boardFolderCollapse.ts`); and the readers, defaults, validation and migrations of every key except the width and the pre-board width (`resize.ts`), the pane height (`history.ts`), and the status chips and the folders-shelved flag (`filters.tsx`); and the model filter's one key (`mc-session-model-filter`, its selection and direction) |
+| `filters.tsx` | the status chips (`SESSION_FILTERS`; a chip's stored value is `'0'` off, `'1'` on, `'2'` on and paused, and the chips and the pause are one state object so a mutation cannot leave a pause with no chip; while paused, the Recent heartbeat stops and the unread auto-drain neither removes the chip nor records the count), the folder, tag and model filter state (with the reveal's folder un-hide), the Recent window, the local running, recent and unread sets, and the unread auto-drain |
 | `lanes.ts`, `conductor.ts` | the lane preference, the lane actually drawn (`renderedLane`) and the lane cycle; the conductor lane's lineage availability (pushed `slot_patch`, no poll), population, lineage tree and open conductors |
 | `folders.ts` | folder sort mode, visibility, the subtree index and ancestor expansion, the filter-menu rows, the tree's root folders, and folder writes |
 | `board.ts` | the tag-column board: columns, the column popover, column writes, lane seeding (it widens the sidebar through `resize.ts`), per-column collapse and membership |
 | `stale.ts`, `pinnedOrder.ts`, `hoverHold.ts` | the dormant-session collapse state and exemptions, the manual pinned order, and the hover hold |
 | `reveal.ts` | reveal-in-sidebar for a session or a folder |
 | `FolderCleanupPanel.tsx` | the header menu's "Clean up empty folders" panel: a dry-run preview of every folder with no live session and no settings, then one Delete that sends the previewed ids back, which the server deletes only while still empty (re-checked inside the folder-store lock) |
-| `rename.ts`, `history.ts`, `resize.ts`, `tags.ts`, `shortcuts.ts`, `create.ts` | row and folder rename, the Older Sessions pane state, the sidebar width (including the width saved while the board is open), the tag vocabulary, the chat-jump order, and session creation |
+| `rename.ts`, `history.ts`, `resize.ts`, `tags.ts`, `models.ts`, `shortcuts.ts`, `create.ts` | row and folder rename, the Older Sessions pane state, the sidebar width (including the width saved while the board is open), the tag vocabulary, the model vocabulary (the models the sessions use, grouped by canonical key, with the include-or-exclude predicate), the chat-jump order, and session creation |
+| `scrollPeek.ts`, `ScrollPeekLayer.tsx` | the scroll peek: which clipped titles in view to show in full while the lane is scrolled, its on / follow-the-rows / off lifecycle, the floating click-through layer that draws them over the rows (rows keep `sidebarWidth`), and the `fullTitlesOnScroll` setting read |
 | `dnd/` | collision geometry (`collision.ts`), drop targets and drag previews (`targets.tsx`), and the drag lifecycle with its folder writes and undo offers (`useSidebarDrag.ts`) |
 
 **The row model and peer isolation.** A live peer row's raw key can be
@@ -402,7 +404,7 @@ Per-thread JSONL files at `~/.kiro/crew/sessions/{safe_key}.jsonl`. First line i
   through the `/api/session/archive` endpoints. Rotating a session the dashboard
   still displays therefore removes the head of that conversation from the chat,
   which is why the save path does not do it.
-- **Cache-fill staleness guard** — transcript memos use a cache identity of `(st_mtime_ns, st_ctime_ns, st_ino)`, rather than mtime alone. That makes the normal atomic rewrite visible even when housekeeping restores its pre-write mtime via `_restore_mtime`; the replacement inode or changed ctime forces a miss. A per-key invalidation **generation** still closes in-process fill races: `_invalidate_cache` bumps it BEFORE dropping entries, and each fill snapshots it before `stat` then re-checks it around publish via `_publish_if_current`, discarding a fill if it moved. `_meta_cache`, `_recent_cache`, `_folded_cache`, `_snippet_cache`, and `_msg_cache` record both identity and generation; `_folded_cache`/`_snippet_cache` serialize stat → read → store under `_file_lock`, while `_msg_cache`'s unlocked on-loop fallback additionally needs a cross-process flock-hold witness. The generation table is process-wide (class-level, keyed by transcript directory + sanitized stem), and invalidation covers each spelling of one session — logical key, sanitized `path.stem`, and canonical/legacy Slack aliases in both directions (`_cache_key_identities`).
+- **Cache-fill staleness guard** — transcript memos use a cache identity of `(st_mtime_ns, st_ctime_ns, st_size, st_ino)` (`_cache_identity`), rather than mtime alone. That makes the normal atomic rewrite visible even when housekeeping restores its pre-write mtime via `_restore_mtime`; the replacement inode or changed ctime forces a miss. `st_size` catches an in-place append that lands on the same clock tick, which the timestamps alone miss on NTFS (coarse write clock, and Windows `st_ctime` is creation time); it cannot catch a same-length rewrite, which the generation below (this process) and the flock witness (another process) cover. A per-key invalidation **generation** still closes in-process fill races: `_invalidate_cache` bumps it BEFORE dropping entries, and each fill snapshots it before `stat` then re-checks it around publish via `_publish_if_current`, discarding a fill if it moved. `_meta_cache`, `_recent_cache`, `_folded_cache`, `_snippet_cache`, and `_msg_cache` record both identity and generation; `_folded_cache`/`_snippet_cache` serialize stat → read → store under `_file_lock`, while `_msg_cache`'s unlocked on-loop fallback additionally needs a cross-process flock-hold witness. The generation table is process-wide (class-level, keyed by transcript directory + sanitized stem), and invalidation covers each spelling of one session — logical key, sanitized `path.stem`, and canonical/legacy Slack aliases in both directions (`_cache_key_identities`).
 - `recent(key)` — last 20 messages for context injection
 - `recent_with_provenance(key)` — entries with source citations. Never a display-only row (`DISPLAY_ONLY_ROLES`, the `notice` and `card` roles): notices are drawn for the reader, not conversation, and the consolidator's memory and skill-detection prompts skip them the same way while its offset still passes them (the Slack thread-parent row reaches a model only through its fenced block)
 - `list_sessions(*, keys=None)` — lists all sessions with title (first user message or LLM-generated). Sort key uses ISO `created` string consistently (defaults to ISO from `st_mtime` if no metadata `created` field, ensuring string-only comparisons). Each returned session's meta dict also carries `folder_id` when present in the persisted metadata line, so sessions can be grouped by the folder they were filed in. Given `keys`, it reads only those sessions' files (the app-ownership screen uses this).
@@ -419,7 +421,7 @@ Per-thread JSONL files at `~/.kiro/crew/sessions/{safe_key}.jsonl`. First line i
 - `read_file_change_messages(key)` — a lightweight Artifacts projection that streams one transcript as bytes, skips lines without the serialized `"file_changes"` key before JSON parsing, and retains only `ts` plus `meta.file_changes` in its own bounded, file-stamped cache. It never warms `_msg_cache`, so scanning the session-document firehose cannot retain the full parsed transcript corpus.
 - Forge references (pull requests, merge requests, issues) are a query dimension of their own, because one item has several written spellings and a transcript carries whichever one its author used. A term naming an item — `#4411`, `PR #4411`, `pr 4411`, `pull request 4411`, `pr4411`, `pull/4411`, a full PR/MR URL, `owner/repo#4411` — becomes ONE required needle carrying every spelling of that item (`SearchNeedle.alts`, counted by the shared `count_needle`), so any spelling finds every spelling. The words that introduce the number are dropped from the gate: they are not part of the reference, and requiring the literal "pr" would disqualify a transcript that names the item only by URL. Spellings are `digit_bounded` on both sides, so `#4411` matches neither `#44110` nor the run id `1544110293`. The TYPED sigil decides the family, never a word before it: `mr#12` is read as `#12`, because letting the word win produced a reference none of whose spellings was the string the user typed. Coverage of every accepted shape is pinned by a property test that drives each one against a transcript quoting it verbatim, rather than by inspection of the spelling list. GitHub's pull/issue sequence is shared (`#4411` ≡ `/pull/4411` ≡ `/issues/4411`) while GitLab numbers merge requests separately, so `!12` and `#12` stay distinct families and never match each other; bare `merge` is not a GitLab word (GitLab is `MR 12` / `merge request 12` / `!12`). Plain digits remain one of the spellings exactly when the QUERY typed no sigil (`issue 42`, `PR 4411`, `pr4411`): such a query would otherwise lose a gate on the digits, so dropping them would HIDE the transcript that says "we hit issue 42 in prod", and keeping them makes the recall of the literal AND it replaces hold with ONE intended exception — a session whose only claim to the old match was the digits sitting inside a longer number, which is what the boundary exists to exclude. The LEFT edge of that boundary applies only to a spelling that starts with a digit: for a delimited spelling the character before it says nothing about the number's length, and demanding a non-digit there would refuse `#4411` inside `owner/repo2#4411` — a repo whose name ends in a digit, matched against the very reference the query named. Only a lead-in run that actually NAMES a type turns a following number into a reference: `pr 4411`, `issue 42`, `pull request 4411` and `merge request 12` (the two-word GitLab form) do; `requests 12` and `merge 1234` do NOT and stay literal terms, since dropping such a word from the gate would trade a real term for every session mentioning that number. A query that DID type a sigil never gated on bare digits, so it keeps them out and stays precise (a standalone "12" is ordinary prose). A BARE number with no naming word is not a reference at all: it keeps its plain substring needle — numeric content search (ports, error codes, run ids) is unchanged — and gains the spellings as scoring-only needles at `_FORGE_REF_WEIGHT`, so the session that references the pull request outranks one that merely contains those digits. Those ranking needles are NOT adjacency evidence (`SearchNeedle.adjacency`, which only CJK bigrams set), or they would arm the adjacency floor and turn a ranking hint into a hidden gate. Two limitations are accepted rather than special-cased, both needing a query nobody writes and both only widening the result set: a chain-only word wedged between the type word and the number (`issue merge 42`) is swallowed, and because the gate is keyed by term text a query repeating a suffix word as its own term (`pull the pull request 12`) loses that term. Closing either means keying the gate by token position instead of by text. Expansions per query are capped at `_SEARCH_MAX_FORGE_REFS`, each costing one scan per spelling per scanned session (up to eight for a named reference, up to thirteen for a bare number's both-families ranking needle, plus up to eight more for a registered provider's own prefixed id — see below); a token past the cap degrades to a plain needle.
 - A REGISTERED source provider contributes its OWN id spellings through the same machinery, so an edition whose reviews are written `REV-987654321` is searchable without any provider vocabulary in core. The seam is one optional plugin hook, `search_ref(token) -> (canonical, alts) | None` on `SourceProviderPlugin`, discovered with `getattr` exactly like `path_markers()`; `source_search_ref()` fans out across the registered plugins (asking each registered plugin until one answers, then handing that answer through unjudged — shape is the normalizer's job, and skipping a malformed answer would only serve the same two-registrant case the merge below is declined for), and `register_source_provider()` publishes that collector DOWNWARD into `history_search.register_search_ref_resolver` at registration time — never from a route handler, because `parse_search_query` is also reached from paths that serve no HTTP (the Discord title-only resume gate, the `kirocrew memory search` CLI) and a process that never ran a route would otherwise answer the same query differently. One slot holds the resolver, not a list: the per-plugin fan-out already lives in the collector. The FIRST plugin to recognize a token WINS, for every token shape: a prefixed id names ONE item, so merging would conflate distinct items, and a cross-plugin merge for a bare number would exist only to serve two registrants holding a real item at the same number — which this repo, registering no provider at all, cannot produce. Cost stays bounded in ONE place: `_MAX_SEARCH_REF_SPELLINGS` (8, sized to the sibling per-plugin `_MAX_PLUGIN_PATH_MARKERS` because it bounds the same kind of thing — what ONE plugin hands core for one lookup) bounds the single answer that arrives, with no collector-side ceiling to drift from it. A bare number is NOT a provider token at all: a provider's ids are prefixed, so a run of digits names nothing it owns and the resolver is not consulted for one. `_provider_search_ref` is the single normalizer — it casefolds every spelling (the query is casefolded before parsing and `count_needle` requires already-folded needles, so a capitalized spelling produces a needle that matches NOTHING, silently), de-duplicates, drops empties, applies the fan-in ceiling, and DROPS an answer none of whose spellings carries the typed token, since such an answer describes some other item and would otherwise rank a query on text it never named. Every way a resolver can fail is contained and costs no more than a debug log — carrying a traceback where an exception was raised, and the offending value where a shape was merely wrong, so none of them is silent: raising when called, returning a malformed answer, and raising while its `alts` are READ — the hook promises a `Sequence`, which cannot do that, but a resolver ignoring the contract can, so the read sits inside the same boundary and the answer is dropped WHOLE rather than half-read, since an exception there would otherwise escape the parse as a 500 on every search. A provider is consulted only for a token no built-in shape recognized (built-ins always win), contributes SPELLINGS ONLY and never lead-in vocabulary (the words a provider would want — "review", "cr" — are common English, so admitting them would trade a real search term for every session mentioning that number), and can never gate a BARE all-digit token, which it is never even asked about — so no number of registered providers can spend the `_SEARCH_MAX_FORGE_REFS` budget on one numeric token. The purity contract — pure, allocation-cheap, no I/O — is documented and not enforced: a resolver is consulted for every term of every query and the parse runs at least twice per search, so a blocking resolver becomes per-keystroke latency in the search box.
-- `_read_messages` — identity-guarded message cache with the same double-checked, miss-only locking `_folded_content` uses for this identical race. A warm hit is served lock-free; only a MISS takes the session's in-process writer lock (`_file_lock`) and re-checks identity + cache under it. The identity `(st_mtime_ns, st_ctime_ns, st_ino)` changes on the normal atomic rewrite even when housekeeping restores the previous mtime, so a stale cache entry cannot remain current. ON the event loop the lock is acquired non-blockingly and a busy lock falls back to an unlocked fill, so an on-loop read never stalls behind a writer holding the RLock across its cross-process flock wait (`_FLOCK_ACQUIRE_TIMEOUT_S`). An unlocked fill publishes through two witnesses: a per-key invalidation **generation** covering local writers and a cross-process **flock-hold witness** covering external processes (`_flock_hold_witness`: publish only while this process provably held the sidecar flock for the whole fill window). A fill that cannot prove its window clean is discarded. Every transcript memo (`_msg_cache`, `_meta_cache`, `_recent_cache`, `_folded_cache`, and `_snippet_cache`) records identity and generation; a warm hit requires both, so a write through another `ConversationLog` instance also invalidates it through the process-wide generation table keyed by `(transcript dir, sanitized filename stem)`, with canonical and legacy Slack spellings closed over bidirectionally (`_cache_key_identities`).
+- `_read_messages` — identity-guarded message cache with the same double-checked, miss-only locking `_folded_content` uses for this identical race. A warm hit is served lock-free; only a MISS takes the session's in-process writer lock (`_file_lock`) and re-checks identity + cache under it. The identity `(st_mtime_ns, st_ctime_ns, st_size, st_ino)` changes on the normal atomic rewrite even when housekeeping restores the previous mtime, so a stale cache entry cannot remain current. ON the event loop the lock is acquired non-blockingly and a busy lock falls back to an unlocked fill, so an on-loop read never stalls behind a writer holding the RLock across its cross-process flock wait (`_FLOCK_ACQUIRE_TIMEOUT_S`). An unlocked fill publishes through two witnesses: a per-key invalidation **generation** covering local writers and a cross-process **flock-hold witness** covering external processes (`_flock_hold_witness`: publish only while this process provably held the sidecar flock for the whole fill window). A fill that cannot prove its window clean is discarded. Every transcript memo (`_msg_cache`, `_meta_cache`, `_recent_cache`, `_folded_cache`, and `_snippet_cache`) records identity and generation; a warm hit requires both, so a write through another `ConversationLog` instance also invalidates it through the process-wide generation table keyed by `(transcript dir, sanitized filename stem)`, with canonical and legacy Slack spellings closed over bidirectionally (`_cache_key_identities`).
 - `delete_session(key)` — permanently removes a session JSONL file. Dashboard
   deletion may tear down the exact live slot and idle SessionManager generation
   captured before unlink, but it preserves chat pins, work ledgers, and
@@ -857,8 +859,12 @@ no longer destroy older turns.
   sentence. Rows in the in-memory window count towards the newest N and are
   never changed. The changed rows' original lines are written to the session
   archive (`reason="file-changes"`, which `read_rotated_messages` never serves
-  back) BEFORE the payload uses them; a failed archive write keeps the prefix
-  as read and the next prefix read retries. The prefix is
+  back) BEFORE the payload uses them, and `_archive_lines` syncs the archive
+  file and its directory before it returns, as it does for every reason; a
+  failed archive write keeps the prefix as read and the next prefix read
+  retries. A crash after the archive write and before the transcript replace
+  leaves the rows whole, so the next uncached prefix read archives them again:
+  a duplicate archive file, never a lost row. The prefix is
   cached on the slot keyed by the file's `(mtime, size)` and
   `_disk_older_count`, together with the foreign lines that save kept, so a
   steady 5s flush is O(window), not O(file size).
@@ -1294,9 +1300,11 @@ no longer destroy older turns.
   - **Archive of ambiguous drops (no permanent loss).** A fresh-`ts` id-less
     copy folded by tiebreak (b) is the genuinely ambiguous case
     (indistinguishable from a distinct same-content message without a stable
-    id), so those drops are returned as `dedup_dropped` and routed through
-    `_archive_lines` (`reason="foreign-dedup"`) by `_save_slot_to_history`
-    before the atomic replace — the trade-off loses no data permanently. (A
+    id), so the scan archives them through `_archive_lines`
+    (`reason="foreign-dedup"`) before the atomic replace — the trade-off loses
+    no data permanently. When that archive raises, the drops stay in the
+    payload as foreign lines, in disk order: a duplicate row, never a lost
+    one. (A
     ts-less / ts-matched plain re-serialization is a normal window copy and is
     dropped silently to avoid archive spam; a corroborated id-matched pass-0
     fold is exact, not ambiguous, and is likewise silent.)
@@ -1436,6 +1444,19 @@ archived instead of being permanently deleted:
   `rewrite=True` / `_pending_rewrite` → `_archive_dropped_lines`). The default
   frozen-prefix dashboard save drops nothing, so it does not archive.
 - **Atomic writes**: exclusive-create (`open mode 'x'`) avoids TOCTOU clobber
+- **Durable before the replace**: `_archive_lines` fsyncs the archive file and
+  syncs the archive directory and its parent (`atomic_write.fsync_dir`, a no-op
+  on Windows) on every call before it returns, and raises if any sync fails.
+  The parent is synced even when the directory already exists, because an
+  earlier call may have created it and failed that sync. Every trigger archives
+  lines its transcript rewrite is about to remove, so the archive must reach
+  disk first.
+- **Fail closed**: an archive failure never lets the rewrite drop the rows.
+  Rotation declines to rotate, compaction (`rewrite_session`) raises with the
+  transcript untouched, the dashboard rewrite path raises so the save writes
+  nothing (a rewind answers `503 rewind_save_failed`; a regenerate keeps
+  `_pending_rewrite` and the next save retries), the file-change bound keeps the
+  prefix as read, and foreign-dedup keeps its lines.
 - **Retention**: configurable via `session.archive_retention_days` (default 30
   days; `-1` or `null` disables cleanup so the user manages deletion manually).
   `_cleanup_old_archives()` reads the value from config when called with no
@@ -1752,6 +1773,51 @@ V1 store and a private V2 member store write structured records only (see
 [memory-skills-hooks](memory-skills-hooks.md)). Each message is formatted by
 `_fmt_message`, which replaces image references with the stripped-image marker, so
 the extraction turn carries text and no image data.
+
+**Row counts off the loop.** `maybe_consolidate(key)` runs on the event loop
+after every completed dashboard, Slack and task-runner turn, and
+`check_idle_sessions()` on every sweep. Neither reads the transcript there: the
+turn that just ended moved the file, so the message cache misses and a count on
+the loop would read and decode the whole transcript. Both go through one counter,
+`HistoryConsolidator._count_off_loop`, which runs in a worker thread
+(`asyncio.to_thread`):
+
+1. A key inside its retry deadline is not counted: `retry_eligible` would
+   refuse its pass anyway. This is what stops a backed-off chat counting every
+   turn after a restart, when `_prefs_offset` starts again at 0. Both callers
+   check the deadline on the loop first (one metadata read) and schedule no task
+   for such a key; the worker thread checks again for a deadline armed between
+   that check and the count.
+2. Otherwise `ConversationLog._count_messages(key, hold_writer_lock=False)` gives
+   the exact count. It streams the file one line at a time through
+   `transcript_count.count_messages`, which shares `message_row` with
+   `_read_messages_locked`, so the count and the full read cannot disagree and
+   rows other processes appended are counted too. It materializes no row list and
+   fills no cache. It never takes the per-file writer lock, because an on-loop
+   `_locked` caller acquires that lock blocking and would otherwise wait out the
+   whole count.
+
+`_read_messages_locked`, which every `_read_messages` caller shares (the
+consolidation pass's off-loop snapshot among them), reads one
+`_TRANSCRIPT_READ_CHUNK` (1 MiB) at a time and splits lines across chunks into
+the same pieces a whole-file `splitlines()` gives. A single whole-file `read()`
+or `splitlines()` holds the GIL for the whole file, so it froze the loop even
+from a worker thread (0.67 s on a 400 MB transcript).
+
+One count runs per transcript file at a time, claimed by file name like `_busy`,
+so two spellings of one key share the claim. The thread future is shielded: a
+cancelled caller cannot stop the read, so the claim is kept until the thread
+finishes. A turn that ends while a count runs starts nothing, because the next
+turn's count includes its rows and the idle and session-end passes extract from
+the same tail. After the count, the busy check is repeated (an idle or
+session-end pass may have claimed the transcript meanwhile), then the
+`retry_eligible` check with the counted total, and the pass runs inside the same
+task. The idle sweep schedules a count only for a key past its throttle, not busy
+and outside its retry deadline, so a key in backoff costs one metadata read and no
+count. `_prefs_offset` advances to the counted total only when the prefs pass
+completes without a refusal, raise or cancellation, and the idle throttle is set
+only when the history pass completes without one. A pass that raises has already
+logged it. A count that fails to read logs a warning and skips that check.
 
 The two `*_update` values replace the whole file, so each is gated by
 `_is_plausible_memory_file()` before writing: a value that does not start with

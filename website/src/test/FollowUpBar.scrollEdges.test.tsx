@@ -15,7 +15,7 @@
  * the derivation testable at all.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import FollowUpBar from '../components/FollowUpBar'
 
 /** `hidden` px of content beyond the right edge, `scrolled` px already past the left. */
@@ -94,5 +94,64 @@ describe('FollowUpBar scroll layout edges', () => {
     scroller.dispatchEvent(fits)
     // A row that fits must leave the gesture to the page.
     expect(fits.defaultPrevented).toBe(false)
+  })
+
+  it('pads both ends of a scrolling row so a vanishing arrow never leaves a chip under the pointer', () => {
+    stubGeometry({ hidden: 240 })
+    const { container } = renderScroll()
+    const scroller = container.querySelector('.overflow-x-auto') as HTMLElement
+    const kids = Array.from(scroller.children) as HTMLElement[]
+    // The arrow's spot at each end is a blank, not a chip: when the arrow goes
+    // away at the end of the scroll, the next click hits nothing.
+    expect(kids[0].hasAttribute('data-arrow-gutter')).toBe(true)
+    expect(kids[kids.length - 1].hasAttribute('data-arrow-gutter')).toBe(true)
+    expect(kids[0].getAttribute('aria-hidden')).toBe('true')
+    // Gutters plus one element per chip.
+    expect(kids.length).toBe(OPTIONS.length + 2)
+
+    // Still there at the end of the scroll, which is when it matters.
+    stubGeometry({ hidden: 240, scrolled: 240 })
+    fireEvent.scroll(scroller)
+    expect(rightArrow()).toBeNull()
+    expect((scroller.lastElementChild as HTMLElement).hasAttribute('data-arrow-gutter')).toBe(true)
+  })
+
+  it('adds no gutter to a row that fits, so its first chip stays flush', () => {
+    stubGeometry({ hidden: 0 })
+    const { container } = renderScroll()
+    expect(container.querySelector('[data-arrow-gutter]')).toBeNull()
+  })
+
+  it('drops the gutters when the row widens until only the gutters would overflow', () => {
+    // Capture the observers watching the scroller so the test can deliver
+    // the resize itself (the glass layers' observers expect real entries).
+    const observers: Array<() => void> = []
+    const RO = window.ResizeObserver
+    window.ResizeObserver = class {
+      cb: () => void
+      constructor(cb: () => void) { this.cb = cb }
+      observe(el: Element) { if (el.classList.contains('overflow-x-auto')) observers.push(this.cb) }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+    try {
+      // Each gutter is 24px wide in this stub; with no CSS the gap reads 0.
+      vi.spyOn(window.HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(24)
+      stubGeometry({ hidden: 240 })
+      const { container } = renderScroll()
+      expect(container.querySelectorAll('[data-arrow-gutter]').length).toBe(2)
+
+      // Wider row: 40px still hidden, but the two gutters account for 48 of
+      // the content, so the chips alone fit.
+      stubGeometry({ hidden: 40 })
+      act(() => { observers.forEach(cb => cb()) })
+      expect(container.querySelector('[data-arrow-gutter]')).toBeNull()
+      // With the gutters gone the content shrinks to fit, and the arrow goes.
+      stubGeometry({ hidden: 0 })
+      act(() => { observers.forEach(cb => cb()) })
+      expect(rightArrow()).toBeNull()
+    } finally {
+      window.ResizeObserver = RO
+    }
   })
 })

@@ -1270,6 +1270,10 @@ class VectorMemoryStore:
                         continue
                     metadata = record_meta.normalize_metadata(item.get("metadata"))
                     metadata.setdefault("source_ref", source_id)
+                    # Same identity resolution as set_semantic: a fact already
+                    # held by another key (or written earlier in this batch)
+                    # updates that key instead of inserting a duplicate holder.
+                    key = record_meta.identity_key(self.db, key, metadata)
                     evidence = record_meta.verified_correction(
                         key=key,
                         before=snapshot.get(key, {}),
@@ -1993,7 +1997,7 @@ class VectorMemoryStore:
                         tuple(chunk),
                     )
                 )
-        return {row["record_id"] for row in rows if not record_meta.eligible(dict(row))}
+        return record_meta.ineligible_record_ids(rows)
 
     def _eligible_rows(self, rows, kind: str) -> list:
         blocked = self._ineligible_ids()

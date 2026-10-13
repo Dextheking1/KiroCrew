@@ -346,6 +346,7 @@ from kiro_crew.dashboard.chat_utils import (  # noqa: F401
     is_harness_slash_command,
     is_system_injection_item,
     mirror_is_paused,
+    open_construct_at_end,
     parse_workflow_command,
     remember_slack_options,
     restore_replacement_if_handover_did_not_land,
@@ -602,6 +603,7 @@ from kiro_crew.security.exfil import MAX_BLOCKED_LINKS_PER_MESSAGE
 from kiro_crew.security.readonly_bash import is_read_only_bash, unsafe_bash_reason
 from kiro_crew.security.redaction import redact_credentials_with_records
 from kiro_crew.sel import SecurityEvent, sel, sel_is_warm
+from kiro_crew.session import process_shutdown_requested  # noqa: F401
 from kiro_crew.session import (
     SessionBusyError,
     SessionClosingError,
@@ -621,6 +623,8 @@ from kiro_crew.slack.outbound import PostedOptions
 from kiro_crew.start_priority import StartPriority, person_priority
 from kiro_crew.tool_gate_busy import hook_gate_busy
 from kiro_crew.trust_patterns import (  # noqa: F401 -- compatibility re-export
+    GrantDeadline,
+    GrantEnded,
     _mask_quoted_separators,
     approval_command,
     approval_display_command,
@@ -628,11 +632,13 @@ from kiro_crew.trust_patterns import (  # noqa: F401 -- compatibility re-export
 from kiro_crew.trust_patterns import extract_base_command as _extract_base_command
 from kiro_crew.trust_patterns import extract_bash_command as _extract_bash_command
 from kiro_crew.trust_patterns import extract_full_command as _extract_full_command
+from kiro_crew.trust_patterns import live_trusted_patterns as _live_trusted_patterns
 from kiro_crew.trust_patterns import matches_trusted_pattern as _matches_trusted_pattern
 from kiro_crew.trust_patterns import redirect_outside_grant as _redirect_outside_grant
 from kiro_crew.trust_patterns import (  # noqa: F401 -- compatibility re-export
     split_command_segments as _split_command_segments,
 )
+from kiro_crew.trust_patterns import timed_grant_deadline as _timed_grant_deadline
 from kiro_crew.validation import ValidationError, validate_ask_user_question
 from kiro_crew.wakatime.heartbeats import (  # noqa: F401
     CADENCE_MIN_INTERVAL_SECS,
@@ -671,6 +677,7 @@ from kiro_crew.dashboard.chat_utils import (  # noqa: E402, F401
     _SYNTHETIC_RECOVERY_MSGS,
     AUTH_REQUIRED_KIND,
     AUTOMATION_NOTICE_KIND,
+    CONTEXT_OVERFLOW_KIND,
     CRON_NOTIFICATION_KIND,
     EMPTY_RUNG_CONTINUE,
     EMPTY_RUNG_GIVE_UP,
@@ -1216,6 +1223,84 @@ async def _steer_repeat_loop_notice(client: Any, notice: str) -> bool:
         logger.debug("repeat-loop steer failed", exc_info=True)
         return False
     return sent is not False
+
+
+#: The chat row shown once per turn when the context crosses the compaction
+#: threshold mid-turn. The frontend's CompactionCard matches this exact shape and
+#: renders it from the catalog, so the English here is the stored form only.
+COMPACT_AFTER_TURN_NOTICE = (
+    "🔄 Context at {pct:.0f}% (limit {limit:.0f}%) — will compact after this turn."
+)
+#: ``meta["notice"]`` on that row. A notice marker keeps ``is_turn_interrupted``
+#: from reading the row as a ``/compact`` result: nothing has been compacted yet.
+COMPACT_AFTER_TURN_NOTICE_KIND = "compact_after_turn"
+
+
+def _tool_rows_settled(slot: Any) -> bool:
+    """True when no tool row of the trailing tool run is still waiting for its result.
+
+    A notice row appended between a running tool's row and its result would stop the
+    turn's backward scans (the post-tool "mark tools done" walk and
+    ``_flush_segment``'s cleanup) before they reach that tool, so the notice waits
+    for a boundary where every tool above it has finished.
+    """
+    for m in reversed(slot.messages):
+        role = m.get("role")
+        if role == "tool":
+            if not (m.get("meta") or {}).get("done"):
+                return False
+        elif role not in ("permission", "card"):
+            return True
+    return True
+
+
+async def _notice_compaction_after_turn(
+    state: DashboardState, slot: Any, client: Any, session_key: str
+) -> bool:
+    """Tell the person "will compact after this turn", once, while the turn still runs.
+
+    Called at a tool-result boundary of a running turn. Does nothing and returns
+    False unless the end-of-turn check would compact this session right now
+    (:meth:`SessionManager.compaction_due_after_turn`) and the transcript is at a
+    clean boundary. Otherwise appends the notice row and returns True, so the caller
+    can make it once per turn. A display row only: the model is not told anything
+    and the turn runs on unchanged. Never compacts: compaction stays where it was,
+    after the turn. Never raises.
+    """
+    try:
+        # `is not True`: only the manager's own verdict counts, never a truthy stand-in.
+        if state.sessions.compaction_due_after_turn(session_key, client) is not True:
+            return False
+        pct = float(client.context_usage_pct())
+        limit = float(state.sessions.effective_autocompact_pct(session_key))
+    except Exception:
+        logger.debug("compact-after-turn: no context reading", exc_info=True)
+        return False
+    if not _tool_rows_settled(slot):
+        return False
+    try:
+        # Finalize the clients' streaming message first. Pre-tool narration was
+        # persisted without a broadcast, so an open client still holds it as the
+        # streaming row, and an assistant frame arriving now would replace it.
+        state.broadcast_ws("chat_segment", {"slot": slot.key})
+        append_and_surface(
+            state,
+            slot,
+            "assistant",
+            COMPACT_AFTER_TURN_NOTICE.format(pct=pct, limit=limit),
+            "msg msg-a",
+            meta={"kind": "compaction", "notice": COMPACT_AFTER_TURN_NOTICE_KIND},
+        )
+    except Exception:
+        logger.debug("compact-after-turn: notice row failed", exc_info=True)
+    logger.info(
+        "Session %s context at %.0f%% (threshold %.0f%%) mid-turn -- noticed; "
+        "compaction runs after the turn",
+        session_key,
+        pct,
+        limit,
+    )
+    return True
 
 
 async def _steer_policy_notice(
@@ -4488,6 +4573,11 @@ def _redact_segment_text(slot: _ChatSlot, text: str) -> tuple[str, list[dict], l
     return redacted, blocked_links, credential_records(matches, slot.credential_evidence)
 
 
+#: Window rows a tool group puts between a segment's chunk rows: the call row,
+#: the approval card a gated call appends, and a change card or guide offer.
+_TOOL_GROUP_ROLES = frozenset({"tool", "permission", "card"})
+
+
 def _flush_segment(
     state: DashboardState,
     slot: _ChatSlot,
@@ -4532,20 +4622,41 @@ def _flush_segment(
         except ValueError:
             return False
 
-    # Walk backwards to find the start of the trailing chunk/stop_event run.
-    boundary = len(slot.messages)
+    # Walk backwards over THIS segment's rows and split them into: chunk rows
+    # to drop, stop_events to re-land after the finalized message, and
+    # tool-group rows (tool, permission, card) to keep in place. The walk stops
+    # at the first row that is none of those — the previous persisted boundary —
+    # which marks the segment start. The tool-group set is the one the
+    # post-tool text fallback reads past: a permission row is the approval card
+    # a gated call appends, a card row is a change card or guide offer the
+    # group's own call puts in, and either can land between deferred chunks.
+    #
+    # A deferred cut (open_construct_at_end holds the boundary while a construct
+    # is open) lets an interleaved tool call land BETWEEN this segment's chunk
+    # rows, so some of the segment's chunks sit before a tool row rather than in
+    # one trailing run. Removing every chunk row from the segment start onward
+    # (not just a trailing run) clears them all; a chunk row left before a tool
+    # row would strand in the window, where a slot-detail reload renders it as a
+    # duplicate ``streaming`` bubble beside the finalized reply. The tool rows
+    # that interleave the chunks are kept in order. The rows are wire-only and
+    # never persisted, so this repairs the in-memory window only; nothing on
+    # disk changes.
+    segment_start = len(slot.messages)
     for i in range(len(slot.messages) - 1, -1, -1):
         role = slot.messages[i].get("role", "")
-        if role == "chunk" or _is_stop_event(slot.messages[i]):
-            boundary = i
+        if role == "chunk" or role in _TOOL_GROUP_ROLES or _is_stop_event(slot.messages[i]):
+            segment_start = i
         else:
             break
-    head = slot.messages[:boundary]
-    tail = slot.messages[boundary:]
+    head = slot.messages[:segment_start]
+    tail = slot.messages[segment_start:]
     trailing_stop_events = [m for m in tail if _is_stop_event(m)]
-    slot.messages = (
-        head  # drops chunks AND trailing stop_events; tail.non-chunk-non-stop stays in head
-    )
+    # Keep the tool-group rows of this segment in place; drop its chunk rows
+    # and pull its stop_events aside (re-landed after the finalized message).
+    kept_tool_rows = [
+        m for m in tail if m.get("role", "") in _TOOL_GROUP_ROLES and not _is_stop_event(m)
+    ]
+    slot.messages = head + kept_tool_rows
     # The window rewrite above is only half the release: append put each chunk
     # row in `_pending` as well, as the SAME dict, so the queue still owns every
     # token of this segment. This is the SUCCESS path — the one a long streamed
@@ -5879,7 +5990,7 @@ async def _recover_app_agent_binding(
         )
     selected_agent = slot.agent
     bindings = await asyncio.to_thread(
-        resolve_session_agent_bindings,
+        functools.partial(resolve_session_agent_bindings, agent_kind=slot.agent_kind),
         resolve_agent_bindings,
         cfg,
         effective_session_key(slot),
@@ -5893,7 +6004,7 @@ async def _recover_app_agent_binding(
     return bindings
 
 
-def _slot_binding(slot: "_ChatSlot") -> tuple[str, str, str, str, str]:
+def _slot_binding(slot: "_ChatSlot") -> tuple[str, str, str, str, str, str]:
     """The slot bindings an eager handshake bakes into the session it registers.
 
     ONE definition, because two exist to be compared: ``_eager_spawn`` snapshots
@@ -5909,6 +6020,8 @@ def _slot_binding(slot: "_ChatSlot") -> tuple[str, str, str, str, str]:
         slot.project,
         slot.reasoning_effort,
         slot.memory_store,
+        # The namespace the name is read in: a kind change is a binding change.
+        slot.agent_kind,
     )
 
 
@@ -5996,9 +6109,9 @@ async def _eager_spawn(
             _bound = _slot_binding(slot)
             kiro_agent: str | None = None
             # Canonical crew identity for watchdog overrides. Seeded from the
-            # slot, replaced by the resolver's alias below: an EMPTY slot runs
-            # the DEFAULT crew (resolve_agent_bindings step 2), whose overrides
-            # would be discarded by passing "" here.
+            # slot, replaced by the resolver's alias below. An EMPTY slot runs
+            # the default TEMPLATE (resolve_agent_bindings step 2), which is
+            # nobody's crew, so "" is its honest alias.
             crew_alias = slot.agent or ""
             agent_model = ""
             # Same default-model resolve as the real turn — the two MUST agree,
@@ -6011,7 +6124,7 @@ async def _eager_spawn(
                 cfg = await asyncio.to_thread(KiroCrewConfig.load)
                 loaded_cfg = cfg
                 bindings = await asyncio.to_thread(
-                    resolve_session_agent_bindings,
+                    functools.partial(resolve_session_agent_bindings, agent_kind=_bound[5]),
                     resolve_agent_bindings,
                     cfg,
                     session_key,
@@ -6044,7 +6157,7 @@ async def _eager_spawn(
                             exc_info=True,
                         )
                     bindings = await asyncio.to_thread(
-                        resolve_session_agent_bindings,
+                        functools.partial(resolve_session_agent_bindings, agent_kind=_bound[5]),
                         resolve_agent_bindings,
                         cfg,
                         session_key,
@@ -6806,6 +6919,47 @@ def _arm_queued_delivery_settlement(
         logger.debug("Could not arm queued sub-agent delivery settlement", exc_info=True)
 
 
+def settle_drained_subagent_notices(state: Any, slot: Any, notices: list[str]) -> None:
+    """Settle the delivery debt of notices drained from ``_pending_subagent_failures``.
+
+    A notice whose run owes a ``delivered`` tombstone is recorded on the slot's
+    ledger under its own text when it is queued, and that run's folder stays
+    untombstoned until this drain, so a restart before it leaves the run to the
+    next start's orphan reconciliation. The parent's next turn calls this where
+    it takes the list. The manager writes the tombstones on a tracked task,
+    behind the same teardown gate as a queued announce.
+    """
+    try:
+        owed = slot.take_pending_subagent_deliveries(notices)
+    except Exception:
+        logger.debug("Could not claim drained sub-agent notice deliveries", exc_info=True)
+        return
+    if not owed:
+        return
+    mgr = getattr(state, "subagents", None)
+    settle = getattr(mgr, "settle_queued_delivery", None) if mgr is not None else None
+    work = None
+    if settle is not None:
+        try:
+            candidate = settle(owed)
+        except Exception:
+            logger.debug("Manager-side notice settlement refused", exc_info=True)
+        else:
+            work = candidate if asyncio.iscoroutine(candidate) else None
+    if work is None:
+        logger.debug(
+            "No sub-agent manager to settle drained notices for %s; "
+            "leaving the folder for restart reconciliation",
+            owed,
+        )
+        return
+    writer = asyncio.create_task(work)
+    bg = getattr(state, "_background_tasks", None)
+    if isinstance(bg, set):
+        bg.add(writer)
+        writer.add_done_callback(bg.discard)
+
+
 #: Where a requeue stamps the actor of the turn it is retrying. Re-exported from
 #: ``chat_delivery``, which assembles queue-entry meta, so the producers that stamp
 #: it and the drain below that reads it cannot drift onto two spellings.
@@ -7025,6 +7179,14 @@ async def _start_next_queued_turn(
     also zeroes the batch's completion-turn count; the drain itself reads no
     store.
     """
+
+    # Nothing starts while the process is going away. The successor would write
+    # its own in-flight marker before the session gate refuses it, and that marker
+    # is what the next start reads in place of the ending turn's: the restart would
+    # show the recovery's row, not the cut reply. The queue stays as it is, so the
+    # history save keeps it for the next start, as the parked drain already does.
+    if _gateway_shutdown_requested(state):
+        return False
 
     # A drain that follows a turn's end marks that end before it writes anything:
     # the drop notices, the held-note flush and the cancellation notices below
@@ -7926,6 +8088,10 @@ async def _finish_queue_cycle(
         # the read. That turn owns the slot now and ends its own cycle.
         return
     slot.append("done", "", "done")
+    # Frontend contract: the dashboard treats the first `slots` frame reporting
+    # `running: false` as the turn's end (runState settleEndedActiveTurn), so all
+    # content is already out, `slot.task = None` precedes the push and the push
+    # precedes `chat_done`. Pinned by test/test_finish_queue_cycle_terminal_order.py.
     slot.task = None
     state.push_slots_update()
     await _send_chat_done(state, slot, payload=payload)
@@ -7967,6 +8133,7 @@ async def _send_chat_done(
     slot: _ChatSlot,
     *,
     continuing: bool = False,
+    ends_turn: bool = True,
     payload: dict[str, Any] | None = None,
 ) -> None:
     """Send a turn-boundary ``chat_done`` frame; the runner sends no other way.
@@ -7976,7 +8143,7 @@ async def _send_chat_done(
     here. Either way :func:`chat_utils.chat_done_payload` is awaited before the
     broadcast, so a coroutine never reaches the serializer."""
     if payload is None:
-        payload = await chat_done_payload(state, slot, continuing=continuing)
+        payload = await chat_done_payload(state, slot, continuing=continuing, ends_turn=ends_turn)
     state.broadcast_ws("chat_done", payload)
 
 
@@ -9014,6 +9181,13 @@ async def _run_chat(
         return injected
 
     assistant_text = ""
+    # The accumulated text at the last segment cut that was deferred because a
+    # construct was open (see open_construct_at_end). While `assistant_text`
+    # still starts with it, the pending segment holds text a cut was held back
+    # over, even if the construct has closed since, so a compaction reset must
+    # finalize it rather than clear it. Any reset of the accumulator breaks the
+    # prefix, which retires the marker without each reset site clearing it.
+    _deferred_cut_text = ""
     # Initialized HERE (not with the other turn-state flags below) because
     # _steer_segment_cut declares it nonlocal — mypy requires the binding to
     # exist textually before the nested def. Semantics unchanged: nothing
@@ -9108,6 +9282,24 @@ async def _run_chat(
                 text=_redacted,
                 interrupted=True,
             )
+            if _gateway_shutdown_requested(state):
+                # The graceful save ran before this row existed, and the turn's
+                # teardown skips its own save while the process is going away, so
+                # without this the row dies with the process. Saved with the
+                # in-flight marker still set: the next start shows this text with
+                # its interruption row and the Resume button. Before the usage
+                # write and the recovery rows below, so the restart reconciles
+                # exactly the text the user watched stream.
+                try:
+                    await save_slot_off_loop(
+                        state,
+                        slot,
+                        force=True,
+                        expected_history_key=slot_history_key(slot),
+                        expected_slot_name=slot.key,
+                    )
+                except Exception:
+                    logger.debug("Saving the partial reply at shutdown failed", exc_info=True)
         # The usage row is written whether or not the turn produced partial text
         # -- a turn cut after many tool calls bills credits with no final
         # assistant segment -- so it sits outside the ``assistant_text`` guard.
@@ -9916,6 +10108,8 @@ async def _run_chat(
     _refusal_notices_settled = 0
     # Same call, same result, again and again: told once per call (repeat_loop).
     _repeat_loop = RepeatLoopTracker()
+    # Whether this turn already said "will compact after this turn" (once per turn).
+    _compact_after_turn_noticed = False
     # Whether the current denied batch's cascade already steered its one
     # cause-specific notice. One notice covers the whole cascaded remainder, so
     # this stops the second and later members from repeating it; re-armed each
@@ -10374,6 +10568,7 @@ async def _run_chat(
                 slot.memory_store,
                 slot._memory_assignment_from_history,
                 effective_session_key(slot),
+                slot.agent_kind,
             )
 
         # Serialize this turn's binding capture and session registration
@@ -10428,7 +10623,7 @@ async def _run_chat(
                 selected_binding[1], operation="chat_turn", source="unknown"
             )
             bindings = await asyncio.to_thread(
-                resolve_session_agent_bindings,
+                functools.partial(resolve_session_agent_bindings, agent_kind=selected_binding[6]),
                 resolve_agent_bindings,
                 cfg,
                 session_key,
@@ -10470,7 +10665,9 @@ async def _run_chat(
                         exc_info=True,
                     )
                 bindings = await asyncio.to_thread(
-                    resolve_session_agent_bindings,
+                    functools.partial(
+                        resolve_session_agent_bindings, agent_kind=selected_binding[6]
+                    ),
                     resolve_agent_bindings,
                     cfg,
                     session_key,
@@ -10662,6 +10859,7 @@ async def _run_chat(
         # circular import: session_control imports this package's modules at module level.
         from kiro_crew.dashboard.session_control import (
             apply_pending_model_pick,
+            arm_model_switch_reset,
             prewarm_enabled_check,
         )
 
@@ -10670,17 +10868,7 @@ async def _run_chat(
             # synchronous gate below does no file IO on the loop.
             await prewarm_enabled_check()
         if apply_pending_model_pick(state, slot):
-            # Reset only a session that can still be on the old model: one
-            # already registered, or an eager spawn in flight that may register
-            # one before get_or_create. With neither, get_or_create cold-starts
-            # on the new model, and an armed reset would tear that session down
-            # at turn end for nothing.
-            _picked_key = effective_session_key(slot)
-            _eager = slot._eager_spawn_task
-            if state.sessions.get_provider(_picked_key) is not None or (
-                _eager is not None and not _eager.done()
-            ):
-                slot._pending_reset_history_key = slot._pending_reset_history_key or _picked_key
+            arm_model_switch_reset(state, slot)
             # The commit above is memory-only; persist it before the provider is
             # acquired, so a gateway exit mid-turn does not restore the old pin.
             # Awaiting here is safe: the gate and the write already happened in
@@ -10942,6 +11130,15 @@ async def _run_chat(
         # next turn.
         if is_new and not resumed:
             state.sessions.mark_first_turn_history_owed(session_key)
+        if state.sessions.unlanded_marker_pending(session_key) is True:
+            # The sid's unlanded marker must land before the turn does, or a
+            # crash in the debounce window keeps the sid without it. Awaited
+            # off the loop; a failed write fails the turn before it is sent,
+            # and the turn's own finally hands the session back. A marker left
+            # by an earlier turn whose write failed is flushed again here, as a
+            # warm retry is not ``is_new``. Only a backend whose resume honours
+            # the marker ever carries one, so other turns await nothing.
+            await state.sessions.aflush()
         # AcpProvider exposes an exact bool; ``is True`` prevents a truthy mock
         # or fallback from authorizing replay. KAS and every future backend fail
         # closed even if they populate a familiar ``tool_name``.
@@ -11535,6 +11732,7 @@ async def _run_chat(
             if slot._pending_subagent_failures:
                 failures = slot._pending_subagent_failures[:]
                 slot._pending_subagent_failures.clear()
+                settle_drained_subagent_notices(state, slot, failures)
                 message = "\n\n".join(failures) + "\n\n" + message
             # Save raw user message before context/persona prepend for Slack
             # mirror — avoids leaking injected context to the linked thread.
@@ -12518,7 +12716,15 @@ async def _run_chat(
                 # message so post-tool text starts a fresh message.
                 if in_tool_group:
                     _flush_text_stream()
-                    if assistant_text:
+                    _open_construct = open_construct_at_end(assistant_text)
+                    if assistant_text and _open_construct:
+                        _deferred_cut_text = assistant_text
+                        logger.debug(
+                            "segment cut deferred on %s — %s still open",
+                            slot.key,
+                            _open_construct,
+                        )
+                    elif assistant_text:
                         _flush_segment(state, slot, assistant_text)
                         assistant_text = ""
                         _turn_flushed_visible_text = True
@@ -12728,9 +12934,18 @@ async def _run_chat(
                 # but keep the streaming message in place for correct tool ordering.
                 _flush_text_stream()
                 if not in_tool_group and assistant_text:
-                    _flush_segment(state, slot, assistant_text, broadcast=False)
-                    assistant_text = ""
-                    _turn_flushed_visible_text = True
+                    _open_construct = open_construct_at_end(assistant_text)
+                    if _open_construct:
+                        _deferred_cut_text = assistant_text
+                        logger.debug(
+                            "segment cut deferred on %s — %s still open",
+                            slot.key,
+                            _open_construct,
+                        )
+                    else:
+                        _flush_segment(state, slot, assistant_text, broadcast=False)
+                        assistant_text = ""
+                        _turn_flushed_visible_text = True
                 # AFTER the flush, because seq is the order a reader folds on and
                 # the model narrating before it calls a tool is the common case:
                 # `_flush_segment` is what appends this turn's `message/sent`, so
@@ -13921,6 +14136,19 @@ async def _run_chat(
                     )
                 except Exception:
                     logger.debug("PostToolUse hook error", exc_info=True)
+                if (
+                    _tool_terminal
+                    and not _compact_after_turn_noticed
+                    and not is_slash
+                    and not assistant_text
+                    and not _deferred_cut_text
+                ):
+                    # The context crossed the threshold while this turn is still
+                    # working. Compaction waits for the turn to end, so say so to
+                    # the person, once per turn.
+                    _compact_after_turn_noticed = await _notice_compaction_after_turn(
+                        state, slot, client, session_key
+                    )
             elif event.kind == EVENT_PERMISSION_REQUEST:
                 # Drain the key as soon as its permission decision begins. The
                 # stream handles one decision at a time, so one bounded key is
@@ -13938,13 +14166,34 @@ async def _run_chat(
                 # cause of pills staying in "running" state until the next tool
                 # call or message end.
                 # Flush accumulated text as a finalized segment before the
-                # permission flow so the frontend renders them in order.
+                # permission flow so the frontend renders them in order. The
+                # same open-construct deferral as the tool-call cut applies: an
+                # approval-gated call (parent or child) that lands inside an
+                # open options marker, fence or widget would otherwise split it
+                # and undo a deferral the tool-call site just made.
                 _flush_text_stream()
-                if assistant_text:
+                _open_construct = open_construct_at_end(assistant_text)
+                if assistant_text and _open_construct:
+                    _deferred_cut_text = assistant_text
+                    logger.debug(
+                        "segment cut deferred on %s — %s still open",
+                        slot.key,
+                        _open_construct,
+                    )
+                elif assistant_text:
                     _flush_segment(state, slot, assistant_text)
                     assistant_text = ""
                     _turn_flushed_visible_text = True
                 _pre_tool_hooks_fired = False
+                # "Not applied — approve this command explicitly" notices from a
+                # rung that declined its grant. Held until the request actually
+                # reaches the interactive card: a later unconditional rung
+                # (native crew, session trust, YOLO) may still approve it, and
+                # then the notice asks for an approval nobody is asked for. Keyed
+                # by the refusal's detail: the hook and trusted-pattern rungs
+                # refuse one shadowed name with the same detail, and one card
+                # needs that sentence once.
+                _declined_grant_notices: dict[str, str] = {}
                 # Backend-subagent request whose SECURITY context is absent
                 # (structured params missing, or shell with no recoverable
                 # command — see AcpEvent.child_low_fidelity): every
@@ -14137,12 +14386,11 @@ async def _run_chat(
                                 refusal=_hook_shim,
                                 tier="hook_auto_approve",
                             )
-                            slot.append(
-                                "system",
+                            _declined_grant_notices.setdefault(
+                                _hook_shim.detail,
                                 "🛡️ Auto-approve not applied — "
                                 f"{_redact_display_text(_hook_shim.detail)}. "
                                 "Approve this command explicitly.",
-                                "msg msg-info",
                             )
                             tool_result = ToolHookResult(action=TOOL_ALLOW)
                     if tool_result.action == TOOL_AUTO_APPROVE:
@@ -14371,11 +14619,24 @@ async def _run_chat(
                 # rule is AcpEvent.child_unconditional_grant_eligible — the same
                 # boolean the unconditional grants below read — bound once above
                 # as _child_grant_eligible, so it cannot drift here.
-                if (
-                    slot._trusted_patterns
-                    and _child_grant_eligible
-                    and not event.tool_input_redacted
-                ):
+                #
+                # Timed grants are checked HERE, at decision time, rather than
+                # by a timer: a grant past its deadline is dropped before the
+                # match, so it can never approve the call in front of it. They
+                # live in their own store, so the set below is the chat-long
+                # patterns plus whichever timed ones are still live.
+                _tp_deadlines = getattr(slot, "_trusted_pattern_deadlines", None)
+                _tp_live = (
+                    _live_trusted_patterns(
+                        slot._trusted_patterns,
+                        _tp_deadlines,
+                        wall=time.time(),
+                        mono=time.monotonic(),
+                    )
+                    if _tp_deadlines
+                    else slot._trusted_patterns
+                )
+                if _tp_live and _child_grant_eligible and not event.tool_input_redacted:
                     _tp_command = approval_command(
                         event.tool_input or "",
                         is_shell=event.is_shell,
@@ -14384,15 +14645,13 @@ async def _run_chat(
                         raw_tool_params=event.raw_tool_params,
                     )
                     matched = (
-                        _matches_trusted_pattern(_tp_command, slot._trusted_patterns)
-                        if _tp_command
-                        else None
+                        _matches_trusted_pattern(_tp_command, _tp_live) if _tp_command else None
                     )
                     if (
                         matched
                         and event.is_shell
                         and _tp_command
-                        and _redirect_outside_grant(_tp_command, slot._trusted_patterns)
+                        and _redirect_outside_grant(_tp_command, _tp_live)
                     ):
                         # The user granted a program, not the files the shell
                         # opens for it: a write redirect needs a grant that
@@ -14409,18 +14668,17 @@ async def _run_chat(
                             tool_kind=event.tool_kind,
                             outcome="auto_approve_declined",
                             request_id=event.request_id,
-                            error="the command writes through a redirect the grant does not cover",
+                            error="the command may write through a redirect the grant does not cover",
                             metadata={
                                 "reason": "redirect_outside_grant",
                                 "tier": "trusted_pattern",
                             },
                         )
-                        slot.append(
-                            "system",
-                            "🛡️ Trusted pattern not applied — the command writes to a file "
-                            "through an output redirect, which the grant does not cover. "
+                        _declined_grant_notices.setdefault(
+                            "redirect_outside_grant",
+                            "🛡️ Trusted pattern not applied — the command may write through "
+                            "a redirect, which the grant does not cover. "
                             "Approve this command explicitly.",
-                            "msg msg-info",
                         )
                         matched = None
                     if matched and event.is_shell and _tp_command:
@@ -14450,14 +14708,24 @@ async def _run_chat(
                                 refusal=_tp_shim,
                                 tier="trusted_pattern",
                             )
-                            slot.append(
-                                "system",
+                            _declined_grant_notices.setdefault(
+                                _tp_shim.detail,
                                 "🛡️ Trusted pattern not applied — "
                                 f"{_redact_display_text(_tp_shim.detail)}. "
                                 "Approve this command explicitly.",
-                                "msg msg-info",
                             )
                             matched = None
+                    # The program-name check above and the transport's own floor
+                    # check are awaited hops, long enough for a timed grant to
+                    # pass its deadline (a slow pool, a host suspended mid-call).
+                    # An approval that rests on timed grants carries their
+                    # deadline down to the send, where the transport checks it
+                    # last; one the chat-long patterns cover alone carries none.
+                    _tp_deadline: GrantDeadline | None = (
+                        _timed_grant_deadline(_tp_command, slot._trusted_patterns, _tp_deadlines)
+                        if matched and _tp_deadlines
+                        else None
+                    )
                     if matched:
                         try:
                             validated_tool = _validate_tool_name(
@@ -14481,45 +14749,58 @@ async def _run_chat(
                                 refusal_reasons=_refusal_reasons,
                             )
                             continue
-                        approval_sent = await client.approve_tool(event.request_id)
-                        if approval_sent is False:
+                        if _tp_deadline is None:
+                            approval_sent = await client.approve_tool(event.request_id)
+                        else:
+                            # A timed grant backs this approval: the transport
+                            # checks its deadline again after the floor and, if it
+                            # has passed, sends nothing and raises. The call then
+                            # falls through to the normal prompt below.
+                            try:
+                                approval_sent = await client.approve_tool(
+                                    event.request_id, deadline=_tp_deadline
+                                )
+                            except GrantEnded:
+                                approval_sent = None
+                        if approval_sent is not None:
+                            if approval_sent is False:
+                                sel().log_tool_invocation(
+                                    session_key=session_key,
+                                    agent=slot.agent or "kirocrew",
+                                    source="dashboard",
+                                    tool_name=_redact_display_text(event.title),
+                                    tool_kind=event.tool_kind,
+                                    outcome=OUTCOME_REJECTED_TRANSPORT_FLOOR,
+                                    request_id=event.request_id,
+                                )
+                                continue
+                            _wt_note_approved(event)
+                            _tool_title = _broadcast_auto_tool(state, slot, event)
+                            _tool_title, _ = redact_exfiltration_urls(_tool_title)
+                            _tool_title, _ = redact_credentials(_tool_title)
+                            slot.append(
+                                "tool",
+                                f"🔧 {_tool_title}",
+                                "msg msg-tool",
+                                # `_tool_meta` for parity with every other rung: same
+                                # `_MAX_TOOL_PURPOSE` cap (a hand-rolled 200-char cap
+                                # here truncated restored purposes mid-sentence), same
+                                # redacted `tool_call_id` (the live↔replay join key),
+                                # and `input`/`kind` so historical rows open the same
+                                # inline detail panel as live ones.
+                                meta=_tool_meta(event),
+                            )
                             sel().log_tool_invocation(
                                 session_key=session_key,
                                 agent=slot.agent or "kirocrew",
                                 source="dashboard",
-                                tool_name=_redact_display_text(event.title),
+                                tool_name=_tool_title,
                                 tool_kind=event.tool_kind,
-                                outcome=OUTCOME_REJECTED_TRANSPORT_FLOOR,
+                                outcome="auto_approved",
                                 request_id=event.request_id,
+                                metadata={"reason": "trusted_pattern", "pattern": matched},
                             )
                             continue
-                        _wt_note_approved(event)
-                        _tool_title = _broadcast_auto_tool(state, slot, event)
-                        _tool_title, _ = redact_exfiltration_urls(_tool_title)
-                        _tool_title, _ = redact_credentials(_tool_title)
-                        slot.append(
-                            "tool",
-                            f"🔧 {_tool_title}",
-                            "msg msg-tool",
-                            # `_tool_meta` for parity with every other rung: same
-                            # `_MAX_TOOL_PURPOSE` cap (a hand-rolled 200-char cap
-                            # here truncated restored purposes mid-sentence), same
-                            # redacted `tool_call_id` (the live↔replay join key),
-                            # and `input`/`kind` so historical rows open the same
-                            # inline detail panel as live ones.
-                            meta=_tool_meta(event),
-                        )
-                        sel().log_tool_invocation(
-                            session_key=session_key,
-                            agent=slot.agent or "kirocrew",
-                            source="dashboard",
-                            tool_name=_tool_title,
-                            tool_kind=event.tool_kind,
-                            outcome="auto_approved",
-                            request_id=event.request_id,
-                            metadata={"reason": "trusted_pattern", "pattern": matched},
-                        )
-                        continue
                 # Trust-reads: auto-approve read-only bash commands
                 # Detect bash tools by tool_input content (title is human-readable)
                 cmd = _extract_bash_command(event.tool_input) if event.tool_input else ""
@@ -14890,6 +15171,10 @@ async def _run_chat(
                 # docs/system-specs/modules/app-notifications.md, "Sound events" (permission row).
                 if tool_approval_timeout_secs() <= 0:
                     perm_meta["resolved"] = "rejected"
+                else:
+                    # Only a card someone can still answer gets the held notices.
+                    for _notice in _declined_grant_notices.values():
+                        slot.append("system", _notice, "msg msg-info")
                 permission_row = slot.append(
                     "permission",
                     f"{_child_lf_warning}{_safe_title}" if _child_lf_warning else _safe_title,
@@ -15546,6 +15831,34 @@ async def _run_chat(
                         "chat_message",
                         {"slot": slot.key, "role": "compacting", "content": ""},
                     )
+                # Finalize the accumulated segment BEFORE the terminal notice is
+                # appended. _broadcast_compaction_result appends an `assistant`
+                # notice row, and _flush_segment's cleanup walks back only to the
+                # first non-chunk/non-tool row — so flushing after the notice
+                # would stop at it and strand this segment's chunk rows as a
+                # duplicate in-memory bubble. Only a segment a cut was deferred
+                # over is finalized here, whether or not its construct has closed
+                # since: that is the text a deferred cut leaves unflushed, and any
+                # other pre-compaction text keeps the plain reset below. The
+                # redactor's withheld tail is emitted first so the wire stream
+                # carries the whole segment before the reset discards the
+                # buffer. The leaked-call scan reads the accumulator here too,
+                # since the reset below empties it before the turn-end gates run.
+                if (
+                    not event.synthesized
+                    and event.text in ("completed", "failed")
+                    and _deferred_cut_text
+                    and assistant_text.startswith(_deferred_cut_text)
+                ):
+                    _compaction_dropped_leak = _compaction_dropped_leak or has_leaked_tool_call(
+                        assistant_text
+                    )
+                    _flush_text_stream()
+                    _flush_segment(state, slot, assistant_text, broadcast=False)
+                    assistant_text = ""
+                    _deferred_cut_text = ""
+                    _turn_flushed_visible_text = True
+                    _wsred.reset()
                 if _broadcast_compaction_result(state, slot, event):
                     saw_compaction = True
                     if event.text == "completed":
@@ -15562,19 +15875,20 @@ async def _run_chat(
                         # `assistant_text`, and clearing it here would delete the
                         # answer a backend produced AFTER compacting.
                         #
+                        # The deferred-text flush ran just above, BEFORE
+                        # _broadcast_compaction_result appended its notice, so it
+                        # could remove that segment's chunk rows without stopping
+                        # at the notice. When it ran, it also emptied
+                        # `assistant_text` and reset `_wsred`.
+                        #
                         # Scan for a leaked tool call BEFORE the reset: the
                         # turn-end leak gates read this accumulator, so a leak
                         # that streamed before the boundary is invisible to them
-                        # once it is cleared, and both decline on an empty
-                        # segment. The block already reached the user (chunks
-                        # stream to the wire as they arrive) and the boundary
-                        # does not flush, so without this the turn shows raw
-                        # invoke syntax, runs no tool, persists nothing and
-                        # explains nothing. Only the FACT survives the reset;
-                        # the text is gone by turn end, which is the defect.
-                        # OR-accumulated: a turn may cross more than one
-                        # boundary, and a leak dropped at an earlier one is not
-                        # un-reported by a later clean segment.
+                        # once it is cleared. OR-accumulated so a leak dropped at
+                        # an earlier boundary is not un-reported by a later clean
+                        # segment. When the hoisted path already emptied the
+                        # accumulator this reads "" and records nothing new; it
+                        # is the no-text terminal that relies on the scan here.
                         _compaction_dropped_leak = _compaction_dropped_leak or has_leaked_tool_call(
                             assistant_text
                         )
@@ -16627,7 +16941,7 @@ async def _run_chat(
             assistant_text = ""
             _wsred.reset()
             _produced_visible_output = True
-            await _send_chat_done(state, slot, continuing=True)
+            await _send_chat_done(state, slot, continuing=True, ends_turn=False)
 
             # claude-agent-acp performs /compact synchronously inside session/prompt;
             # there is no out-of-band _kiro.dev/compaction/status notification, so

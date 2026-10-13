@@ -16,6 +16,7 @@ import pytest
 from kiro_crew import platform_compat
 from kiro_crew.acp.session_handle import WatchdogSettings
 from kiro_crew.start_priority import PrioritySemaphore, StartPriority
+from kiro_crew.testing.wait import async_wait_until
 
 
 @pytest.fixture(autouse=True)
@@ -191,16 +192,28 @@ class TestFillWarmPool:
         provider.shutdown = AsyncMock(side_effect=asyncio.CancelledError)
         factory.side_effect = lambda *a, **kw: provider
 
-        with patch("kiro_crew.session._sync_kill_provider") as mock_kill:
+        # The cancellation handler can neither await nor block the loop, so it
+        # dispatches the hard kill fire-and-forget. Production sends it to
+        # `subprocess_executor()`, a process-wide 8-worker singleton shared by
+        # every test in this xdist worker, and a started run_in_executor future
+        # cannot be cancelled -- so sibling tests holding those threads (a real
+        # `taskkill` or descendant scan on Windows, a wedged PTY close) make
+        # this kill queue behind them for as long as they run. A private
+        # executor owns the capacity this assertion depends on, so the only
+        # wait left is for the dispatched call to reach its worker thread: a
+        # signal under a lost-run bound, not a bet on the shared pool's spare
+        # capacity.
+        with (
+            ThreadPoolExecutor(max_workers=1) as private_executor,
+            patch("kiro_crew.session._sync_kill_provider") as mock_kill,
+            patch("kiro_crew.session.subprocess_executor", return_value=private_executor),
+        ):
             with pytest.raises(asyncio.CancelledError):
                 await mgr._fill_warm_pool()
-            # The hard kill is dispatched fire-and-forget to the subprocess
-            # executor (a cancellation handler can neither await nor block the
-            # loop) — give the worker thread a beat to run it.
-            for _ in range(100):
-                if mock_kill.call_count:
-                    break
-                await asyncio.sleep(0.01)
+            await async_wait_until(
+                lambda: mock_kill.call_count,
+                describe=lambda: f"hard kill not dispatched; calls={mock_kill.mock_calls!r}",
+            )
             mock_kill.assert_called_once_with(provider)
         assert mgr._warm_pool.qsize() == 0
 
@@ -425,6 +438,21 @@ class TestConfigWiring:
         cfg.agent.default_agent = "fallback-agent"
         mgr = SessionManager(cfg)
         assert mgr._pool_agent == "fallback-agent"
+
+    def test_a_blank_pool_agent_is_the_default_template_not_a_same_named_alias(self):
+        """A plain session runs ``default_template``; when a crewmate alias spells
+        the same name but binds another template, the pool must prewarm what the
+        session runs, or every claim misses."""
+        from kiro_crew.config.loader import KiroCrewAgentConfig
+        from kiro_crew.session import SessionManager
+
+        cfg = _make_cfg(pool_size=1, pool_agent="")
+        cfg.agent.default_agent = "atlas"
+        cfg.agents["atlas"] = KiroCrewAgentConfig(
+            kiro_agent="other-template", workspace="default", memory_store="default"
+        )
+        mgr = SessionManager(cfg)
+        assert mgr._pool_agent == "atlas"
 
     def test_pool_disabled_by_default(self):
         from kiro_crew.session import SessionManager
@@ -874,11 +902,16 @@ class TestModelMatchesPoolDefault:
         mgr._drain_and_claim.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_empty_pool_agent_skips_model_resolution_on_claim(self):
-        """No pool_agent configured → no model resolution on post-claim check."""
+    async def test_empty_pool_agent_is_the_default_template(self):
+        """No pool_agent configured → the pool is the default TEMPLATE.
+
+        A plain session asks the pool for the default template, so that is
+        what the pool prewarms and what the post-claim model check reads.
+        """
         from kiro_crew.providers.acp import AcpProvider
 
         mgr, factory = _make_manager(pool_agent="")
+        assert mgr._pool_agent == "kirocrew"
         pooled = _make_provider()
         pooled.__class__ = AcpProvider
         pooled.client = MagicMock()
@@ -888,12 +921,12 @@ class TestModelMatchesPoolDefault:
         mgr._drain_and_claim = AsyncMock(return_value=pooled)
         mgr._schedule_replenish = MagicMock()
 
-        with patch.object(type(mgr), "_resolve_agent_model") as mock_resolve:
+        with patch.object(type(mgr), "_resolve_agent_model", return_value="") as mock_resolve:
             await mgr.get_or_create("test-key", agent=None, model="claude-opus-4.6")
 
-        mock_resolve.assert_not_called()
-        # model provided but no pool_agent → pool_model is None → skip set_model
-        # (pool process already has whatever model kiro-cli defaults to)
+        mock_resolve.assert_called_once_with("kirocrew")
+        # The template pins no model → pool_model is "" → skip set_model (the
+        # pool process already has whatever model kiro-cli defaults to).
         pooled.client.set_model.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -977,6 +1010,14 @@ class TestStatelessSkipsPool:
         mgr._warm_pool.put_nowait((pooled, time.monotonic()))
         mgr._drain_and_claim = AsyncMock(return_value=pooled)
 
+        def _persistent_provider(*_a, **_kw):
+            # A real provider reports its privacy mode; the turn after creation
+            # checks it against the session's.
+            p = _make_provider()
+            p.memory_mode = "persistent"
+            return p
+
+        factory.side_effect = _persistent_provider
         provider, is_new, _ = await mgr.get_or_create("_bg", agent=None)
 
         mgr._drain_and_claim.assert_not_awaited()

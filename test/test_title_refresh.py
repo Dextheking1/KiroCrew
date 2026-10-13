@@ -424,7 +424,7 @@ class TestManualRegenerateRaceGuard:
         async def _generate(_sessions, _prompt, **_kw):
             return "Model suggestion"
 
-        async def _rename_during_persist(_state, _slot):
+        async def _rename_during_persist(_state, _slot, **_kw):
             slot.title = "User chosen name"
             slot._title_origin = _TITLE_ORIGIN_USER
             slot._title_epoch += 1
@@ -1649,7 +1649,9 @@ class TestScriptCronSlotCreateTitles:
         assert reopened.created_at != "2000-01-01T00:00:00+00:00"
         assert reopened.folder_id == folder_id
         assert reopened.tags == ["tag-1"]
-        pin_store.assert_awaited_once()
+        # An agent-less reopen is the default TEMPLATE: a template pick
+        # never pins member memory, and the selection is still recorded.
+        pin_store.assert_not_awaited()
         record_selection.assert_awaited_once()
 
     @pytest.mark.asyncio

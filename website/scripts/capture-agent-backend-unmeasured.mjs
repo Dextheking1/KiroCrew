@@ -10,11 +10,11 @@
  * Every `capabilities` row below is copied verbatim from what
  * `backend_cards.card_payload()` emits for that harness on this revision, so a frame
  * documents the answer the server actually gives rather than a shape hand-written to
- * make a point. pi is the harness whose `/compact` cell is declared unmeasured
- * (`DECLARED_UNMEASURED`, from `ACP_BACKENDS_COMPACT`'s own "unclassified" words), and
- * kiro-cli sits beside it as the all-measured comparison — which is what makes the
- * three marks comparable in one read. The goose rows are the card as it read before
- * goose's `/compact` capture, kept so the frames show two unmeasured harnesses.
+ * make a point. `DECLARED_UNMEASURED` is empty on this revision, so no live card has an
+ * unmeasured cell. The pi and goose rows are each card as it read before that harness's
+ * `/compact` capture, kept so the frames still show the third mark, and kiro-cli sits
+ * beside them as the all-measured comparison — which is what makes the three marks
+ * comparable in one read.
  *
  * Usage: node scripts/capture-agent-backend-unmeasured.mjs [outDir]
  */
@@ -28,7 +28,7 @@ const PROJECT = '/home/user/workspace/KiroCrew'
 
 mkdirSync(OUT, { recursive: true })
 
-/** `card_payload("pi")` on this revision. */
+/** `card_payload("pi")` before its `/compact` capture. */
 const PI_CAPABILITIES = [
   { id: 'crew_tools', available: false, measured: true, unmeasured_reason: '' },
   { id: 'member_thread_tools', available: false, measured: true, unmeasured_reason: '' },

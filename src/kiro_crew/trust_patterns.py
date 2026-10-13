@@ -12,8 +12,16 @@ import fnmatch
 import glob
 import json
 import re
+import time
+from collections.abc import Callable, Iterable
+from typing import NamedTuple
 
 ENV_ASSIGNMENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*=")
+
+# The longest a timed command-scoped grant may last. "For the rest of today"
+# is the widest timed choice the approval card offers, so a day bounds every
+# honest request; a longer one is refused rather than clamped.
+MAX_TIMED_GRANT_SECONDS = 24 * 60 * 60
 
 _REDIRECT_PLACEHOLDER = "\x00REDIR\x00"
 _REDIRECT_RE = re.compile(r"[0-9]*>&[0-9]*|&>>?")
@@ -267,12 +275,20 @@ def redirect_outside_grant(command: str, patterns: set[str]) -> bool:
     for segment in segments if len(segments) > 1 else [normalized]:
         if not writes_through_redirect(segment):
             continue
-        if not any(
-            pattern == "*" or (writes_through_redirect(pattern) and _tool_matches(pattern, segment))
-            for pattern in patterns
-        ):
+        if not any(_covers_write_redirect(pattern, segment) for pattern in patterns):
             return True
     return False
+
+
+def _covers_write_redirect(pattern: str, segment: str) -> bool:
+    """Whether ``pattern`` covers ``segment`` together with the write redirect in it.
+
+    The rule :func:`redirect_outside_grant` applies: the broad ``*`` grant, or a
+    pattern that matches the segment and spells a write redirect itself.
+    """
+    from kiro_crew.security.readonly_bash import writes_through_redirect
+
+    return pattern == "*" or (writes_through_redirect(pattern) and _tool_matches(pattern, segment))
 
 
 def extract_base_command(command: str) -> str:
@@ -328,3 +344,148 @@ def base_trust_patterns(base_command: str) -> set[str]:
         literal = glob.escape(base)
         patterns.update((literal, f"{literal} *"))
     return patterns
+
+
+def parse_grant_ttl(value: object) -> int | None:
+    """Return a timed grant's lifetime in whole seconds, or ``None`` if invalid.
+
+    Only a plain integer from 1 to :data:`MAX_TIMED_GRANT_SECONDS` is a
+    lifetime. A bool, a float, a numeric string or an out-of-range number is
+    invalid, and the caller refuses the grant on ``None``: an unreadable
+    lifetime never becomes a grant that lasts for the whole chat.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if not 1 <= value <= MAX_TIMED_GRANT_SECONDS:
+        return None
+    return value
+
+
+class GrantDeadline(NamedTuple):
+    """When a timed grant stops applying, on two clocks at once.
+
+    ``wall`` is ``time.time()`` and keeps counting while the host is
+    suspended, which is the clock the user's "until 1:45 AM" refers to.
+    ``mono`` is ``time.monotonic()`` and cannot be moved back by a clock
+    change. The grant ends when EITHER deadline passes, so neither a sleeping
+    laptop nor a clock set backwards stretches it.
+    """
+
+    wall: float
+    mono: float
+
+    def ended(self, *, wall: float, mono: float) -> bool:
+        """Return whether the deadline has passed at (``wall``, ``mono``)."""
+        return wall >= self.wall or mono >= self.mono
+
+
+# A deadline every reading of either clock has already passed.
+_ENDED = GrantDeadline(wall=float("-inf"), mono=float("-inf"))
+
+
+class GrantEnded(Exception):
+    """The timed grant an approval rested on ended before the approval was sent.
+
+    A transport raises it from ``approve_tool`` INSTEAD of answering: nothing
+    was sent and the request is still pending, so the caller asks the person.
+    """
+
+
+def grant_deadline_guard(deadline: GrantDeadline, request_id: str | int) -> Callable[[], None]:
+    """Return a check that raises :class:`GrantEnded` once ``deadline`` has passed.
+
+    A transport runs it under its write lock, right before it writes the
+    answer, so both clocks are read at the last moment before the answer leaves.
+    """
+
+    def _check() -> None:
+        if deadline.ended(wall=time.time(), mono=time.monotonic()):
+            raise GrantEnded(request_id)
+
+    return _check
+
+
+def grant_deadline(ttl: int, *, wall: float, mono: float) -> GrantDeadline:
+    """Return the deadline of a grant made at (``wall``, ``mono``) for ``ttl`` seconds."""
+    return GrantDeadline(wall=wall + ttl, mono=mono + ttl)
+
+
+def record_trust_grant(
+    patterns: set[str],
+    timed: dict[str, GrantDeadline],
+    granted: Iterable[str],
+    deadline: GrantDeadline | None,
+) -> None:
+    """Record a chat's grant of ``granted``, for the chat or until ``deadline``.
+
+    A chat-long grant goes into ``patterns``, the store every per-chat writer
+    shares, and clears any timed entry it now outlasts. A timed grant goes into
+    ``timed`` ONLY: it never adds to or removes from ``patterns``, so a pattern
+    another writer holds there (a worker lease, a chat-long grant) keeps its
+    own lifetime whatever the timed entry does. The newest timed grant of a
+    pattern sets its deadline.
+    """
+    for pattern in granted:
+        if deadline is None:
+            patterns.add(pattern)
+            timed.pop(pattern, None)
+        else:
+            timed[pattern] = deadline
+
+
+def live_trusted_patterns(
+    patterns: set[str], timed: dict[str, GrantDeadline], *, wall: float, mono: float
+) -> set[str]:
+    """Return the patterns that may approve a call now, dropping expired timed ones.
+
+    Called at decision time, right before a call is matched, so an expired
+    grant never approves anything: the call prompts again exactly as if the
+    grant had never been made. Only ``timed`` is pruned; ``patterns`` is
+    returned unchanged, and is returned itself when no timed grant is live.
+    """
+    for pattern, deadline in list(timed.items()):
+        if deadline.ended(wall=wall, mono=mono):
+            del timed[pattern]
+    if not timed:
+        return patterns
+    return patterns | timed.keys()
+
+
+def timed_grant_deadline(
+    command: str, patterns: set[str], timed: dict[str, GrantDeadline]
+) -> GrantDeadline | None:
+    """Return when the timed grants an approval of ``command`` rests on end.
+
+    ``None`` means the chat-long ``patterns`` cover every part of ``command``
+    on their own: the approval rests on no timed grant and carries no deadline.
+    Otherwise each part they leave uncovered takes the timed grant covering it
+    that ends last, and the result is the earliest of those on each clock, so
+    the approval stands only while every timed grant it needs is live. A part
+    nothing covers returns a deadline that has already passed: the caller
+    prompts rather than send an approval no grant backs.
+
+    A part that writes through a redirect is covered only as
+    :func:`redirect_outside_grant` covers it, so a timed grant that spells the
+    redirect lends its deadline even when a chat-long base grant matches the
+    rest of the part.
+    """
+    # Imported here: ``kiro_crew.security`` imports this module at package load.
+    from kiro_crew.security.readonly_bash import writes_through_redirect
+
+    split = split_command_segments(command)
+    if split is None:
+        return _ENDED
+    normalized, segments = split
+    parts = segments if len(segments) > 1 else [normalized]
+    needed: list[GrantDeadline] = []
+    for part in parts:
+        covers = _covers_write_redirect if writes_through_redirect(part) else _tool_matches
+        if any(covers(p, part) for p in patterns):
+            continue
+        covering = [d for p, d in timed.items() if covers(p, part)]
+        if not covering:
+            return _ENDED
+        needed.append(max(covering))
+    if not needed:
+        return None
+    return GrantDeadline(wall=min(d.wall for d in needed), mono=min(d.mono for d in needed))

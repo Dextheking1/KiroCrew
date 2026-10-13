@@ -205,6 +205,10 @@ def test_crewmate_create_binds_its_schedule_to_the_created_identity():
     )
     plan = catalog.build_preview("crewmate.create", p, {"exists": False}, {})["apply"]
     assert [s["path"] for s in plan] == ["/api/agents", "/api/crons"]
+    # Built from the Crewmates page's template, and owed the same first message.
+    assert plan[0]["body"]["kiro_agent"] == "kirocrew"
+    assert plan[0]["body"]["first_greeting"] is True
+    assert plan[1]["body"]["agent"] == "kirocrew"
     assert plan[1]["fill"] == [
         {"field": "member_id", "source": "step", "step": 0, "key": "member_id"}
     ]
@@ -3076,7 +3080,7 @@ def test_schedule_card_undo_through_the_hook_refuses_a_delete_raced_by_another_t
     async def main():
         history = service.get_history()
         with mock.patch.object(
-            history, "delete_job_history", wraps=history.delete_job_history
+            history, "delete_job_history_sync", wraps=history.delete_job_history_sync
         ) as del_hist:
             with mock.patch.object(cards, "read_state", read_state):
                 client = TestClient(TestServer(_app()))
@@ -3090,7 +3094,7 @@ def test_schedule_card_undo_through_the_hook_refuses_a_delete_raced_by_another_t
                         data = await resp.json()
                     if routes._BACKGROUND:
                         await asyncio.gather(*list(routes._BACKGROUND))
-                    return resp.status, data, del_hist.await_count
+                    return resp.status, data, del_hist.call_count
                 finally:
                     await client.close()
 

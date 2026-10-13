@@ -5162,8 +5162,9 @@ async def test_live_worktree_path_reports_running_image_while_staged(monkeypatch
 @_POSIX_ONLY
 async def test_live_worktree_path_honours_pointer_when_checkout_unknown(monkeypatch, tmp_path):
     """A packaged install is not a checkout, so the running image cannot be
-    compared. That is "cannot verify", not a mismatch: the pointer stays
-    authoritative rather than the resolution collapsing to None."""
+    compared. That is "cannot verify", not a mismatch: the pointer still names the
+    live row (so removal guards keep protecting it), but it is marked UNVERIFIED
+    so the fleet view does not assert the gateway runs from it."""
     target_wt = tmp_path / "kirocrew-wt-new"
     (target_wt / ".venv" / "bin").mkdir(parents=True)
     (target_wt / ".venv" / "bin" / "kirocrew").write_text("#!/bin/sh\n")
@@ -5179,9 +5180,44 @@ async def test_live_worktree_path_honours_pointer_when_checkout_unknown(monkeypa
     monkeypatch.setattr(live_mod, "_LIVE_CHECK_AT", 0.0, raising=False)
     monkeypatch.setattr(live_mod, "_LIVE_WORKTREE", None, raising=False)
     monkeypatch.setattr(live_mod, "_running_checkout", lambda: None)
+    monkeypatch.setattr(live_mod, "_LIVE_VERIFIED", True, raising=False)
+    monkeypatch.setattr(live_mod, "_POINTER_PROVIDER", None)
 
     assert await mod._live_worktree_path() == str(target_wt.resolve())
     assert mod._staged_target() is None
+    state = await live_mod.pointer_state()
+    assert state.live == str(target_wt.resolve())
+    assert state.live_verified is False
+
+
+@pytest.mark.asyncio
+@_POSIX_ONLY
+async def test_live_worktree_path_is_verified_when_the_running_checkout_matches(
+    monkeypatch, tmp_path
+):
+    """The pointer agrees with the checkout being executed: that is verified, and a
+    previous unverified answer must not stick."""
+    target_wt = tmp_path / "kirocrew-wt-new"
+    (target_wt / ".venv" / "bin").mkdir(parents=True)
+    (target_wt / ".venv" / "bin" / "kirocrew").write_text("#!/bin/sh\n")
+    (target_wt / ".venv" / "bin" / "kirocrew").chmod(0o755)
+    (target_wt / "src" / "kiro_crew").mkdir(parents=True)
+    ptr_file = tmp_path / "ptr" / "live_target.json"
+    ptr_file.parent.mkdir(parents=True)
+    import json as _json
+
+    ptr_file.write_text(_json.dumps({"checkout": str(target_wt)}) + "\n")
+
+    monkeypatch.setattr(live_mod.live_target, "pointer_path", lambda: ptr_file)
+    monkeypatch.setattr(live_mod, "_LIVE_CHECK_AT", 0.0, raising=False)
+    monkeypatch.setattr(live_mod, "_LIVE_WORKTREE", None, raising=False)
+    monkeypatch.setattr(live_mod, "_LIVE_VERIFIED", False, raising=False)
+    monkeypatch.setattr(live_mod, "_POINTER_PROVIDER", None)
+    monkeypatch.setattr(live_mod, "_running_checkout", lambda: target_wt.resolve())
+
+    state = await live_mod.pointer_state()
+    assert state.live == str(target_wt.resolve())
+    assert state.live_verified is True
 
 
 @pytest.mark.asyncio
@@ -6989,6 +7025,37 @@ async def test_fleet_payload_says_live_state_is_unknown_on_a_pointer_outage():
     assert fleet["staged_target"] is None
     assert fleet["staged_cancel_available"] is False
     assert len(fleet["worktrees"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("live_path", "verified", "expected"),
+    [
+        ("/repo", True, True),
+        ("/repo", False, False),
+        (None, True, True),
+    ],
+)
+async def test_fleet_payload_live_verified_says_whether_the_live_row_is_confirmed(
+    live_path, verified, expected
+):
+    """A live row taken from the pointer alone (a packaged gateway cannot confirm
+    it runs that checkout) has live_verified false, so the page shows "live?"
+    instead of asserting it. The row keeps is_live for the guards."""
+
+    async def _state(*, fresh=False):
+        return live_mod.PointerState(
+            live=live_path, staged=None, staged_cancel_available=False, live_verified=verified
+        )
+
+    with patch.object(live_mod, "pointer_state", _state):
+        fleet = await _fleet_with(
+            [{"path": "/repo", "branch": "main", "is_main": True}],
+            _load_cfg=lambda: None,
+        )
+    assert fleet["live_state_known"] is True
+    assert fleet["live_verified"] is expected
+    assert fleet["worktrees"][0]["is_live"] is (live_path is not None)
 
 
 # =============================================================================

@@ -46,6 +46,7 @@ from kiro_crew.hooks import (
     get_global_hook_store,
     hook_gate_kwargs,
     title_is_trusted_mcp_identity,
+    untruncated_shell_title,
 )
 from kiro_crew.image_refs import strip_image_refs
 from kiro_crew.messaging.link import canonical_key
@@ -70,6 +71,7 @@ from kiro_crew.providers.base import (
 from kiro_crew.security import (
     MAX_SCANNABLE_COMMAND_CHARS,
     is_denied,
+    is_denied_synthesized_target,
     is_sensitive_bash_command,
     is_sensitive_write_path,
     is_unverifiable_path_refusal,
@@ -289,9 +291,13 @@ _RE_CONTEXT_OVERFLOW_TEXT = re.compile(
 def is_context_overflow_error(exc: BaseException) -> bool:
     """True when *exc* is a turn refused as too long for the model's window.
 
-    Structural first (the raise-time classifier's ``context_overflow`` tag), then
-    the text: the classifier reads only the error's ``data`` field, and the claude
-    adapter puts its "Prompt is too long" refusal in ``message``. Scoped to
+    Structural first: the raise-time classifier's ``context_overflow`` tag, which
+    owns the claude adapter's ``message``-borne refusal through the anchored
+    ``_RE_ADAPTER_INPUT_TOO_LONG`` in ``acp/transport_errors.py``. The text match
+    is the fallback for a frame that classifier cannot read (a non-dict error,
+    formatted ``Prompt error: <raw>``), for an ``AcpError`` built from text, and for the
+    OpenAI-style "maximum context length", which no captured frame places yet, so
+    it stays untagged rather than risk a false terminal on an echo. Scoped to
     ``AcpError`` so an unrelated exception mentioning a long prompt never counts.
     The only consumer forces a ``_bg`` recycle, so a false positive costs one
     provider respawn.
@@ -1439,6 +1445,7 @@ def _title_denial(
     *,
     exempt_command: str | None = None,
     identity_exempt: bool = False,
+    bash_subject: str | None = None,
 ) -> tuple[str, str] | None:
     """Return the always-enforced denial for the tool *title*, or ``None``.
 
@@ -1450,6 +1457,11 @@ def _title_denial(
     a hop that offloaded only the tool_input strings left the crash path in
     place. The tuple is ``(kind, reason)`` with *kind* ``"path"`` / ``"bash"`` /
     ``"regex"``; the reasons are the exact strings the on-loop checks produced.
+
+    *bash_subject*, when given, is what the bash tier scans instead of *title*:
+    a title rebuilt around the whole command (``untruncated_shell_title``) is
+    scanned there without its display prefix, so the prefix cannot carry a
+    command that fits the size ceiling past it.
     """
     # The path tier reads a PATH. A shell tool's recovered COMMAND is command text,
     # which the gate deliberately does not match paths in (``hooks.on_tool_call``
@@ -1474,7 +1486,7 @@ def _title_denial(
         if is_unverifiable_path_refusal(path_refusal):
             return ("path", path_refusal)
         return ("path", f"Blocked: sensitive path: {title}")
-    bash_reason = is_sensitive_bash_command(title)
+    bash_reason = is_sensitive_bash_command(title if bash_subject is None else bash_subject)
     if bash_reason:
         return ("bash", bash_reason)
     deny_reason = is_denied(title, denied_regexes=denied_regexes)
@@ -2596,14 +2608,16 @@ async def background_turn(
 _UNFINISHED_TURN_STOP_REASONS = frozenset({STOP_REASON_TIMEOUT, STOP_REASON_STALE_RECOVER})
 
 
-def _unfinished_turn_error(event: LLMEvent, partial_output: str) -> AcpTimeoutError | None:
+def unfinished_turn_error(event: LLMEvent, partial_output: str) -> AcpTimeoutError | None:
     """The prompt-timeout error for a turn the backend never finished, else ``None``.
 
     Raised, not returned as an answer, so the caller's failure path runs: the text
     collected so far is not a result. It is the same error the per-process
     client raises when a prompt times out, carrying the partial text, and it is
     never transient: a retry would re-send the prompt to a backend that stopped
-    answering and wait out the ceiling again.
+    answering and wait out the ceiling again. A collector that ends a turn on
+    ``EVENT_COMPLETE`` asks this function rather than listing the unfinished
+    stop reasons itself.
     """
     stop_reason = str(getattr(event, "stop_reason", "") or "")
     if stop_reason not in _UNFINISHED_TURN_STOP_REASONS:
@@ -2850,7 +2864,7 @@ async def stream_and_collect(
                             on_complete(event)
                         except Exception:
                             logger.debug("on_complete callback failed", exc_info=True)
-                    unfinished = _unfinished_turn_error(event, result_text)
+                    unfinished = unfinished_turn_error(event, result_text)
                     if unfinished is not None:
                         raise unfinished
                     break
@@ -3232,6 +3246,14 @@ async def _resolve_permission(
         )
         await provider.reject_tool(event.request_id)
         return False
+    # The title tier judges a shell title in kiro-cli's cut shape (a leading
+    # slice of the recovered command plus ``...``) in its uncut form,
+    # exactly as ``hooks.on_tool_call`` does (``untruncated_shell_title``); any
+    # other title is judged verbatim.
+    _shell_command = getattr(event, "shell_command", None)
+    judged_title = untruncated_shell_title(
+        normalized, _shell_command if isinstance(_shell_command, str) else None
+    )
     # Honor the user's Settings>Security opt-out + governance pins on this
     # surface too (cron / Slack / workflow / heartbeat). Without threading the
     # effective set, is_denied() fails closed to ALL built-ins here, which would
@@ -3422,7 +3444,7 @@ async def _resolve_permission(
         # the strings. Title first, so a request denied on its title
         # reports the title-tier reason and mechanism exactly as before.
         title_hit = _title_denial(
-            normalized,
+            judged_title,
             _denied_regexes,
             exempt_command=_path_tier_exempt(event),
             identity_exempt=title_is_trusted_mcp_identity(
@@ -3431,9 +3453,26 @@ async def _resolve_permission(
                 getattr(event, "tool_name", "") or "",
                 mcp_identity_trusted=bool(getattr(event, "mcp_identity_trusted", False)),
             ),
+            bash_subject=(
+                _normalize_tool_name(judged_title) if judged_title != normalized else None
+            ),
         )
         if title_hit is not None:
-            return (title_hit[0], title_hit[1], normalized, "always_deny")
+            return (title_hit[0], title_hit[1], judged_title, "always_deny")
+        if judged_title != normalized and hooks is not None:
+            # The operator's own regexes judge the title as SENT when it was
+            # rebuilt, as ``hooks.on_tool_call`` does and through the same
+            # floor-free tier, whole string and per segment: a rule written
+            # against the cut text kiro-cli displayed keeps firing, including one
+            # anchored to a single chained command, and no shipped rule sees that
+            # text. Without a HookManager no operator rule is known.
+            operator_regexes = hooks.operator_denied_regexes()
+            if operator_regexes:
+                shown_reason = is_denied_synthesized_target(
+                    normalized, operator_regexes, segments=True
+                )
+                if shown_reason:
+                    return ("regex", shown_reason, normalized, "always_deny")
         if _edit_target_gated:
             edit_hit = _edit_target_denial(_gated_params, event.diff_path, event.tool_kind)
             if edit_hit is not None:

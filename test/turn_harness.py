@@ -623,6 +623,8 @@ _SESSION_ANSWERS: dict[str, Any] = {
     "cancel_owned_turn": "acked",
     "commit_provider_switch_replay_sid": False,
     "compact_wait_budget_secs": 60.0,
+    # Below the threshold: nothing to say mid-turn about a coming compaction.
+    "compaction_due_after_turn": False,
     "consume_first_turn_history_owed": False,
     "consume_needs_reinjection": False,
     "consume_provider_switch_replay": False,
@@ -648,6 +650,7 @@ _SESSION_ANSWERS: dict[str, Any] = {
     "set_active_dashboard_slots": None,
     "set_approval_policy": None,
     "set_compacting_callback": None,
+    "unlanded_marker_pending": False,
     "stop_generation": 0,
 }
 #: The real in-memory link stores ``chat_test_helpers._make_state`` builds,

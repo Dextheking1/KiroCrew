@@ -535,6 +535,20 @@ describe('CrewChatWindow', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })
 
+  it('shows the Behind badge in the header for a compatible crew on an older build', async () => {
+    mocks.instancesCapabilities.mockResolvedValue({ version_match: true, behind: true, version: '0.9.0', local_version: '0.9.1' })
+    renderWindow()
+    expect(await screen.findByText('Behind: remote 0.9.0, local 0.9.1')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Update devbox in Remote Crew' }).getAttribute('href')).toBe('/settings/instances')
+  })
+
+  it('shows no Behind badge when the crew runs the same build', async () => {
+    mocks.instancesCapabilities.mockResolvedValue({ version_match: true, behind: false, version: '0.9.0', local_version: '0.9.0' })
+    renderWindow()
+    await screen.findByRole('textbox', { name: 'Message the agent on devbox…' })
+    expect(screen.queryByTestId('remote-behind-badge')).toBeNull()
+  })
+
   it('keeps an unsent draft across switching to another crew session and back', async () => {
     const view = renderWindow()
     const box = await screen.findByRole('textbox', { name: 'Message the agent on devbox…' })
@@ -1006,6 +1020,18 @@ describe('CrewChatWindow', () => {
       fireEvent.pointerDown(screen.getByRole('button', { name: /approval mode/i }), { button: 0, ctrlKey: false, pointerType: 'mouse' })
       expect(await screen.findByTestId('approval-mode-remote-note')).toHaveTextContent('YOLO covers every session on devbox.')
       expect(screen.queryAllByRole('menuitem')).toHaveLength(0)
+    })
+
+    it('re-reads the peer\'s YOLO before a mode write and skips the write when it is on', async () => {
+      // The picker drew from an "off" read; YOLO turned on before the next poll.
+      mocks.instancesApprovalState.mockResolvedValueOnce({ yolo: false }).mockResolvedValue({ yolo: true })
+      renderWindow()
+      await waitFor(() => expect(screen.getByRole('button', { name: /approval mode/i })).toHaveTextContent('Normal'), PEER_ROW_WAIT)
+      fireEvent.pointerDown(screen.getByRole('button', { name: /approval mode/i }), { button: 0, ctrlKey: false, pointerType: 'mouse' })
+      fireEvent.click(await screen.findByRole('menuitem', { name: /^Trust/ }))
+      // The fresh read redraws the picker as YOLO, and no mode write went out.
+      await waitFor(() => expect(screen.getByRole('button', { name: /approval mode/i })).toHaveTextContent('YOLO'))
+      expect(posted().filter(c => c[0] === 'api/chat/mode')).toEqual([])
     })
 
     it('draws no approval-mode picker while the peer\'s YOLO state is unknown', async () => {

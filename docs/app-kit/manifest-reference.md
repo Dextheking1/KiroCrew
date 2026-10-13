@@ -89,6 +89,13 @@ installed against:
 - The host CLI name `kirocrew` is pinned to the running gateway before any of
   the above applies.
 
+A stdio entry's `env` values are passed through as declared. A
+`secret://<name>` value is **not** resolved for app servers when kiro-cli
+spawns them: the server receives the literal reference text. Registration logs
+a warning naming the app, server and env key when it sees one. How an app may
+receive a vault secret is undecided
+([#10641](https://github.com/kirodotdev/KiroCrew/issues/10641)).
+
 ## Scheduling
 
 ### `crons` — Cron Job Definitions
@@ -144,6 +151,30 @@ the permissions an operator reviews before installing name it. Install, update
 and self-registration refuse a manifest without it, with an error that names the
 fix. An app installed before it declared the grant keeps loading and firing its
 crons; it meets the rule on its next update.
+
+**Changing a cron after install.** Each registered job remembers, field by
+field, the manifest entry it was built from. When the app's crons are registered
+again -- an app update, a gateway start, an enable -- each field in the table
+above whose manifest value changed is re-applied to the job; `enabled` is the
+exception, being the initial pause state only. A field the author did not change
+is left exactly as it is, including any edit the user made to it on the Schedule
+page, and so is a job whose entry did not change at all. The precedence is
+**manifest over hand edit** for a field the author changed, **hand edit over
+manifest** for a field the author did not, and **the user's pause state over the
+manifest** always: a paused job gets the new values and stays paused. Settings the manifest does not own -- a delivery channel, a model, chat
+visibility, a secret grant -- are never touched. A change to `command`, `script`,
+`agent_sequence` or `env` is the exception: the scheduler accepts those fields at
+creation only, so the change is logged (and audited as
+`app_cron_resync_pending_reenable`) on every registration until the app is
+disabled and enabled again, which is when it reaches the job; the entry's other
+changed fields still land at once. A `message` cleared to empty is reported the
+same way, because the scheduler keeps the stored prompt on an empty value. A job registered
+by a build that did not yet record its entry is brought up to the manifest once,
+on the next registration: nothing recorded which entry it came from, so the
+manifest is applied even if the author changed nothing, and an edit the user
+made to one of its manifest-owned fields is replaced. The gateway log names
+each replaced field with its old and new value (a WARNING line ending in
+"job predates the manifest stamp") so the user can put the edit back.
 
 > **Caveat:** disabling an app deletes its registered cron jobs when a cron
 > service is reachable, and re-enabling the app re-registers them from the
@@ -1068,10 +1099,10 @@ Control how Kiro Crew manages the app:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `platform.os` | string[] | `["macos", "linux"]` | Supported platforms. Valid names: `macos`, `linux`, `windows`. **The default excludes `windows`** — see below |
+| `platform.os` | string[] | `["macos", "linux"]` | Supported platforms. Valid names: `macos`, `linux`, `windows`; any other value is rejected at validation. **The default excludes `windows`** — see below |
 | `platform.arch` | string[] | `[]` (any) | Supported architectures |
 | `platform.requiresDesktopApp` | boolean | `false` | App's own UI needs the Electron desktop shell |
-| `platform.installMode` | string | `"server"` | `"server"` or `"client"` |
+| `platform.installMode` | string | `"server"` | `"server"` or `"client"`; any other value is rejected at validation |
 | `platform.clientInstall.shell` | string | | One-liner for local install |
 | `platform.clientInstall.postInstall` | string | | Command to run after install |
 
@@ -1212,6 +1243,12 @@ gateway has them: `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`,
 - Each UI page must have `route` and `label`
 - Each UI overlay must have `id` and `replaces`; both must be kebab-case, and `id`
   must be unique within the manifest
+- Each `platform.os` entry must be exactly `macos`, `linux` or `windows`. Spelling and
+  case matter: `Windows`, `win` and `windows ` match no platform, so the platform gate
+  would answer no for the platform the manifest names. The platform strings `darwin` and
+  `win32` are refused too
+- `platform.installMode` must be exactly `server` or `client`; the install gates test
+  for `client` alone, so a spelling such as `Client` would install as a server app
 
 ## Full Example
 

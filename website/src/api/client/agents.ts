@@ -66,11 +66,6 @@ export interface MemberRosterRow {
    *  it created Mate). Absent or false = never owed; the Crewmates page then
    *  treats Mate as already seen. */
   welcome_owed?: boolean
-  /** Epoch seconds the USER last sent this crew a message, in its DM or in a
-   *  normal chat; 0 = never. Background work (crons, wakes, sub-agents,
-   *  dispatched workers, apps) never moves it. The Crewmates list shows and
-   *  orders by it. Absent on an older gateway. */
-  last_chat_ts?: number
   /** Baseline projections (roster/activity/wake/driving) at a known seq, fed
    *  to the per-member projection store so the page renders from pushed
    *  frames. Absent on an older gateway that predates the event log. */
@@ -108,10 +103,6 @@ export interface CrewTeam {
   members: string[]
 }
 
-/** Free-form fields a crew publishes into its webview. The crew owns the shape,
- *  so every value is unknown until the renderer narrows it. */
-export type CrewPanelData = Record<string, unknown>
-
 /** Metadata half of GET /api/members/{slug}/panel. The document itself travels
  *  beside it as `html`, already composed server-side from the template. */
 /** One field of a dashboard template manifest, as the gateway serves it.
@@ -135,36 +126,6 @@ export interface DashboardManifest {
   description: string
   source: 'builtin' | 'user' | 'shared'
   fields: Record<string, DashboardFieldSpec>
-}
-
-export interface CrewPanelMeta {
-  template: string
-  title: string
-  crew: string
-  published_at: string
-  data: CrewPanelData
-  /** The template's opt-in to render ITSELF in the docked card: the fixed pixel
-   *  height of that compact frame, or null for a template that did not opt in
-   *  (the drawer then keeps its native, zero-mint summary). */
-  docked_height?: number | null
-  /** The crew's superseded panels, newest last, one row per replaced publish.
-   *  Bounded server-side; a file-only legacy record (published before the fold
-   *  recorded history) omits this rather than sending an empty array. */
-  history?: CrewPanelHistoryRow[]
-  /** How many times this crew has published on this slot. Absent on a file-only
-   *  legacy record for the same reason `history` is. */
-  publishes?: number
-  /** How many history rows aged out past the server's per-owner cap: the bound
-   *  speaking, so a reader tells a history trimmed at its cap from a complete
-   *  one. Absent on a file-only legacy record. */
-  history_omitted?: number
-}
-
-/** One superseded panel in a crew's `CrewPanelMeta.history`. */
-export interface CrewPanelHistoryRow {
-  at: string
-  title: string
-  template: string
 }
 
 export function createAgentsEndpoints({ post, put, del, j, jfetch: fetch, sessionKeyHeader: _sk }: ClientTransport) {
@@ -227,8 +188,9 @@ export function createAgentsEndpoints({ post, put, del, j, jfetch: fetch, sessio
     // mode="member"), so this is also the only place a member slot key comes from.
     memberThread: (slug: string) =>
       post('/api/members/' + encodeURIComponent(slug) + '/thread').then(j) as Promise<{ slot_key: string; slug: string; member: string }>,
-    // Mate's once-only first greeting. The server decides: it starts one
-    // Mate turn only for Mate's own empty pinned thread, at most once
+    // A crewmate's once-only first greeting. The server decides: it starts one
+    // turn only on the empty pinned thread of Mate or of a crewmate whose
+    // create asked for it (`first_greeting`), at most once
     // ever, and answers every other case with the outcome that declined it.
     memberGreet: (slug: string) =>
       post('/api/members/' + encodeURIComponent(slug) + '/greet').then(j) as Promise<{ outcome: string }>,
@@ -266,17 +228,6 @@ export function createAgentsEndpoints({ post, put, del, j, jfetch: fetch, sessio
       fetch(
         '/api/members/' + encodeURIComponent(slug) + '/projections?member=' + encodeURIComponent(member),
       ).then(j) as Promise<ProjectionsBlock>,
-    // The crew's published webview: metadata plus the composed document. Read
-    // through this layer rather than a component-local `fetch`, like every sibling
-    // above -- the members page's tests stub `api/client`, so a hand-rolled fetch was
-    // the one reader they could not stub, and a silent fallback (a remembered crew
-    // renamed away) surfaced as a red alert instead. `member` is the exact crew name
-    // because the record carries an ownership claim the server checks against it;
-    // slugs are lossy, so two crews can share one.
-    memberPanel: (slug: string, member: string) =>
-      fetch(
-        '/api/members/' + encodeURIComponent(slug) + '/panel?member=' + encodeURIComponent(member),
-      ).then(j) as Promise<{ panel: CrewPanelMeta | null; html: string | null }>,
     // The crewmate's dynamic dashboard INSTANCE: which template it copied, its own
     // edited page, the manifest that says where each field's value comes from, and
     // the instance's state. Served by the registry (contract v3 part 4/7) and read
@@ -291,8 +242,9 @@ export function createAgentsEndpoints({ post, put, del, j, jfetch: fetch, sessio
     // `member` is the exact crew name, as every member route takes it (slugs are lossy).
     // `locale` is the UI language the page should render its own words in; the
     // gateway checks it against the shipped catalogs and falls back to English.
-    /** `preview`: the STAGED page `dashboard_preview` set aside, which no version
-     *  records; 404 `no_preview` once nothing is staged. */
+    // `preview` reads the STAGED page instead of the live record -- the page an agent
+    // offered and nobody has applied. Same route, same owner gate; nothing staged
+    // answers 404 `no_preview`.
     memberDashboard: (slug: string, member: string, locale = '', preview = false) =>
       fetch(
         '/api/members/' + encodeURIComponent(slug) + '/dashboard?member=' + encodeURIComponent(member)
@@ -308,6 +260,8 @@ export function createAgentsEndpoints({ post, put, del, j, jfetch: fetch, sessio
         rendered_html?: string
         manifest: DashboardManifest
         state: 'empty' | 'live' | 'stale' | 'error'
+        /** Set on a `preview` read: this body is the staged page, not the record. */
+        preview?: boolean
         /** The person's layout lock: while true the crewmate cannot apply or roll back a page. */
         structure_locked?: boolean
       } | null>,
@@ -356,6 +310,16 @@ export function createAgentsEndpoints({ post, put, del, j, jfetch: fetch, sessio
         /** The file ran past the briefing cap, so the text above ends in the
          *  truncation marker instead of the tail; the panel says so above the
          *  notes. */
+        /** SYSTEM-owned, beside the agent's notes: what the crewmate is told about
+         *  its Dashboard page -- the pointer line its prompt carries, each field it
+         *  writes with what it means / when / how (and a helper script path where the
+         *  data lives outside the crew log), and the helper names -- or null when it
+         *  has no page. Absent from an older gateway. */
+        upkeep?: {
+          pointer: string
+          fields: { field: string; means: string; when: string; how: string; helper?: string }[]
+          scripts: string[]
+        } | null
         truncated: boolean
       }>,
     // The work a crewmate holds (open goals, recent sessions), read for its

@@ -108,11 +108,13 @@ from kiro_crew.config.loader import (  # noqa: F401
     ConfigReadError,
     KiroCrewAgentConfig,
     KiroCrewConfig,
+    _overlay_kiro_agent,
     _safe_color,
     coerce_dict_section,
     coerce_effort,
     config_local_path,
     config_path,
+    default_template,
     dispatch_kiro_agent,
     inject_kiro_cli_api_key,
     normalize_agent_model,
@@ -211,6 +213,7 @@ from kiro_crew.dashboard.agent_admin.crew_records import (  # noqa: F401
     _api_kirocrew_agents_create,
     _crew_effort_rejected,
     _crew_memory_store_rejected,
+    _mark_first_greeting_owed,
     _refresh_session_defaults,
     api_kirocrew_agent_resolved_model,
     api_kirocrew_agents_create,
@@ -227,12 +230,12 @@ from kiro_crew.dashboard.agent_admin.crew_update import (  # noqa: F401
     api_kirocrew_agent_update,
 )
 from kiro_crew.dashboard.agent_admin.default_agent import (  # noqa: F401
-    _alias_binding_template,
-    _AmbiguousDefaultTarget,
     _AppRegisteredTemplate,
-    _binds_template,
+    _BackgroundOnlyTemplate,
     _installed_template_alias,
     _is_app_registered,
+    _set_default_template,
+    _spec_lock_or_unlocked_read,
     api_default_agent,
 )
 from kiro_crew.dashboard.agent_admin.fork_publish import (  # noqa: F401

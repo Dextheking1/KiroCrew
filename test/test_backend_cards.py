@@ -360,14 +360,14 @@ def test_core_counts_per_harness_are_pinned() -> None:
         for card in _every_card()
     }
     assert counts == {
-        "claude": 5,
+        "claude": 6,
         "codex": 6,
         "deepseek": 4,
-        "goose": 4,
+        "goose": 5,
         "kas": 7,
         "kiro": 6,
         "opencode": 4,
-        "pi": 2,
+        "pi": 3,
     }
     assert counts["kas"] == len(cards_mod.USER_FACING_LINES)
 
@@ -631,16 +631,14 @@ def test_no_declared_unmeasured_entry_names_a_member() -> None:
         assert rendered.measured is False
 
 
-def test_the_compact_capture_gap_is_the_only_unmeasured_thing_on_any_card() -> None:
-    """The one cell, named, and every other cell on every card measured.
+def test_every_cell_on_every_card_is_measured() -> None:
+    """No cell on any card is unmeasured, and the two compaction answers stay apart.
 
-    pi dispatches ``/compact`` before a model turn in its own source and has not
-    been driven, which ``ACP_BACKENDS_COMPACT`` records as "unclassified". goose was
-    driven, so its cell is measured. A plain cross means something else: deepseek has no compaction on
-    its ACP surface at all -- in the set's own words it emits no
+    pi was driven through ``/compact`` (``test/fixtures/acp_frames/pi/compact-live.jsonl``),
+    so its cell is measured and available. A plain cross means something else: deepseek
+    has no compaction on its ACP surface at all -- in the set's own words it emits no
     ``available_commands_update`` and answers ``session/load`` with "Method not
-    found". Those two answers are not the same answer, and this test is where the
-    difference is pinned.
+    found".
     """
     unmeasured = {
         (card.backend, line.id)
@@ -648,9 +646,10 @@ def test_the_compact_capture_gap_is_the_only_unmeasured_thing_on_any_card() -> N
         for line in (*card.capabilities, *card.details)
         if not line.measured
     }
-    assert unmeasured == {
-        (ACP_BACKEND_PI, cards_mod.LINE_MANUAL_COMPACT),
-    }
+    assert unmeasured == set()
+    pi = cards_mod.card_for(ACP_BACKEND_PI)
+    pi_compact = next(line for line in pi.capabilities if line.id == cards_mod.LINE_MANUAL_COMPACT)
+    assert (pi_compact.available, pi_compact.measured) == (True, True)
     # The harness with no compaction surface keeps the cross: its answer is known.
     deepseek = cards_mod.card_for(ACP_BACKEND_DEEPSEEK)
     compact = next(

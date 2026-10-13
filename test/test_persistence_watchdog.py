@@ -5,8 +5,8 @@ watchdog catches one that passed boot and broke later (a seccomp filter whose
 sandbox was torn down mid-run). It must: re-run the probe periodically,
 re-confirm a single failure before acting, exit non-zero on a confirmed
 restart-curable failure so a supervisor restarts, stay up on a failure a
-restart cannot cure, exit 0 on an operator stop, and let a request handler poke
-it to probe immediately without collapsing the confirmation window.
+restart cannot cure, and exit 0 on an operator stop -- including one that lands
+while the confirming probe is running.
 """
 
 from __future__ import annotations
@@ -155,6 +155,27 @@ async def test_operator_stop_during_the_confirm_window_exits_without_firing() ->
     fired = await await_until(task, what="watchdog to exit on the operator stop")
     assert fired is False
     assert probe.calls["n"] == 1  # the confirm never completed into a 2nd probe
+
+
+@pytest.mark.asyncio
+async def test_operator_stop_during_the_confirming_probe_exits_without_firing() -> None:
+    """An operator stop that arrives while the confirming probe runs owns the
+    shutdown: the watchdog returns False (exit 0) even though that probe failed."""
+    shutdown = _Event()
+    calls = {"n": 0}
+
+    async def _probe() -> pw.ProbeResult | None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            shutdown.set()  # SIGTERM handled while the confirming probe is in flight
+        return _enosys()
+
+    fired = await pw.run_persistence_watchdog(shutdown, _probe, interval=0.0, confirm_delay=0.0)
+    assert fired is False
+    assert calls["n"] == 2
+    done: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
+    done.set_result(fired)
+    assert pw.shutdown_exit_code(done) == 0
 
 
 @pytest.mark.asyncio

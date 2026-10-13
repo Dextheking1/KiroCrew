@@ -41,6 +41,7 @@ from kiro_crew import platform_compat
 from kiro_crew.config.loader import ConfigReadError
 from kiro_crew.dashboard.handlers import updates
 from kiro_crew.platform import update_layout
+from kiro_crew.testing.wait import async_wait_until, await_until
 
 
 @pytest.fixture(autouse=True)
@@ -272,10 +273,10 @@ def record(path, pid):
 record({pidfile!r} + ".git", os.getpid())
 if {with_helper}:
     helper = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(60)"], cwd=os.path.dirname({pidfile!r})
+        [sys.executable, "-c", "import time; time.sleep(600)"], cwd=os.path.dirname({pidfile!r})
     )
     record({pidfile!r}, helper.pid)
-time.sleep(60)
+time.sleep(600)
 """
 
 
@@ -292,29 +293,40 @@ def _recorded(path: Path) -> tuple[int, str | None] | None:
         return None
 
 
-class _ShortGitWaits:
-    """``asyncio`` as the updates module sees it, with every git wait cut to 0.5 s.
+class _TimedOutGitWaits:
+    """``asyncio`` as the updates module sees it, with every git wait timing out.
 
     Bound as that module's own ``asyncio``, never over the real module, so the
     event loop, the test's own bound and ``platform_compat`` keep the real one.
-    With *helper_record*, the first wait starts its 0.5 s only once the stand-in
-    git has recorded its helper (bounded at 5 s), so the timeout fires while the
-    helper holds git's stderr however long the stand-in takes to start.
+    ``wait_for`` does what the real one does when its deadline passes -- cancels
+    the awaited ``communicate()`` and raises ``TimeoutError`` -- but on a signal,
+    never a clock: it waits until the stand-in git has recorded *started_record*
+    (its helper's pid when there is a helper, else git's own pid). The stand-in
+    writes that record only after ``create_subprocess_exec`` has launched it and
+    ``communicate()`` is reading, so the timeout fires with git provably started
+    and hung -- and, with a helper, the helper holding git's stderr -- however
+    long the stand-in took to start.
     """
 
-    def __init__(self, helper_record: Path | None = None) -> None:
-        self._helper_record = helper_record
+    def __init__(self, started_record: Path) -> None:
+        self._started_record: Path | None = started_record
 
     def __getattr__(self, name: str) -> object:
         return getattr(asyncio, name)
 
     async def wait_for(self, aw, timeout=None):
-        record, self._helper_record = self._helper_record, None
+        record, self._started_record = self._started_record, None
+        waited = asyncio.ensure_future(aw)
         if record is not None:
-            deadline = time.monotonic() + 5.0
-            while _recorded(record) is None and time.monotonic() < deadline:
-                await asyncio.sleep(0.02)
-        return await asyncio.wait_for(aw, timeout=0.5)
+            await async_wait_until(
+                lambda: _recorded(record) is not None,
+                off_loop=True,
+                describe=lambda: f"the stand-in git never recorded itself in {record}",
+            )
+        waited.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waited
+        raise asyncio.TimeoutError
 
 
 class TestGitFetchTimeoutReapsTheHelper:
@@ -339,7 +351,8 @@ class TestGitFetchTimeoutReapsTheHelper:
         git.chmod(0o755)
         monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
         if short_waits:
-            waits = _ShortGitWaits(helper_record=pidfile if with_helper else None)
+            started = pidfile if with_helper else Path(f"{pidfile}.git")
+            waits = _TimedOutGitWaits(started)
             monkeypatch.setattr(updates, "asyncio", waits)
         return pidfile
 
@@ -373,29 +386,31 @@ class TestGitFetchTimeoutReapsTheHelper:
         pidfile = self._stand_in_git(monkeypatch, tmp_path, with_helper=True)
         helper_exited = False
         try:
+            check = asyncio.ensure_future(
+                updates._check_git_checkout(_git_proj(monkeypatch, tmp_path), _git_capability())
+            )
             try:
-                await asyncio.wait_for(
-                    updates._check_git_checkout(
-                        _git_proj(monkeypatch, tmp_path), _git_capability()
-                    ),
-                    timeout=10,
-                )
-            except asyncio.TimeoutError:
-                pytest.fail(
+                await await_until(check, what="the fetch timeout handler returning")
+            except AssertionError as stalled:
+                check.cancel()
+                raise AssertionError(
                     "the fetch timeout handler did not return: it killed git and then "
                     "waited on a stderr pipe the helper still holds open"
-                )
+                ) from stalled
             assert updates._update_info["error_code"] == updates.ERR_GIT_FETCH_FAILED
             helper = _recorded(pidfile)
             assert helper is not None, "the stand-in git never started its helper"
             helper_pid, helper_identity = helper
             assert helper_identity is not None, f"no start-time identity for helper {helper_pid}"
-            # Poll the helper's own exit by its recorded identity, under a monotonic
-            # bound, rather than sleeping a fixed time for the group kill.
-            deadline = time.monotonic() + 5.0
-            while not self._gone(helper_pid, helper_identity) and time.monotonic() < deadline:
-                await asyncio.sleep(0.02)
-            helper_exited = self._gone(helper_pid, helper_identity)
+            # Wait on the helper's own exit by its recorded identity, rather than
+            # sleeping a fixed time for the group kill.
+            helper_exited = bool(
+                await async_wait_until(
+                    lambda: self._gone(helper_pid, helper_identity),
+                    off_loop=True,
+                    describe=lambda: f"helper {helper_pid} ({helper_identity}) still running",
+                )
+            )
         finally:
             # Never signal a helper seen exit: nothing holds its pid once it is
             # reaped. Otherwise only while that pid still has the helper's identity.
@@ -410,9 +425,11 @@ class TestGitFetchTimeoutReapsTheHelper:
         self, monkeypatch, tmp_path
     ):
         pidfile = self._stand_in_git(monkeypatch, tmp_path, with_helper=False)
-        await asyncio.wait_for(
-            updates._check_git_checkout(_git_proj(monkeypatch, tmp_path), _git_capability()),
-            timeout=10,
+        await await_until(
+            asyncio.ensure_future(
+                updates._check_git_checkout(_git_proj(monkeypatch, tmp_path), _git_capability())
+            ),
+            what="the fetch timeout handler returning",
         )
         assert updates._update_info["error_code"] == updates.ERR_GIT_FETCH_FAILED
         assert updates._update_info["check_status"] == updates.CHECK_FAILED
@@ -434,11 +451,12 @@ class TestGitFetchTimeoutReapsTheHelper:
         helper = git = None
         git_exited = helper_exited = False
         try:
-            deadline = time.monotonic() + 10.0
-            while helper is None and not task.done() and time.monotonic() < deadline:
-                helper = _recorded(pidfile)
-                if helper is None:
-                    await asyncio.sleep(0.02)
+            await async_wait_until(
+                lambda: task.done() or _recorded(pidfile) is not None,
+                off_loop=True,
+                describe=lambda: f"no helper record in {pidfile}; check done={task.done()}",
+            )
+            helper = _recorded(pidfile)
             assert helper is not None, "the stand-in git never started its helper"
             git = _recorded(Path(f"{pidfile}.git"))
             assert git is not None, "the stand-in git never recorded its own pid"
@@ -446,13 +464,18 @@ class TestGitFetchTimeoutReapsTheHelper:
             assert helper[1] is not None, f"no start-time identity for helper {helper[0]}"
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, timeout=10)
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
+                await await_until(task, what="the cancelled check settling")
+
+            def _both_gone() -> bool:
+                nonlocal git_exited, helper_exited
                 git_exited, helper_exited = self._gone(*git), self._gone(*helper)
-                if git_exited and helper_exited:
-                    break
-                await asyncio.sleep(0.02)
+                return git_exited and helper_exited
+
+            await async_wait_until(
+                _both_gone,
+                off_loop=True,
+                describe=lambda: f"git exited={git_exited}, helper exited={helper_exited}",
+            )
         finally:
             if not task.done():
                 task.cancel()
@@ -1716,10 +1739,10 @@ class TestRingLogHandler:
         handler.emit(_record("broadcast me"))
         # The fan-out is scheduled via call_soon_threadsafe, so it lands on a
         # later loop iteration rather than inside emit().
-        for _ in range(50):
-            await asyncio.sleep(0.005)
-            if ws.send_str.await_count:
-                break
+        await async_wait_until(
+            lambda: ws.send_str.await_count,
+            describe=lambda: f"send_str awaits={ws.send_str.await_count}",
+        )
 
         ws.send_str.assert_awaited_once()
         payload = json.loads(ws.send_str.await_args[0][0])
@@ -1870,18 +1893,14 @@ class TestLogsStream:
         before = len(root.handlers)
 
         task = asyncio.ensure_future(updates.api_logs(_request(query={"lines": "1"})))
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if any(isinstance(h, updates._QueueLogHandler) for h in root.handlers):
-                break
-        assert any(isinstance(h, updates._QueueLogHandler) for h in root.handlers)
+        await async_wait_until(
+            lambda: any(isinstance(h, updates._QueueLogHandler) for h in root.handlers),
+            describe=lambda: f"handlers={root.handlers!r}",
+        )
 
         logging.getLogger("kiro_crew.stream").warning("live one")
         logging.getLogger("kiro_crew.stream").warning("live two")
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if len(writes) >= 2:
-                break
+        await async_wait_until(lambda: len(writes) >= 2, describe=lambda: f"writes={writes!r}")
         task.cancel()
         await task
 
@@ -1912,10 +1931,9 @@ class TestLogsStream:
         monkeypatch.setattr(asyncio, "wait_for", _no_waiting)
 
         task = asyncio.ensure_future(updates.api_logs(_request()))
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if b": keepalive\n\n" in writes:
-                break
+        await async_wait_until(
+            lambda: b": keepalive\n\n" in writes, describe=lambda: f"writes={writes!r}"
+        )
         task.cancel()
         await task
 
@@ -2033,12 +2051,9 @@ class TestDashboardStream:
         )
 
         task = asyncio.ensure_future(updates.api_stream(req))
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if len(writes) >= 6:
-                break
+        await async_wait_until(lambda: len(writes) >= 6, describe=lambda: f"writes={writes!r}")
         updates.shutdown_event.set()
-        await asyncio.wait_for(task, timeout=5)
+        await await_until(task, what="the stream handler returning on shutdown")
 
         text = b"".join(writes).decode()
         assert "event: slots\ndata: []\n\n" in text
@@ -2080,12 +2095,12 @@ class TestDashboardStream:
         )
 
         task = asyncio.ensure_future(updates.api_stream(req))
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if any(w.startswith(b"event: chat_message") for w in writes):
-                break
+        await async_wait_until(
+            lambda: any(w.startswith(b"event: chat_message") for w in writes),
+            describe=lambda: f"writes={writes!r}",
+        )
         updates.shutdown_event.set()
-        await asyncio.wait_for(task, timeout=5)
+        await await_until(task, what="the stream handler returning on shutdown")
 
         frames = [w.decode() for w in writes if w.startswith(b"event: chat_message")]
         assert frames, "no chat_message frame was written"
@@ -2112,12 +2127,12 @@ class TestDashboardStream:
         )
 
         task = asyncio.ensure_future(updates.api_stream(req))
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if any(w.startswith(b"event: chat_message") for w in writes):
-                break
+        await async_wait_until(
+            lambda: any(w.startswith(b"event: chat_message") for w in writes),
+            describe=lambda: f"writes={writes!r}",
+        )
         updates.shutdown_event.set()
-        await asyncio.wait_for(task, timeout=5)
+        await await_until(task, what="the stream handler returning on shutdown")
 
         frames = [w.decode() for w in writes if w.startswith(b"event: chat_message")]
         assert frames, "no chat_message frame was written"
@@ -2156,12 +2171,12 @@ class TestDashboardStream:
         )
 
         task = asyncio.ensure_future(updates.api_stream(req))
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if any(w.startswith(b"event: chat_message") for w in writes):
-                break
+        await async_wait_until(
+            lambda: any(w.startswith(b"event: chat_message") for w in writes),
+            describe=lambda: f"writes={writes!r}",
+        )
         updates.shutdown_event.set()
-        await asyncio.wait_for(task, timeout=5)
+        await await_until(task, what="the stream handler returning on shutdown")
 
         frames = [w.decode() for w in writes if w.startswith(b"event: chat_message")]
         assert frames, "no chat_message frame was written"
@@ -2221,9 +2236,9 @@ class TestDashboardStream:
         state.status_snapshot.return_value = {"sessions": 0}
 
         task = asyncio.ensure_future(updates.api_stream(req))
-        await asyncio.sleep(0.05)
+        await async_wait_until(lambda: queue.probes > 1, describe=lambda: f"probes={queue.probes}")
         updates.shutdown_event.set()
-        resp = await asyncio.wait_for(task, timeout=5)
+        resp = await await_until(task, what="the stream handler returning on shutdown")
 
         assert isinstance(resp, web.StreamResponse)
         state.unregister_sse.assert_called_once()
@@ -2234,10 +2249,10 @@ class TestDashboardStream:
         req = self._request_with_queue([])
 
         task = asyncio.ensure_future(updates.api_stream(req))
-        for _ in range(200):
-            await asyncio.sleep(0.005)
-            if req.app["state"].register_sse.called:
-                break
+        await async_wait_until(
+            lambda: req.app["state"].register_sse.called,
+            describe=lambda: "register_sse never called",
+        )
         task.cancel()
         resp = await task
 
@@ -2370,7 +2385,7 @@ class TestExternallyManagedCheck:
         monkeypatch.setattr("kiro_crew.platform.update_capability.distribution", lambda: "wheel")
         monkeypatch.setattr(updates, "_check_release_feed", _count)
         leader = asyncio.create_task(updates._do_update_check())
-        await asyncio.wait_for(started.wait(), timeout=1)
+        await await_until(started, what="the leader's check starting")
         follower = asyncio.create_task(updates._do_update_check())
         await asyncio.sleep(0)
         assert not follower.done()

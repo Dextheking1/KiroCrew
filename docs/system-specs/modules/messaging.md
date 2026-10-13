@@ -734,7 +734,7 @@ Its contract:
 - **The sent filename is derived, never the raw basename.** `upload_filename(file, index)` answers "what name is safe in a `Content-Disposition` header": the path came out of LLM-authored reply text, so only a sanitized basename survives, the extension follows the **sniffed** mime rather than the written suffix, and the RESULT is re-scanned so a name still shaped like a credential or a beacon URL is replaced outright. The extension half is the reachable one — extraction admits a file on its byte signature alone and never reconciles that with the suffix, so a raw basename can label a part with a type the bytes contradict, and the platform echoes that name back to everyone in the conversation. Discord, Telegram and Webex share `messaging/outbound_files.upload_filename`; Slack predates it and keeps an equivalent of its own in `slack/files.py`. That is duplication, not a gap — the two agree on every mime extraction can actually produce, since `_MIME_EXT` and `raster._MAGIC` have the same keys — and the shared one is where a channel added later goes.
 - **A reference inside balanced inline code or a code fence is literal.** Inline spans reuse the length-preserving balanced-backtick masker used by rendered-block parsing; fenced offsets come from `iter_fence_spans` above, so neither grammar is re-derived here.
 - **Only a real raster is sent.** Type comes from the leading bytes via `messaging/raster.py`, never an extension: a shell script named `.png` is refused, and SVG is scriptable markup with no signature. The same table decides inbound sniffing, so the two directions cannot disagree about a file.
-- **The security floor is applied per reference**, because reply text is not trustworthy input — a prompt-injected agent chooses what it writes. Beyond the path and link checks below, the accepted raster bytes themselves are content-scanned before upload (`platform.binary_content_is_flagged`, the scan every file-delivery gate shares), and a flagged payload is refused as `REASON_SENSITIVE`; a scan that cannot answer counts as flagged, so it fails closed. Async channel extraction requires the acquired provider's actual `cwd` as its approved root; a path lexically outside that root is refused before metadata probes, and `safe_read_file_bytes_nolink(..., within_root=cwd)` rechecks the opened descriptor so a parent-symlink race cannot escape it. The existing `is_sensitive_path` denylist still applies; symlinks, hardlinks, and non-regular files are refused.
+- **The security floor is applied per reference**, because reply text is not trustworthy input — a prompt-injected agent chooses what it writes. Beyond the path and link checks below, the accepted raster bytes themselves are content-scanned before upload (`platform.binary_content_is_flagged`, the scan every file-delivery gate shares), and a flagged payload is refused as `REASON_SENSITIVE`; a scan that cannot answer counts as flagged, so it fails closed. Async channel extraction requires the acquired provider's actual `cwd` as its approved root; `outbound_files.approved_roots(cwd)` adds exactly one more, the browser CLI's own output directory (`browser_cli.snapshots.snapshot_dir()`, pinned under the data home and never inside a working directory), because that is the only place a screenshot the agent just took can be and admitting it grants nothing `file_send` does not already deliver from there. A path lexically outside both roots — the data home around the snapshot directory included — is refused before metadata probes, and `safe_read_file_bytes_nolink(..., within_root=<the root that admitted the path>)` rechecks the opened descriptor so a parent-symlink race cannot escape whichever root it sits in. The existing `is_sensitive_path` denylist still applies; symlinks, hardlinks, and non-regular files are refused.
 - **Every refusal is returned, never swallowed**, and the refused reference keeps its original markup so the path stays visible in the message. A file dropped in silence leaves a reply that talks about a picture with no picture and no explanation — the defect this module exists to prevent. This holds for a per-file-cap refusal too, so a channel with a low ceiling never has to drop an already-stripped file after the fact.
 - **Caps bound work, not just output.** `max_files` counts references *examined*, so a reply full of unreadable paths cannot drive unbounded filesystem work or an unbounded rejection list. `max_total_bytes` is handed to the read itself, so an oversize file is refused rather than allocated, and `max_file_bytes` narrows that same read when a channel's ceiling is lower.
 
@@ -1104,6 +1104,19 @@ no link for it to ride. `session="<channel>"` needs no link — it resolves the
 destination from the transport's own `configured_targets()` through
 `_deliver_channel_dm` — which is what makes it the route for a proactive notice
 raised somewhere other than the channel itself.
+
+**A proactive channel send names its sender.** Every session and cron can reach
+the same owner DM, so `_deliver_send_message_fallback` ends the text with one line,
+`Sent by cron: <job name>` or `Sent by chat: <chat title>`
+(`proactive_send._proactive_source_line`). The sender comes from the identities the
+legs already trust: a cron's validated `caller_session` names its job (the job id
+when the job is gone), and any other caller is the attested `X-Session-Key`, named
+by its dashboard title (the slot key while untitled). The name is one line, redacted
+and capped at `_SOURCE_NAME_MAX` characters. The `session="<channel>"` leg always
+carries the line; the `channel_type` leg carries it only for a cron, because a chat
+sending into its own conversation is that conversation talking, like a reply. A
+channel-born or unknown caller gets no line, and Slack sends, configured-target
+sends and mirrored replies are unchanged.
 
 **One roster, three views.** The channels a proactive send may name are derived
 ONCE, as `constants.CHANNEL_SEND_NAMESPACES` — `CHANNEL_SESSION_NAMESPACES` minus
@@ -1868,11 +1881,11 @@ Two preconditions gate the steer, and both matter:
 - `provider.supports_steer` — membership in `ACP_BACKENDS_STEER`, since the
   dormant Claude backend seam has none. On this path `provider` is the
   registry's `AcpProvider`, which reports False for a backend with
-  `steer_needs_loss_recovery` (codex, `ACP_BACKENDS_STEERING_REQUEST`) and
-  refuses its steer, so a mid-turn channel message on a codex session always
-  queues; codex's `_session/steering` is spoken only for the dashboard composer,
-  which steers the inner handle. When false the message falls through to the
-  queue path.
+  `steer_needs_loss_recovery` (codex and claude, `ACP_BACKENDS_STEERING_REQUEST`)
+  and refuses its steer, so a mid-turn channel message on a codex or claude
+  session always queues; their `_session/steering` is spoken only for the
+  dashboard composer, which steers the inner handle or client. When false the
+  message falls through to the queue path.
 - `provider.has_active_turn()`, **not** `sessions.is_busy()`. `is_busy` stays
   true through post-turn bookkeeping (success record, turn persist, threshold
   notice, SEL audit, all await points), so it alone cannot distinguish a live
@@ -3993,6 +4006,11 @@ Trailing `[OPTIONS:]` choices carry `opt:<index>:<tag>` in `callback_data`, with
 session key. The label remains button text rather than callback data, keeping CJK and
 emoji labels out of Telegram's 64-byte payload budget; at the 25-button ceiling the
 largest payload is 19 ASCII bytes.
+
+Rows hold two buttons while every label fits `_HALF_WIDTH_LABEL_CELLS` (16) display
+cells, measured by `messaging.tables.display_width` so a CJK ideograph counts as two;
+once any label is wider, every button gets its own row, keeping the keyboard a uniform
+width. The 25-button ceiling, not this rule, bounds the keyboard's height.
 
 The callback retires the keyboard, rejects an untagged legacy button, and re-dispatches
 the recovered label with command interpretation disabled. The dispatcher compares the
@@ -6368,7 +6386,29 @@ and closes its loop before the daemon thread exits.
 `[feishu]` extra in `setup.cfg` and lazily imported inside the client module;
 `maybe_start_feishu` catches `ImportError` and logs a skip so a missing
 library never takes down the gateway. No public webhook endpoint is required.
-Capabilities: `streaming=False`, `edit=False`, `reactions=False`,
+
+**Optional-SDK card (Feishu, Teams, WhatsApp).** Every channel whose client
+library ships as an optional extra is one `_CHANNEL_SDK_EXTRA` entry in
+`dashboard/handlers/messaging.py` (`feishu` → `lark_oapi`, `teams` → `jwt`,
+`whatsapp` → `neonize`), and its config GET returns `sdk_installed`,
+`sdk_install_supported` and `sdk_install_command` from `_channel_sdk_status`:
+`find_spec` only (never an import, so the Teams GET still does not load PyJWT on
+the boot path), with the command from `pip_extra_install_command`, which names the
+gateway's OWN interpreter, and empty where `_pip_install_channel_available` says no
+in-place install can work. Each panel renders the shared `OptionalSdkCard`
+(`pages/settings/OptionalSdkCard.tsx`) from those fields: the command when it is
+supported, otherwise the "cannot install here" notice; `sdk_installed` absent
+(an older gateway) renders nothing. No panel shows a bare `pip install`: the Teams
+`jwt_required` notice carries no command and shows only when the card does not
+(`jwt_available` false while `find_spec` still finds a `jwt` module, or an older
+gateway), and the WhatsApp panel renders neither `connect_error` nor the
+"restart the gateway" hint while `sdk_installed` is false: the gateway leaves the
+log-oriented `MISSING_EXTRA_HINT` in `connect_error`, and a restart does nothing
+until the package is installed (that hint
+itself is unchanged for logs, doctor and the CLI setup wizard). There is no Install
+button.
+
+Feishu capabilities: `streaming=False`, `edit=False`, `reactions=False`,
 `files_inbound=False`, `files_outbound=False`, `rich_blocks=False`,
 `threads=False`, `max_message_chars=4000`, `max_buttons=0`,
 `supports_proactive_send=False`. A non-text message (`image`, `file`, `audio`,

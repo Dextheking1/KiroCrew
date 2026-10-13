@@ -73,6 +73,7 @@ from kiro_crew.instances.registry import (
     InvalidInstanceError,
     ancestor_ids,
     descendant_ids,
+    is_headless_provisioner,
     validate_ttl,
 )
 from kiro_crew.instances.ssh_tunnel_manager import ProxyRequestError, TunnelState
@@ -1218,6 +1219,95 @@ async def api_instances_restart(request: web.Request) -> web.Response:
     return web.json_response(result, status=502)
 
 
+#: How each ``start_remote_update`` refusal code answers over HTTP. Every one
+#: is decided before anything runs on the remote.
+_UPDATE_REFUSAL_STATUS = {
+    "not_found": 404,
+    "invalid_transport": 400,
+    "chained": 409,
+    "headless": 409,
+    "already_running": 409,
+}
+
+
+def _update_owner_denial(request: web.Request, operation: str) -> web.Response | None:
+    """The explicit owner check both update routes add on top of ``_guard``.
+
+    The update route runs a command on another machine, so it states the
+    positive owner identity itself rather than leaning on ``_guard``'s copy of
+    it: an app token or a Slack-minted ``!dashboard`` subject is refused here,
+    before the registry is read, even if ``_guard`` admitted it.
+    """
+    if not is_owner_dashboard_request(request):
+        _audit(operation, "denied", error="non-owner identity rejected")
+        return _owner_denial_response(request, "updating a remote crew is owner-only")
+    return None
+
+
+async def api_instances_update_remote(request: web.Request) -> web.Response:
+    """POST /api/instances/{id}/update — run the remote crew's own updater.
+
+    Starts a background job that runs the fixed literal ``kirocrew update`` on
+    the remote, over the same transport runner and refusals as
+    ``/restart`` (a chained or headless crew is refused before anything runs),
+    then ``kirocrew restart`` when the update succeeds. The remote's own update
+    policy, install layout and updater decide what the update does. The request
+    carries no body and nothing in it reaches the remote command. Answers
+    ``202 {ok, job}`` at once; poll ``GET`` on the same path for progress.
+    One click starts one job: a second POST while one runs is refused 409.
+    """
+    denied = _guard(request, "update_remote")
+    if denied is not None:
+        return denied
+    denied = _update_owner_denial(request, "update_remote")
+    if denied is not None:
+        return denied
+    state: DashboardState = request.app["state"]
+    instance_id = request.match_info["id"]
+    if await asyncio.to_thread(_registry(state).get, instance_id) is None:
+        _audit("update_remote", "denied", request_id=instance_id, error="not found")
+        return web.json_response({"error": "not found", "code": "not_found"}, status=404)
+    mgr = getattr(state, "instances_manager", None)
+    if mgr is None:
+        _audit("update_remote", "denied", request_id=instance_id, error="manager unavailable")
+        return web.json_response(
+            {"error": "instances manager not running", "code": "instances_unavailable"},
+            status=503,
+        )
+    result = await mgr.start_remote_update(instance_id)
+    if result.get("ok"):
+        _audit("update_remote", "success", request_id=instance_id)
+        return web.json_response(result, status=202)
+    code = str(result.get("code") or "")
+    message = str(result.get("message") or "remote update refused")
+    _audit("update_remote", "denied", request_id=instance_id, error=f"{code}: {message}")
+    return web.json_response(
+        {"ok": False, "code": code, "error": message},
+        status=_UPDATE_REFUSAL_STATUS.get(code, 502),
+    )
+
+
+async def api_instances_update_remote_status(request: web.Request) -> web.Response:
+    """GET /api/instances/{id}/update — the latest update job for this crew.
+
+    ``{job: null}`` when none has run since this gateway started. The job
+    survives the crew's restart and reconnect, so the dashboard reads the
+    outcome here rather than from the tunnel state.
+    """
+    denied = _guard(request, "update_remote_status")
+    if denied is not None:
+        return denied
+    denied = _update_owner_denial(request, "update_remote_status")
+    if denied is not None:
+        return denied
+    state: DashboardState = request.app["state"]
+    instance_id = request.match_info["id"]
+    mgr = getattr(state, "instances_manager", None)
+    job = mgr.remote_update_job(instance_id) if mgr is not None else None
+    _audit("update_remote_status", "success", request_id=instance_id)
+    return web.json_response({"job": job})
+
+
 async def api_instances_search_sessions(request: web.Request) -> web.Response:
     """GET /api/instances/search-sessions — federated session search.
 
@@ -1785,6 +1875,39 @@ def _cap_str(value: object, limit: int = _CAP_MAX_STR) -> str:
     return redact_peer_text(sanitize_string(value))[:limit]
 
 
+def _remote_is_behind(local: str, remote: str) -> bool:
+    """Whether a peer runs a strictly OLDER build than this gateway.
+
+    Exact-version, so a patch or pre-release skew counts even though
+    :func:`versions_compatible` still lets the two crews exchange frames. Uses
+    the update checker's own ordering (``0.5.0rc3`` < ``0.5.0``), so "behind"
+    here means what "an update is available" means everywhere else. An empty or
+    unparseable version is never behind: the badge states a fact or says
+    nothing.
+    """
+    if not remote or not local or remote == local:
+        return False
+    from kiro_crew.dashboard.handlers.updates import _is_newer
+
+    return _is_newer(local, remote) is True
+
+
+def _can_run_remote_commands(inst: object) -> bool:
+    """Whether this dashboard can run a ``kirocrew`` verb on *inst*'s host.
+
+    The display side of ``SshTunnelManager._remote_command_target``'s refusals,
+    so the dashboard offers Update only where the gateway would accept it: a
+    chained crew (no shell from here) and a fargate or headless crew (no
+    gateway) are refused there, and offered nothing here. The manager remains
+    the authority; this only decides what is shown.
+    """
+    if getattr(inst, "via_instance_id", ""):
+        return False
+    if getattr(inst, "connection_method", "") == "fargate":
+        return False
+    return not is_headless_provisioner(str(getattr(inst, "provisioner_id", "") or ""))
+
+
 def _cap_list(payload: object, key: str) -> object:
     """The row list out of a peer reply that is either bare or wrapped in *key*.
 
@@ -1913,6 +2036,7 @@ async def api_instances_capabilities(request: web.Request) -> web.Response:
         else []
     )
     version_match = versions_compatible(kiro_crew.__version__, peer_version)
+    behind = _remote_is_behind(kiro_crew.__version__, peer_version)
     # The remote pre-session picker can offer these levels before a live slot
     # reports its config. Keep the hub's POST allowlist in sync with that offer.
     if version_match and effort_levels:
@@ -1928,6 +2052,9 @@ async def api_instances_capabilities(request: web.Request) -> web.Response:
             # can explain a refusal BEFORE the user types a message rather than
             # after their first send fails.
             "version_match": version_match,
+            # Exact-version skew, independent of the compatibility gate above:
+            # a patch-behind peer still chats, but the header says it is behind.
+            "behind": behind,
             "agents": _cap_rows(
                 _cap_list(agents_payload, "agents"),
                 {"name": 128, "description": _CAP_MAX_STR, "scope": 32, "model": 128},
@@ -2005,6 +2132,81 @@ async def api_instances_approval_state(request: web.Request) -> web.Response:
         peer_yolo = yolo if isinstance(yolo, bool) else None
     _audit("approval_state", "success", request_id=instance_id)
     return web.json_response({"yolo": peer_yolo})
+
+
+async def api_instances_versions(request: web.Request) -> web.Response:
+    """GET /api/instances/versions — every CONNECTED crew's version beside ours.
+
+    One read for the whole crew list, so the Remote Crew rows and the
+    post-update offer can show which remotes run an older build without opening
+    a capabilities read per row. Each version comes from the peer's own
+    ``/api/version`` through :meth:`SshTunnelManager.peer_capability`, the same
+    closed-path carrier capabilities uses. A peer that does not answer reports
+    ``version: ""`` and is never ``behind``. ``behind`` is the exact-version
+    compare of :func:`_remote_is_behind`.
+
+    Owner-only on top of ``_guard``: the reads run on each peer with the owner's
+    manager-held credential.
+    """
+    denied = _guard(request, "versions")
+    if denied is not None:
+        return denied
+    if not is_owner_dashboard_request(request):
+        _audit("versions", "denied", error="non-owner identity rejected")
+        return _owner_denial_response(request, "remote-crew versions are owner-only")
+    state: DashboardState = request.app["state"]
+    local = kiro_crew.__version__
+    mgr = getattr(state, "instances_manager", None)
+    if mgr is None:
+        _audit("versions", "success", request_id="no-manager")
+        return web.json_response({"local_version": local, "instances": []})
+    connected = [
+        iid
+        for iid, st in mgr.status_all().items()
+        if getattr(st, "state", None) is TunnelState.CONNECTED
+    ]
+    results = await asyncio.gather(
+        *(mgr.peer_capability(iid, "/api/version") for iid in connected),
+        return_exceptions=True,
+    )
+    names: dict[str, str] = {}
+    updatable: dict[str, bool] = {}
+    if connected:
+        try:
+            for inst in await asyncio.to_thread(_registry(state).list):
+                names[inst.id] = inst.name
+                updatable[inst.id] = _can_run_remote_commands(inst)
+        except Exception:
+            names, updatable = {}, {}
+    rows: list[dict[str, object]] = []
+    for iid, outcome in zip(connected, results):
+        version = ""
+        # Why this crew's version is unknown, as the carrier's own code, so a
+        # failed read is reported rather than looking like a current crew.
+        read_error = ""
+        if isinstance(outcome, BaseException):
+            logger.info("Peer version read on %s raised (%s)", iid, type(outcome).__name__)
+            read_error = "capability_unreachable"
+        else:
+            ok, payload = outcome
+            if ok and isinstance(payload, dict):
+                version = _cap_str(payload.get("version"), _CAP_MAX_VERSION_STR)
+            elif not ok:
+                read_error = (
+                    _cap_str(payload.get("code"), 64) if isinstance(payload, dict) else ""
+                ) or "capability_error"
+        rows.append(
+            {
+                "id": iid,
+                "name": _cap_str(names.get(iid) or iid, 128),
+                "version": version,
+                "behind": _remote_is_behind(local, version),
+                "updatable": updatable.get(iid, False),
+                "error": read_error,
+            }
+        )
+    _audit("versions", "success")
+    return web.json_response({"local_version": local, "instances": rows})
 
 
 #: Every field ``useInstanceSessions.ts`` reads off a peer slot, with the clamp

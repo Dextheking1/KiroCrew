@@ -66,7 +66,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, NamedTuple
 
 from kiro_crew.atomic_write import atomic_write, read_bytes_with_retry
 from kiro_crew.config.paths import data_home
@@ -118,11 +118,17 @@ WORKER_STATUSES: frozenset[str] = frozenset(WORK_WORKER_STATUSES)
 BLOCKED_REASONS: frozenset[str] = frozenset(WORK_BLOCKED_REASONS)
 
 #: The statuses from which a report gap still means "the WORKER went quiet", which is
-#: the only thing :func:`is_stale` exists to surface. ``done`` is deliberately absent:
-#: a worker that has claimed its bar is met has nothing left to report, and the next
-#: move belongs to the conductor (verify, promote, close) or to a human. Flagging it
-#: would point the flag at the reader instead of the worker.
-STALE_ELIGIBLE_STATUSES: frozenset[str] = frozenset({"progress", "blocked", "question"})
+#: the only thing :func:`is_stale` exists to surface. Only ``progress`` leaves the next
+#: move with the worker. ``done``, ``blocked`` and ``question`` each woke the conductor
+#: through the report itself and hand the next move to the conductor or to a person,
+#: so a worker that stays silent after one of them is waiting, not stalled. Flagging
+#: it would point the flag at the reader instead of the worker.
+STALE_ELIGIBLE_STATUSES: frozenset[str] = frozenset({"progress"})
+
+#: The statuses that wait on the conductor or a person. A conductor ``decide`` newer
+#: than such a report hands the move BACK to the worker, and from then on
+#: :func:`is_stale` measures the worker's silence from the decision.
+WAITING_STATUSES: frozenset[str] = frozenset({"blocked", "question"})
 
 #: Field values that mean "not filled in yet". A conductor legitimately opens an item
 #: whose bar is not knowable at dispatch time -- the worker is what learns the pull
@@ -170,43 +176,56 @@ CONDUCTOR_ACTIONS: frozenset[str] = frozenset(
 
 #: How many OPEN items one conductor may hold at once -- the bound on live fan-out,
 #: which is the only thing a per-conductor item cap is for. Items in a
-#: :data:`TERMINAL_ITEM_STATES` state do not count: they stay on disk, are still
-#: listed and readable, but a queue conductor that mints one item per ticket and
-#: closes each as it lands would otherwise exhaust the cap on its own history within
-#: a day, with nothing live behind the refusal. Enforced by :func:`_create_item`.
-#: Closed items are bounded with the open ones by
-#: :data:`MAX_STORED_ITEMS_PER_CONDUCTOR` below.
+#: :data:`TERMINAL_ITEM_STATES` state do not count: a queue conductor that mints one
+#: item per ticket and closes each as it lands would otherwise exhaust the cap on its
+#: own history within a day, with nothing live behind the refusal. Enforced by
+#: :func:`_create_item`. There is no bound on how many items a board creates over its
+#: life: the crew log's ``work`` fold forgets a closed item once
+#: ``work_vocab.WORK_CLOSED_WINDOW`` newer closed items sit behind it, so the fold is
+#: bounded by what is open, not by history. This cache keeps every record; nothing
+#: here removes one.
 MAX_ITEMS_PER_CONDUCTOR = 32
-#: How many items one conductor's board may CREATE over its life, open and closed
-#: together -- the bound on stored history, where the cap above bounds live fan-out.
-#: Equal to the crew log fold's per-board item ceiling
-#: (``crew_log.projection.WORK_ITEM_LIMIT``) by construction: both read
-#: :data:`kiro_crew.work_vocab.WORK_STORED_ITEM_LIMIT`. Every create this bound
-#: admits is one recorded create, so a board that cannot admit more creates than the
-#: fold retains cannot overflow the fold, and the fold is always the whole board.
-#: Counted by :attr:`ConductorRecord.created_total`, a monotonic counter in the
-#: header that :func:`_create_item` bumps under the conductor lock, NOT off the
-#: record files and not off the readable listing: the fold counts creates in an
-#: append-only log, so a record removed from ``items/`` -- torn, hand-deleted, lost
-#: -- still has its create there, and a count of what the directory holds would
-#: admit one create more than the fold retains for every record it lost. Removing
-#: a record reclaims nothing. Enforced by :func:`_create_item`, which refuses rather
-#: than evicts -- nothing in this module deletes a record. A board at this bound has
-#: run its course: once every item is closed, ``kirocrew ledger-sweep --purge``
-#: removes the finished ledger whole.
-MAX_STORED_ITEMS_PER_CONDUCTOR = WORK_STORED_ITEM_LIMIT
-#: How many items one GOAL may create, every round and re-plan together, when the
-#: user set no budget of their own. A spend bound, where the two above bound the
-#: store: reaching it means the conductor asks the user, then raises the cap with
-#: ``work_ledger_record action=goal item_cap=N``. Stored per board as
-#: :attr:`ConductorRecord.item_cap` and enforced by :func:`_create_item` on a board
-#: that has recorded a goal -- a queue board that never writes one (the pipeline
-#: and security conductors) keeps only the open and stored bounds.
+#: How many OPEN items one GOAL may hold at once when the user set no bound of
+#: their own -- the goal's own fan-out bound, tighter than
+#: :data:`MAX_ITEMS_PER_CONDUCTOR`, which bounds the store. A worker per open item
+#: is a worker running, so this is the bound on parallel work, the one thing the
+#: user asked to be capped in code. Stored per board as
+#: :attr:`ConductorRecord.concurrency_cap`, set with
+#: ``work_ledger_record action=goal concurrency_cap=N`` and enforced by
+#: :func:`_create_item` on a board that has recorded a goal -- a queue board that
+#: never writes one (the pipeline and security conductors) keeps only the open
+#: open bound. Closed items do not count: a create refused here is refused for
+#: what is running, never for what has run.
+DEFAULT_GOAL_CONCURRENCY_CAP = 6
+#: The highest ``concurrency_cap`` a goal write accepts: a cap past the store's
+#: open bound could never be reached, so it would only hide that bound behind a
+#: different refusal.
+MAX_GOAL_CONCURRENCY_CAP = MAX_ITEMS_PER_CONDUCTOR
+#: How many items one GOAL is expected to create, every round and re-plan together,
+#: when the user set no budget of their own. An ADVISORY line, not a bound: a
+#: create past it is admitted, and :attr:`ConductorRecord.cap_exceeded` turns true
+#: so the conductor's round report can say so and the user can decide whether the
+#: goal is spending more than they meant. Nothing refuses on it: a refusal here
+#: would stall a goal whose items land and close quickly on its own finished
+#: history while nothing was running, and the bound on spend is the concurrency
+#: cap above. Stored per board as :attr:`ConductorRecord.item_cap`, set with
+#: ``work_ledger_record action=goal item_cap=N`` and measured against
+#: :attr:`ConductorRecord.goal_items_used`.
 DEFAULT_GOAL_ITEM_CAP = 20
-#: The highest ``item_cap`` a goal write accepts: a cap past the stored bound could
-#: never be reached, so it would only hide that bound behind a different refusal.
-MAX_GOAL_ITEM_CAP = MAX_STORED_ITEMS_PER_CONDUCTOR
+#: The highest ``item_cap`` a goal write accepts.
+MAX_GOAL_ITEM_CAP = WORK_STORED_ITEM_LIMIT
 MAX_EVENTS_PER_ITEM = 200
+#: How many levels may CONDUCT: the root at depth 0 and the one conductor it may
+#: dispatch at depth 1. Depth ``MAX_DEPTH`` itself is the first level that may
+#: only work -- it may neither open a ledger nor create an item -- so a conductor
+#: dispatched by a depth-1 conductor is refused at its first ledger call
+#: (:func:`child_depth` denies the open), before any ledger exists for it. Two levels rather
+#: than three because each level multiplies sessions -- three levels of three items
+#: is twenty-seven -- and because a summary of summaries of summaries is not
+#: evidence any more; that number is a guess informed by session multiplication,
+#: not a measurement (RFC Q5). Read ONLY through :func:`may_conduct`, which every
+#: depth guard asks, so the level a dispatch admits, the level a ledger may open at
+#: and the level that may create an item are one level and cannot drift apart.
 MAX_DEPTH = 2
 
 MAX_GOAL_CHARS = 2000
@@ -242,8 +261,7 @@ CODE_UNKNOWN_ITEM = "unknown_item"
 CODE_ALREADY_BOUND = "already_bound"
 CODE_ITEM_CLOSED = "item_closed"
 CODE_ITEM_CAP_EXCEEDED = "item_cap_exceeded"
-CODE_ITEM_STORE_FULL = "item_store_full"
-CODE_GOAL_ITEM_CAP_REACHED = "goal_item_cap_reached"
+CODE_GOAL_CONCURRENCY_CAP_REACHED = "goal_concurrency_cap_reached"
 CODE_CREW_LOG_INCOMPLETE = "crew_log_incomplete"
 CODE_CACHE_DIRTY = "cache_dirty"
 CODE_DEPTH_EXCEEDED = "depth_exceeded"
@@ -304,17 +322,22 @@ class ConductorRecord:
     #: expected to hold every goal write, and a rebuild checks that it does.
     recorded_at: str = ""
     #: How many items this board has created over its life, open and closed
-    #: together -- what :data:`MAX_STORED_ITEMS_PER_CONDUCTOR` is measured against.
-    #: Monotonic under the store's own writes: :func:`_create_item` bumps it under
+    #: together; the current goal's spend (:attr:`goal_items_used`) is measured off
+    #: it. Monotonic under the store's own writes: :func:`_create_item` bumps it under
     #: the conductor lock in the same hold that writes the item, and nothing here
     #: lowers it -- a record removed from ``items/`` keeps the create it counted,
     #: as the crew log keeps that create's entry. :func:`rebuild_from_projection`
     #: sets it to the count the log holds. Zero on records from before it; the
     #: first create on such a board seeds it from the records on the board.
     created_total: int = 0
-    #: How many items the current goal may create -- :data:`DEFAULT_GOAL_ITEM_CAP`
-    #: unless a ``goal`` write set it. Measured against :attr:`goal_items_used`.
+    #: How many items the current goal is expected to create --
+    #: :data:`DEFAULT_GOAL_ITEM_CAP` unless a ``goal`` write set it. Measured
+    #: against :attr:`goal_items_used` by :attr:`cap_exceeded`; advisory only.
     item_cap: int = DEFAULT_GOAL_ITEM_CAP
+    #: How many items the current goal may hold OPEN at once --
+    #: :data:`DEFAULT_GOAL_CONCURRENCY_CAP` unless a ``goal`` write set it. The
+    #: bound :func:`_create_item` refuses on, once the board has recorded a goal.
+    concurrency_cap: int = DEFAULT_GOAL_CONCURRENCY_CAP
     #: :attr:`created_total` when the current goal started, so the goal's own
     #: creates are the difference. Only a goal write with ``new_goal=True`` moves
     #: it: a reworded goal text, a round bump or a cap raise keeps the count.
@@ -330,6 +353,18 @@ class ConductorRecord:
             return 0
         return max(0, self.created_total - self.goal_items_base)
 
+    @property
+    def cap_exceeded(self) -> bool:
+        """Whether the current goal has created more items than :attr:`item_cap`.
+
+        True from the first create past the cap, not at the cap: a goal at twenty
+        of twenty has spent what it was allowed. Advisory -- the read reports it beside
+        ``items used: N of M`` and the conductor tells the user; nothing blocks on
+        it. False on a board that never recorded a goal, which has no goal to
+        measure: a queue board's count is its whole history.
+        """
+        return self.goal_version > 0 and self.goal_items_used > self.item_cap
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
@@ -344,6 +379,7 @@ class ConductorRecord:
             "recorded_at": self.recorded_at,
             "created_total": self.created_total,
             "item_cap": self.item_cap,
+            "concurrency_cap": self.concurrency_cap,
             "goal_items_base": self.goal_items_base,
         }
 
@@ -370,6 +406,7 @@ class ConductorRecord:
             recorded_at=_as_str(raw.get("recorded_at")),
             created_total=max(0, _as_int(raw.get("created_total"), 0)),
             item_cap=_stored_item_cap(raw.get("item_cap")),
+            concurrency_cap=_stored_concurrency_cap(raw.get("concurrency_cap")),
             goal_items_base=(
                 max(0, _as_int(raw.get("goal_items_base"), 0))
                 if "goal_items_base" in raw
@@ -402,6 +439,18 @@ def _stored_item_cap(value: Any) -> int:
     return number
 
 
+def _stored_concurrency_cap(value: Any) -> int:
+    """A stored ``concurrency_cap``, or the default when absent or out of range.
+
+    A header from before the field reads as the default, so an upgraded board's
+    fan-out is bounded the same way a new one's is.
+    """
+    number = _finite_int(value)
+    if number is None or not 1 <= number <= MAX_GOAL_CONCURRENCY_CAP:
+        return DEFAULT_GOAL_CONCURRENCY_CAP
+    return number
+
+
 @dataclass
 class WorkItem:
     """One dispatched work item. Two writers, one per-item lock, disjoint fields.
@@ -410,7 +459,7 @@ class WorkItem:
     ``worker_session_key``, ``round``, ``fails``.
     Worker-owned: ``status``, ``reason``, ``summary``, ``artifacts``, ``pr``,
     ``last_report_at``.
-    Server-owned: ``item_id``, ``created_at``, ``closed_at``.
+    Server-owned: ``item_id``, ``created_at``, ``closed_at``, ``decided_at``.
 
     ``orphaned`` and ``stale`` are NOT fields. They are derived at read time by
     :func:`is_orphaned` and :func:`is_stale`, because a stamped flag would need
@@ -437,6 +486,10 @@ class WorkItem:
     last_report_at: str | None = None
     created_at: str = ""
     closed_at: str | None = None
+    #: When the conductor last wrote ``decide`` on this item, or ``None``. A ``decide``
+    #: newer than the last report hands a ``blocked`` / ``question`` item back to the
+    #: worker; see :func:`is_stale`.
+    decided_at: str | None = None
     schema: int = SCHEMA_VERSION
     #: When the crew log first held this item whole (its recorded create, or the
     #: baseline its first recorded mutation carried). Empty until then: the write
@@ -467,6 +520,7 @@ class WorkItem:
             "last_report_at": self.last_report_at,
             "created_at": self.created_at,
             "closed_at": self.closed_at,
+            "decided_at": self.decided_at,
             "recorded_at": self.recorded_at,
         }
 
@@ -503,6 +557,7 @@ class WorkItem:
             last_report_at=_as_opt_str(raw.get("last_report_at")),
             created_at=_as_str(raw.get("created_at")),
             closed_at=_as_opt_str(raw.get("closed_at")),
+            decided_at=_as_opt_str(raw.get("decided_at")),
             recorded_at=_as_str(raw.get("recorded_at")),
             schema=_as_int(raw.get("schema"), SCHEMA_VERSION),
         )
@@ -1031,8 +1086,8 @@ def _stored_item_ids(slot_key: str) -> list[str]:
     of items that read. :func:`rebuild_from_projection` locks and snapshots every
     record by this list, a torn one included, and :func:`_create_item` seeds a
     header that predates :attr:`ConductorRecord.created_total` from it, once. It
-    is NOT what the stored bound counts: a directory listing goes down when a
-    record is removed, and the fold's count of creates never does. Only a full
+    is NOT the board's create count: a directory listing goes down when a record
+    is removed, and the fold's count of creates never does. Only a full
     ``it_<8 hex>`` stem is a record, as in the listing: a stray ``it_bad.json``
     was never minted here and has no create in the fold. Lock-free, like the
     listing; both callers hold the conductor lock.
@@ -1378,25 +1433,37 @@ def _require_count(value: Any, name: str) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def may_conduct(depth: int) -> bool:
+    """Whether a session at *depth* may hold a ledger and dispatch from it.
+
+    The one reading of :data:`MAX_DEPTH`. :func:`child_depth`, :func:`ensure_conductor`
+    and :func:`_create_item` all decide through this predicate so that the level a
+    dispatch admits, the level a ledger may open at and the level that may create
+    an item are the same level by construction.
+    """
+    return depth < MAX_DEPTH
+
+
 def child_depth(parent_depth: int) -> int:
     """The depth a conductor dispatched BY one at *parent_depth* would have.
 
-    Refuses past the cap rather than clamping: a clamped depth would let level three
-    exist while reporting as level two, which is the failure the cap exists to stop.
-    Two levels rather than three because each level multiplies sessions — three
-    levels of three items is twenty-seven — and because a summary of summaries of
-    summaries is not evidence any more. That number is a guess informed by session
-    multiplication, not a measurement (RFC Q5).
+    Refuses rather than clamping: a clamped depth would let a third conducting
+    level exist while reporting as the second, which is the failure the cap exists
+    to stop. The refusal lands HERE, at the child's first ledger call and before
+    any ledger exists for it: the child is told it may only work, and its parent
+    never watches a child that opened a ledger and then could create nothing in
+    it.
     """
     depth = _require_count(parent_depth, "depth")
-    if depth + 1 > MAX_DEPTH:
+    child = depth + 1
+    if not may_conduct(child):
         raise WorkLedgerError(
-            f"depth {depth} is at the cap of {MAX_DEPTH}; this session may not "
-            "dispatch a conductor",
+            f"depth {depth} is the last conducting level (the cap is {MAX_DEPTH}); "
+            "this session may not dispatch a conductor",
             code=CODE_DEPTH_EXCEEDED,
             field="depth",
         )
-    return depth + 1
+    return child
 
 
 # --------------------------------------------------------------------------- #
@@ -1420,6 +1487,7 @@ def is_stale(
     *,
     worker_running: bool,
     worker_closed: bool = False,
+    worker_looping: bool = False,
     now: datetime | None = None,
     window_secs: float = DEFAULT_STALE_WINDOW_SECS,
 ) -> bool:
@@ -1429,6 +1497,14 @@ def is_stale(
     in a thirty-minute build is running, so it is never flagged however long it stays
     silent. The window exists only to cover the gap between binding and the first
     report, and to catch a session that ended without reporting.
+
+    ``worker_looping`` says the worker's own session holds an ACTIVE loop -- a
+    ``monitor_start`` prompt loop or a structured monitor -- that will wake it. Such a
+    worker has no turn in flight between cycles and is still alive, the way a worker
+    in a long build is, so it is not flagged. A stopped or expired loop wakes nobody,
+    and the caller answers ``False`` for it. A closed session outranks a loop record:
+    the loop has no session left to wake. Defaults to ``False``, which is the answer
+    for "unknown" and keeps a caller that cannot read loops on the behaviour it had.
 
     ``worker_closed`` SKIPS THE WINDOW for an item that has REPORTED AT LEAST ONCE, and
     skips only the window. The window is there because "not running" is true of a worker
@@ -1444,9 +1520,15 @@ def is_stale(
     field existed.
 
     A terminal item is never stale — there is nothing left to report. Neither is one
-    whose last report was ``done``: the ball is in the conductor's court (verify,
-    promote, close) or a human's, and silence from a worker that has already claimed
-    its bar is met is the expected end of its work, not a gap worth waking anyone for.
+    whose last report was ``done``, ``blocked`` or ``question``: each of those already
+    woke the conductor, and the ball is in the conductor's court (verify, rule,
+    unblock) or a human's. Silence from a worker that is waiting on someone else is the
+    expected shape of that wait, not a gap worth waking anyone for. The conductor's
+    ``decide`` on such an item hands the move back: from a ``decided_at`` at or after the
+    last report, the worker owns the next move again and the window runs from the
+    decision. A ``blocked`` / ``question`` item whose worker session has CLOSED after
+    reporting is flagged at once, with or without a ``decide``: nobody is left to act on
+    the answer. A ``decide`` on any other status does not move the window.
     :data:`STALE_ELIGIBLE_STATUSES` names the statuses that do still count, and no
     report yet counts too — that is the bind-to-first-report gap.
 
@@ -1461,7 +1543,13 @@ def is_stale(
     """
     if item.is_terminal or worker_running:
         return False
+    if worker_closed and item.last_report_at and item.status in WAITING_STATUSES:
+        # Waiting on the conductor, but the worker the answer goes back to is gone, so
+        # no answer can be acted on. Flagged with or without a ``decide`` yet.
+        return True
     if not _worker_owns_next_move(item):
+        return False
+    if worker_looping and not worker_closed:
         return False
     if worker_closed and item.last_report_at:
         # Past both guards above, so this is an OPEN item whose next move is the
@@ -1477,7 +1565,8 @@ def is_stale(
         # and now it is not. With no report the two are indistinguishable, so the window
         # decides as it did before, which is the behaviour that gap always had.
         return True
-    reference = item.last_report_at or item.created_at
+    handed_back = _decided_after_report(item) if item.status in WAITING_STATUSES else None
+    reference = handed_back or item.last_report_at or item.created_at
     if not reference:
         return True
     # Through ``parse_stamp``, whose UTC fallback covers a stamp at either end of
@@ -1498,11 +1587,38 @@ def _worker_owns_next_move(item: WorkItem) -> bool:
     The half of :func:`is_stale` that keeps the flag pointed at a worker rather than at
     whoever is reading. No report yet counts (the worker owes the first one), and so
     does a ``done`` whose verdict came back ``fail`` on a still-open item — the
-    conductor handed that work back.
+    conductor handed that work back -- and so does a ``blocked`` / ``question`` the
+    conductor has answered with ``decide``.
     """
     if item.status is None or item.status in STALE_ELIGIBLE_STATUSES:
         return True
+    if item.status in WAITING_STATUSES:
+        return _decided_after_report(item) is not None
     return item.status == "done" and item.verdict == "fail"
+
+
+def _decided_after_report(item: WorkItem) -> str | None:
+    """*item*'s ``decided_at`` when it is at or after its last report, else ``None``.
+
+    "At or after" because both stamps are seconds-precision and a ``decide`` answers the
+    report it follows, so a decision in the report's own second is the answer to it.
+    An unreadable stamp reads as no hand-back, which leaves a waiting item unflagged
+    as it is without a decision.
+    """
+    if not item.decided_at:
+        return None
+    decided = parse_stamp(item.decided_at)
+    if decided is None:
+        return None
+    if not item.last_report_at:
+        return item.decided_at
+    reported = parse_stamp(item.last_report_at)
+    if reported is None:
+        return None
+    try:
+        return item.decided_at if decided >= reported else None
+    except TypeError:
+        return None
 
 
 def is_acceptance_concrete(acceptance: Any) -> bool:
@@ -1746,14 +1862,16 @@ def ensure_conductor(
 
     *depth* and *parent_item* are SERVER-owned in Phase 2: the value passed here
     comes from the creating session's own record via :func:`child_depth`, never from
-    a model. Refuses a depth past the cap so a ledger cannot exist at a level that
-    is not allowed to conduct.
+    a model. Refuses a depth that :func:`may_conduct` denies, so a ledger cannot
+    exist at a level that is not allowed to conduct -- the same question
+    :func:`child_depth` already answered, asked again here because this function is
+    also reachable with a depth that did not come through it.
     """
     checked_goal = _require_text(goal, MAX_GOAL_CHARS, "goal", required=False)
     checked_depth = _require_count(depth, "depth")
-    if checked_depth > MAX_DEPTH:
+    if not may_conduct(checked_depth):
         raise WorkLedgerError(
-            f"depth {checked_depth} is past the cap of {MAX_DEPTH}",
+            f"depth {checked_depth} may not conduct; the cap is {MAX_DEPTH} levels",
             code=CODE_DEPTH_EXCEEDED,
             field="depth",
         )
@@ -1796,6 +1914,7 @@ def apply_conductor_action(
     round_number: Any = None,
     fails: Any = None,
     item_cap: Any = None,
+    concurrency_cap: Any = None,
     new_goal: Any = None,
 ) -> dict[str, Any]:
     """Write the fields the CONDUCTOR owns, and append the one event that explains it.
@@ -1813,8 +1932,8 @@ def apply_conductor_action(
     ``decide``  ``item_id``, ``decision``, optional ``round_number``.
     ``verdict`` ``item_id``, ``verdict``, optional ``fails``.
     ``close``   ``item_id``, ``state``, optional ``decision`` — stamps ``closed_at``.
-    ``goal``    ``goal``, optional ``round_number``, ``item_cap`` and ``new_goal``
-                — the conductor record only.
+    ``goal``    ``goal``, optional ``round_number``, ``item_cap``,
+                ``concurrency_cap`` and ``new_goal`` — the conductor record only.
 
     Returns ``{"conductor", "item", "event"}``; ``item`` and ``event`` are ``None``
     for ``goal``. Raises :class:`WorkLedgerError` with a ``code`` from the ``CODE_*``
@@ -1833,7 +1952,15 @@ def apply_conductor_action(
 
     if action == "goal":
         return {
-            "conductor": _write_goal(slot_key, record, goal, round_number, item_cap, new_goal),
+            "conductor": _write_goal(
+                slot_key,
+                record,
+                goal,
+                round_number,
+                item_cap,
+                new_goal,
+                concurrency_cap=concurrency_cap,
+            ),
             "item": None,
             "event": None,
         }
@@ -1899,6 +2026,8 @@ def _write_goal(
     round_number: Any,
     item_cap: Any = None,
     new_goal: Any = None,
+    *,
+    concurrency_cap: Any = None,
 ) -> ConductorRecord:
     """Partial update of the conductor header, merged UNDER the lock.
 
@@ -1912,7 +2041,7 @@ def _write_goal(
     ``new_goal=True`` starts a new goal, so its item count starts again:
     :attr:`ConductorRecord.goal_items_base` moves to the board's create total. It
     is an explicit signal and needs the new goal text with it; a goal text that
-    merely differs keeps the count, so rewording cannot reset the spend bound.
+    merely differs keeps the count, so rewording cannot reset the spend line.
     """
     checked_goal = None if goal is None else _require_text(goal, MAX_GOAL_CHARS, "goal")
     checked_round = None if round_number is None else _require_count(round_number, "round")
@@ -1922,6 +2051,16 @@ def _write_goal(
             f"item_cap must be between 1 and {MAX_GOAL_ITEM_CAP}; got {checked_cap}",
             code=CODE_INVALID_VALUE,
             field="item_cap",
+        )
+    checked_concurrency = (
+        None if concurrency_cap is None else _require_count(concurrency_cap, "concurrency_cap")
+    )
+    if checked_concurrency is not None and not 1 <= checked_concurrency <= MAX_GOAL_CONCURRENCY_CAP:
+        raise WorkLedgerError(
+            f"concurrency_cap must be between 1 and {MAX_GOAL_CONCURRENCY_CAP}; "
+            f"got {checked_concurrency}",
+            code=CODE_INVALID_VALUE,
+            field="concurrency_cap",
         )
     if new_goal is not None and not isinstance(new_goal, bool):
         raise WorkLedgerError(
@@ -1955,6 +2094,8 @@ def _write_goal(
             current.round = checked_round
         if checked_cap is not None:
             current.item_cap = checked_cap
+        if checked_concurrency is not None:
+            current.concurrency_cap = checked_concurrency
         current.goal_version += 1
         _write_record(conductor_dir(slot_key) / _CONDUCTOR_FILE, current.to_dict())
         return current
@@ -1969,32 +2110,25 @@ def _create_item(
 ) -> dict[str, Any]:
     """Mint one item under the conductor lock.
 
-    Two bounds, each checked under the lock and each off the thing it bounds. The
-    stored TOTAL first: :data:`MAX_STORED_ITEMS_PER_CONDUCTOR` is measured against
-    the header's :attr:`ConductorRecord.created_total`, a counter of every create
-    this board has admitted, which this function bumps in the same hold that writes
-    the item. It is a counter and not a count of the records on the board because
-    the fold that equals this bound counts creates in an append-only log: a record
-    removed from ``items/`` -- torn, hand-deleted, lost -- still has its create
-    there, so a count of what the directory holds would admit one create more than
-    the fold retains for every record it lost, and the fold's ceiling guard in
-    :func:`rebuild_from_projection` would then refuse that board for good. The
-    counter only ever climbs here, so a removed record reclaims nothing; a board
-    this refusal admits can always be folded whole, and that guard is defensive.
-    A header from before the counter holds zero: the first create on such a board
-    seeds it from the records the board holds (:func:`_stored_item_ids`), once,
-    before the compare -- a backfill that can only over-count the log, never under.
-    Then the OPEN count: :data:`MAX_ITEMS_PER_CONDUCTOR` bounds live fan-out, read
-    off :func:`list_work_items`, so an item in a terminal state is listed but not
-    counted there, and a torn record -- whose state cannot be read -- counts toward
-    neither. Closed items stay on the board until the stored bound; nothing here
-    evicts one.
+    Two bounds on the OPEN count, each checked under the lock:
+    :data:`MAX_ITEMS_PER_CONDUCTOR` bounds the store's live fan-out for every board,
+    and :attr:`ConductorRecord.concurrency_cap` bounds the goal's for a board that
+    recorded one. Both are read off :func:`list_work_items`, so an item in a terminal
+    state is listed but not counted there, and a torn record -- whose state cannot be
+    read -- counts toward neither. The header's :attr:`ConductorRecord.created_total`
+    counts every create this board has admitted, bumped in the same hold that writes
+    the item; a header from before the counter holds zero, and the first create on
+    such a board seeds it from the records the board holds (:func:`_stored_item_ids`),
+    once. The goal's item cap (:attr:`ConductorRecord.item_cap`) refuses nothing: it
+    is the advisory line :attr:`ConductorRecord.cap_exceeded` reports. Nothing bounds
+    how many items a board creates over its life: the crew log's ``work`` fold
+    forgets old closed items, so it is bounded by what is open.
 
     The header is written FIRST, then the item. A failure between the two leaves
     the counter one ahead of the board -- a create the fold never sees, so the
     safe side -- and the header is put back when the item write raises. The
     other order would let a failed header write leave an item the counter never
-    saw, which is the side that overflows the fold. Every refusal, the item's own
+    saw, which is the side that under-counts the goal's spend. Every refusal, the item's own
     size included, is decided before the header write, so a refused create leaves
     every file byte-identical.
 
@@ -2004,13 +2138,16 @@ def _create_item(
     write. The new item's own lock is taken from inside that hold, in the
     documented order.
 
-    Refuses when the conductor is at the depth cap, because an item is a dispatch and
-    a session at the cap may not dispatch.
+    Refuses when :func:`may_conduct` denies the conductor's depth, because an item
+    is a dispatch and a level that may not conduct may not dispatch. No such record
+    opens through :func:`ensure_conductor`, but a header on disk can carry a depth
+    no guard here admitted -- :func:`rebuild_from_projection` keeps the depth a
+    stored header holds -- so the question is asked here too.
     """
     checked_title = _require_text(title, MAX_TITLE_CHARS, "title")
     checked_acceptance = _require_acceptance(acceptance)
     checked_round = None if round_number is None else _require_count(round_number, "round")
-    if record.depth >= MAX_DEPTH:
+    if not may_conduct(record.depth):
         raise WorkLedgerError(
             f"conductor is at depth {record.depth} and the cap is {MAX_DEPTH}; it may "
             "not dispatch further work",
@@ -2024,7 +2161,7 @@ def _create_item(
         # that is GONE means the ledger was purged while this call waited on the
         # lock: minting an item now would write a record into a store with no
         # header -- a ledger destroyed down to the records that made it one. And
-        # the header holds the create count the stored bound is measured against,
+        # the header holds the create count the goal's spend is measured against,
         # which the pre-lock snapshot may hold low, so a header that is present
         # but torn refuses too; see ``_header_under_lock``.
         live = _header_under_lock(slot_key, "no item can be created in it")
@@ -2039,36 +2176,10 @@ def _create_item(
             live.created_total = len(_stored_item_ids(slot_key))
         # A header from before the per-goal count: its goal counts from here.
         _settle_goal_base(live)
-        # The stored total first: a board that has admitted every create it may
-        # ever admit is refused whatever its open count, so closed history cannot
-        # carry the board past the fold's ceiling.
-        if live.created_total >= MAX_STORED_ITEMS_PER_CONDUCTOR:
-            raise WorkLedgerError(
-                f"conductor has created {live.created_total} items over its life, open "
-                f"and closed together; the stored bound is {MAX_STORED_ITEMS_PER_CONDUCTOR}. "
-                "Nothing evicts a record and removing one reclaims nothing: once every "
-                "item is closed, `kirocrew ledger-sweep --purge` removes the finished "
-                "ledger whole",
-                code=CODE_ITEM_STORE_FULL,
-                field="items",
-            )
-        # The goal's own spend bound: every item this goal created, closed ones
-        # and every round's re-plans included. A person decides past it. Only a
-        # board that recorded a goal has one: a queue board never writes ``goal``.
-        if live.goal_version > 0 and live.goal_items_used >= live.item_cap:
-            raise WorkLedgerError(
-                f"this goal has created {live.goal_items_used} items and its item cap "
-                f"is {live.item_cap}. Dispatch nothing new and keep patrolling what is "
-                "in flight; ask the user whether to spend more, and if they agree "
-                "raise the cap with work_ledger_record action=goal item_cap=<new cap> "
-                f"(at most {MAX_GOAL_ITEM_CAP})",
-                code=CODE_GOAL_ITEM_CAP_REACHED,
-                field="item_cap",
-            )
-        # Only OPEN items count toward the fan-out cap: a closed item is history, not
-        # fan-out. It stays on the board and ``list_work_items`` still returns it; it
-        # does not block a create. Read off the listing, since only a readable record
-        # has a state.
+        # Only OPEN items count toward either fan-out cap: a closed item is history,
+        # not fan-out. It stays on the board and ``list_work_items`` still returns
+        # it; it does not block a create. Read off the listing, since only a
+        # readable record has a state.
         open_items = [
             item for item in list_work_items(slot_key) if item.state not in TERMINAL_ITEM_STATES
         ]
@@ -2078,6 +2189,20 @@ def _create_item(
                 f"{MAX_ITEMS_PER_CONDUCTOR}",
                 code=CODE_ITEM_CAP_EXCEEDED,
                 field="items",
+            )
+        # The goal's own fan-out bound: how much of this goal may run at once. A
+        # person decides past it. Only a board that recorded a goal has one: a
+        # queue board never writes ``goal``. The goal's item cap is NOT checked
+        # here -- what the goal has spent over its life is reported, not refused.
+        if live.goal_version > 0 and len(open_items) >= live.concurrency_cap:
+            raise WorkLedgerError(
+                f"this goal holds {len(open_items)} open items and its concurrency cap "
+                f"is {live.concurrency_cap}. Dispatch nothing new until one lands; to "
+                "run more at once, ask the user, and if they agree raise the cap with "
+                "work_ledger_record action=goal concurrency_cap=<new cap> "
+                f"(at most {MAX_GOAL_CONCURRENCY_CAP})",
+                code=CODE_GOAL_CONCURRENCY_CAP_REACHED,
+                field="concurrency_cap",
             )
         item_id = mint_item_id()
         while (items_dir(slot_key) / f"{item_id}.json").exists():
@@ -2206,6 +2331,7 @@ def _write_item_action(
         elif action == "decide":
             assert checked_decision is not None
             item.decision = checked_decision
+            item.decided_at = _now_iso()
             event = _commit_item_locked(slot_key, item, "decision", checked_decision)
         elif action == "verdict":
             assert checked_verdict is not None
@@ -3029,11 +3155,13 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
     writer can take the lock of an item whose record does not exist yet, so the
     window a writer could use opens only once this rebuild writes the file, by
     which time its lock is held. A slot whose fold holds no entry leaves the files
-    untouched, so a caller can tell "no entries" from "rebuilt empty". The rebuilt
-    header's :attr:`ConductorRecord.created_total` is the number of records the
-    rebuilt board holds -- every item the fold retained plus every legacy record
-    kept -- so the stored bound afterwards agrees with the record rather than with
-    whatever the cache's header held.
+    untouched, so a caller can tell "no entries" from "rebuilt empty". A closed record
+    the fold does not hold (it forgets closed items past
+    ``work_vocab.WORK_CLOSED_WINDOW``) is kept as the cache holds it. The rebuilt header's
+    :attr:`ConductorRecord.created_total` is the number of items the fold ever held,
+    forgotten ones included, plus every legacy record kept, raised to a trusted cache
+    header's count: the goal's spend count follows the record, but never drops below
+    what the cache says was already spent.
 
     Returns the counts: ``{"slot_key", "items", "events", "removed", "legacy"}``.
     """
@@ -3087,22 +3215,16 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
         fold_items = [raw for raw in (folded.get("items") or ()) if isinstance(raw, dict)]
         omitted = folded.get("omitted")
         if len(fold_items) >= WORK_ITEM_LIMIT and (not isinstance(omitted, int) or omitted > 0):
-            # The fold keeps a board's first ``WORK_ITEM_LIMIT`` items and counts
-            # every later create in ``omitted``. The writer bounds a board's creates
-            # at that same number (``MAX_STORED_ITEMS_PER_CONDUCTOR`` reads the same
-            # ``work_vocab`` value) with a monotonic counter in the header that a
-            # removed record does not lower, and every create it admits is one
-            # recorded create, so a board the writer admits cannot overflow the
-            # fold and this guard is defensive: it fires on a full fold whose
-            # ``omitted`` counts something else (a straggler entry, a parked one),
-            # or on a board whose header something other than this module wrote
-            # with a count below its creates. A full fold that reports omissions
-            # might be a PREFIX of the board -- rebuilding from it would write the
-            # oldest items back and, past the dirty-cache shortcut below, which
-            # trusts the fold over the cache, unlink every newer one, open items
-            # included -- so it is refused; the cache stands, and it is complete.
-            # A full fold that omitted nothing is the whole board and rebuilds; a
-            # fold whose count is unreadable is treated as full.
+            # The fold HOLDS at most ``WORK_ITEM_LIMIT`` items at once and counts
+            # every create past that in ``omitted``. It forgets closed items past its
+            # window, so a board the writer admits (at most 32 open) never fills it,
+            # and this guard is defensive: it fires on a log something else wrote. A
+            # full fold that reports omissions might be a PREFIX of the board --
+            # rebuilding from it would write the oldest items back and, past the
+            # dirty-cache shortcut below, which trusts the fold over the cache, unlink
+            # every newer one, open items included -- so it is refused; the cache
+            # stands. A full fold that omitted nothing rebuilds; a fold whose count is
+            # unreadable is treated as full.
             raise WorkLedgerError(
                 f"the crew log's fold holds {len(fold_items)} items for this board, its "
                 f"ceiling of {WORK_ITEM_LIMIT}, and omitted {omitted!r}; a board that "
@@ -3130,10 +3252,11 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
             }
         ):
             held.enter_context(item_lock(slot_key, new_id, create=True))
-        _refuse_fold_behind_cache(slot_key, present, fold_items, header)
+        forgotten = _folded_forgotten(folded)
+        _refuse_fold_behind_cache(slot_key, present, fold_items, header, forgotten)
         touched = _rebuild_footprint(slot_key, present, fold_items)
         try:
-            counts = _rebuild_locked(slot_key, header, fold_items, present)
+            counts = _rebuild_locked(slot_key, header, fold_items, present, forgotten)
         except BaseException:
             try:
                 _restore_files(touched)  # the locks are already held here
@@ -3147,11 +3270,53 @@ def rebuild_from_projection(slot_key: str) -> dict[str, Any]:
         return counts
 
 
+class _Forgotten(NamedTuple):
+    """What a ``work`` fold view says about the closed items it let go."""
+
+    #: Every item the fold has held, forgotten ones included.
+    created: int
+    #: How many closed items it let go.
+    items: int
+    #: Forgotten items the fold saw a baseline for, so ``created`` already counts them.
+    baseline_ids: frozenset[str] = frozenset()
+
+
+def _folded_forgotten(folded: Any) -> _Forgotten:
+    """The fold's ``forgotten`` counts, zero for a view that carries none."""
+    view = folded if isinstance(folded, dict) else {}
+    counts = view.get("forgotten")
+    counts = counts if isinstance(counts, dict) else {}
+    raw_ids = counts.get("baseline_ids")
+    return _Forgotten(
+        created=max(0, _as_int(counts.get("created"), 0)),
+        items=max(0, _as_int(counts.get("items"), 0)),
+        baseline_ids=frozenset(
+            entry
+            for entry in (raw_ids if isinstance(raw_ids, list) else ())
+            if isinstance(entry, str)
+        ),
+    )
+
+
+def _may_be_forgotten(cached: "WorkItem", forgotten: "_Forgotten | None") -> bool:
+    """Whether *cached* may be a closed item the fold let go, so its absence from the
+    fold is no sign of a lost unit.
+
+    The rebuild KEEPS such a record rather than judging it: the cache is the only
+    place a forgotten item stays whole, and nothing in the store removes a record. So
+    a closed record the fold lacks, on a board whose fold reports forgotten items, is
+    neither refused nor removed -- whatever the reason it is absent, keeping it loses
+    nothing. An open record the fold lacks is still a lost unit and still refused.
+    """
+    return forgotten is not None and forgotten.items > 0 and cached.is_terminal
+
+
 def _refuse_fold_behind_cache(
     slot_key: str,
     present: "list[str]",
     fold_items: "list[dict[str, Any]]",
     header: "dict[str, Any] | None" = None,
+    forgotten: "_Forgotten | None" = None,
 ) -> None:
     """Refuse the rebuild when the record holds LESS than the cache does.
 
@@ -3244,6 +3409,11 @@ def _refuse_fold_behind_cache(
         if cached is None:
             continue
         folded = by_id.get(item_id)
+        if folded is None and _may_be_forgotten(cached, forgotten):
+            # A closed item the fold may have let go once newer closed items filled
+            # its window. The rebuild keeps its cached record (``_rebuild_locked``),
+            # so there is nothing to protect by refusing.
+            continue
         if folded is None:
             created = _parse_iso(cached.created_at)
             post_epoch = (
@@ -3413,7 +3583,11 @@ def _rebuild_footprint(
 
 
 def _rebuild_locked(
-    slot_key: str, header: dict[str, Any], fold_items: "list[dict[str, Any]]", present: "list[str]"
+    slot_key: str,
+    header: dict[str, Any],
+    fold_items: "list[dict[str, Any]]",
+    present: "list[str]",
+    forgotten: "_Forgotten | None" = None,
 ) -> dict[str, Any]:
     """The rebuild's writes, run under the locks :func:`rebuild_from_projection` holds."""
     epoch = _parse_iso(_as_str(header.get("first_entry_at")))
@@ -3443,14 +3617,17 @@ def _rebuild_locked(
             record = dataclasses.replace(record, generation=existing.generation)
         if existing.recorded_at:
             record = dataclasses.replace(record, recorded_at=existing.recorded_at)
-        # The goal's spend cap and where its count starts ride no crew-log entry,
+        # The goal's two caps and where its count starts ride no crew-log entry,
         # so they are the cache's to keep -- but only while the cache holds no
         # goal write the record lacks. A dirty cache, or one a goal write ahead
-        # of the record, may carry a refused write's cap and count start; those
+        # of the record, may carry a refused write's caps and count start; those
         # are dropped for the defaults below, as for a board with no cache header.
         if not cache_dirty(slot_key) and existing.goal_version == record.goal_version:
             record = dataclasses.replace(
-                record, item_cap=existing.item_cap, goal_items_base=existing.goal_items_base
+                record,
+                item_cap=existing.item_cap,
+                concurrency_cap=existing.concurrency_cap,
+                goal_items_base=existing.goal_items_base,
             )
             # A trusted header from before the per-goal count keeps its legacy
             # status, settled below against the rebuilt total.
@@ -3494,31 +3671,86 @@ def _rebuild_locked(
         written_events += len(events)
 
     removed = 0
+    forgotten_kept: set[str] = set()
     legacy: set[str] = set()
     for item_id in present:
         if item_id in kept:
             continue
-        cached = read_work_item(slot_key, item_id)
-        if cached is not None and _predates(cached.created_at, epoch):
-            # Created before this board's first recorded entry: the log never
-            # saw it, so the log cannot judge it. It stays as the cache holds it.
+        # STRICT so a present-but-momentarily-unreadable record -- a Windows rename
+        # race, a permission or disk blip -- RAISES rather than reading as absent.
+        # The non-strict read read such a file as ``None`` and the loop then unlinked
+        # it, turning a transient read error into real data loss. The raise unwinds
+        # into ``rebuild_from_projection``'s undo, which restores every file and leaves
+        # the record on disk for the next rebuild to read once the blip clears. Torn or
+        # non-UTF-8 CONTENT still reads as ``None`` here (corruption reads as absent):
+        # such a record is dropped below, except on a board whose fold has forgotten
+        # items, where it is left in place -- only an I/O error is treated as
+        # "present, read later".
+        cached = read_work_item(slot_key, item_id, strict=True)
+        # Legacy means the log never held the record's create: an UNRECORDED record
+        # from before the board's first recorded entry. Stamp order alone cannot
+        # decide it. A closed legacy record is terminal too, so the forgotten test
+        # would claim it and the total would lose it; and the board's first item
+        # shares its second with the epoch, so the stamp test would call that
+        # RECORDED item legacy and the total would count it twice (once inside the
+        # fold's creates, once as legacy). ``recorded_at`` tells the two apart.
+        if cached is not None and not cached.recorded_at and _predates(cached.created_at, epoch):
+            if forgotten is not None and item_id in forgotten.baseline_ids:
+                # The fold folded its baseline and then let it go: its stamp failed
+                # after the baseline landed, so the record still reads unrecorded. The
+                # fold's total already counts it, so it is kept and counted once.
+                forgotten_kept.add(item_id)
+                continue
+            # Created before this board's first recorded entry and never recorded:
+            # the log never saw it, so the log cannot judge it. It stays as the
+            # cache holds it and is ADDED to the total below.
             legacy.add(item_id)
+            continue
+        if cached is not None and _predates(cached.created_at, epoch):
+            # RECORDED but older than the board's first surviving entry: retention
+            # pruned the unit holding its create. The log cannot judge it, so it is
+            # kept as the cache holds it -- never unlinked -- and counted like a
+            # forgotten record, once, in the fold's total.
+            forgotten_kept.add(item_id)
+            continue
+        if cached is not None and _may_be_forgotten(cached, forgotten):
+            # A closed record the fold does not hold: the cache is where it stays
+            # whole, so it is kept as it is, and counted in the fold's total below.
+            forgotten_kept.add(item_id)
+            continue
+        if cached is None and forgotten is not None and forgotten.items > 0:
+            # A record whose content does not parse, on a board whose fold has let
+            # closed items go. It may be one of those forgotten items, whose only
+            # whole copy -- record and events -- is the cache, so the rebuild leaves
+            # both files where they are rather than judge it. Every reader already
+            # reads it as absent, so keeping it changes nothing anyone sees, and it
+            # is not counted: the fold's total covers its create if the log held one.
             continue
         item_path(slot_key, item_id).unlink(missing_ok=True)
         item_events_path(slot_key, item_id).unlink(missing_ok=True)
         removed += 1
-    # The stored bound's counter is set from the record, not carried over from the
-    # cache's header: every item the fold retained is a create the log holds, and
-    # every legacy record kept is one the log may yet hold whole (its first recorded
-    # mutation carries it as a baseline, which takes a fold slot). Nothing else the
-    # fold reports counts -- past the ceiling guard the fold dropped no create, and
-    # a non-zero ``omitted`` there counts entries that are not this board's creates
-    # (stragglers of a purged board, parked lines), which would refuse creates a
-    # board has room for.
-    # Defaults for a cap the cache could not vouch for: cap 20, counted from the
-    # board's first create -- the side that asks the user sooner, never later. A
+    # The create counter is set from the record, not carried over from the cache's
+    # header: every item the fold held -- still held or forgotten once closed -- is a
+    # create the log holds, and every legacy record kept is one the log may yet hold
+    # whole (its first recorded mutation carries it as a baseline). Nothing else the
+    # fold reports counts: a non-zero ``omitted`` counts entries that are not this
+    # board's creates (stragglers of a purged board, parked lines).
+    # Defaults for caps the cache could not vouch for: 6 open, a line at 20,
+    # counted from the board's first create -- the side that tells the user
+    # sooner, never later. A
     # kept count start past the new total is clamped so the count cannot go negative.
-    total = len(kept) + len(legacy)
+    # The fold counts every item it held, forgotten closed ones included, so the
+    # board's create count comes from it rather than from what it still holds.
+    # A kept forgotten record is one of the fold's own creates, so it is counted once,
+    # in the fold's total; a legacy record never reached the fold and is added.
+    held = len(kept) + len(forgotten_kept)
+    total = max(held, forgotten.created if forgotten else 0) + len(legacy)
+    if trusted_base and existing is not None:
+        # The store only ever adds to the counter, and the pieces above can overlap
+        # without one containing the other (a pruned unit's create, a torn forgotten
+        # record), so they can come out short. A trusted header's count is a floor:
+        # the rebuild may raise the spend count, never lower it below what was spent.
+        total = max(total, existing.created_total)
     if not trusted_base:
         base = 0
     elif record.goal_items_base == LEGACY_GOAL_BASE:
@@ -3530,7 +3762,9 @@ def _rebuild_locked(
     # The identity breadcrumb beside the record, as the bootstrap writes it, so a
     # cache rebuilt into an empty directory carries the same two files a new one does.
     atomic_write(conductor_dir(slot_key) / _KEY_FILE, slot_key + "\n", mode=0o600)
-    _reconcile_bindings(slot_key, fold_items, kept, legacy)
+    # A kept forgotten record is an item the fold does not hold, so like a legacy one
+    # its binding is kept where it points.
+    _reconcile_bindings(slot_key, fold_items, kept, legacy | forgotten_kept)
     return {
         "slot_key": slot_key,
         "items": written_items,
@@ -3562,7 +3796,8 @@ def _reconcile_bindings(
     this board's item which the record does not bind to that worker is removed.
     A terminal item still names the worker that finished it but does not route
     it (the store lets another board bind a worker whose item is terminal), so its
-    binding is kept where it points and never claimed back. Legacy items keep
+    binding is kept where it points and never claimed back. Items in *legacy* --
+    legacy records and kept forgotten ones, which the fold does not hold -- keep
     theirs.
     """
     wanted: dict[str, str] = {}

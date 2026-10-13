@@ -68,7 +68,7 @@ from typing import Any, NamedTuple
 
 from kiro_crew.acp.types import EVENT_COMPLETE, EVENT_PERMISSION_REQUEST, EVENT_TEXT_CHUNK
 from kiro_crew.constants import DENY_CAUSE_SURFACE_POLICY
-from kiro_crew.label_guard import is_verdict_reply, looks_like_prose
+from kiro_crew.label_guard import ends_like_sentence, is_verdict_reply, looks_like_prose
 from kiro_crew.llm_helpers import _steer_host_deny, background_turn
 from kiro_crew.loop_lock import LoopBoundLock
 from kiro_crew.platform import redact_log_via_context
@@ -210,13 +210,19 @@ def clean_title(raw: str) -> str:
     written to the Slack thread itself when a ``set_channel_title`` hook is
     passed, so a refusal stored here renames a conversation other people see.
     """
-    title = raw.split("\n")[0].strip("\"'. \t")
+    first_line = raw.split("\n")[0]
+    title = first_line.strip("\"'. \t")
     title = title.replace("<", "").replace(">", "")
     if not title or is_verdict_reply(title, (TITLE_SKIP_VERDICT,)):
         return ""
+    # The strip above drops a final period, so the end-of-sentence shape is
+    # read from the line before it.
+    ends_as_sentence = ends_like_sentence(first_line)
     title, _ = redact_exfiltration_urls(title)
     title, _ = redact_credentials(title)
-    if looks_like_prose(title, max_unspaced_chars=TITLE_PROSE_MAX_UNSPACED_CHARS):
+    if ends_as_sentence or looks_like_prose(
+        title, max_unspaced_chars=TITLE_PROSE_MAX_UNSPACED_CHARS
+    ):
         # Gate-side log line: the context-aware, non-raising redactor, so a
         # host with a companion loaded is not scanned with the baseline pass.
         # Redact BEFORE truncating: a cut can split a credential so no pattern

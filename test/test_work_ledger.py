@@ -26,6 +26,7 @@ from windows_sim import read_sharing_violation
 
 from kiro_crew import atomic_write, platform_compat
 from kiro_crew import work_ledger as wl
+from kiro_crew.work_vocab import WORK_CLOSED_WINDOW
 
 CONDUCTOR = "chat-1-conductor"
 WORKER = "chat-2-worker"
@@ -96,7 +97,8 @@ def test_conductor_actions_are_exactly_six():
 
 def test_caps_hold_their_rfc_values():
     assert wl.MAX_ITEMS_PER_CONDUCTOR == 32
-    assert wl.MAX_STORED_ITEMS_PER_CONDUCTOR == 256
+    assert WORK_CLOSED_WINDOW == 32
+    assert wl.MAX_GOAL_ITEM_CAP == 256
     assert wl.MAX_EVENTS_PER_ITEM == 200
     assert wl.MAX_DEPTH == 2
     assert wl.MAX_GOAL_CHARS == 2000
@@ -111,21 +113,12 @@ def test_caps_hold_their_rfc_values():
     assert wl.SCHEMA_VERSION == 1
 
 
-def test_the_stored_bound_is_the_folds_item_ceiling():
-    """The two numbers MUST be one number.
-
-    Every stored item is one recorded create, so a board that can never hold more
-    records than the fold retains can never overflow the fold: ``omitted`` stays 0,
-    the fold is always the whole board and never a prefix, and the rebuild's ceiling
-    guard is defensive. Both sides read the same ``work_vocab`` value; this pins
-    that neither has grown a number of its own.
-    """
+def test_the_fold_holds_far_less_than_its_ceiling():
+    """Open fan-out plus the closed window sits far below the fold's held-item
+    ceiling, so a board the store admits never reaches it."""
     from kiro_crew.crew_log import projection
-    from kiro_crew.work_vocab import WORK_STORED_ITEM_LIMIT
 
-    assert wl.MAX_STORED_ITEMS_PER_CONDUCTOR == projection.WORK_ITEM_LIMIT
-    assert wl.MAX_STORED_ITEMS_PER_CONDUCTOR == WORK_STORED_ITEM_LIMIT
-    assert wl.MAX_ITEMS_PER_CONDUCTOR < wl.MAX_STORED_ITEMS_PER_CONDUCTOR
+    assert wl.MAX_ITEMS_PER_CONDUCTOR + WORK_CLOSED_WINDOW < projection.WORK_ITEM_LIMIT
 
 
 # ── paths and ids ─────────────────────────────────────────────────────────
@@ -238,6 +231,14 @@ def test_ensure_conductor_refuses_a_depth_past_the_cap():
     assert caught.value.code == wl.CODE_DEPTH_EXCEEDED
 
 
+def test_ensure_conductor_refuses_the_first_depth_that_may_not_conduct():
+    """A ledger at ``MAX_DEPTH`` could create nothing, so it must not open at all."""
+    with pytest.raises(wl.WorkLedgerError) as caught:
+        wl.ensure_conductor("sterile", goal="g", depth=wl.MAX_DEPTH)
+    assert caught.value.code == wl.CODE_DEPTH_EXCEEDED
+    assert wl.read_conductor("sterile") is None
+
+
 def test_ensure_conductor_records_a_parent_item_and_checks_its_shape():
     parent = wl.mint_item_id()
     record = wl.ensure_conductor("child", depth=1, parent_item=parent)
@@ -249,20 +250,80 @@ def test_ensure_conductor_records_a_parent_item_and_checks_its_shape():
 # ── depth ─────────────────────────────────────────────────────────────────
 
 
-def test_child_depth_advances_one_level_and_refuses_at_the_cap():
+def test_child_depth_advances_one_level_and_refuses_the_last_conducting_level():
+    """A root may dispatch a conductor; that conductor's children may only work.
+
+    The refusal lands on the PARENT's side of the dispatch: ``child_depth(1)`` is
+    what a depth-1 conductor's child would be born at, and refusing there is what
+    keeps a ledger from opening at a depth where every create is refused.
+    """
     assert wl.child_depth(0) == 1
-    assert wl.child_depth(1) == 2
+    with pytest.raises(wl.WorkLedgerError) as caught:
+        wl.child_depth(1)
+    assert caught.value.code == wl.CODE_DEPTH_EXCEEDED
     with pytest.raises(wl.WorkLedgerError) as caught:
         wl.child_depth(2)
     assert caught.value.code == wl.CODE_DEPTH_EXCEEDED
 
 
-def test_create_is_refused_when_the_conductor_is_at_the_depth_cap():
-    wl.ensure_conductor("capped", goal="g", depth=wl.MAX_DEPTH)
+def _header_at_depth(slot_key: str, depth: int) -> None:
+    """Put a ledger on disk whose stored depth no entry guard admitted.
+
+    ``ensure_conductor`` refuses such a depth, so the header is rewritten after a
+    legal open -- the shape a rebuild from the crew log can leave, since it keeps
+    the depth the stored header holds.
+    """
+    wl.ensure_conductor(slot_key, goal="g", depth=0)
+    header_path = wl.conductor_dir(slot_key) / "conductor.json"
+    stored = json.loads(header_path.read_text(encoding="utf-8"))
+    stored["depth"] = depth
+    header_path.write_text(json.dumps(stored), encoding="utf-8")
+    assert wl.read_conductor(slot_key).depth == depth
+
+
+def test_create_is_refused_when_a_stored_header_sits_at_a_depth_that_may_not_conduct():
+    _header_at_depth("capped", wl.MAX_DEPTH)
     with pytest.raises(wl.WorkLedgerError) as caught:
         wl.apply_conductor_action("capped", "create", title="t", acceptance={})
     assert caught.value.code == wl.CODE_DEPTH_EXCEEDED
     assert wl.list_work_items("capped") == []
+
+
+@pytest.mark.parametrize("depth", range(0, 4))
+def test_the_three_depth_guards_agree_at_every_depth(depth: int):
+    """One predicate, three guards: a depth a dispatch admits is a depth a ledger
+    opens at is a depth that may create. No depth is let in by one and refused by
+    another."""
+    allowed = wl.may_conduct(depth)
+    assert allowed == (depth < wl.MAX_DEPTH)
+
+    def refused(call) -> bool:
+        try:
+            call()
+        except wl.WorkLedgerError as exc:
+            assert exc.code == wl.CODE_DEPTH_EXCEEDED
+            return True
+        return False
+
+    def dispatch() -> None:
+        wl.child_depth(depth - 1)
+
+    def open_ledger() -> None:
+        wl.ensure_conductor(f"open-{depth}", goal="g", depth=depth)
+
+    slot = f"stored-{depth}"
+
+    def create() -> None:
+        wl.apply_conductor_action(slot, "create", title="t", acceptance={})
+
+    # Guard 1: the dispatch that would create a conductor at *depth*.
+    if depth > 0:
+        assert refused(dispatch) == (not allowed)
+    # Guard 2: opening a ledger at *depth*.
+    assert refused(open_ledger) == (not allowed)
+    # Guard 3: creating an item from a header stored at *depth*.
+    _header_at_depth(slot, depth)
+    assert refused(create) == (not allowed)
 
 
 def test_a_conductor_one_below_the_cap_may_still_dispatch():
@@ -758,13 +819,146 @@ def test_a_done_item_is_never_stale_however_long_it_stays_quiet():
     assert item is not None
     much_later = datetime.now().astimezone() + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 10)
     assert wl.is_stale(item, worker_running=False, now=much_later) is False
-    for status in ("progress", "blocked", "question"):
-        wl.apply_worker_report(CONDUCTOR, item_id, status=status, summary="s")
-        still_working = wl.read_work_item(CONDUCTOR, item_id)
-        assert still_working is not None
-        assert wl.is_stale(still_working, worker_running=False, now=much_later) is True, status
+    wl.apply_worker_report(CONDUCTOR, item_id, status="progress", summary="s")
+    still_working = wl.read_work_item(CONDUCTOR, item_id)
+    assert still_working is not None
+    assert wl.is_stale(still_working, worker_running=False, now=much_later) is True
     assert "done" not in wl.STALE_ELIGIBLE_STATUSES
     assert wl.STALE_ELIGIBLE_STATUSES < wl.WORKER_STATUSES
+
+
+@pytest.mark.parametrize("status", ["blocked", "question"])
+def test_a_blocked_or_question_item_is_never_stale_however_long_it_stays_quiet(status):
+    """Both reports already woke the conductor, and the next move is the conductor's
+    or a person's. The worker waiting in silence is the expected shape of that wait,
+    so the flag must not point at it -- with the worker idle, closed or neither."""
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status=status, summary="waiting")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None
+    much_later = datetime.now().astimezone() + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 10)
+    assert wl.is_stale(item, worker_running=False, now=much_later) is False
+    assert status not in wl.STALE_ELIGIBLE_STATUSES
+
+
+def test_decide_stamps_decided_at_and_it_round_trips():
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    fresh = wl.read_work_item(CONDUCTOR, item_id)
+    assert fresh is not None and fresh.decided_at is None
+    wl.apply_conductor_action(CONDUCTOR, "decide", item_id=item_id, decision="go ahead")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None and item.decided_at
+    assert wl.WorkItem.from_dict(item.to_dict()).decided_at == item.decided_at
+
+
+@pytest.mark.parametrize("status", ["blocked", "question"])
+def test_a_decide_hands_a_waiting_item_back_to_the_worker(status):
+    """After ``blocked`` / ``question`` the move is the conductor's. Its ``decide``
+    hands it back, so the worker's silence is measured again -- from the decision,
+    under every liveness rule a ``progress`` item gets."""
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status=status, summary="waiting")
+    waiting = wl.read_work_item(CONDUCTOR, item_id)
+    assert waiting is not None
+    much_later = datetime.now(timezone.utc) + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 10)
+    assert wl.is_stale(waiting, worker_running=False, now=much_later) is False
+
+    wl.apply_conductor_action(CONDUCTOR, "decide", item_id=item_id, decision="go ahead")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None and item.status == status
+    decided = wl.parse_stamp(item.decided_at or "")
+    assert decided is not None
+    inside = decided + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS / 2)
+    past = decided + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 2)
+    # The window runs from the decision, not from the older report.
+    assert wl.is_stale(item, worker_running=False, now=inside) is False
+    assert wl.is_stale(item, worker_running=False, now=past) is True
+    assert wl.is_stale(item, worker_running=True, now=past) is False
+    assert wl.is_stale(item, worker_running=False, worker_looping=True, now=past) is False
+    # A worker gone after the hand-back is flagged without waiting out the window.
+    assert wl.is_stale(item, worker_running=False, worker_closed=True, now=inside) is True
+
+
+def test_a_report_after_the_decide_takes_the_move_back():
+    """The worker answering with ``question`` again hands the move to the conductor."""
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status="question", summary="a or b?")
+    wl.apply_conductor_action(CONDUCTOR, "decide", item_id=item_id, decision="a")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None
+    item.last_report_at = "2999-01-01T00:00:00+00:00"
+    much_later = datetime(3000, 1, 1, tzinfo=timezone.utc)
+    assert wl.is_stale(item, worker_running=False, now=much_later) is False
+
+
+@pytest.mark.parametrize("status", ["blocked", "question"])
+def test_a_waiting_item_whose_worker_closed_is_stale_without_a_decide(status):
+    """A worker that died while waiting cannot act on any answer, so the conductor
+    learns of it at once -- whether or not it has written a ``decide`` yet."""
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status=status, summary="waiting")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None and item.decided_at is None
+    assert wl.is_stale(item, worker_running=False, worker_closed=True) is True
+    # Open and silent, it stays the conductor's, so it is not flagged.
+    assert wl.is_stale(item, worker_running=False) is False
+    assert wl.is_stale(item, worker_running=True, worker_closed=True) is False
+
+
+def test_a_decide_on_a_progress_item_does_not_restart_its_window():
+    """The hand-back is for ``blocked`` / ``question``. A ``progress`` item already
+    belongs to the worker, so its silence is measured from its last report."""
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status="progress", summary="half way")
+    wl.apply_conductor_action(CONDUCTOR, "decide", item_id=item_id, decision="carry on")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None and item.decided_at
+    item.last_report_at = "2026-01-01T00:00:00+00:00"
+    item.decided_at = "2026-01-01T00:20:00+00:00"
+    now = datetime(2026, 1, 1, 0, 25, tzinfo=timezone.utc)
+    assert wl.is_stale(item, worker_running=False, now=now, window_secs=900) is True
+
+
+def test_a_done_item_whose_worker_closed_is_still_not_stale():
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status="done", summary="green")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None
+    assert wl.is_stale(item, worker_running=False, worker_closed=True) is False
+
+
+def test_a_worker_parked_in_its_own_loop_is_not_stale():
+    """A worker waiting on CI inside its own monitor loop has no turn in flight between
+    cycles, yet it is alive: the loop wakes it. Only a loop that is still ACTIVE counts,
+    and the caller answers that; ``False``, the default, flags as an unwired caller does."""
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status="progress", summary="waiting on CI")
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None
+    much_later = datetime.now(timezone.utc) + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 10)
+    assert wl.is_stale(item, worker_running=False, worker_looping=True, now=much_later) is False
+    assert wl.is_stale(item, worker_running=False, worker_looping=False, now=much_later) is True
+    assert wl.is_stale(item, worker_running=False, now=much_later) is True
+    # A session that is gone cannot be woken by a loop record it left behind.
+    assert (
+        wl.is_stale(
+            item, worker_running=False, worker_looping=True, worker_closed=True, now=much_later
+        )
+        is True
+    )
+
+
+def test_a_looping_worker_on_a_handed_back_item_is_not_stale():
+    """``verdict: fail`` hands the move back to the worker; a worker already looping on
+    that retry is alive, and one that is not is still flagged."""
+    item_id = _new_item(acceptance={"kind": "human_approval"})
+    wl.apply_worker_report(CONDUCTOR, item_id, status="done", summary="claimed")
+    wl.apply_conductor_action(CONDUCTOR, "verdict", item_id=item_id, verdict="fail", fails=1)
+    item = wl.read_work_item(CONDUCTOR, item_id)
+    assert item is not None
+    much_later = datetime.now(timezone.utc) + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 10)
+    assert wl.is_stale(item, worker_running=False, now=much_later) is True
+    assert wl.is_stale(item, worker_running=False, worker_looping=True, now=much_later) is False
 
 
 def test_a_done_item_the_conductor_handed_back_is_stale_again():
@@ -773,7 +967,7 @@ def test_a_done_item_the_conductor_handed_back_is_stale_again():
     again — otherwise a worker that vanished mid-retry could never be surfaced."""
     item_id = _new_item(acceptance={"kind": "human_approval"})
     wl.apply_worker_report(CONDUCTOR, item_id, status="done", summary="claimed")
-    much_later = datetime.now().astimezone() + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 10)
+    much_later = datetime.now(timezone.utc) + timedelta(seconds=wl.DEFAULT_STALE_WINDOW_SECS * 10)
     waiting = wl.read_work_item(CONDUCTOR, item_id)
     assert waiting is not None
     assert wl.is_stale(waiting, worker_running=False, now=much_later) is False
@@ -855,8 +1049,9 @@ def test_work_brief_shows_the_item_and_not_the_conductors_goal():
 
 
 def _lift_goal_cap() -> None:
-    """Raise the goal's spend cap to its ceiling, so a test of another cap reaches it."""
-    wl.apply_conductor_action(CONDUCTOR, "goal", item_cap=wl.MAX_GOAL_ITEM_CAP)
+    """Raise the goal's concurrency cap to its ceiling, so a test of the store's own
+    open cap reaches it on a board that recorded a goal."""
+    wl.apply_conductor_action(CONDUCTOR, "goal", concurrency_cap=wl.MAX_GOAL_CONCURRENCY_CAP)
 
 
 def test_the_item_cap_refuses_the_thirty_third_item():
@@ -871,87 +1066,253 @@ def test_the_item_cap_refuses_the_thirty_third_item():
     assert sorted(p.name for p in wl.items_dir(CONDUCTOR).iterdir()) == before
 
 
-# ── the goal's spend cap ──────────────────────────────────────────────────
+# ── the goal's two caps: concurrency (hard) and item total (advisory) ─────────
 
 
-def _create_n(count: int, prefix: str = "t") -> None:
+def _create_n(count: int, prefix: str = "t") -> list[str]:
+    ids = []
     for index in range(count):
-        wl.apply_conductor_action(CONDUCTOR, "create", title=f"{prefix}{index}", acceptance={})
+        made = wl.apply_conductor_action(
+            CONDUCTOR, "create", title=f"{prefix}{index}", acceptance={}
+        )
+        ids.append(made["item"].item_id)
+    return ids
 
 
-def test_the_goal_item_cap_refuses_the_twenty_first_create_by_default():
+def _create_and_close_n(count: int, prefix: str = "t") -> None:
+    """*count* items minted and closed one at a time, so no fan-out cap is in the way."""
+    for index in range(count):
+        made = wl.apply_conductor_action(
+            CONDUCTOR, "create", title=f"{prefix}{index}", acceptance={}
+        )
+        wl.apply_conductor_action(
+            CONDUCTOR, "close", item_id=made["item"].item_id, state="accepted"
+        )
+
+
+def _refused_create(title: str = "one too many") -> wl.WorkLedgerError:
+    with pytest.raises(wl.WorkLedgerError) as caught:
+        wl.apply_conductor_action(CONDUCTOR, "create", title=title, acceptance={})
+    return caught.value
+
+
+def test_the_concurrency_cap_refuses_the_seventh_open_item_by_default():
+    """The bound on parallel work: six open at once, and the seventh is refused.
+
+    Red before the cap existed: a goal board admitted a seventh open item.
+    """
     wl.ensure_conductor(CONDUCTOR)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
-    assert wl.read_conductor(CONDUCTOR).item_cap == wl.DEFAULT_GOAL_ITEM_CAP == 20
-    _create_n(20)
+    header = wl.read_conductor(CONDUCTOR)
+    assert header.concurrency_cap == wl.DEFAULT_GOAL_CONCURRENCY_CAP == 6
+    _create_n(6)
     before = sorted(p.name for p in wl.items_dir(CONDUCTOR).iterdir())
     header_before = wl.read_conductor(CONDUCTOR).to_dict()
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="twenty-first", acceptance={})
-    assert caught.value.code == wl.CODE_GOAL_ITEM_CAP_REACHED == "goal_item_cap_reached"
-    assert caught.value.field == "item_cap"
-    message = str(caught.value)
-    assert "ask the user" in message and "action=goal item_cap=" in message
+    refused = _refused_create("seventh")
+    assert refused.code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED == "goal_concurrency_cap_reached"
+    assert refused.field == "concurrency_cap"
+    message = str(refused)
+    assert "open items" in message and "action=goal concurrency_cap=" in message
     # A refusal writes nothing.
     assert sorted(p.name for p in wl.items_dir(CONDUCTOR).iterdir()) == before
     assert wl.read_conductor(CONDUCTOR).to_dict() == header_before
 
 
-def test_closed_items_still_count_toward_the_goal_item_cap():
-    """The goal cap bounds spend, so a closed item is still one the goal paid for."""
-    wl.ensure_conductor(CONDUCTOR)
-    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g", item_cap=2)
-    for item in [
-        wl.apply_conductor_action(CONDUCTOR, "create", title=f"t{n}", acceptance={})["item"]
-        for n in range(2)
-    ]:
-        wl.apply_conductor_action(CONDUCTOR, "close", item_id=item.item_id, state="accepted")
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="third", acceptance={})
-    assert caught.value.code == wl.CODE_GOAL_ITEM_CAP_REACHED
-
-
-def test_a_raised_goal_item_cap_admits_the_next_create_and_keeps_the_count():
+@pytest.mark.parametrize("terminal_state", sorted(wl.TERMINAL_ITEM_STATES))
+def test_closing_an_item_frees_a_seat_under_the_concurrency_cap(terminal_state: str):
     wl.ensure_conductor(CONDUCTOR)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
-    _create_n(20)
-    # Raising the cap is a goal write; it must not restart the goal's count.
-    wl.apply_conductor_action(CONDUCTOR, "goal", item_cap=22)
+    ids = _create_n(6)
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+    wl.apply_conductor_action(CONDUCTOR, "close", item_id=ids[0], state=terminal_state)
+    minted = wl.apply_conductor_action(CONDUCTOR, "create", title="next", acceptance={})
+    assert minted["item"].state == "open"
+    # Six open again, so the cap bites again.
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+
+
+def test_closed_items_never_count_toward_the_concurrency_cap():
+    """A goal that has created far more than its cap still dispatches, so long as
+    no more than the cap is running: the cap is on parallel work, not on history."""
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
+    _create_and_close_n(30)
     header = wl.read_conductor(CONDUCTOR)
-    assert header.item_cap == 22 and header.goal_items_used == 20
+    assert header.goal_items_used == 30 and header.created_total == 30
+    _create_n(6, "live")
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+
+
+def test_a_raised_concurrency_cap_admits_more_open_items_and_keeps_the_count():
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
+    _create_n(6)
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+    # Raising the cap is a goal write; it must not restart the goal's item count.
+    wl.apply_conductor_action(CONDUCTOR, "goal", concurrency_cap=8)
+    header = wl.read_conductor(CONDUCTOR)
+    assert header.concurrency_cap == 8 and header.goal_items_used == 6
     _create_n(2, "more")
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+
+
+def test_a_lowered_concurrency_cap_refuses_until_enough_items_land():
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
+    ids = _create_n(4)
+    wl.apply_conductor_action(CONDUCTOR, "goal", concurrency_cap=2)
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+    for item_id in ids[:2]:
+        wl.apply_conductor_action(CONDUCTOR, "close", item_id=item_id, state="accepted")
+    # Two open against a cap of two: still full.
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+    wl.apply_conductor_action(CONDUCTOR, "close", item_id=ids[2], state="accepted")
+    wl.apply_conductor_action(CONDUCTOR, "create", title="fits", acceptance={})
+
+
+def test_the_stores_open_cap_still_wins_at_the_concurrency_ceiling():
+    """A concurrency cap at its ceiling equals the store's own open bound, so the
+    thirty-third open item is refused by the store, under its own code."""
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(
+        CONDUCTOR, "goal", goal="g", concurrency_cap=wl.MAX_GOAL_CONCURRENCY_CAP
+    )
+    assert wl.MAX_GOAL_CONCURRENCY_CAP == wl.MAX_ITEMS_PER_CONDUCTOR
+    _create_n(wl.MAX_ITEMS_PER_CONDUCTOR)
+    assert _refused_create().code == wl.CODE_ITEM_CAP_EXCEEDED
+
+
+def test_a_board_that_never_records_a_goal_has_no_goal_concurrency_cap():
+    """A queue board (pipeline, security) writes no ``goal``; only the store's open
+    cap bounds its fan-out."""
+    wl.ensure_conductor(CONDUCTOR)
+    _create_n(wl.DEFAULT_GOAL_CONCURRENCY_CAP + 1, "q")
+    open_items = [i for i in wl.list_work_items(CONDUCTOR) if i.state == "open"]
+    assert len(open_items) == wl.DEFAULT_GOAL_CONCURRENCY_CAP + 1
+
+
+@pytest.mark.parametrize("bad", [0, -1, wl.MAX_GOAL_CONCURRENCY_CAP + 1, "six", 2.5])
+def test_an_out_of_range_concurrency_cap_is_refused_and_writes_nothing(bad):
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
+    before = wl.read_conductor(CONDUCTOR).to_dict()
     with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="past the raise", acceptance={})
-    assert caught.value.code == wl.CODE_GOAL_ITEM_CAP_REACHED
+        wl.apply_conductor_action(CONDUCTOR, "goal", concurrency_cap=bad)
+    assert caught.value.code == wl.CODE_INVALID_VALUE
+    assert caught.value.field == "concurrency_cap"
+    assert wl.read_conductor(CONDUCTOR).to_dict() == before
+
+
+def test_a_stored_concurrency_cap_out_of_range_reads_as_the_default():
+    for raw in (None, 0, wl.MAX_GOAL_CONCURRENCY_CAP + 1, "x"):
+        record = wl.ConductorRecord.from_dict({"concurrency_cap": raw})
+        assert record.concurrency_cap == wl.DEFAULT_GOAL_CONCURRENCY_CAP
+    assert wl.ConductorRecord.from_dict({"concurrency_cap": 9}).concurrency_cap == 9
+
+
+def test_a_header_from_before_the_concurrency_cap_is_bounded_by_the_default():
+    """An upgraded board gets the default cap, not an unbounded fan-out."""
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
+    header_path = wl.conductor_dir(CONDUCTOR) / "conductor.json"
+    stored = json.loads(header_path.read_text(encoding="utf-8"))
+    stored.pop("concurrency_cap")
+    header_path.write_text(json.dumps(stored), encoding="utf-8")
+    assert wl.read_conductor(CONDUCTOR).concurrency_cap == wl.DEFAULT_GOAL_CONCURRENCY_CAP
+    _create_n(6)
+    assert _refused_create().code == wl.CODE_GOAL_CONCURRENCY_CAP_REACHED
+    # The first write stores the key.
+    assert "concurrency_cap" in json.loads(header_path.read_text(encoding="utf-8"))
+
+
+def test_the_concurrency_cap_holds_under_concurrent_creates():
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
+    refused: list[str] = []
+
+    def create() -> None:
+        for _ in range(3):
+            try:
+                wl.apply_conductor_action(CONDUCTOR, "create", title="t", acceptance={})
+            except wl.WorkLedgerError as exc:
+                refused.append(exc.code)
+
+    threads = [threading.Thread(target=create) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert len(wl.list_work_items(CONDUCTOR)) == wl.DEFAULT_GOAL_CONCURRENCY_CAP
+    assert refused and set(refused) == {wl.CODE_GOAL_CONCURRENCY_CAP_REACHED}
+
+
+# ── the goal's item cap: an advisory line, not a refusal ─────────────────────
+
+
+def test_the_twenty_first_create_is_admitted_and_flagged_by_default():
+    """The goal's total is reported, never refused.
+
+    Red before: the twenty-first create was refused ``goal_item_cap_reached``.
+    """
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g")
+    assert wl.read_conductor(CONDUCTOR).item_cap == wl.DEFAULT_GOAL_ITEM_CAP == 20
+    _create_and_close_n(20)
+    header = wl.read_conductor(CONDUCTOR)
+    # At the line, not past it: twenty of twenty is what the cap allowed.
+    assert header.goal_items_used == 20 and header.cap_exceeded is False
+    minted = wl.apply_conductor_action(CONDUCTOR, "create", title="twenty-first", acceptance={})
+    assert minted["item"].state == "open"
+    header = wl.read_conductor(CONDUCTOR)
+    assert header.goal_items_used == 21 and header.cap_exceeded is True
+    assert not hasattr(wl, "CODE_GOAL_ITEM_CAP_REACHED"), "the refusal is gone, not dormant"
+
+
+def test_closed_items_still_count_toward_the_item_cap_line():
+    """The line is about spend, so a closed item is still one the goal paid for."""
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g", item_cap=2)
+    _create_and_close_n(2)
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is False
+    wl.apply_conductor_action(CONDUCTOR, "create", title="third", acceptance={})
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is True
+
+
+def test_a_raised_item_cap_clears_the_flag_and_keeps_the_count():
+    wl.ensure_conductor(CONDUCTOR)
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="g", item_cap=2)
+    _create_and_close_n(3)
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is True
+    wl.apply_conductor_action(CONDUCTOR, "goal", item_cap=5)
+    header = wl.read_conductor(CONDUCTOR)
+    assert (header.item_cap, header.goal_items_used, header.cap_exceeded) == (5, 3, False)
 
 
 def test_a_round_only_or_same_text_goal_write_keeps_the_count():
     wl.ensure_conductor(CONDUCTOR)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="g", item_cap=1)
-    _create_n(1)
+    _create_and_close_n(2)
     wl.apply_conductor_action(CONDUCTOR, "goal", round_number=2)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="g", round_number=3)
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="next round", acceptance={})
-    assert caught.value.code == wl.CODE_GOAL_ITEM_CAP_REACHED
+    header = wl.read_conductor(CONDUCTOR)
+    assert header.goal_items_used == 2 and header.cap_exceeded is True
 
 
 def test_a_new_goal_starts_a_new_item_count():
     wl.ensure_conductor(CONDUCTOR)
-    wl.apply_conductor_action(CONDUCTOR, "goal", goal="first goal")
-    _create_n(20)
-    # Closed, so the open fan-out cap stays out of the way of the second goal.
-    for item in wl.list_work_items(CONDUCTOR):
-        wl.apply_conductor_action(CONDUCTOR, "close", item_id=item.item_id, state="accepted")
+    wl.apply_conductor_action(CONDUCTOR, "goal", goal="first goal", item_cap=3)
+    _create_and_close_n(4)
     version = wl.read_conductor(CONDUCTOR).goal_version
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is True
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="second goal", new_goal=True)
     header = wl.read_conductor(CONDUCTOR)
     assert header.goal_version == version + 1
-    assert header.goal_items_used == 0 and header.created_total == 20
-    _create_n(20, "second")
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="past it", acceptance={})
-    assert caught.value.code == wl.CODE_GOAL_ITEM_CAP_REACHED
+    assert header.goal_items_used == 0 and header.created_total == 4
+    assert header.cap_exceeded is False
+    _create_and_close_n(3, "second")
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is False
+    _create_n(1, "past")
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is True
 
 
 def test_a_new_goal_on_a_board_from_before_the_counter_starts_after_its_records():
@@ -968,6 +1329,7 @@ def test_a_new_goal_on_a_board_from_before_the_counter_starts_after_its_records(
     header = wl.read_conductor(CONDUCTOR)
     assert (header.created_total, header.goal_items_used) == (3, 0)
     wl.apply_conductor_action(CONDUCTOR, "create", title="first of the new goal", acceptance={})
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is False
 
 
 def _strip_to_pre_goal_cap_header() -> None:
@@ -983,14 +1345,12 @@ def test_an_upgraded_header_counts_its_goal_from_the_upgrade():
     """A header from before the per-goal cap does not charge earlier goals to this one.
 
     One goal made 22 items, then a second goal was recorded the old way. With the
-    count start read as zero, the next create was refused as if this goal had made
+    count start read as zero, the next create was flagged as if this goal had made
     22. Read as legacy, the goal starts counting at the upgrade.
     """
     wl.ensure_conductor(CONDUCTOR)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="first goal", item_cap=wl.MAX_GOAL_ITEM_CAP)
-    _create_n(22)
-    for item in wl.list_work_items(CONDUCTOR):
-        wl.apply_conductor_action(CONDUCTOR, "close", item_id=item.item_id, state="accepted")
+    _create_and_close_n(22)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="second goal")
     _strip_to_pre_goal_cap_header()
     header = wl.read_conductor(CONDUCTOR)
@@ -1000,14 +1360,15 @@ def test_an_upgraded_header_counts_its_goal_from_the_upgrade():
 
     header = wl.read_conductor(CONDUCTOR)
     assert (header.goal_items_base, header.goal_items_used) == (22, 1)
-    # The settled start is stored, and the default cap now counts from it.
+    assert header.cap_exceeded is False
+    # The settled start is stored, and the default line now counts from it.
     assert "goal_items_base" in json.loads(
         (wl.conductor_dir(CONDUCTOR) / "conductor.json").read_text(encoding="utf-8")
     )
-    _create_n(19, "rest")
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="21st", acceptance={})
-    assert caught.value.code == wl.CODE_GOAL_ITEM_CAP_REACHED
+    _create_and_close_n(19, "rest")
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is False
+    _create_n(1, "21st")
+    assert wl.read_conductor(CONDUCTOR).cap_exceeded is True
 
 
 def test_a_goal_write_settles_an_upgraded_headers_count_start():
@@ -1024,13 +1385,11 @@ def test_a_reworded_goal_does_not_reset_the_item_count():
     """Only an explicit ``new_goal`` restarts the count, so rewording cannot dodge it."""
     wl.ensure_conductor(CONDUCTOR)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="ship the feature", item_cap=1)
-    _create_n(1)
+    _create_and_close_n(2)
     wl.apply_conductor_action(CONDUCTOR, "goal", goal="ship the feature, round two")
     header = wl.read_conductor(CONDUCTOR)
-    assert header.goal == "ship the feature, round two" and header.goal_items_used == 1
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="after rewording", acceptance={})
-    assert caught.value.code == wl.CODE_GOAL_ITEM_CAP_REACHED
+    assert header.goal == "ship the feature, round two" and header.goal_items_used == 2
+    assert header.cap_exceeded is True
 
 
 def test_new_goal_needs_the_goal_text_and_a_boolean():
@@ -1044,15 +1403,15 @@ def test_new_goal_needs_the_goal_text_and_a_boolean():
     assert wl.read_conductor(CONDUCTOR).to_dict() == before
 
 
-def test_a_board_that_never_records_a_goal_has_no_goal_item_cap():
-    """A queue board (pipeline, security) writes no ``goal``; only the open cap bounds it."""
+def test_a_board_that_never_records_a_goal_has_no_item_cap_line():
+    """A queue board (pipeline, security) writes no ``goal``: its count is its whole
+    history, so there is no goal to measure and the flag never turns on."""
     wl.ensure_conductor(CONDUCTOR)
-    ids = []
-    for index in range(wl.DEFAULT_GOAL_ITEM_CAP + 1):
-        item = wl.apply_conductor_action(CONDUCTOR, "create", title=f"q{index}", acceptance={})
-        ids.append(item["item"].item_id)
-        wl.apply_conductor_action(CONDUCTOR, "close", item_id=ids[-1], state="accepted")
+    _create_and_close_n(wl.DEFAULT_GOAL_ITEM_CAP + 1, "q")
+    header = wl.read_conductor(CONDUCTOR)
     assert len(wl.list_work_items(CONDUCTOR)) == wl.DEFAULT_GOAL_ITEM_CAP + 1
+    assert header.goal_items_used == wl.DEFAULT_GOAL_ITEM_CAP + 1
+    assert header.cap_exceeded is False
 
 
 @pytest.mark.parametrize("bad", [0, -1, wl.MAX_GOAL_ITEM_CAP + 1, "twenty", 2.5])
@@ -1144,141 +1503,29 @@ def test_closed_items_stay_on_disk_listed_and_readable_past_the_cap():
     assert brief is not None and brief["item_id"] == ids[0]
 
 
-def test_the_stored_bound_refuses_a_create_on_a_board_of_closed_items(monkeypatch):
-    """The second bound counts EVERY create, so closed history cannot grow past it.
+def test_a_board_keeps_dispatching_past_256_lifetime_creates():
+    """Closed history does not stop a board.
 
-    A board that has created ``MAX_STORED_ITEMS_PER_CONDUCTOR`` items, every one of
-    them closed, has zero open items and is refused anyway -- with the store's own
-    code, not the open cap's -- and the refusal changes no bytes. The message names
-    the create count, the bound and the remedy (the ledger sweep's purge), and the
-    header's counter stands at the bound. The bound is patched small the way the
-    projection tests patch the fold's ceiling: filling a board to the real number
-    takes seconds, and the number itself is pinned by
-    ``test_caps_hold_their_rfc_values`` and
-    ``test_the_stored_bound_is_the_folds_item_ceiling``.
+    A queue board (no goal, so no spend cap) creates and closes 260 items; every
+    create succeeds, and the header's create
+    counter still counts each one.
     """
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 4)
-    wl.ensure_conductor(CONDUCTOR, goal="g")
-    ids: list[str] = []
-    for index in range(wl.MAX_STORED_ITEMS_PER_CONDUCTOR):
-        ids.append(
-            wl.apply_conductor_action(CONDUCTOR, "create", title=f"t{index}", acceptance={})[
-                "item"
-            ].item_id
-        )
-        # Close as we go, so the open cap never bites and only the stored bound can.
-        wl.apply_conductor_action(CONDUCTOR, "close", item_id=ids[-1], state="accepted")
-    listed = wl.list_work_items(CONDUCTOR)
-    assert len(listed) == wl.MAX_STORED_ITEMS_PER_CONDUCTOR
-    assert not any(item.state == "open" for item in listed)
-    before = sorted(p.name for p in wl.items_dir(CONDUCTOR).iterdir())
-
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="one too many", acceptance={})
-
-    assert caught.value.code == wl.CODE_ITEM_STORE_FULL
-    assert caught.value.field == "items"
-    message = str(caught.value)
-    assert f"has created {wl.MAX_STORED_ITEMS_PER_CONDUCTOR} items" in message
-    assert f"stored bound is {wl.MAX_STORED_ITEMS_PER_CONDUCTOR}" in message
-    assert "kirocrew ledger-sweep --purge" in message
-    assert sorted(p.name for p in wl.items_dir(CONDUCTOR).iterdir()) == before
-    # Closing frees nothing here: the bound is on creates, and a close keeps its
-    # record. Every closed item is still on the board, listed and readable.
-    assert wl.read_work_item(CONDUCTOR, ids[0]) is not None
-    assert len(wl.list_work_items(CONDUCTOR)) == wl.MAX_STORED_ITEMS_PER_CONDUCTOR
+    wl.ensure_conductor(CONDUCTOR)
+    total = 260
+    for index in range(total):
+        item_id = wl.apply_conductor_action(CONDUCTOR, "create", title=f"t{index}", acceptance={})[
+            "item"
+        ].item_id
+        wl.apply_conductor_action(CONDUCTOR, "close", item_id=item_id, state="accepted")
     header = wl.read_conductor(CONDUCTOR)
-    assert header is not None and header.created_total == wl.MAX_STORED_ITEMS_PER_CONDUCTOR
+    assert header is not None and header.created_total == total
+    assert len(wl.list_work_items(CONDUCTOR)) == total
 
 
-def _closed_board_at_the_stored_bound() -> list[str]:
-    """Fill the board to ``MAX_STORED_ITEMS_PER_CONDUCTOR`` creates, closing each as
-    it lands so the open cap never bites and only the stored bound can."""
-    wl.ensure_conductor(CONDUCTOR, goal="g")
-    ids: list[str] = []
-    for index in range(wl.MAX_STORED_ITEMS_PER_CONDUCTOR):
-        ids.append(
-            wl.apply_conductor_action(CONDUCTOR, "create", title=f"t{index}", acceptance={})[
-                "item"
-            ].item_id
-        )
-        wl.apply_conductor_action(CONDUCTOR, "close", item_id=ids[-1], state="accepted")
-    return ids
-
-
-def test_the_stored_bound_counts_a_record_the_listing_cannot_read(monkeypatch):
-    """A torn record still holds its place on the board.
-
-    The stored bound is measured against the header's create counter, which the
-    torn record's own create bumped, so a board of ``MAX_STORED_ITEMS_PER_CONDUCTOR``
-    creates with one record torn to unreadable JSON lists one item fewer and holds
-    zero open ones, and a create is refused anyway, with the store's code, changing
-    no byte under ``items/``. Counted off the listing instead, the torn record would
-    have let one create more through than the fold retains.
-    """
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 4)
-    ids = _closed_board_at_the_stored_bound()
-    torn = ids[1]
-    wl.item_path(CONDUCTOR, torn).write_text("{", encoding="utf-8")
-    listed = wl.list_work_items(CONDUCTOR)
-    assert len(listed) == wl.MAX_STORED_ITEMS_PER_CONDUCTOR - 1
-    assert torn not in {item.item_id for item in listed}
-    assert not any(item.state == "open" for item in listed)
-    before = {p.name: p.read_bytes() for p in wl.items_dir(CONDUCTOR).iterdir()}
-
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="one too many", acceptance={})
-
-    assert caught.value.code == wl.CODE_ITEM_STORE_FULL
-    assert caught.value.field == "items"
-    assert f"has created {wl.MAX_STORED_ITEMS_PER_CONDUCTOR} items" in str(caught.value)
-    assert {p.name: p.read_bytes() for p in wl.items_dir(CONDUCTOR).iterdir()} == before
-
-
-def test_removing_a_record_does_not_reclaim_stored_capacity(monkeypatch):
-    """The bound is a counter of creates, not a count of the files in ``items/``.
-
-    The crew log's fold counts creates in an append-only log, so a record removed
-    from the cache -- by hand, by the ``cache_dirty`` remedy, by loss -- still has
-    its create there. A board of ``MAX_STORED_ITEMS_PER_CONDUCTOR`` creates with one
-    record file (and its event log) deleted lists one item fewer, and the next
-    create is refused all the same: ``item_store_full``, every remaining file under
-    ``items/`` byte-identical, and the header's ``created_total`` exactly where the
-    last create left it. Counted off the files, the deletion would have admitted a
-    create the fold cannot hold, and the rebuild's ceiling guard would then refuse
-    that board for good.
-    """
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 4)
-    ids = _closed_board_at_the_stored_bound()
-    header_before = wl.read_conductor(CONDUCTOR)
-    assert header_before is not None
-    assert header_before.created_total == wl.MAX_STORED_ITEMS_PER_CONDUCTOR
-    wl.item_path(CONDUCTOR, ids[2]).unlink()
-    wl.item_events_path(CONDUCTOR, ids[2]).unlink()
-    assert len(wl._stored_item_ids(CONDUCTOR)) == wl.MAX_STORED_ITEMS_PER_CONDUCTOR - 1
-    assert len(wl.list_work_items(CONDUCTOR)) == wl.MAX_STORED_ITEMS_PER_CONDUCTOR - 1
-    before = {p.name: p.read_bytes() for p in wl.items_dir(CONDUCTOR).iterdir()}
-    header_bytes = (wl.conductor_dir(CONDUCTOR) / "conductor.json").read_bytes()
-
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="one too many", acceptance={})
-
-    assert caught.value.code == wl.CODE_ITEM_STORE_FULL
-    assert caught.value.field == "items"
-    assert "removing one reclaims nothing" in str(caught.value)
-    assert {p.name: p.read_bytes() for p in wl.items_dir(CONDUCTOR).iterdir()} == before
-    assert (wl.conductor_dir(CONDUCTOR) / "conductor.json").read_bytes() == header_bytes
-    header_after = wl.read_conductor(CONDUCTOR)
-    assert header_after is not None
-    assert header_after.created_total == wl.MAX_STORED_ITEMS_PER_CONDUCTOR
-
-
-def test_a_header_from_before_the_counter_is_seeded_from_its_records_once(monkeypatch):
+def test_a_header_from_before_the_counter_is_seeded_from_its_records_once():
     """``created_total`` is zero on a header that predates it. The first create on
     such a board seeds the counter from the records the board holds, then bumps it,
-    so the count starts where the board stands rather than at zero; a board that
-    already holds every record it may hold is refused on that seed."""
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 4)
+    so the count starts where the board stands rather than at zero."""
     wl.ensure_conductor(CONDUCTOR, goal="g")
     for index in range(2):
         wl.apply_conductor_action(CONDUCTOR, "create", title=f"t{index}", acceptance={})
@@ -1291,31 +1538,6 @@ def test_a_header_from_before_the_counter_is_seeded_from_its_records_once(monkey
 
     wl.apply_conductor_action(CONDUCTOR, "create", title="third", acceptance={})
     assert wl.read_conductor(CONDUCTOR).created_total == 3, "seeded from two records, then bumped"
-
-    wl.apply_conductor_action(CONDUCTOR, "create", title="fourth", acceptance={})
-    stored = json.loads(header_path.read_text(encoding="utf-8"))
-    del stored["created_total"]  # zero again, with four records on the board
-    header_path.write_text(json.dumps(stored), encoding="utf-8")
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="one too many", acceptance={})
-    assert caught.value.code == wl.CODE_ITEM_STORE_FULL
-    assert json.loads(header_path.read_text(encoding="utf-8")) == stored, "a refusal writes nothing"
-
-
-def test_the_stored_bound_is_checked_before_the_open_cap(monkeypatch):
-    """At both bounds at once the refusal names the store.
-
-    The open cap's remedy -- close something -- would not help a board that is
-    full of records, so the stored bound speaks first.
-    """
-    monkeypatch.setattr(wl, "MAX_ITEMS_PER_CONDUCTOR", 2)
-    monkeypatch.setattr(wl, "MAX_STORED_ITEMS_PER_CONDUCTOR", 2)
-    wl.ensure_conductor(CONDUCTOR, goal="g")
-    for index in range(2):
-        wl.apply_conductor_action(CONDUCTOR, "create", title=f"t{index}", acceptance={})
-    with pytest.raises(wl.WorkLedgerError) as caught:
-        wl.apply_conductor_action(CONDUCTOR, "create", title="one too many", acceptance={})
-    assert caught.value.code == wl.CODE_ITEM_STORE_FULL
 
 
 @pytest.mark.parametrize(
@@ -3122,7 +3344,7 @@ def test_a_goal_on_a_purged_ledger_refuses_and_rebuilds_nothing(monkeypatch):
 
 
 def test_a_torn_but_present_header_refuses_both_writers_under_the_lock():
-    """The header holds the create count the stored bound is measured against, and
+    """The header holds the create count the goal's spend is measured against, and
     the pre-lock snapshot may hold it low -- every writer that held the lock since
     the snapshot was read is missing from it. So a header that is present but does
     not read under the lock refuses the write instead of standing the snapshot in

@@ -370,6 +370,9 @@ class TestWhatThisSetGrants:
     #: Board columns. Same posture as the tag tools: read, append and reorder;
     #: no delete and no retag, so nothing the person put on the board is lost.
     COLUMN_TOOLS = {"chat_tag_column_list", "chat_tag_column_create", "chat_tag_column_move"}
+    #: Moving a card between columns. Same posture as tag assignment: it is the
+    #: status-tag swap chat_tag_assign could send, through the board's own route.
+    MOVE_TOOLS = {"session_move_to_column"}
     #: The session-control half. Granted by the SAME assignment as the folder
     #: half — see ``test_session_driving_tools_ship_with_the_folder_tools`` for
     #: why the two classes ride together rather than in two servers.
@@ -381,10 +384,13 @@ class TestWhatThisSetGrants:
         # the End-wait button writes; nothing discarded, same target fence.
         "session_end_wait",
         "session_retry",
+        "session_continue",
         "session_set_model",
         "session_reload",
         # Relabels a session the caller may already stop, or itself; same gate.
         "session_rename",
+        # Regenerates a title on a session the caller created; same gate, narrower.
+        "session_generate_title",
         "session_close",
         "session_revive",
         "session_send",
@@ -402,7 +408,7 @@ class TestWhatThisSetGrants:
         "session_read_message",
         "session_summary",
     }
-    GRANTED_TOOLS = FOLDER_TOOLS | TAG_TOOLS | COLUMN_TOOLS | PIN_TOOLS | SESSION_TOOLS
+    GRANTED_TOOLS = FOLDER_TOOLS | TAG_TOOLS | COLUMN_TOOLS | MOVE_TOOLS | PIN_TOOLS | SESSION_TOOLS
 
     def test_the_set_is_exactly_the_folder_tools(self) -> None:
         from kiro_crew import mcp_dashboard

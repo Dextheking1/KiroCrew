@@ -129,30 +129,20 @@ class TestTheHarnessThatWasDrivenAndProved:
         assert ACP_BACKEND_GOOSE in ACP_BACKENDS_INLINE_COMPACTION
         assert capabilities_for(ACP_BACKEND_GOOSE).compacts_inline is True
 
-    def test_pi_waits_for_a_capture(self) -> None:
-        """Absence as a decision, and the decision is about the evidence CLASS.
+    def test_pi_can_serve_a_manual_compact(self) -> None:
+        """pi joins on the same bar: a driven session whose ``usage_update.used``
+        fell after ``/compact``. The capture is
+        ``test/fixtures/acp_frames/pi/compact-live.jsonl``."""
+        assert ACP_BACKEND_PI in ACP_BACKENDS_COMPACT
 
-        pi advertises ``compact`` and dispatches it before any model turn --
-        pi-acp 0.0.33 in ``prompt()`` -- so its SOURCE says inline.  What it lacks
-        is a driven capture, which is the bar opencode and goose met: a live
-        session whose ``usage_update.used`` was seen to fall.  Source says what the
-        code would do; a capture says what the harness did, and for a membership
-        whose wrong answer makes ``wait_for_compaction`` report a completion that
-        never happened, the second is the bar.
-
-        Its position while it waits is better than the one it held: it takes the
-        arm that promises nothing rather than being told its harness manages
-        compaction itself.
-        """
-        for backend in (ACP_BACKEND_PI,):
-            assert backend not in ACP_BACKENDS_COMPACT, backend
-            assert backend not in ACP_BACKENDS_INLINE_COMPACTION, backend
-            assert backend not in _harness_managed_set(), backend
-            assert backend not in _recycle_set(), backend
-            assert (
-                messaging_commands.compact_refusal_arm(backend)
-                == messaging_commands.COMPACT_ARM_UNCLASSIFIED
-            ), backend
+    def test_pi_finishes_inside_the_prompt_turn(self) -> None:
+        """Its ``/compact`` turn carries the ``Compaction completed`` chunk and ends
+        with ``end_turn`` and no status frame after it, so the turn's terminal is the
+        done signal."""
+        assert ACP_BACKEND_PI in ACP_BACKENDS_INLINE_COMPACTION
+        assert capabilities_for(ACP_BACKEND_PI).compacts_inline is True
+        provider = AcpProvider(acp_backend=ACP_BACKEND_PI)
+        assert messaging_commands.compact_unsupported_backend(provider) is None
 
     def test_kiro_stays_on_the_waiting_arm(self) -> None:
         """kiro-cli serves ``/compact`` and reports it ASYNCHRONOUSLY, which is
@@ -256,11 +246,8 @@ class TestEveryKnownBackendIsClassified:
     """
 
     #: Known backends deliberately outside all three compaction sets, each with why.
-    #:
-    #: * ``pi`` -- its source says it compacts inline; no driven capture confirms it,
-    #:   which is the bar ``ACP_BACKENDS_COMPACT`` holds members to. The capture is
-    #:   tracked as deferred follow-up work.
-    UNCLASSIFIED = frozenset({ACP_BACKEND_PI})
+    #: Empty: every known backend is classified.
+    UNCLASSIFIED: frozenset = frozenset()
 
     def test_every_known_backend_is_classified_or_listed(self) -> None:
         classified = (
@@ -914,13 +901,13 @@ class TestTheRefusalTextSaysWhatHappens:
             imessage_text,
         )
         # Three backends, one per arm: kas is harness-managed, deepseek is
-        # recycled, and pi is in neither -- the case the two-arm split got
-        # wrong on every surface that held one.
+        # recycled, and an id outside every set is in neither -- the case the
+        # two-arm split got wrong on every surface that held one.
         for reply in surfaces:
             managed, recycled, unclassified = (
                 reply(ACP_BACKEND_KAS),
                 reply(ACP_BACKEND_DEEPSEEK),
-                reply(ACP_BACKEND_PI),
+                reply("some-future-harness"),
             )
             assert len({managed, recycled, unclassified}) == 3, reply
             # And the specific promise that must not reach an unclassified
@@ -939,19 +926,8 @@ class TestTheRefusalTextSaysWhatHappens:
         arm = messaging_commands.compact_refusal_arm
         assert arm(ACP_BACKEND_KAS) == messaging_commands.COMPACT_ARM_HARNESS_MANAGED
         assert arm(ACP_BACKEND_DEEPSEEK) == messaging_commands.COMPACT_ARM_RECYCLED
-        assert arm(ACP_BACKEND_PI) == messaging_commands.COMPACT_ARM_UNCLASSIFIED
         # An id this build cannot name gets the arm that claims nothing.
         assert arm("not-a-backend") == messaging_commands.COMPACT_ARM_UNCLASSIFIED
-
-    def test_pi_is_the_unclassified_case_today(self) -> None:
-        """Named rather than implied, because the arm above is only exercised
-        while some known backend is unclassified. When pi earns the driven
-        capture ``ACP_BACKENDS_COMPACT`` asks of its members, this test says so, and
-        whoever moves it can see what it stands in for."""
-        for backend in (ACP_BACKEND_PI,):
-            assert backend not in ACP_BACKENDS_COMPACT, backend
-            assert backend not in _harness_managed_set(), backend
-            assert backend not in _recycle_set(), backend
 
     def test_only_the_arm_reads_a_compaction_membership(self) -> None:
         """The memberships have ONE reader, which is what makes the arm the single

@@ -481,8 +481,28 @@ def compaction_in_flight(sessions: Any, key: str) -> bool:
     Builder's Pause. Fail-soft
     to False and ``is True`` rather than truthiness: a manager double without the
     method, or one answering a truthy Mock, keeps the ordinary stop path.
+
+    A compaction that is still waiting for the turn permit does not hold the
+    session yet: the turn holding the permit does, and the Stop is aimed at it
+    (``_compaction_waits_for_turn``). ``stop_turn`` reads the same answer, so the
+    probe and the decline cannot disagree.
     """
     probe = getattr(sessions, "is_compacting", None)
+    if not callable(probe):
+        return False
+    try:
+        return probe(key) is True and not _compaction_waits_for_turn(sessions, key)
+    except Exception:
+        return False
+
+
+def _compaction_waits_for_turn(sessions: Any, key: str) -> bool:
+    """Whether *key*'s compaction still waits for the turn that holds the session.
+
+    Narrows the Stop decline only: anything but an explicit True (a double
+    without the method, a truthy Mock, a raise) answers False, which keeps it.
+    """
+    probe = getattr(sessions, "compaction_waits_for_turn", None)
     if not callable(probe):
         return False
     try:
@@ -518,6 +538,14 @@ class _ChildTeardownHandler(Protocol):
     def snapshot_teardown_children_only(self, parent_session_key: str) -> tuple[str, ...]: ...
 
     def has_live_or_queued_children(self, parent_session_key: str) -> bool: ...
+
+    def has_in_memory_pending_work_for(
+        self, parent_session_key: str, *, exclude_id: str = ""
+    ) -> bool: ...
+
+    async def has_pending_work_for_async(self, parent_session_key: str) -> bool: ...
+
+    def has_unfinished_report_for(self, parent_session_key: str) -> bool: ...
 
     async def has_pending_store_children(self, parent_session_key: str) -> bool: ...
 
@@ -2727,11 +2755,26 @@ class SessionLifecycleService:
             return complete
 
     async def remove_if_unclaimed(self, key: str) -> bool:
-        """Remove a speculative session only while its first turn is unclaimed."""
+        """Remove a speculative session only while its first turn is unclaimed
+        and it owes no sub-agent work.
+
+        A free semaphore proves only that the parent's own turn is over: children
+        it spawned keep running on its runtime, and a finished child still owes
+        the parent its report. The decision follows the identity sweep's
+        spare-children shape. A tentative teardown fence opens under the lock,
+        the off-loop read asks the manager's single pending-work signal
+        (``has_pending_work_for_async``) plus the fence-aware store read, and the
+        commit re-asks the in-memory half under the lock before promoting the
+        fence. A report still running for a child whose task is gone
+        (``has_unfinished_report_for``) is asked at both points, because the
+        pending-work signal stops seeing a run once its task ends. Any child, an
+        unfinished report, a failed read, or a pending injection keeps the parent.
+        """
         owner = self._owner
         constants = self._deps.constants()
         requested_key = key
         key = owner._fold_key(key)
+        handler = self._child_teardown
         async with owner._lock:
             session = owner._sessions.get(key)
             if (
@@ -2740,23 +2783,69 @@ class SessionLifecycleService:
                 or session.semaphore.locked()
             ):
                 return False
-            del owner._sessions[key]
-            # Snapshot the runs this key owns in the SAME lock hold as the pop: every
-            # await below is a window a cold start can register a successor under
-            # this key in, and a selection made after one would name the
-            # successor's runs. The cancel itself happens after the teardown.
-            teardown_children = self._snapshot_parent_children(key)
-            owner._advance_session_generation(key)
-            owner._compact_cooldown_until.pop(key, None)
-            self._suppress_replay.discard(key)
-            owner._compact_pending_verdict.pop(key, None)
-            self._origin_links.pop(key, None)
-            self.state.stop_requests.pop(key, None)
-            self._discard_replay_gap(key)
-            self.state.orphaned_holders.pop(key, None)
-            self._release_turn_ceiling(key, requested_key)
-            # Same tick as the removal: see reset.
-            await record_session_ended(key, end_reason=END_REASON_UNCLAIMED)
+            fence = self._open_teardown_fence(key)
+        committed = False
+        try:
+            if handler is not None:
+                try:
+                    if (
+                        handler.has_unfinished_report_for(key)
+                        or await handler.has_pending_work_for_async(key)
+                        or await self._parent_has_sparable_child(key)
+                    ):
+                        return False
+                except Exception:
+                    self._deps.logger.warning(
+                        "Unclaimed removal: reading the sub-agents of %s failed; keeping it",
+                        key,
+                        exc_info=True,
+                    )
+                    return False
+            async with owner._lock:
+                if (
+                    owner._sessions.get(key) is not session
+                    or session.first_turn is constants.first_turn_nothing_armed
+                    or session.semaphore.locked()
+                    or owner._has_pending_injection(key)
+                ):
+                    return False
+                if handler is not None:
+                    if (
+                        handler.has_live_or_queued_children(key)
+                        or handler.has_in_memory_pending_work_for(key)
+                        or handler.has_unfinished_report_for(key)
+                    ):
+                        return False
+                    if fence is not None and not handler.commit_identity_sweep_retire(key, fence):
+                        return False
+                committed = True
+                del owner._sessions[key]
+                # Select the runs this key owns in the SAME lock hold as the pop: every
+                # await below is a window a cold start can register a successor under
+                # this key in, and a selection made after one would name the
+                # successor's runs. The cancel itself happens after the teardown. A
+                # promoted fence is already the committed one, so only the selection
+                # half runs; re-opening it would drop the admissions it carries.
+                if handler is not None and fence is not None:
+                    teardown_children = tuple(handler.snapshot_teardown_children_only(key))
+                else:
+                    teardown_children = self._snapshot_parent_children(key)
+                owner._advance_session_generation(key)
+                owner._compact_cooldown_until.pop(key, None)
+                self._suppress_replay.discard(key)
+                owner._compact_pending_verdict.pop(key, None)
+                self._origin_links.pop(key, None)
+                self.state.stop_requests.pop(key, None)
+                self._discard_replay_gap(key)
+                self.state.orphaned_holders.pop(key, None)
+                self._release_turn_ceiling(key, requested_key)
+                # Same tick as the removal: see reset.
+                await record_session_ended(key, end_reason=END_REASON_UNCLAIMED)
+        finally:
+            # A kept parent (or a cancellation mid-read) runs no cancel sweep, so its
+            # tentative fence has no consumer; a commit promoted it instead.
+            if not committed and handler is not None and fence is not None:
+                handler.release_teardown_fence(key, fence)
         await asyncio.to_thread(self._deps.get_unlink_session_queue(), session)
         try:
             await session.provider.shutdown()
@@ -3363,8 +3452,15 @@ class SessionLifecycleService:
         # the turn saw, and recording it would make the compaction path below
         # read its own later failure as user-cancelled. ``getattr`` because the
         # owner protocol does not declare the compacting set; a double without it
-        # keeps the old behaviour.
-        if not force and session is not None and key in getattr(owner, "_compacting", ()):
+        # keeps the old behaviour. Not while the compaction still waits for the
+        # turn permit: the turn holding it owns the session, and this Stop is aimed
+        # at that turn (the same answer ``compaction_in_flight`` gives).
+        if (
+            not force
+            and session is not None
+            and key in getattr(owner, "_compacting", ())
+            and not _compaction_waits_for_turn(owner, key)
+        ):
             logger.info("stop_turn outcome=compacting session=%s (cooperative stop declined)", key)
             return "compacting"
         # Record the Stop against the session key before anything is awaited:

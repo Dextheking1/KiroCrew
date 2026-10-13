@@ -889,9 +889,20 @@ async def api_memory_semantic_write(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+_FORGET_BODY_FIELDS = frozenset({"expect_value_json", "superseded_by"})
+
+
 async def api_memory_semantic_delete(request: web.Request) -> web.Response:
     """DELETE /api/memory/semantic/{key} — tombstone a semantic entry in the store
-    named by ``?store=``, else the GLOBAL store."""
+    named by ``?store=``, else the GLOBAL store.
+
+    An optional JSON body carries two fields, both strings, for the CLI's
+    ``kirocrew memory forget``. ``expect_value_json`` makes it a compare-and-delete:
+    a row whose stored body differs from that value is kept and answers 409
+    ``value_changed``. ``superseded_by`` names the live key that replaces this one;
+    it must differ from *key* and be live, or the call answers 400/409. The
+    dashboard sends no body, and a bodiless call behaves exactly as before.
+    """
     state: DashboardState = request.app["state"]
     # The shared write gate rejects unknown callers before checking session
     # mode: the restricted-mode check alone returns False for an unknown key.
@@ -905,9 +916,52 @@ async def api_memory_semantic_delete(request: web.Request) -> web.Response:
     if denial is not None:
         return denial
     key = request.match_info["key"]
-    # Offload: acquires _db_lock internally — see api_memory_semantic.
-    ok = await asyncio.to_thread(store.delete_semantic, key, source="user_explicit")
+    body, body_err = await read_bounded_json(request, allow_absent=True)
+    if body_err is not None:
+        return body_err
+    assert body is not None  # read_bounded_json returns (dict, None) on success
+    if not set(body) <= _FORGET_BODY_FIELDS or not all(
+        isinstance(value, str) for value in body.values()
+    ):
+        return web.json_response(
+            {
+                "error": "body may hold only string expect_value_json and superseded_by",
+                "code": "invalid_forget_body",
+            },
+            status=400,
+        )
+    expect = body.get("expect_value_json")
+    winner = body.get("superseded_by")
+    if winner is not None:
+        if winner == key:
+            return web.json_response(
+                {"error": "superseded_by names the key itself", "code": "superseded_by_self"},
+                status=400,
+            )
+        if await asyncio.to_thread(store.get_semantic, winner) is None:
+            return web.json_response(
+                {"error": "superseded_by is not a live key", "code": "superseded_by_absent"},
+                status=409,
+            )
+    options: dict[str, str] = {}
+    if expect is not None:
+        options["expect_value_json"] = expect
+    if winner is not None:
+        options["superseded_by"] = winner
+    try:
+        # Offload: acquires _db_lock internally — see api_memory_semantic.
+        ok = await asyncio.to_thread(store.delete_semantic, key, source="user_explicit", **options)
+    except ValueError:
+        # delete_semantic refuses a multi-line or over-long superseded_by.
+        return web.json_response(
+            {"error": "superseded_by must be a short key", "code": "invalid_forget_body"},
+            status=400,
+        )
     if not ok:
+        if expect is not None and await asyncio.to_thread(store.get_semantic, key) is not None:
+            return web.json_response(
+                {"error": "value changed", "code": "value_changed"}, status=409
+            )
         return web.json_response({"error": "not found"}, status=404)
     return web.json_response({"ok": True})
 

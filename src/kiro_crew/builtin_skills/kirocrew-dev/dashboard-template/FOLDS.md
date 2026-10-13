@@ -249,6 +249,7 @@ Moved by: `work/recorded`.
 | Field | Type | Optional |
 |---|---|---|
 | `conductor` | `object` | no |
+| `forgotten` | `object` | no |
 | `items` | `array` | no |
 | `omitted` | `number` | no |
 

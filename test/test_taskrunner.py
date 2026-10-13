@@ -55,6 +55,34 @@ def _non_git_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str) -> 
     return work
 
 
+class _SteppedClock:
+    """Stands in for the ``time`` module: seconds pass only when a test says so.
+
+    ``monotonic()`` follows the real passage of time the test scripts;
+    ``time()`` follows it too, plus any wall-clock step on top. Every other
+    name is the real module's.
+    """
+
+    def __init__(self) -> None:
+        self._wall = 1_800_000_000.0
+        self._mono = 5_000.0
+
+    def time(self) -> float:
+        return self._wall
+
+    def monotonic(self) -> float:
+        return self._mono
+
+    def advance(self, passed: float, *, step: float = 0.0) -> None:
+        self._mono += passed
+        self._wall += passed + step
+
+    def __getattr__(self, name: str) -> Any:
+        import time as _time
+
+        return getattr(_time, name)
+
+
 def _make_mock_sessions() -> MagicMock:
     """Create a mock SessionManager with the methods TaskRunner uses."""
     sessions = MagicMock()
@@ -2756,6 +2784,58 @@ class TestWatchdog:
         assert any("stalled" in t.lower() for t, _ in notifications)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("passed", "step", "cancelled"),
+        [
+            (5.0, 0.0, False),
+            (5.0, 2 * 3600.0 + 60, False),
+            (_STALL_CANCEL_TIMEOUT + 60.0, 0.0, True),
+            (_STALL_CANCEL_TIMEOUT + 60.0, -3600.0, True),
+        ],
+        ids=["progressing", "progressing_forward_step", "stalled", "stalled_backward_step"],
+    )
+    async def test_watchdog_measures_stalls_on_the_monotonic_clock(
+        self, monkeypatch: pytest.MonkeyPatch, passed: float, step: float, cancelled: bool
+    ) -> None:
+        """A wall-clock step neither cancels a progressing task nor spares a stalled one.
+
+        *passed* seconds really pass after the last progress stamp, and the wall
+        clock also steps by *step*. Before the fix the watchdog read the age from
+        the wall clock: the forward step reset a task that progressed 5 s ago,
+        and the backward step left a task stalled past the cancel timeout alone.
+        """
+        clock = _SteppedClock()
+        monkeypatch.setattr(taskrunner_module, "time", clock)
+        sessions = _make_mock_sessions()
+        sessions.is_provider_alive = AsyncMock(return_value=True)
+        runner = TaskRunner(sessions=sessions, auto_test=False)
+        run = TaskRun(spec_path="/t.md", spec_content="s", status="running")
+        run.current_task = 1
+        run.started_at = run.last_task_time = clock.time()
+        ticks = [lambda: clock.advance(passed, step=step)]
+
+        async def _tick(_secs: float) -> None:
+            if not ticks:
+                raise asyncio.CancelledError()
+            ticks.pop(0)()
+
+        class _AsyncioWithSleep:
+            """The watchdog's own ``asyncio`` with a scripted ``sleep``; the rest is real."""
+
+            sleep = staticmethod(_tick)
+
+            def __getattr__(self, name: str):
+                return getattr(asyncio, name)
+
+        monkeypatch.setattr(taskrunner_module, "asyncio", _AsyncioWithSleep())
+        await runner._watchdog_loop(run)
+
+        assert sessions.reset.await_count == (1 if cancelled else 0), (
+            f"{passed:.0f} s after the last progress, with a {step:+.0f} s wall-clock step, "
+            f"the watchdog reset the step's session {sessions.reset.await_count} time(s)"
+        )
+
+    @pytest.mark.asyncio
     async def test_watchdog_exits_when_not_running(self) -> None:
         """Watchdog exits when run status changes from running."""
         sessions = _make_mock_sessions()
@@ -2841,6 +2921,125 @@ class TestWatchdog:
         # If watchdog read runner._last_task_time (0.0), it would stall-notify.
         # It should read run.last_task_time (recent) and NOT notify.
         assert not any("stalled" in t.lower() for t, _ in notifications)
+
+
+class TestGlobalTimeoutClock:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("passed", "step", "timed_out"),
+        [
+            (5.0, 0.0, False),
+            (5.0, 2 * 3600.0, False),
+            (2 * 3600.0, 0.0, True),
+            (2 * 3600.0, -3 * 3600.0, True),
+        ],
+        ids=["healthy", "healthy_forward_step", "over", "over_backward_step"],
+    )
+    async def test_executor_measures_the_global_timeout_on_the_monotonic_clock(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        passed: float,
+        step: float,
+        timed_out: bool,
+    ) -> None:
+        """A wall-clock step neither fails a run inside its global timeout nor spares one past it.
+
+        The first step really takes *passed* seconds, and the wall clock also steps by
+        *step*. The executor checks the 1 h timeout before the second step. Read as
+        ``time.time() - started_at``, the forward step failed a run 5 s old with "Global
+        timeout exceeded", and the backward step let a run 2 h old start another step.
+        """
+        clock = _SteppedClock()
+        monkeypatch.setattr(taskrunner_module, "time", clock)
+        runner = TaskRunner(
+            sessions=_make_mock_sessions(),
+            auto_test=False,
+            work_dir=tmp_path,
+            global_timeout=3600.0,
+        )
+        runner._notify = AsyncMock()
+        executed: list[int] = []
+
+        async def _execute(run, task, hk="", session_key=""):
+            executed.append(task.index)
+            if task.index == 1:
+                clock.advance(passed, step=step)
+            task.status = StepStatus.PASSED
+            return True
+
+        runner._execute_single_task = _execute
+        run = TaskRun(task_id="gt", spec_path="", spec_content="s", status="running")
+        run.started_at = run.last_task_time = clock.time()
+        run.tasks = [
+            Step(index=1, title="A", description="d"),
+            Step(index=2, title="B", description="d", depends_on=[1]),
+        ]
+
+        await runner._execute_tasks(run, "hk")
+
+        assert executed == ([1] if timed_out else [1, 2]), (
+            f"{passed:.0f} s into the run, with a {step:+.0f} s wall-clock step, "
+            f"the executor ran steps {executed} ({run.status}: {run.error!r})"
+        )
+        assert (run.status == "failed" and "Global timeout" in run.error) is timed_out
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("passed", "step", "timed_out"),
+        [
+            (5.0, 0.0, False),
+            (5.0, 2 * 3600.0, False),
+            (2 * 3600.0, -3 * 3600.0, True),
+        ],
+        ids=["no_step", "forward_step", "over_backward_step"],
+    )
+    async def test_the_global_timeout_counts_from_the_run_start_stamp(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        passed: float,
+        step: float,
+        timed_out: bool,
+    ) -> None:
+        """The age is taken where ``execute_plan`` stamps the start, not at the executor's entry.
+
+        The clock moves after the start is stamped and before the executor's first
+        check: *passed* seconds pass and the wall clock steps by *step*. An age read
+        from the wall clock there failed a run 5 s old, or let a run 2 h old run.
+        """
+        clock = _SteppedClock()
+        monkeypatch.setattr(taskrunner_module, "time", clock)
+        runner = TaskRunner(
+            sessions=_make_mock_sessions(),
+            auto_test=False,
+            work_dir=tmp_path,
+            global_timeout=3600.0,
+        )
+        runner._decompose = AsyncMock(
+            return_value=[Step(index=1, title="Implement", description="make the change")]
+        )
+        run = await runner.plan("implement the feature")
+        execute_tasks = runner._execute_tasks
+
+        async def _after_the_stamp(project, history_key):
+            clock.advance(passed, step=step)
+            await execute_tasks(project, history_key)
+
+        async def _execute(project, task, hk="", session_key=""):
+            task.status = StepStatus.PASSED
+            return True
+
+        runner._execute_tasks = _after_the_stamp
+        runner._execute_single_task = _execute
+
+        await runner.execute_plan(run.task_id)
+        await asyncio.wait_for(runner._tasks[run.task_id], timeout=_GENEROUS_DEADLINE)
+
+        assert (run.status == "failed" and "Global timeout" in run.error) is timed_out, (
+            f"{passed:.0f} s after the start stamp, with a {step:+.0f} s wall-clock step, "
+            f"the run ended {run.status} ({run.error!r})"
+        )
 
 
 # ── Phase 12.2: Working Memory ──

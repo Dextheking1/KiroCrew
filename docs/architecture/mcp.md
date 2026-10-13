@@ -287,6 +287,24 @@ launch from it — though doctor skips the probe for a server whose spec gate is
 closed, since no emitted spec defines it). See
 [../guides/enterprise-mcp-governance.md](../guides/enterprise-mcp-governance.md).
 
+A user entry that is a **bare registry pointer** — `"type": "registry"` with no
+`command` and no `url` in any source, the shape Kiro IDE and kiro-cli write when
+a server is installed from the catalog — is carried into the emitted spec
+verbatim by `resolve_mcp_servers` instead of taking the generic "no command" drop
+(#3308). The spec pins `includeMcpJson: false`, so that copy is the only route by
+which kiro-cli sees the pointer, and kiro-cli is the only party that can resolve
+it. Its `@ref` then goes through `sync_shared_server_refs` and the auto-approve
+gate like any other shared server. The readiness probe's structural check
+(`kiro_prerequisite._unlaunchable_mcp_servers`) accepts the same pointer as
+launchable, since kiro-cli supplies its transport; without that exemption every
+governed host would land behind the "agent specs rejected" gate. Nothing else changes: a marked entry with an
+unresolvable local `command` is still dropped, and the Claude session array, the
+KAS projection and the pooled broker stubs still withhold marked entries. In
+discovery, `_server_from_spec` flags the same shape as `registry_pointer`;
+`list_servers` and `probe_server` report it as status `registry` — never
+spawned, never cached, no quarantine verdict — and the dashboard renders it as
+the muted "Not verified" badge with a hint naming `kiro-cli mcp list`.
+
 `kirocrew-computer` carries **no `autoApprove` key and none may ever be added.**
 kiro-cli approves an auto-approved MCP tool locally and emits no permission
 request, so `hooks.on_tool_call` (the PreToolUse deny floor, sensitive-path
@@ -847,6 +865,19 @@ gateway log, which is not where someone staring at a red badge is looking: a
 Python server configured through `env.PYTHONPATH` fails the probe while working
 in a session, and unexplained that reads as a probe bug rather than the
 launcher boundary it is.
+
+### Managed servers that follow kirocrew-core
+
+When `kirocrew-core` is in the stub set, Kiro Crew's other caller-aware managed
+servers join it (`config.integration_sections.MANAGED_STUB_FOLLOWERS`), so each
+is one shared backend instead of one process per session. They already need no
+launch approval (managed launch), get the per-session token from gatewayd, and
+consume the injected caller block. `kirocrew-computer` stays out (tenant-nonce
+gated), and so does `kirocrew-cron` (outside what this layer was measured on).
+Joining the stub set mounts nothing: only
+servers a spec already declares are wrapped. An operator can turn any one off in
+MCP Management; that choice is stored as an override and survives later
+`kirocrew-core` toggles.
 
 ### Stub launch approval
 
@@ -1638,7 +1669,7 @@ Managed servers, registered by `agent._MANAGED_MCP_SERVERS` and installed into
 | `kirocrew-cron` | `kirocrew mcp-cron` (`mcp_cron.py`) | `cron_add`, `cron_list`, `cron_update`, `cron_remove`, `cron_remove_all`, `cron_pause`, `cron_resume`, `cron_trigger`, `cron_secret_request` |
 | `kirocrew-core` | `kirocrew mcp-core` (`mcp_core.py` + `mcp_tools/`) | spawn/subagent, learn, task, messaging, artifact, workflow, knowledge and session-directive tools (see below) |
 | `kirocrew-computer` | `kirocrew mcp-computer` (`mcp_computer.py`) | `computer_list_apps`, `computer_launch_app`, `computer_get_state`, `computer_click`, `computer_drag`, `computer_type_text`, `computer_press_key`, `computer_set_value`, `computer_scroll`, `computer_perform_action`, `computer_end_turn` |
-| `kirocrew-dashboard` | `kirocrew mcp-dashboard` (`mcp_dashboard.py`) | `chat_folder_tree`, `chat_folder_create`, `chat_folder_move`, `chat_folder_update`, `chat_folder_move_session`, `chat_folder_delete`, `chat_folder_file_self`, `chat_tag_list`, `chat_tag_create`, `chat_tag_update`, `chat_tag_assign`, `chat_tag_column_list`, `chat_tag_column_create`, `chat_tag_column_move`, `chat_session_pin`, `session_create`, `session_fork`, `session_stop`, `session_end_wait`, `session_retry`, `session_set_model`, `session_reload`, `session_rename`, `session_close`, `session_revive`, `session_send`, `session_broadcast`, `session_status`, `session_adopt`, `session_release`, `session_read_message`, `session_summary` |
+| `kirocrew-dashboard` | `kirocrew mcp-dashboard` (`mcp_dashboard.py`) | `chat_folder_tree`, `chat_folder_create`, `chat_folder_move`, `chat_folder_update`, `chat_folder_move_session`, `chat_folder_delete`, `chat_folder_file_self`, `chat_tag_list`, `chat_tag_create`, `chat_tag_update`, `chat_tag_assign`, `chat_tag_column_list`, `chat_tag_column_create`, `chat_tag_column_move`, `session_move_to_column`, `chat_session_pin`, `session_create`, `session_fork`, `session_stop`, `session_end_wait`, `session_retry`, `session_continue`, `session_set_model`, `session_reload`, `session_rename`, `session_generate_title`, `session_close`, `session_revive`, `session_send`, `session_broadcast`, `session_status`, `session_adopt`, `session_release`, `session_read_message`, `session_summary` |
 | `kirocrew-work` | `kirocrew mcp-work` (`mcp_work.py`) | `work_brief`, `work_report`, `work_ledger_read`, `work_ledger_rebuild`, `work_ledger_record` |
 | `kirocrew-crew-log` | `kirocrew mcp-crew-log` (`mcp_crew_log.py`) | `crew_log_list`, `crew_log_read`, `crew_log_projection` |
 | `kirocrew-debug` | `kirocrew mcp-debug` (`mcp_debug.py`) | `debug_gateway`, `debug_refusals`, `debug_threads`, `debug_processes`, `debug_snapshots` |
@@ -1871,8 +1902,9 @@ was saved; the guide ended without confirming it", never "completed" without
 the gateway's evidence and never a bare "cancelled"; the reason is kept on the
 conversation row (`meta.card.reason`), so the line reads the same after the
 store has forgotten the guide. A save the server refuses
-outright (a 4xx) clears the step's "submitted" state, and the guide follows the
-form back to the step it shows. `target_found`
+outright (a 4xx) clears the step's "submitted" state, and the guide stays on
+`crewmate.create`'s one step, the New crewmate card's Create, so the person can
+press it again. `target_found`
 is a no-op on an active guide, is refused on a terminal one, and needs the owner
 tab, so a cancelled, expired or completed guide never resumes; a reloaded tab
 (a new tab id) takes the guide over explicitly, which walks it back to the
@@ -1901,7 +1933,7 @@ The same server carries **change cards**. `propose_change(kind, params, reason?)
 names one REGISTERED kind (`change_card_catalog.KINDS`: `setting.change`,
 `schedule.create`/`.update`, `crewmate.create`/`.update`/`.capabilities`,
 `template.update`, `mcp.install`/`.add_custom`/`.toggle`, `connection.connect`,
-`secret.save`, `trust.app`, `denied_command`); trust-root files have no kind.
+`secret.save`, `trust.app`, `denied_command`, `folder.steering`); trust-root files have no kind.
 `setting.change` takes a Settings-registry `setting_id` (found with
 `find_setting(query)`, which returns up to ten matches with `writable`,
 the current value and the allowed values, never a credential value) or a raw
@@ -3797,6 +3829,31 @@ chat-route gate admits only `GET` on the list. There is no delete or retag tool:
 either would remove a view the person built. The two writes are blocked for
 channel agents, at the permission prompt and again at dispatch.
 
+**Moving a card is a tag write, not a board write.** `session_move_to_column`
+resolves the session through the scoped `_visible_chat_slots`, verifies the
+caller strictly, resolves `column` with `_resolve_chat_tag_column`, and posts
+`{column_id, expected_created, base_tags_revision}` to
+`POST /api/chat/slots/<slot>/drop`, the route
+the board's drag calls. Because it changes a session's tags and not the layout,
+it follows the tag-assignment rules rather than the column rules: the route
+applies the unattributable-caller refusal, the crew-member `member_owns_slot`
+fence and the App Kit slot and transcript ownership checks `PUT /tags` applies,
+re-checks `expected_created` and `base_tags_revision` (409 `stale_base`, the
+compare-and-set `chat_tag_assign` gets) under the tags write lock, and holds every
+non-person caller (decided by `slot_tag_write_principal`, the enumeration
+`PUT /tags` uses) to `agent_slot_tags_refusal` over the same prior-to-new diff, so
+a drop can never be a bypass of `PUT /tags`. It is then held to the `chat_tag`
+`set_state` rule on the target as well: the column's status must be a
+row-backed workflow state with `add-remove` policy (`not_a_status_tag`,
+`tag_policy_denied` otherwise). `PUT /tags` admits an `add-only` state, which a
+drop would turn into a card no agent can move out again. The person's drag is
+never gated.
+The route's rejections carry a `code`: `not_status_lane` and `state_lane` read as
+"Not moved" (calling again changes nothing), while `session_gone` comes back as an
+error telling the caller to re-resolve the session. The member chat-route gate admits
+`POST` on the path; the tool is withheld from unattended conductors and blocked
+for channel agents at the prompt and at dispatch.
+
 **Assignment is still not authorization.** Being unreferenced by default keeps a
 capability cheap and deliberate; it does not prove the user consented to reach the
 agent does not otherwise have. For that, `config.json` is the WRONG home —
@@ -4140,6 +4197,22 @@ outage, whereas the attended CLI's own identity (`kirocrew chat` with no gateway
 direct host store the cron tools always had before the transport was required;
 a gateway-minted key with no injected caller is the non-pooled topology and
 reports the outage instead.
+
+The kiro-backend element list carries one population `CONTROL_PLANE_BACKENDS`
+does not: the builtin app servers that run Kiro Crew's own code
+(`session_mcp.builtin_app_identity_launches`). A shipped, builtin-owned manifest
+that declares `command: "kirocrew"` (Mochi's `mochi:mochi`) is pinned by
+`bridges._pin_host_cli_command` to the gateway's interpreter and serves through
+`mcp_shared`, so it reads the same attested tool policy. kiro-cli mounts it
+straight from the spec, and without its own element every call refuses as
+`identity_unattested` for session `mcp`. `kiro_control_plane_servers` therefore
+re-declares a granted one after the managed servers, with the launch re-derived
+from the manifest by `apps.execution.builtin_app_host_cli_mcp_launches` and
+pinned exactly as registration pins it, never read from the spec, and with
+`PYTHONPATH` and `KIROCREW_HOME` set from that pin over anything the spec
+declares. A user app, a shadowed builtin, or a builtin app that ships its own
+binary is not Kiro Crew's code and gets no element. gatewayd's set stays the
+managed servers: a pooled app server is not handed the token.
 
 `register_hook` resolves through `require_strict_session_key`. Member hooks
 capture their originating execution record before provider allocation; Global
@@ -4621,9 +4694,12 @@ Servicing one parked call and sending the report are each guarded like one
 message on the read loop: a failure answers that call (or costs one report) and
 the loop keeps serving. `_call_tool` (what a
 test, the CLI or a non-loop caller invokes) drives a deferred to completion
-inline with `drive_deferred`, and so does the synchronous Windows dispatch path,
-where no loop timer exists: from outside the POSIX loop a deferred tool is a
-blocking one.
+inline with `drive_deferred`: from outside the loop a deferred tool is a
+blocking one. The loop itself is the same on every platform. Windows
+`select.select` cannot poll stdin, so there `_start_stdin_pump` reads frames on
+a daemon thread into a queue the loop waits on with the same short timeout; the
+worker, the parked-call timer, cancels and ping answers do not depend on how a
+frame was read.
 
 **The in-flight report.** A backend whose long calls are all deferred can prove
 they are healthy. When the client's `initialize` declared
@@ -4641,9 +4717,7 @@ while a server whose every tool is synchronous gains nothing from the report and
 would only have its recycle ceiling lowered under its running call. A server that
 did not opt in neither advertises the key nor sends the frame, even to a client
 that declared it. An opted-in loop advertises the key in its
-`initialize` result on POSIX only -- the Windows path cannot send a frame
-mid-call, and advertising there would have the gateway shorten a ceiling the
-backend cannot vouch for. The gateway asks for the report on every `initialize`
+`initialize` result on every platform. The gateway asks for the report on every `initialize`
 it forwards (`_inject_inflight_capability`, beside the MCP Apps extension
 injection) and in its own prewarm `send_initialize`; `Backend._apply_inflight_report`
 consumes the frame off the backend's stdout (it names gateway forward ids, so it

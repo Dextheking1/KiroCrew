@@ -29,7 +29,8 @@ sandboxed backend is reverse-proxied at ``/apps/dev-fleet/api/``):
     Same gate. It shares the ``_MAKE_LIVE_LOCK`` / ``_MAKE_LIVE_COMMITTED`` latch
     with the cutover, so the two must live in one process.
 ``GET live-target``
-    The pointer-state read broker: ``{live, staged, staged_cancel_available}`` as
+    The pointer-state read broker: ``{live, staged, staged_cancel_available,
+    previous, live_verified}`` as
     :class:`live.PointerState`. Admits ONLY Dev Fleet's own app token — this is how
     the sandboxed backend learns which row is live or staged (``server.main``
     installs :class:`pointer_broker.GatewayPointerBroker`); the dashboard never
@@ -214,6 +215,7 @@ async def handle_live_target(request: web.Request) -> web.Response:
             "staged": state.staged,
             "staged_cancel_available": state.staged_cancel_available,
             "previous": state.previous,
+            "live_verified": state.live_verified,
         }
     )
 

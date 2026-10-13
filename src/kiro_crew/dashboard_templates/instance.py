@@ -54,8 +54,8 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Iterator, Mapping
-from urllib.parse import quote
+from typing import Any, Final, Iterable, Iterator, Mapping
+from urllib.parse import quote, urlencode
 
 from kiro_crew import dashboard_frame, pinned_fs
 from kiro_crew.atomic_write import (
@@ -90,6 +90,8 @@ __all__ = [
     "MAX_INSTANCE_HTML_BYTES",
     "MAX_PREVIEW_AGE_MS",
     "MAX_RETAINED_VERSIONS",
+    "PREVIEW_PAGE_PARAM",
+    "PREVIEW_PAGE_VALUE",
     "RENDERABLE_SOURCES",
     "SCHEMA_VERSION",
     "SESSION_KEY_PREFIX",
@@ -105,6 +107,7 @@ __all__ = [
     "adopt",
     "apply_preview",
     "default_instance",
+    "default_template_id",
     "discard_preview",
     "edit",
     "history",
@@ -472,8 +475,28 @@ def _empty(slug: str, reason: str) -> Instance:
     )
 
 
+def default_template_id(slug: str, known: Iterable[str]) -> str | None:
+    """The page an unadopted crewmate named *slug* gets, out of the ids in *known*.
+
+    The page whose id IS the slug, when a shipped page has that id, and
+    :data:`DEFAULT_TEMPLATE_ID` otherwise. This is the crew panel's rule that a
+    template named after a crew is that crew's view, side effect included: a crewmate
+    named like a shipped page gets that page. The slug is only ever compared against
+    ids the catalog already loaded, and never names a directory.
+    """
+    ids = set(known)
+    if slug and slug in ids:
+        return slug
+    return DEFAULT_TEMPLATE_ID if DEFAULT_TEMPLATE_ID in ids else None
+
+
 def default_instance(slug: str) -> Instance | None:
-    """:data:`DEFAULT_TEMPLATE_ID` as an UNADOPTED instance, or ``None`` if it is absent.
+    """The default page for *slug* as an UNADOPTED instance, or ``None`` if it is absent.
+
+    The page is :func:`default_template_id`'s pick: one named for the crewmate, else
+    :data:`DEFAULT_TEMPLATE_ID`. Both the read route and the ``[DASHBOARD]`` turn
+    block resolve through here, so the page a reader sees and the page the crewmate
+    is told about are one page.
 
     What a crewmate renders before it adopts anything. Deliberately not part of
     :func:`read`, which answers for the STORED record and nothing else: a fresh read
@@ -487,9 +510,12 @@ def default_instance(slug: str) -> Instance | None:
     Nothing is persisted either, which is the point -- a later version of the default
     template reaches every crewmate that never adopted one, with no migration.
     """
-    try:
-        entry = catalog.load_one(DEFAULT_TEMPLATE_ID)
-    except catalog.UnknownTemplate:
+    by_id = catalog.list_templates().by_id
+    # Shipped pages only: an operator's page is adopted by a person, never picked up
+    # because its folder name happens to match a crewmate's slug.
+    shipped = [tid for tid, e in by_id.items() if e.origin == catalog.BUILTIN_SOURCE]
+    template_id = default_template_id(slug, shipped)
+    if template_id is None:
         # A build that shipped the loader without the templates, which is the quiet
         # failure the packaging gates exist for. The caller's own empty state is the
         # right answer here, so this is reported and not raised.
@@ -497,6 +523,7 @@ def default_instance(slug: str) -> Instance | None:
             "dashboard: the default template %r is not in the registry", DEFAULT_TEMPLATE_ID
         )
         return None
+    entry = by_id[template_id]
     return Instance(
         slug=slug,
         instance_version=0,
@@ -814,23 +841,22 @@ def history(slug: str, *, session_id: str = "") -> tuple[dict[str, Any], ...]:
 # --------------------------------------------------------------------------
 
 
-#: Template provenances whose page may become a crewmate's live dashboard. One value.
+#: Template provenances whose page may become a crewmate's live dashboard.
 #:
 #: A rendered page runs its own inline script against the crewmate's fold values -- a
 #: chart is script or it is nothing -- inside a frame that can navigate itself. So a
 #: page that executes is a page trusted with every task title and summary it is handed,
-#: and it can carry those somewhere by navigating. Provenance is the only signal that
-#: says whether anyone here ever looked at the page, and ``builtin`` -- a directory in
-#: this repo, which went through review -- is the only provenance that carries one.
+#: and it can carry those somewhere by navigating. Provenance says whether a person put
+#: the page there. Two do:
 #:
-#: A page written by an agent, or imported from a sender, is therefore not renderable at
-#: all: not at preview, not at adopt. Making one renderable needs a wrapper document
-#: minted by this gateway, which holds the authored markup while withholding the frame's
-#: own navigation, plus a surface where a person looks at the page before it runs. Both
-#: are P2 -- see ``docs/request-for-change/rfc-crewmate-dynamic-dashboard.md`` -- and
-#: until they exist the honest answer to "render this page I wrote" is a refusal that
-#: says so.
-RENDERABLE_SOURCES: Final[frozenset[str]] = frozenset({catalog.BUILTIN_SOURCE})
+#: * ``builtin`` -- a directory in this repo, which went through review;
+#: * ``user`` -- a directory the operator placed in the data home's ``panel-templates``
+#:   folder, which no agent write path reaches (see :mod:`catalog`).
+#:
+#: ``shared`` -- a page imported from a sender -- is not renderable, and neither is a
+#: page an agent wrote: not at preview, not at adopt. See
+#: ``docs/request-for-change/rfc-crewmate-dynamic-dashboard.md``.
+RENDERABLE_SOURCES: Final[frozenset[str]] = frozenset({catalog.BUILTIN_SOURCE, catalog.USER_SOURCE})
 
 
 def _check(manifest: Any, html: str) -> dict[str, Any]:
@@ -850,9 +876,9 @@ def _check(manifest: Any, html: str) -> dict[str, Any]:
     if parsed.source not in RENDERABLE_SOURCES:
         raise InstanceRefused(
             f"a {parsed.source!r} template cannot be adopted: only a page that shipped "
-            "with the product has been looked at by anyone here, and a rendered page "
-            "runs its own script against this crewmate's task titles and summaries. A "
-            "page written here is a later change that needs a minted wrapper document"
+            "with the product, or one the operator placed in the panel-templates "
+            "folder, was put there by a person, and a rendered page runs its own "
+            "script against this crewmate's task titles and summaries"
         )
     return dict(manifest)
 
@@ -972,7 +998,28 @@ def _commit(
         "at_ms": at_ms,
     }
     _append_history(slug, entry, session_id)
-    return read(slug)
+    record = read(slug)
+    _sync_upkeep(record)
+    return record
+
+
+def _sync_upkeep(record: Instance) -> None:
+    """Copy the crewmate's upkeep helper scripts for the version just committed.
+
+    Every adopt, apply, rollback and edit reaches here, so a page swap copies the new
+    page's helpers and drops the old page's in the same call. Handed the record, so the
+    scripts are built without a second read of the store while its lock is held. A
+    root session's own dashboard (:func:`is_session_key`) has no crewmate shell, so it
+    gets none. Best effort: the version is already written.
+    """
+    if is_session_key(record.slug):
+        return
+    try:
+        from kiro_crew import dashboard_upkeep
+
+        dashboard_upkeep.sync(record.slug, page=(record, parse_manifest(dict(record.manifest))))
+    except Exception:
+        logger.warning("dashboard instance: upkeep scripts not synced", exc_info=True)
 
 
 def _append_history(slug: str, entry: dict[str, Any], session_id: str) -> None:
@@ -1297,15 +1344,27 @@ def _preview_path(slug: str) -> Path:
     return instance_dir(slug) / _PREVIEW_FILE
 
 
-def preview_url(slug: str) -> str:
-    """The link a person opens to SEE the staged page.
+#: The Members page query that opens the Dashboard tab on the STAGED page:
+#: ``?dashboard=preview``. Mirrored by ``DASHBOARD_PREVIEW_PARAM`` and
+#: ``DASHBOARD_PREVIEW_VALUE`` in ``website/src/pages/members/dashboardPreview.ts``.
+PREVIEW_PAGE_PARAM: Final[str] = "dashboard"
+PREVIEW_PAGE_VALUE: Final[str] = "preview"
 
-    The ordinary dashboard read with ``preview=1``, not a route of its own. That route
-    is already owner-only and a staged page carries the same crewmate's fold values as
-    the live one, so a second route would be a second place to get that gate right. A
-    capability token would be a second credential for data its holder can already read.
+
+def preview_url(member: str) -> str:
+    """The link a person opens to SEE the staged page: a page, never the JSON read.
+
+    The Members page with this crewmate open and its Dashboard tab showing the staged
+    page under a preview label. The tab reads it from the ordinary dashboard route with
+    ``preview=1`` rather than a route of its own: that route is already owner-only and
+    a staged page carries the same crewmate's fold values as the live one, so a second
+    route would be a second place to get that gate right.
+
+    *member* is the exact crew name, not the slug. Slugification is lossy, so the
+    page and the read it makes both refuse a slug alone (``missing_member``).
     """
-    return f"/api/members/{slug}/dashboard?preview=1"
+    query = urlencode({"member": member, PREVIEW_PAGE_PARAM: PREVIEW_PAGE_VALUE}, quote_via=quote)
+    return f"/members?{query}"
 
 
 def session_preview_url(slot_key: str) -> str:
@@ -1330,12 +1389,15 @@ class Preview:
     manifest: Mapping[str, Any]
     staged_ms: int
 
-    def wire(self) -> dict[str, Any]:
+    def wire(self, member: str) -> dict[str, Any]:
         """What a caller is told about the staged page. NEVER the page itself.
 
         The html is the large half, no caller renders it, and the person who has to
         decide reads it in the frame through :func:`preview_url`. So this carries
         identity and shape, which is the same cut a catalog listing makes.
+
+        *member* is the exact crew name the link opens; a staged page is stored per
+        slug and the slug alone does not name a crewmate.
         """
         declared = self.manifest.get("fields")
         return {
@@ -1345,7 +1407,7 @@ class Preview:
             "fields": sorted(declared) if isinstance(declared, dict) else [],
             "html_bytes": len(self.html.encode("utf-8")),
             "staged_ms": self.staged_ms,
-            "preview_url": preview_url(self.slug),
+            "preview_url": preview_url(member),
         }
 
 

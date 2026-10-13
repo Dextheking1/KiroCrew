@@ -247,7 +247,7 @@ human and any other app's token are refused:
 |---|---|---|
 | `POST /api/apps/dev-fleet/restart-gateway` | — | Restart the live gateway through its service-manager backend; returns the pre-restart `start_id` for the restart handshake |
 | `POST /api/apps/dev-fleet/make-live` | `{path, dry_run?, undo?, expected_staged?}` | Repoint the live gateway at another worktree (see Make Live); a real cutover returns `start_id` for the restart handshake |
-| `GET /api/apps/dev-fleet/live-target` | `?fresh=1` | The pointer-state read broker `{live, staged, staged_cancel_available, previous}` (`previous` is the pointer's validated one-level undo target, so the fleet's Undo banner needs no pointer read of its own) — admits ONLY Dev Fleet's own app token (how the sandboxed backend learns which row is live); a dashboard human and any other app's token are refused |
+| `GET /api/apps/dev-fleet/live-target` | `?fresh=1` | The pointer-state read broker `{live, staged, staged_cancel_available, previous, live_verified}` (`previous` is the pointer's validated one-level undo target, so the fleet's Undo banner needs no pointer read of its own; `live_verified` is false when `live` is the pointer's target taken on trust because a packaged gateway has no running checkout to compare it with) — admits ONLY Dev Fleet's own app token (how the sandboxed backend learns which row is live); a dashboard human and any other app's token are refused |
 | `POST /api/apps/dev-fleet/live-target/removal-lease` | `{path}` | Lease a worktree before `git worktree remove`, so a cutover or a gateway restart cannot land mid-deletion; answers `{ok, granted, token}`, refused while a cutover is in flight. The token is the capability to renew or release |
 | `PUT /api/apps/dev-fleet/live-target/removal-lease` | `{token}` | Renew the lease; `{ok, renewed}`, where `false` means it is gone and the holder must not start a mutation it has not started |
 | `DELETE /api/apps/dev-fleet/live-target/removal-lease` | `{token}` | Release the lease; idempotent, and a token that names no lease is a no-op |
@@ -1520,6 +1520,14 @@ choose the gateway's next image. Instead:
   worktree removal and the prune override screen **refuse**, because "nothing is
   live" from an outage would let a removal delete a staged cutover target. Toasts
   on those refusals carry the plain sentence; the exception text stays in the log.
+- **The live badge says whether it is confirmed.** The fleet payload carries
+  `live_verified`: false only when a packaged / site-packages gateway has no
+  running checkout, so `_live_worktree_path` takes the pointer's target on trust
+  (`PointerState.live_verified` is false). The row keeps `is_live` (the removal
+  guards still protect it), but the page shows a **live?** badge with the reason
+  as visible text beside it ("Packaged install: can't confirm this checkout is
+  running.", also the badge's `title`) instead of the plain **live** badge. A pointer outage is
+  `live_state_known: false`, not this field.
 - **No inline filesystem reads on the gateway loop.** `_make_live_inner` now runs
   on the loop that serves the whole dashboard, so every probe of the pointer, the
   checkout path or the service drop-in (`snapshot`, `_staged_target`, `exists`,

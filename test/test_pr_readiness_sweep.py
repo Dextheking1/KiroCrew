@@ -976,6 +976,30 @@ def test_an_ordinary_lane_pending_still_pays_no_status_read(runner: Runner) -> N
     assert not runner.status_read.exists()
 
 
+def test_a_young_no_evidence_pending_pays_no_status_read(runner: Runner) -> None:
+    """Both description consumers are aged against STALE_MINUTES, so a pending
+    past the publish lag but younger than that is skipped before the read.
+
+    The fixture carries the withheld-verdict token, which WOULD re-run a lane if
+    the pending were old enough -- so this also proves the age gate, not the
+    classifier, is what leaves it alone.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    published = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    completed = (now - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    dispatched = runner.sweep(
+        state="pending",
+        status_at=published,
+        check_completed_at=completed,
+        description=VERDICT_UNPUBLISHED_DESCRIPTION,
+    )
+    assert dispatched == []
+    assert not runner.status_read.exists()
+    assert "withheld advisory verdict" not in runner.last_stdout
+
+
 def test_an_unreadable_description_leaves_the_pending_alone(runner: Runner) -> None:
     """The classifier fails CLOSED toward the evidence test.
 

@@ -1074,6 +1074,83 @@ class TestShutdown:
         await orch._shutdown()
         assert task.cancelled()
 
+    @staticmethod
+    def _orch_with_dashboard_turn(turn: "asyncio.Task"):
+        orch = _make_orchestrator()
+        for name in ("cron_svc", "heartbeat_svc", "secretary_svc", "subagent_mgr"):
+            setattr(orch, name, None)
+        orch._dashboard_runner = None
+        orch.sessions = MagicMock()
+        orch.sessions.close_all = AsyncMock()
+        state = MagicMock()
+        state._slots = {"s1": SimpleNamespace(task=turn)}
+        state.close_all_ws = AsyncMock()
+        orch.dashboard_state = state
+        return orch
+
+    @pytest.mark.asyncio
+    async def test_shutdown_waits_for_a_dashboard_turn_that_is_unwinding(self, monkeypatch):
+        """A turn cut by close_all() saves its partial reply as it unwinds; the hard
+        exit after shutdown must not beat that save."""
+        monkeypatch.setattr(
+            "kiro_crew.gateway_shutdown_budget.DASHBOARD_TURN_UNWIND_SECS", 5.0, raising=False
+        )
+        order: list[str] = []
+        closed = asyncio.Event()
+        collected = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _turn():
+            await asyncio.wait_for(closed.wait(), timeout=30)
+            # The unwind and its save: parked until the test lets it finish.
+            await asyncio.wait_for(release.wait(), timeout=30)
+            order.append("saved")
+
+        turn = asyncio.create_task(_turn())
+        try:
+            orch = self._orch_with_dashboard_turn(turn)
+            orch.sessions.close_all = AsyncMock(side_effect=lambda: closed.set())
+            state, slots = orch.dashboard_state, orch.dashboard_state._slots
+
+            def _slots_read(_self):
+                # Shutdown reads the slots after close_all() only to wait for
+                # their turns; that read is the signal to let the turn finish.
+                if closed.is_set():
+                    collected.set()
+                return slots
+
+            type(state)._slots = property(_slots_read)
+            shutdown = asyncio.create_task(orch._shutdown())
+            shutdown.add_done_callback(lambda _t: order.append("shutdown returned"))
+            collecting = asyncio.create_task(collected.wait())
+            await asyncio.wait_for(
+                asyncio.wait({collecting, shutdown}, return_when=asyncio.FIRST_COMPLETED), 30
+            )
+            collecting.cancel()
+            release.set()
+            await asyncio.wait_for(asyncio.gather(turn, shutdown), timeout=30)
+            assert order == [
+                "saved",
+                "shutdown returned",
+            ], f"shutdown returned before the cut turn saved: {order}"
+        finally:
+            turn.cancel()
+            await asyncio.wait_for(asyncio.gather(turn, return_exceptions=True), timeout=30)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_never_cancels_or_outwaits_a_hung_dashboard_turn(self, monkeypatch):
+        monkeypatch.setattr(
+            "kiro_crew.gateway_shutdown_budget.DASHBOARD_TURN_UNWIND_SECS", 0.2, raising=False
+        )
+        turn = asyncio.create_task(asyncio.Event().wait())
+        orch = self._orch_with_dashboard_turn(turn)
+        try:
+            await asyncio.wait_for(orch._shutdown(), timeout=30)
+            assert not turn.done(), "a hung turn must be left to the exit, not cancelled"
+        finally:
+            turn.cancel()
+            await asyncio.wait_for(asyncio.gather(turn, return_exceptions=True), timeout=30)
+
     @pytest.mark.asyncio
     async def test_shutdown_cancels_and_reaps_console_script_repair(self, tmp_path):
         """Shutdown owns the repair task, not only its direct cancellation path."""
@@ -3030,6 +3107,22 @@ class TestInitTaskRunner:
             mock_tr.return_value = mock_tr_inst
             orch._init_task_runner()
         assert orch.task_runner is not None
+
+    def test_init_task_runner_passes_the_configured_test_command(self):
+        orch = _make_orchestrator()
+        orch.sessions = _mock_sessions()
+        orch.ctx_builder = _mock_context_builder()
+        orch.ctx_builder.hooks = MagicMock()
+        orch.conv_log = MagicMock()
+        orch.consolidator = MagicMock()
+        orch.dashboard_state = _mock_dashboard_state()
+        orch._cfg.taskrunner.test_command = ["python", "-m", "pytest", "-q"]
+        orch._cfg.taskrunner.require_verification = True
+        with patch("kiro_crew.slack.gateway.TaskRunner") as mock_tr:
+            orch._init_task_runner()
+        kw = mock_tr.call_args.kwargs
+        assert kw["test_cmd"] == ["python", "-m", "pytest", "-q"]
+        assert kw["require_verification"] is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -7200,6 +7293,65 @@ class TestRetriggerRecovery:
         orch.dashboard_state.push_slots_update.assert_called()
 
     @pytest.mark.asyncio
+    async def test_subagent_event_injection_failed_notes_the_debt_of_a_completed_run(self):
+        """A completed run keeps no delivered tombstone while its report is undelivered.
+
+        The queued notice carries the debt instead, under its own text, for the
+        drain that hands that text to the parent to settle.
+        """
+        from kiro_crew.subagent import SubagentDelivery
+
+        orch, mock_sm = self._setup()
+        on_event = mock_sm.call_args[1]["on_event"]
+        slot = MagicMock()
+        slot._pending_subagent_failures = []
+        orch.dashboard_state.get_slot = MagicMock(return_value=slot)
+        info = MagicMock()
+        info.id = "agent-done"
+        info.parent_session_key = "dashboard:slot1"
+        info.task = "finished task"
+        info.outcome = "completed"
+        info.elapsed = 3.5
+        info.credits = 0.25
+
+        await on_event(
+            "subagent_injection_failed",
+            info,
+            {"error": "timed out", "failure_msg": "Agent done"},
+        )
+
+        assert slot._pending_subagent_failures == ["Agent done"]
+        slot.note_pending_subagent_delivery.assert_called_once_with(
+            "Agent done", [SubagentDelivery("agent-done", 3.5, 0.25)]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ["failed", "stopped"])
+    async def test_subagent_event_injection_failed_notes_no_debt_for_an_unfinished_run(
+        self, outcome
+    ):
+        """Only a completed run was ever going to get the ``delivered`` tombstone."""
+        orch, mock_sm = self._setup()
+        on_event = mock_sm.call_args[1]["on_event"]
+        slot = MagicMock()
+        slot._pending_subagent_failures = []
+        orch.dashboard_state.get_slot = MagicMock(return_value=slot)
+        info = MagicMock()
+        info.id = "agent-unfinished"
+        info.parent_session_key = "dashboard:slot1"
+        info.task = "unfinished task"
+        info.outcome = outcome
+
+        await on_event(
+            "subagent_injection_failed",
+            info,
+            {"error": "timed out", "failure_msg": "Agent unfinished"},
+        )
+
+        assert slot._pending_subagent_failures == ["Agent unfinished"]
+        slot.note_pending_subagent_delivery.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_subagent_event_chunk(self):
         """Subagent chunk event broadcasts to subscribers."""
         orch, mock_sm = self._setup()
@@ -7444,7 +7596,7 @@ class TestBgSessionDashboardBranch:
                 trace.append("url")
             real_print(*args, **kwargs)
 
-        async def _tracing_probe():
+        async def _tracing_probe(_sessions=None):
             trace.append("probe")
 
         fresh_event = asyncio.Event()

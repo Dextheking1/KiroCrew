@@ -782,6 +782,46 @@ class TestSessionsArchiveLayerBGate:
         # cannot tell it from one that was never configured.
         assert audit.call_args.kwargs["result"] == "failed"
         assert "store_relocated_outside_fence" in audit.call_args.kwargs["error"]
+        # The reason travels as `error`; the event's outcome payload is unchanged.
+        assert audit.call_args.args[1]["skipped"] == ""
+
+    def test_a_declined_sweep_is_published_to_the_status_read(self, tmp_path, monkeypatch):
+        """A decline replaces the sessions row's last result instead of leaving it stale.
+
+        The status read serves how the last sweep ended. A decline never reaches
+        `_prune_remote_archives`, so without its own write the sessions row would keep
+        serving whatever the last sweep that RAN said -- and a decline repeated every
+        night would read as the success before it.
+
+        MUTATION: drop the `_record_last_sweep` call from the suppressed branch and
+        this reddens on the stale success.
+        """
+        self._skip_without_pinning()
+        self._both_halves(tmp_path, monkeypatch)
+        self._store(tmp_path, True)
+        stale = {
+            "result": "successful",
+            "skipped": "",
+            "retired": 2,
+            "versions": 2,
+            "at": "2026-01-01T00:00:00+00:00",
+        }
+        doc = json.loads((tmp_path / "backup.json").read_text(encoding="utf-8"))
+        doc["accounts"][ACCOUNT][backup.RETENTION_LAST_SWEEP_STATE_KEY] = {
+            backup.KIND_SESSIONS: stale
+        }
+        (tmp_path / "backup.json").write_text(json.dumps(doc), encoding="utf-8")
+        monkeypatch.setattr(backup, "_store_relocated_outside_the_fence", lambda: True)
+
+        with mock.patch.object(backup, "_prune_remote_archives") as prune:
+            self._run_capturing_names(monkeypatch)
+
+        assert prune.call_count == 0
+        last = backup.retention_last_sweep(ACCOUNT)[backup.KIND_SESSIONS]
+        assert last["result"] == "failed"
+        assert "store_relocated_outside_fence" in last["skipped"]
+        assert last["retired"] == 0
+        assert last["at"] != stale["at"]
 
     def test_a_relocated_store_is_reported_not_silently_skipped(self, tmp_path, monkeypatch):
         """A store the environment re-roots is skipped AND named in the run record.

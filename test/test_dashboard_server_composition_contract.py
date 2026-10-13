@@ -442,7 +442,7 @@ def test_the_shared_state_keeps_its_identity() -> None:
 #: gateway's boot path or close an import cycle, so each stays where the one-module
 #: file had it: inside the function that needs it.
 _LAZY_IMPORTS = {
-    "kiro_crew": "_hist_mod _rs stt",
+    "kiro_crew": "_hist_mod _rs model_registry stt",
     "kiro_crew.agent": "rebuild_agent_config rebuild_agent_config_reporting",
     "kiro_crew.change_card_catalog": "HOOKED_ROUTES",
     "kiro_crew.apps.bridges": "reconcile_enabled_app_resources",
@@ -512,7 +512,7 @@ def test_the_lazy_imports_stay_inside_the_functions_that_need_them() -> None:
                     for alias in node.names:
                         local.setdefault(alias.asname or alias.name, set()).add(alias.name)
     assert local == {name: {module} for name, module in expected.items()}
-    assert len(expected) == 81
+    assert len(expected) == 82
 
 
 def test_a_star_import_carries_the_moved_public_names(tmp_path: Path) -> None:
@@ -1409,7 +1409,7 @@ _DASHBOARD_BOOT = tuple("""
     _register_mcp_routes _deferred _deferred setup_spawn_resume_routes
     _deferred_work_ledger _deferred_work_ledger _deferred_work_ledger
     _deferred_work_ledger _deferred_work_ledger _deferred _deferred _deferred _deferred
-    _deferred
+    _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred
@@ -1477,7 +1477,7 @@ _API_BOOT = tuple("""
     _register_mcp_routes _deferred _deferred setup_spawn_resume_routes
     _deferred_work_ledger _deferred_work_ledger _deferred_work_ledger
     _deferred_work_ledger _deferred_work_ledger _deferred _deferred _deferred _deferred
-    _deferred
+    _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred _deferred _deferred _deferred _deferred
     _deferred _deferred _deferred _deferred
@@ -1699,8 +1699,8 @@ def _routes(app: web.Application) -> list[tuple[str, str, str]]:
 #: SHA-256 of the MCP route table's ``"<method> <path> <handler>"`` rows in
 #: registration order, and their count. The table is shared by both entrypoints, so a
 #: route added to it on purpose updates these with it.
-_MCP_TABLE_ROWS = 281
-_MCP_TABLE_DIGEST = "62e2119918cf293bddece697d6e08f5d585e6231765a63e7979a2c2796c808b1"
+_MCP_TABLE_ROWS = 283
+_MCP_TABLE_DIGEST = "e46b1d1f39ae16e706b16cf5795764452e51debb26edbd9bea0f13886bdadfa1"
 
 
 def test_the_mcp_route_table_keeps_its_rows_and_order() -> None:
@@ -2188,7 +2188,7 @@ async def test_a_blocked_loop_is_logged_and_a_dead_heartbeat_reports_itself(
 
     clock = iter([0.0, 10.0, 10.0, 15.5])
     monkeypatch.setattr(asyncio, "sleep", _sleep)
-    monkeypatch.setattr(server, "time", types.SimpleNamespace(monotonic=lambda: next(clock)))
+    monkeypatch.setattr(server.platform_compat, "awake_now", lambda: next(clock))
     state = MagicMock()
     state.resource_pressure_notifier.maybe_sample = AsyncMock(
         side_effect=[None, RuntimeError("notifier gone")]

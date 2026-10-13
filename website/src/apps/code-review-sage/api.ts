@@ -27,6 +27,7 @@ const API = '/api/apps/code-review-sage'
 interface ApiError {
   error?: string
   code?: string
+  char?: string
 }
 
 /** A failed request, carrying the backend's machine-readable `code`.
@@ -37,18 +38,25 @@ interface ApiError {
  *  translated string; `message` is for logs and for codes nobody has mapped yet. */
 export class SageApiError extends Error {
   code: string
+  /** For `invalid_namespace_name`: the refused character, or '' when none was named. */
+  char: string
 
-  constructor(message: string, code: string) {
+  constructor(message: string, code: string, char = '') {
     super(message)
     this.name = 'SageApiError'
     this.code = code
+    this.char = char
   }
 }
 
 async function parseErrorBody(r: Response): Promise<SageApiError> {
   try {
     const body = (await r.json()) as ApiError
-    return new SageApiError(body.error || `HTTP ${r.status}`, body.code || '')
+    return new SageApiError(
+      body.error || `HTTP ${r.status}`,
+      body.code || '',
+      typeof body.char === 'string' ? body.char : '',
+    )
   } catch {
     return new SageApiError(`HTTP ${r.status}`, '')
   }

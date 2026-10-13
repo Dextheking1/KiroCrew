@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import type { RootState } from '../store'
 import { Provider } from 'react-redux'
 import { MemoryRouter } from 'react-router-dom'
@@ -111,14 +111,14 @@ Object.defineProperty(window, 'matchMedia', {
 import ChatPane from '../components/ChatPane'
 import { api } from '../api/client'
 
-function renderPane(slotKey: string) {
+function renderPane(slotKey: string, project?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const store = configureStore({
     reducer: { dashboard: dashboardReducer, chat: chatReducer, notifications: notificationsReducer },
     preloadedState: {
       dashboard: {
         status: null, connected: true,
-        slots: [{ key: slotKey, messages: 0, running: true, mode: '', pending_approval: false, waiting_for_input: false, last_activity_ts: undefined }],
+        slots: [{ key: slotKey, messages: 0, running: true, mode: '', pending_approval: false, waiting_for_input: false, last_activity_ts: undefined, ...(project ? { project } : {}) }],
         unreadSlots: [], refreshTrigger: 0, approvalMode: 'normal',
         subagentRunning: {}, subagentDetails: {}, subagentText: {},
       } as unknown as RootState['dashboard'],
@@ -186,5 +186,50 @@ describe('ChatPane queue actions (issue #5891)', () => {
 
     expect(api.interruptSlot).toHaveBeenCalledTimes(1)
     await act(async () => { d.resolve({ ok: true }) })
+  })
+
+  it('a second cancelled card does not reuse a mention spelling the pane already stages (#14617)', async () => {
+    // The pane merges each restore into its composer, so it hands the hook
+    // its staged files: the second card's `y/a.txt` must not come back as
+    // `@a.txt` beside the first card's `x/a.txt`, or the next send binds
+    // both mentions to one file.
+    const queuedRow = (queueId: string, content: string, file: string) =>
+      ({ role: 'queued', content, cls: 'msg msg-queued', ts: '', meta: { queueId, files: [file] } })
+    vi.mocked(api.chatSlotDetail).mockResolvedValueOnce({
+      messages: [
+        queuedRow('q-x', 'compare [attached_file 1] /repo/x/a.txt', '/repo/x/a.txt'),
+        queuedRow('q-y', 'against [attached_file 1] /repo/y/a.txt', '/repo/y/a.txt'),
+      ],
+      running: true,
+      has_more: false,
+      total: 2,
+    } as unknown as Awaited<ReturnType<typeof api.chatSlotDetail>>)
+    renderPane('pane-same-name')
+    // Two cards stack collapsed; expanding the stack shows each card's actions.
+    fireEvent.click(await screen.findByText('compare [attached_file 1] /repo/x/a.txt'))
+    const cancelOf = (text: string) =>
+      within(screen.getByText(text).parentElement!).getByRole('button', { name: 'Cancel queued message' })
+    fireEvent.click(await waitFor(() => cancelOf('compare [attached_file 1] /repo/x/a.txt')))
+    await waitFor(() => expect(paneInputValue).toBe('compare @a.txt'))
+    fireEvent.click(await waitFor(() => cancelOf('against [attached_file 1] /repo/y/a.txt')))
+    await waitFor(() => expect(paneInputValue).toContain('against @y/a.txt'))
+    expect(paneInputValue).toContain('compare @a.txt')
+  })
+
+  it('spells a restored mention of a file in the pane project relative to that project (#14617)', async () => {
+    // The pane hands the hook its slot's project, so a file at src/a.ts in
+    // it comes back as the `@src/a.ts` its own picker would insert.
+    vi.mocked(api.chatSlotDetail).mockResolvedValueOnce({
+      messages: [{
+        role: 'queued', content: 'check [attached_file 1] /repo/main/src/a.ts', cls: 'msg msg-queued', ts: '',
+        meta: { queueId: 'q-p', files: ['/repo/main/src/a.ts'] },
+      }],
+      running: true,
+      has_more: false,
+      total: 1,
+    } as unknown as Awaited<ReturnType<typeof api.chatSlotDetail>>)
+    renderPane('pane-project', '/repo/main')
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel queued message' }))
+    await waitFor(() => expect(paneInputValue).toBe('check @src/a.ts'))
   })
 })

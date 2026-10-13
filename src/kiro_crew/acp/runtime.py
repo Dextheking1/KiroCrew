@@ -77,7 +77,10 @@ from kiro_crew.acp.kas_transport import (
     METHOD_KAS_AUTH_GET_ACCESS_TOKEN,
 )
 from kiro_crew.acp.launch import LaunchRequest, LaunchTools, launch
-from kiro_crew.acp.mcp_ref_guard import warn_unresolved_server_refs
+from kiro_crew.acp.mcp_ref_guard import (
+    warn_remote_header_secret_refs,
+    warn_unresolved_server_refs,
+)
 from kiro_crew.acp.mcp_session_report import (
     NAME_CAP,
     active_custom_agent,
@@ -149,6 +152,7 @@ from kiro_crew.acp.types import (
     ACP_BACKENDS_MARKDOWN_AGENT_SPECS,
     ACP_BACKENDS_SERIAL_SESSION_STARTS,
     MCP_ROSTER_COMPLETE_NOTE,
+    METHOD_AGENT_SWITCHED,
     METHOD_KAS_MCP_RESET_SERVER,
     METHOD_KAS_OPEN_EXTERNAL_URL,
     METHOD_MCP_OAUTH_REQUEST,
@@ -1275,6 +1279,11 @@ class AcpRuntime:
         # (e.g. session/prompt response signals turn completion and must reach the session)
         self._routed_requests: dict[int, str] = {}
         self._session_queues: dict[str, asyncio.Queue[JsonRpcMessage | None]] = {}
+        # sessionId -> the ``model`` kiro-cli's last ``_kiro.dev/agent/switched``
+        # named for it. ``session/set_mode`` answers ``{}``; this notification,
+        # sent before that answer, is the only report of the model the activated
+        # agent's spec put the session on. Read by ``_served_default_after_mode``.
+        self._switched_models: dict[str, str] = {}
         # OAuth notifications can precede the session/new or session/load
         # response that reveals which queue to register. Stage only those
         # frames while an init is active, then transfer the matching session's
@@ -2889,6 +2898,16 @@ class AcpRuntime:
             )
         return verdict == "holds"
 
+    async def refresh_process_tree(self) -> None:
+        """Re-walk this runtime's tree before a teardown takes its kill handle.
+
+        The snapshot otherwise runs only at spawn, create and resume, so a child
+        a turn started is missing from the handle, and only a recorded member may
+        vouch for a leaderless group (``process_identity._group_member_vouches``).
+        Same guarded pass as every other snapshot (:meth:`_snapshot_descendants`).
+        """
+        await self._snapshot_descendants()
+
     async def _snapshot_descendants(self, *, retry_when_empty: bool = False) -> None:
         """Record this runtime's descendant PIDs in the tracking file.
 
@@ -2919,8 +2938,14 @@ class AcpRuntime:
         identity would then be recorded as OURS -- self-consistent, so every
         later ownership check passes and the teardown signals a stranger. A pid
         absent from the second walk is not a descendant of this root and is
-        dropped. The window is not closed, but crossing it now needs a pid to
-        become a stranger and then become our descendant again.
+        dropped, and so is one whose start id now reads back as something other
+        than the one captured. The window is not closed, but crossing it now needs a pid to
+        become a stranger and then become our descendant again under the
+        identity it had before.
+
+        The walk itself is :func:`runtime_process_tree.guarded_tree_pass` in
+        replace mode, the same pass ``AcpClient.refresh_process_tree`` runs
+        add-only.
 
         The file is written BEFORE the in-memory record is replaced, and a failed
         write publishes nothing: the next pass re-reads the tree and tries again.
@@ -2939,65 +2964,42 @@ class AcpRuntime:
         if pid is None:
             return
         try:
-            loop = asyncio.get_running_loop()
             async with self._descendant_scan_lock:
                 # The root's own number can be reused too, and a walk from a
-                # recycled root enumerates a stranger's whole tree -- which would
-                # then be recorded as ours and signalled at teardown. Verified
-                # before the walk and again before the write, because the root can
-                # exit while the walk runs. No recorded identity means it cannot
-                # be verified at all, so nothing is recorded.
-                if not self._root_identity_holds():
-                    return
-                # /proc reads on Linux, `pgrep`/`ps` subprocesses on macOS:
-                # blocking either way, so they ride the same dedicated executor
-                # the client path and the teardown sweep use, not the event loop.
-                descendants = await loop.run_in_executor(
-                    subprocess_executor(), _get_child_pids, pid
-                )
-                if not descendants and retry_when_empty:
-                    await asyncio.sleep(self._DESCENDANT_RESCAN_DELAY)
-                    descendants = await loop.run_in_executor(
-                        subprocess_executor(), _get_child_pids, pid
-                    )
-                if not descendants:
-                    return
-                fresh: dict[int, ChildRecord] = await loop.run_in_executor(
-                    subprocess_executor(), _capture_child_records, descendants
-                )
-                still_ours = set(
-                    await loop.run_in_executor(subprocess_executor(), _get_child_pids, pid)
-                )
-                confirmed = {p: rec for p, rec in fresh.items() if p in still_ours}
-                escaped = {
-                    p: rec
-                    for p, rec in self._child_pids.items()
-                    if p not in confirmed and _escapee_is_still_ours(p, rec)
-                }
-                merged = {**escaped, **confirmed}
-                gone = [p for p in self._child_pids if p not in merged]
-                if merged == self._child_pids:
-                    return
-                if not self._root_identity_holds():
-                    return
-                if not await loop.run_in_executor(
-                    subprocess_executor(),
-                    functools.partial(
-                        _replace_child_pids, merged, parent_pid=pid, drop=tuple(gone)
+                # recycled root enumerates a stranger's whole tree, so the pass
+                # brackets the walk with the root's identity. No recorded
+                # identity means it cannot be verified at all: nothing is
+                # recorded. The blocking reads ride the subprocess executor.
+                result = await runtime_process_tree.guarded_tree_pass(
+                    pid,
+                    self._child_pids,
+                    probes=runtime_process_tree.TreeProbes(
+                        walk=_get_child_pids,
+                        capture=_capture_child_records,
+                        start_id=platform_compat.get_process_start_id,
+                        write=_replace_child_pids,
                     ),
-                ):
+                    executor=subprocess_executor(),
+                    root_holds=self._root_identity_holds,
+                    replace=True,
+                    keep_unwalked=_escapee_is_still_ours,
+                    retry_delay=self._DESCENDANT_RESCAN_DELAY if retry_when_empty else None,
+                )
+                if result.outcome == "write_failed":
                     logger.warning(
                         "AcpRuntime: could not write the descendant PIDs of root %d -- "
                         "retrying on the next scan",
                         pid,
                     )
                     return
-                self._child_pids = merged
+                if result.outcome != "written":
+                    return
+                self._child_pids = result.record
             logger.info(
                 "AcpRuntime: tracking %d descendant PID(s) of root %d (%d outside the tree)",
-                len(merged),
+                len(result.record),
                 pid,
-                len(escaped),
+                len(result.kept),
             )
         except Exception:
             logger.warning(
@@ -4194,6 +4196,8 @@ class AcpRuntime:
                     # every other session would be cross-talk.
                     queue = self._session_queues.get(session_id)
                     if queue is not None:
+                        if msg.is_method(METHOD_AGENT_SWITCHED):
+                            self._note_switched_model(session_id, msg.params)
                         await queue.put(msg)
                     elif (
                         session_id in self._subagent_sessions
@@ -5409,7 +5413,13 @@ class AcpRuntime:
         self._skill_projection_generation = generation
         return True
 
-    async def _write_response_bounded(self, data: bytes, request_id: str | int) -> None:
+    async def _write_response_bounded(
+        self,
+        data: bytes,
+        request_id: str | int,
+        *,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
         """Write a response/error frame under the write lock and a no-progress bound.
 
         Mirror of ``AcpClient._write_response_bounded`` for the shared runtime.
@@ -5423,15 +5433,25 @@ class AcpRuntime:
         ``AcpRuntimeDead``, which the session provider translates to
         ``AcpProcessDied`` so the caller takes the same session-reset +
         bounded-requeue recovery the broken-pipe case uses. The request id
-        appears only through ``_loggable_request_id``.
+        appears only through ``_loggable_request_id``. A caller's
+        ``before_write`` runs under the lock after the dead-runtime check.
         """
         assert self._process is not None and self._process.stdin is not None
+        if before_write is None:
+            under_lock: Callable[[], None] = self._refuse_write_if_dead
+        else:
+            caller_check = before_write
+
+            def under_lock() -> None:
+                self._refuse_write_if_dead()
+                caller_check()
+
         if await write_response_frame_bounded(
             self._process.stdin,
             self._stdin_write_lock(),
             data,
             bound_secs=_RESPONSE_WRITE_BOUND_SECS,
-            before_write=self._refuse_write_if_dead,
+            before_write=under_lock,
         ):
             return
         safe_id = _loggable_request_id(request_id)
@@ -5626,8 +5646,19 @@ class AcpRuntime:
         if not future.done():
             future.cancel()
 
-    async def send_response(self, request_id: str | int, result: dict[str, Any]) -> None:
-        """Send a JSON-RPC response (for server→client requests like permission)."""
+    async def send_response(
+        self,
+        request_id: str | int,
+        result: dict[str, Any],
+        *,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
+        """Send a JSON-RPC response (for server→client requests like permission).
+
+        ``before_write`` runs under the write lock right before the frame is
+        written, after the dead-runtime check, and may raise to abort the write
+        with nothing written.
+        """
         if not self._process or not self._process.stdin:
             raise AcpRuntimeDead("process not running")
         if self._dead:
@@ -5637,7 +5668,12 @@ class AcpRuntime:
         data = json.dumps(msg) + "\n"
 
         try:
-            await self._write_response_bounded(data.encode(), request_id)
+            if before_write is None:
+                await self._write_response_bounded(data.encode(), request_id)
+            else:
+                await self._write_response_bounded(
+                    data.encode(), request_id, before_write=before_write
+                )
         except (BrokenPipeError, ConnectionResetError) as exc:
             self._mark_dead(f"pipe broken: {exc}")
             raise AcpRuntimeDead(f"pipe broken: {exc}") from exc
@@ -5661,6 +5697,7 @@ class AcpRuntime:
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session queue (called by AcpSessionHandle.destroy)."""
         self._session_queues.pop(session_id, None)
+        self._switched_model_record().pop(session_id, None)
         # Clean up any pending routed requests for this session
         stale = [k for k, v in self._routed_requests.items() if v == session_id]
         for k in stale:
@@ -6156,6 +6193,50 @@ class AcpRuntime:
             "kiro-cli would run still matches the agent's spec. The session was not "
             "started. Start it again; if it keeps failing, restart the gateway."
         )
+
+    def _switched_model_record(self) -> dict[str, str]:
+        """The per-session ``agent/switched`` model record, created on first use.
+
+        Read through this rather than the attribute because a runtime built with
+        ``object.__new__`` (the shape several start-path tests use) never ran
+        ``__init__``, and a start must not fail for want of an empty record.
+        """
+        record: dict[str, str] | None = getattr(self, "_switched_models", None)
+        if record is None:
+            record = {}
+            self._switched_models = record
+        return record
+
+    def _note_switched_model(self, session_id: str, params: dict[str, Any] | None) -> None:
+        """Record the model a ``_kiro.dev/agent/switched`` frame names for *session_id*.
+
+        Called from the reader loop before the frame is queued, so the record is
+        in place by the time the ``session/set_mode`` answer that follows it
+        resolves. A frame naming no model leaves the previous record alone.
+        """
+        model = (params or {}).get("model")
+        if isinstance(model, str) and model.strip():
+            self._switched_model_record()[session_id] = model.strip()
+
+    async def _served_default_after_mode(self, handle: AcpSessionHandle, session_id: str) -> None:
+        """Re-run the served-default check for the model ``set_mode`` just applied.
+
+        Both session-start paths check the served default right after storing the
+        ``session/new`` / ``session/load`` response, which is BEFORE the mode is
+        activated. kiro-cli's ``set_mode`` puts the session on the model the
+        activated agent's spec pins, undoing that earlier switch, and
+        ``agent.model`` is copied into ``kirocrew.json``. An unentitled default
+        then fails the first prompt with "no access to model".
+
+        The model judged is the one kiro-cli itself reported in the
+        ``_kiro.dev/agent/switched`` frame for this activation, not a second read
+        of the spec file: the file can change after kiro-cli read it, and only
+        the host knows which copy of the agent it loaded. No frame, or a frame
+        without a model (older kiro-cli), is no evidence and changes nothing.
+        """
+        activated = self._switched_model_record().pop(session_id, "")
+        if activated:
+            await handle.ensure_served_default(activated_model=activated)
 
     def _refuse_if_view_superseded(
         self, mode_agent: str, sent_alias: str, used_generation: int
@@ -7625,6 +7706,14 @@ class AcpRuntime:
                 handle.mcp_session_report().record_unresolved_refs(unresolved)
         except Exception:
             logger.debug("unresolved-ref guard: evaluation failed", exc_info=True)
+        try:
+            header_refs, omitted = warn_remote_header_secret_refs(
+                spec, wire_servers, backend=self.acp_backend, agent=agent or ""
+            )
+            if header_refs:
+                handle.mcp_session_report().record_header_secret_refs(header_refs, omitted)
+        except Exception:
+            logger.debug("remote-header guard: evaluation failed", exc_info=True)
 
     async def _finish_create_session(
         self,
@@ -7786,6 +7875,8 @@ class AcpRuntime:
             # then consumed without being recorded, leaving the panel at a false
             # "no report" for the rest of the session.
             staged_before_switch = handle.queued_frame_count()
+            # Only the frame THIS activation sends may be judged afterwards.
+            self._switched_model_record().pop(session_id, None)
             activated_alias = await self._activate_mode_bracketed(
                 session_id,
                 mode_agent,
@@ -7796,6 +7887,7 @@ class AcpRuntime:
             )
             set_mode_ran = True
             handle.active_agent = mode_agent
+            await self._served_default_after_mode(handle, session_id)
             # Whether set_mode actually SWITCHED modes: the servers that
             # initialized during session/new belong to the mode kiro-cli
             # started the session on. If the requested agent differs, those
@@ -8359,6 +8451,7 @@ class AcpRuntime:
             # then consumed without being recorded, leaving the panel at a false
             # "no report" for the rest of the session.
             staged_before_switch = handle.queued_frame_count()
+            self._switched_model_record().pop(resume_sid, None)
             activated_alias = await self._activate_mode_bracketed(
                 resume_sid,
                 mode_agent,
@@ -8369,6 +8462,7 @@ class AcpRuntime:
             )
             set_mode_ran = True
             handle.active_agent = mode_agent
+            await self._served_default_after_mode(handle, resume_sid)
             # See create_session: after a real mode switch, registration frames
             # staged during session/load describe the pre-switch roster.
             _ids, _current, _adv = parse_session_modes(resp)

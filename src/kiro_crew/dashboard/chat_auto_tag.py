@@ -13,7 +13,10 @@ Two passes, in order:
    auto-title uses, so it stays serialized and on the cheap background model)
    asks for up to ``_TOPIC_TAG_MAX`` short topic tags from the first user
    message. This pass never takes a session above ``MAX_TAGS_PER_SESSION``
-   tags; the cap is applied here, on the server, not by the model's reply.
+   tags; the cap is applied here, on the server, not by the model's reply. With an
+   explicit ``dashboard.language`` the tags are written in that language (the
+   ``{language}`` slot of ``_TOPIC_PROMPT_TEMPLATE``); unset, the model mirrors the
+   message as before.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from kiro_crew.dashboard.chat_tags import (
     persist_tags_snapshot_unlocked,
     tags_write_lock,
 )
-from kiro_crew.dashboard.chat_title import _titling_messages
+from kiro_crew.dashboard.chat_title import _titling_messages, _ui_language
 from kiro_crew.dashboard.chat_utils import slot_history_key
 from kiro_crew.llm_helpers import run_bg_oneliner
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
@@ -86,6 +89,23 @@ _TOPIC_PROMPT_TEMPLATE = (
     "lowercase words naming the kind of work, such as debugging, code review or "
     "oncall. Do not repeat the project or repository name. No numbering, no '#', "
     "no explanation. Reply with exactly NONE when the topic is unclear.\n"
+    "{language}"
+)
+
+# Filled into the ``{language}`` slot of ``_TOPIC_PROMPT_TEMPLATE`` when the
+# workspace has an explicit UI language. A tag is persisted and rendered beside
+# chrome in that language, so it follows the configured tag and not the language of
+# the message (``chat_title._TITLE_LANGUAGE_TEMPLATE``). ``NONE`` is the parser's
+# control word (``_parse_topic_tags`` drops it), so a translation of it would be
+# stored as a tag; the line keeps it literal.
+_LANGUAGE_TEMPLATE = (
+    "\nWrite each tag in the language of BCP-47 tag {lang}. That is the language the "
+    "dashboard around the tag is rendered in, so the tag must be in it even when the "
+    "message is in another language. Keep code, identifiers and product names "
+    "verbatim. For a language written without spaces between words (zh, ja, th, ...), "
+    "1-3 words means roughly 2-8 characters.\n"
+    "NONE is a control word, not a tag: reply with the literal ASCII NONE, never a "
+    "translation of it.\n"
 )
 
 
@@ -231,7 +251,13 @@ async def _maybe_topic_tags(state: Any, slot: Any, message: str, history_key: st
     if not await _topic_tags_enabled():
         return
     count = min(_TOPIC_TAG_MAX, room)
-    prompt = _TOPIC_PROMPT_TEMPLATE.format(message=message, count=count)
+    # Off-loop: the language lookup stats and reads the config file.
+    ui_language = await asyncio.to_thread(_ui_language)
+    prompt = _TOPIC_PROMPT_TEMPLATE.format(
+        message=message,
+        count=count,
+        language=_LANGUAGE_TEMPLATE.format(lang=ui_language) if ui_language else "",
+    )
     try:
         text = await run_bg_oneliner(
             state.sessions,

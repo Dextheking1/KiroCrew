@@ -43,7 +43,7 @@ from kiro_crew.dashboard.state import (
     _ChatSlot,
 )
 from kiro_crew.history import ConversationLog
-from kiro_crew.testing.wait import async_wait_until
+from kiro_crew.testing.wait import async_wait_until, await_until, until_parked
 
 
 def _provider_mock() -> AsyncMock:
@@ -231,26 +231,26 @@ class TestChatSlot:
         assert d["pending_approval"] is False
 
     def test_issue_links_do_not_crowd_out_pr_chips(self):
-        """Each kind gets its own chip budget, so a PR chip is never starved.
+        """The chip budget is shared, but pull requests claim it first.
 
-        A single shared budget sliced before the kind filter would drop the PR
-        entirely once three issues are mentioned first -- and, because the
-        check-status refresh reads the same slice, would also stop scheduling
-        that PR's CI updates.
+        The slice is taken after changes are grouped ahead of issues, so a PR
+        chip is never starved however many issues the session mentions -- and,
+        because the check-status refresh reads the same slice, that PR's CI
+        updates keep being scheduled too. Issues fill only the slots left over.
         """
         slot = _ChatSlot("s1")
         pr_url = "https://github.com/acme/widgets/pull/12"
         issue_urls = [f"https://github.com/acme/widgets/issues/{n}" for n in (1, 2, 3, 4)]
-        # The issues are mentioned FIRST, so a shared budget would spend all of
-        # it before ever reaching the pull request.
+        # The issues are mentioned FIRST, so a slice taken in mention order
+        # would spend the whole budget before ever reaching the pull request.
         slot.append("assistant", "\n".join([*issue_urls, pr_url]), ts="t1")
 
         payload = slot.to_dict()
         serialized = payload["source_links"]
-        assert pr_url in [link["url"] for link in serialized]
         assert [link["url"] for link in serialized if link["kind"] == "change"] == [pr_url]
-        # Three of the four issues fit their own budget; the fourth overflows.
-        assert len([link for link in serialized if link["kind"] == "issue"]) == 3
+        # The PR takes one of the three slots; two issues fit in the rest.
+        assert len([link for link in serialized if link["kind"] == "issue"]) == 2
+        assert len(serialized) == 3
         assert payload["source_links_total"] == 5
 
     def test_jira_issue_links_scanned_from_user_messages(self):
@@ -410,7 +410,7 @@ class TestChatSlot:
         assert beyond_cap.reads == 0
 
     def test_pr_source_links_are_ordered_most_recently_mentioned_first(self):
-        """The chip budget serializes only the first few links per kind, so a
+        """The chip budget serializes only the first few links, so a
         first-mention order handed those slots to the oldest pull requests and
         collapsed the one being worked on into the "+N" pill."""
         slot = _ChatSlot("s1")
@@ -555,7 +555,7 @@ class TestChatSlot:
             "https://github.com/acme/widgets/pull/7",
         ]
 
-    def test_serialized_chips_keep_the_newest_links_of_each_kind(self):
+    def test_serialized_chips_keep_the_newest_pull_requests(self):
         slot = _ChatSlot("s1")
         for number in (1, 2, 3, 4, 5):
             slot.append("assistant", f"https://github.com/acme/widgets/pull/{number}")
@@ -567,10 +567,11 @@ class TestChatSlot:
         changes = [x["number"] for x in serialized if x["kind"] == "change"]
         issues = [x["number"] for x in serialized if x["kind"] == "issue"]
 
-        # Three per kind, newest first, and the total still counts everything so
-        # the "+N" pill stays honest.
+        # Three in total, newest pull requests first; with the budget spent on
+        # PRs every issue folds into "+N", and the total still counts everything
+        # so that pill stays honest.
         assert changes == [5, 4, 3]
-        assert issues == [13, 12, 11]
+        assert issues == []
         assert payload["source_links_total"] == 9
 
     def test_to_dict_scans_pr_source_links_once(self, monkeypatch):
@@ -8669,6 +8670,12 @@ class TestRuntimeWiring:
         state = _make_state(tmp_path)
         slot = state.get_or_create_slot("s1")
         slot.agent = "oncall"
+        slot.model = "oncall-model"
+        slot._model_pick_gen = 3
+        slot._active_fallback_model = "oncall-fallback"
+        slot._fallback_primary_model = "oncall-model"
+        slot._fallback_slot_model = "oncall-model"
+        slot._fallback_pick_gen = 3
         alive = MagicMock(spec=LLMProvider)
         alive.has_active_turn.return_value = False
         state.sessions.get_provider = MagicMock(return_value=alive)
@@ -8679,6 +8686,12 @@ class TestRuntimeWiring:
             resp = await client.post("/api/chat/slots/s1/agent", json={"agent": "research"})
             assert resp.status == 500
             assert slot.agent == "oncall"
+            assert slot.model == "oncall-model"
+            assert slot._model_pick_gen == 3
+            assert slot._active_fallback_model == "oncall-fallback"
+            assert slot._fallback_primary_model == "oncall-model"
+            assert slot._fallback_slot_model == "oncall-model"
+            assert slot._fallback_pick_gen == 3
 
     @pytest.mark.asyncio
     async def test_api_chat_slot_agent_reset_raise_with_successor_succeeds(
@@ -9031,15 +9044,29 @@ class TestRuntimeWiring:
             assert slot.project == "/workspace/new-ws"
 
     @pytest.mark.asyncio
-    async def test_api_chat_slot_agent_persists_to_metadata(self, tmp_path, monkeypatch):
-        """Switching a slot's agent writes the new value to the JSONL metadata.
+    async def test_api_chat_slot_agent_resets_fallback_and_persists_bindings(
+        self, tmp_path, monkeypatch
+    ):
+        """Switching agents resets provider-specific state and persists both bindings.
 
-        Without this, a session resumed after a gateway restart reverts to
-        whatever agent (if any) was recorded in the initial metadata line.
+        The pin is KEPT (the read side withholds it from a provider that does
+        not serve it); the fallback walk, which nothing re-scopes at read, is
+        reset. Without the persistence, a session resumed after a gateway
+        restart reverts to whatever agent (if any) was recorded in the initial
+        metadata line.
         """
         monkeypatch.setattr("kiro_crew.dashboard.state.config_dir", lambda: tmp_path)
         state = _make_state(tmp_path)
-        state.get_or_create_slot("s1")
+        slot = state.get_or_create_slot("s1")
+        slot.agent = "old-agent"
+        slot.model = "old-provider-model"
+        slot._model_pick_gen = 4
+        slot._fallback_candidate_idx = 2
+        slot._fallback_walked = ["old-fallback"]
+        slot._active_fallback_model = "old-fallback"
+        slot._fallback_primary_model = "old-provider-model"
+        slot._fallback_slot_model = "old-provider-model"
+        slot._fallback_pick_gen = 4
         state.sessions.reset = AsyncMock()
 
         # Seed a session file so update_metadata has something to patch.
@@ -9051,6 +9078,7 @@ class TestRuntimeWiring:
         # leave the "dashboard_s1" cache entry stale.
         history_key = "dashboard:s1"
         state.conversation_log.append(history_key, "user", "hi", agent="old-agent")
+        state.conversation_log.update_metadata(history_key, {"model": "old-provider-model"})
         assert state.conversation_log.get_metadata(history_key).get("agent") == "old-agent"
 
         # Minimal config stub (agent-binding resolution is exercised by the
@@ -9070,6 +9098,142 @@ class TestRuntimeWiring:
         assert (
             meta.get("agent") == "new-agent"
         ), f"expected new-agent in metadata, got {meta.get('agent')!r}"
+        assert meta.get("model") == "old-provider-model"
+        assert slot.model == "old-provider-model"
+        assert slot._model_pick_gen == 4
+        assert slot._fallback_candidate_idx == 0
+        assert slot._fallback_walked == []
+        assert slot._active_fallback_model == ""
+        assert slot._fallback_primary_model == ""
+        assert slot._fallback_slot_model == ""
+        assert slot._fallback_pick_gen == 0
+
+    @pytest.mark.asyncio
+    async def test_api_chat_slot_agent_same_agent_keeps_model_state(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kiro_crew.dashboard.state.config_dir", lambda: tmp_path)
+        state = _make_state(tmp_path)
+        slot = state.get_or_create_slot("s1")
+        slot.agent = "same-agent"
+        slot.model = "same-provider-model"
+        slot._model_pick_gen = 4
+        slot._active_fallback_model = "same-fallback"
+        slot._fallback_primary_model = "same-provider-model"
+        slot._fallback_slot_model = "same-provider-model"
+        slot._fallback_pick_gen = 4
+        state.sessions.reset = AsyncMock()
+
+        mock_cfg = MagicMock()
+        mock_cfg.agents = {}
+        monkeypatch.setattr("kiro_crew.dashboard.chat.KiroCrewConfig.load", lambda: mock_cfg)
+        # The handler imports the owner check locally from source_providers, so
+        # that is the namespace to patch; short-circuiting it keeps this test on
+        # the same-agent path instead of the binding-resolution refusal.
+        monkeypatch.setattr(
+            "kiro_crew.dashboard.handlers.source_providers.is_owner_dashboard_request",
+            lambda request: True,
+        )
+
+        async with TestClient(TestServer(_make_app_with_agent_routes(state))) as client:
+            resp = await client.post("/api/chat/slots/s1/agent", json={"agent": "same-agent"})
+            assert resp.status == 200
+
+        assert slot.model == "same-provider-model"
+        assert slot._model_pick_gen == 4
+        assert slot._active_fallback_model == "same-fallback"
+        assert slot._fallback_primary_model == "same-provider-model"
+        assert slot._fallback_slot_model == "same-provider-model"
+        assert slot._fallback_pick_gen == 4
+
+    @pytest.mark.asyncio
+    async def test_api_chat_slot_agent_same_name_kind_switch_clears_the_binding(
+        self, tmp_path, monkeypatch
+    ):
+        """A same-name member->template pick is a rebind, not an affirmation.
+
+        The pin is kept (the read side withholds it from the replacement
+        provider); only the fallback walk, which nothing re-scopes at read,
+        is reset. Only the kind distinguishes the two picks, so the reset
+        keys on it as well as the name.
+        """
+        monkeypatch.setattr("kiro_crew.dashboard.state.config_dir", lambda: tmp_path)
+        state = _make_state(tmp_path)
+        slot = state.get_or_create_slot("s1")
+        slot.agent = "same-agent"
+        slot.agent_kind = "member"
+        slot.model = "member-provider-model"
+        slot._model_pick_gen = 4
+        slot._active_fallback_model = "member-fallback"
+        slot._fallback_primary_model = "member-provider-model"
+        slot._fallback_slot_model = "member-provider-model"
+        slot._fallback_pick_gen = 4
+        state.sessions.reset = AsyncMock()
+
+        mock_cfg = MagicMock()
+        mock_cfg.agents = {}
+        monkeypatch.setattr("kiro_crew.dashboard.chat.KiroCrewConfig.load", lambda: mock_cfg)
+        monkeypatch.setattr(
+            "kiro_crew.dashboard.handlers.source_providers.is_owner_dashboard_request",
+            lambda request: True,
+        )
+        mock_bindings = ResolvedBindings(
+            workspace_dir=tmp_path,
+            memory_store_name="",
+            effective_memory_config={},
+            kiro_agent="kirocrew",
+            selection_kind="template",
+        )
+        monkeypatch.setattr(
+            "kiro_crew.dashboard.chat_handlers.resolve_agent_bindings",
+            lambda cfg, name, project_dir=None, **kwargs: mock_bindings,
+        )
+
+        async with TestClient(TestServer(_make_app_with_agent_routes(state))) as client:
+            resp = await client.post(
+                "/api/chat/slots/s1/agent", json={"agent": "same-agent", "agent_kind": "template"}
+            )
+            assert resp.status == 200
+
+        assert slot.agent_kind == "template"
+        assert slot.model == "member-provider-model"
+        assert slot._model_pick_gen == 4
+        assert slot._active_fallback_model == ""
+        assert slot._fallback_primary_model == ""
+        assert slot._fallback_slot_model == ""
+        assert slot._fallback_pick_gen == 0
+
+    @pytest.mark.asyncio
+    async def test_rolled_back_owner_switch_persists_the_restored_model(
+        self, tmp_path, monkeypatch
+    ):
+        """A refused agent switch preserves the pin in memory and metadata."""
+        monkeypatch.setattr("kiro_crew.dashboard.state.config_dir", lambda: tmp_path)
+        state = _make_state(tmp_path)
+        slot = state.get_or_create_slot("s1")
+        slot.agent = "oncall"
+        slot.model = "pinned-model"
+        slot._active_fallback_model = "old-fallback"
+        slot.workspace = "oncall-ws"
+        slot.project = "/tmp/oncall"
+        state.conversation_log.append("dashboard:s1", "user", "hi", agent="oncall")
+        state.conversation_log.update_metadata("dashboard:s1", {"model": "pinned-model"})
+
+        state.sessions.reset = AsyncMock()
+        state.sessions.get_provider = MagicMock(return_value=None)
+        monkeypatch.setattr(
+            "kiro_crew.dashboard.chat_handlers._record_explicit_agent_selection",
+            AsyncMock(side_effect=ValueError("member memory write failed")),
+        )
+        self._patch_agent_resolution(monkeypatch)
+
+        async with TestClient(TestServer(_make_app_with_agent_routes(state))) as client:
+            resp = await client.post("/api/chat/slots/s1/agent", json={"agent": "research"})
+            assert resp.status != 200
+
+        assert slot.agent == "oncall"
+        assert slot.model == "pinned-model"
+        metadata = state.conversation_log.get_metadata("dashboard:s1")
+        assert metadata.get("agent") == "oncall"
+        assert metadata.get("model") == "pinned-model"
 
     @pytest.mark.asyncio
     async def test_api_chat_slot_create_response_includes_workspace(self, tmp_path, monkeypatch):
@@ -11735,7 +11899,7 @@ class TestRunChatRefusalFallback:
         slot._refusal_client_pick_epoch = 0  # epoch unmoved when restore starts
 
         restore_task = _asyncio.create_task(_restore_refusal_fallback(slot, client))
-        await _asyncio.wait_for(restore_entered.wait(), timeout=5)
+        await await_until(restore_entered, what="the restore reaching set_model")
 
         async def _alias_pick() -> None:
             # The pick handler's essential moves, under the SAME session
@@ -11750,8 +11914,8 @@ class TestRunChatRefusalFallback:
         for _ in range(10):  # let the pick reach the lock (or, unfixed, run)
             await _asyncio.sleep(0)
         release_restore.set()
-        await _asyncio.wait_for(restore_task, timeout=5)
-        await _asyncio.wait_for(pick_task, timeout=5)
+        await await_until(restore_task, what="the restore finishing")
+        await await_until(pick_task, what="the aliased pick finishing")
 
         client.set_model.assert_awaited_once_with("fable-5")
         assert client.served_model == "user-picked", (
@@ -11797,7 +11961,7 @@ class TestRunChatRefusalFallback:
         client.set_model = AsyncMock(side_effect=_gated_set_model)
 
         swap_task = _asyncio.create_task(_refusal_fallback_swap(slot, client, "opus-test"))
-        await _asyncio.wait_for(swap_entered.wait(), timeout=5)
+        await await_until(swap_entered, what="the swap reaching set_model")
 
         async def _alias_pick() -> None:
             # The pick handler's essential moves, under the SAME session
@@ -11812,8 +11976,8 @@ class TestRunChatRefusalFallback:
         for _ in range(10):  # let the pick reach the lock (or, unfixed, run)
             await _asyncio.sleep(0)
         release_swap.set()
-        assert await _asyncio.wait_for(swap_task, timeout=5) == "fable-5"
-        await _asyncio.wait_for(pick_task, timeout=5)
+        assert await await_until(swap_task, what="the swap finishing") == "fable-5"
+        await await_until(pick_task, what="the aliased pick finishing")
 
         # The retry ran; the next genuine turn restores. The record must be
         # dropped on the epoch mismatch without touching the model.
@@ -12120,7 +12284,7 @@ class TestRunChatRefusalFallback:
             )
         finally:
             _held.release()
-        assert await _asyncio.wait_for(swap_task, timeout=5) == "fable-5"
+        assert await await_until(swap_task, what="the swap finishing") == "fable-5"
         assert (
             slot._refusal_fallback_session_key == _turn_key
         ), "the swap must stamp the binding it ran under"
@@ -12161,7 +12325,7 @@ class TestRunChatRefusalFallback:
             )
         finally:
             _held.release()
-        await _asyncio.wait_for(restore_task, timeout=5)
+        await await_until(restore_task, what="the restore finishing")
         # Once inside the lock, the rebind guard rules: the record belongs to
         # the recorded session, and ``client`` now serves the rebound one —
         # the restore must DROP the record, never move the rebound session's
@@ -12677,8 +12841,6 @@ class TestRunChatRefusalFallback:
         """End to end through the real refuse -> swap -> enqueue -> drain path: a
         correction queued after the drain spawned the replay cancels it at the
         consume seam, and the correction runs next."""
-        import asyncio as _asyncio
-
         from kiro_crew.acp.types import STOP_REASON_REFUSAL
         from kiro_crew.providers.base import EVENT_COMPLETE, EVENT_TEXT_CHUNK, LLMEvent
 
@@ -12711,7 +12873,7 @@ class TestRunChatRefusalFallback:
         assert replay is not None, "the refusal replay was not dispatched"
         # The correction lands after the drain spawned the replay, before it runs.
         slot.queue_insert(0, "actually do the other thing", kind="")
-        await _asyncio.wait_for(replay, timeout=5)
+        await await_until(replay, what="the refusal replay finishing")
         await await_successor(slot, replay)
 
         assert [p for p in prompts if "hello" in p] == [prompts[0]], "the replay ran"
@@ -12726,8 +12888,6 @@ class TestRunChatRefusalFallback:
         barrier, and no shared preparation holds turns back, so an armed
         synthesis starts, as it would after any finished turn, and the cycle's
         chat_done is left to it."""
-        import asyncio as _asyncio
-
         state = self._make_state_for_run_chat(tmp_path, monkeypatch)
         from kiro_crew.dashboard.chat_utils import SYNTHESIS_CLEAR
 
@@ -12750,7 +12910,7 @@ class TestRunChatRefusalFallback:
         slot._pending_synthesis = True
 
         await _run_chat(state, slot, "retry me", _replay=frozenset({ReplayFamily.CONTENT_FILTER}))
-        await _asyncio.wait_for(slot.task, timeout=5)
+        await await_until(slot.task, what="the slot's turn finishing")
 
         synthesis.assert_awaited_once()
         assert chat_done_frames(state) == []
@@ -12946,7 +13106,7 @@ class TestRunChatEarlyExitHandOff:
         first = await self._run(state, slot, "answer me")
         await await_successor(slot, first)
         for task in list(state._background_tasks):
-            await asyncio.wait_for(task, timeout=5)
+            await await_until(task, what="a background task finishing")
 
         title.assert_awaited_once()
         state.refresh_slot_source_status.assert_called_once_with(slot.key)
@@ -13084,7 +13244,7 @@ class TestRunChatEarlyExitHandOff:
         slot.queue_insert(0, "do X please", kind="")
 
         runner = asyncio.ensure_future(self._run(state, slot, "answer me"))
-        await asyncio.wait_for(entered.wait(), timeout=5)
+        await await_until(entered, what="the turn reaching its gate")
         first = slot.task
         first.cancel()
         await asyncio.sleep(0)
@@ -13227,9 +13387,9 @@ class TestRunChatEarlyExitHandOff:
         except RuntimeError:
             assert hold == "setup"
         assert slot.task is not None, "the send was stranded on an idle slot"
-        await asyncio.wait_for(slot.task, timeout=5)
+        await await_until(slot.task, what="the slot's turn finishing")
         while slot.task is not None and not slot.task.done():
-            await asyncio.wait_for(slot.task, timeout=5)
+            await await_until(slot.task, what="the slot's turn finishing")
 
         ran = [p for p in prompts if "sent during the read" in p or "held entry" in p]
         assert len(ran) == 2 and "sent during the read" in ran[0], prompts
@@ -13312,16 +13472,22 @@ class TestRunChatEarlyExitHandOff:
                 resp.prepare = AsyncMock()
                 resp.write = AsyncMock(side_effect=written.append)
                 monkeypatch.setattr(openai_compat.web, "StreamResponse", lambda: resp)
-                await asyncio.wait_for(
-                    openai_compat._stream_response(MagicMock(), state, slot, "id1", "m", 0, False),
-                    timeout=5,
+                await await_until(
+                    asyncio.ensure_future(
+                        openai_compat._stream_response(
+                            MagicMock(), state, slot, "id1", "m", 0, False
+                        )
+                    ),
+                    what="the error stream response finishing",
                 )
                 body = b"".join(written).decode()
                 assert "server_error" in body and '"finish_reason": "stop"' not in body, body
             else:
-                response = await asyncio.wait_for(
-                    openai_compat._blocking_response(state, slot, "id1", "m", 0, False),
-                    timeout=5,
+                response = await await_until(
+                    asyncio.ensure_future(
+                        openai_compat._blocking_response(state, slot, "id1", "m", 0, False)
+                    ),
+                    what="the error blocking response finishing",
                 )
                 assert response.status == 500
                 assert json.loads(response.text)["error"]["type"] == "server_error"
@@ -13361,7 +13527,7 @@ class TestRunChatEarlyExitHandOff:
         with pytest.raises(OSError, match="store unavailable"):
             await self._run(state, slot, "/workflow nightly")
         assert slot.task is not None, "the queued message was held"
-        await asyncio.wait_for(slot.task, timeout=5)
+        await await_until(slot.task, what="the slot's turn finishing")
 
         assert sum("summarize the PR" in p for p in prompts) == 1, prompts
         errors = [m.get("content", "") for m in slot.messages if m.get("role") == "error"]
@@ -14971,16 +15137,10 @@ class TestFolderCRUD:
                 client.patch(f"/api/chat/folders/{b['id']}", json={"parent_id": a["id"]})
             )
 
-            async def _both_queued() -> None:
-                # _folders_lock is a LoopBoundLock; the waiter queue
-                # lives on this loop's inner asyncio.Lock.
-                inner = state._folders_lock._bound()
-                while len(getattr(inner, "_waiters", None) or ()) < 2:
-                    await asyncio.sleep(0.01)
-
             # Both requests have passed their pre-lock validation against the
-            # SAME pre-state and are now waiting on the store.
-            await asyncio.wait_for(_both_queued(), timeout=5)
+            # SAME pre-state and are now waiting on the store. _folders_lock is a
+            # LoopBoundLock; until_parked reads this loop's inner asyncio.Lock.
+            await until_parked(state._folders_lock, count=2)
             gate.set()
             r1, r2 = await asyncio.gather(t1, t2)
             await holder
@@ -23188,7 +23348,7 @@ class TestRunChatModelFallback:
             assert not task.done()
         finally:
             slot._model_pick_lock.release()
-        candidate = await asyncio.wait_for(task, timeout=2)
+        candidate = await await_until(task, what="the fallback swap finishing")
         assert candidate == "fallback-model"
         assert slot._active_fallback_model == "fallback-model"
 
@@ -23237,7 +23397,7 @@ class TestRunChatModelFallback:
             assert not task.done()
         finally:
             _session_lock.release()
-        candidate = await asyncio.wait_for(task, timeout=2)
+        candidate = await await_until(task, what="the fallback swap finishing")
         assert candidate == "fallback-model"
         assert slot._active_fallback_model == "fallback-model"
 
@@ -25620,7 +25780,7 @@ class TestCloseBroadcastDurability:
 
         async with TestClient(TestServer(_make_app(state))) as client:
             close = asyncio.get_running_loop().create_task(client.delete("/api/chat/slots/s1"))
-            await asyncio.wait_for(seen.wait(), timeout=5.0)
+            await await_until(seen, what="the broadcast firing")
             assert "save" in calls and calls.index("save") < calls.index("broadcast")
             assert "s1" not in state._slots
             close.cancel()

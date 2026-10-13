@@ -11,7 +11,9 @@ from kiro_crew import agent, agent_state
 from kiro_crew.agent_capabilities import (
     CapabilityError,
     CapabilityService,
+    member_backend_gap,
     prepare_member_capabilities,
+    tool_limited_servers,
     validate_request,
 )
 from kiro_crew.config import loader
@@ -3520,3 +3522,135 @@ def cap_agent_state_for(cap):
     from kiro_crew import agent_state
 
     return agent_state
+
+
+_LIMITED_DOCS = {
+    "section": "mcpServers",
+    "id": "docs",
+    "action": "set",
+    "value": {"command": "example-mcp", "disabledTools": ["wipe"]},
+}
+
+
+def _set_member_backend(home, backend):
+    config = json.loads((home / "config.json").read_text())
+    config.setdefault("agent", {})["member_acp_backend"] = backend
+    (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    loader._invalidate_config_cache()
+
+
+@pytest.mark.parametrize(
+    ("backend", "limited", "expected"),
+    [
+        ("", (), None),
+        ("", ("docs",), None),
+        ("kas", (), None),
+        ("kas", ("docs",), "tool_limits_unsupported"),
+        ("codex", (), "harness_unsupported"),
+        ("codex", ("docs",), "harness_unsupported"),
+        ("claude", (), "harness_unsupported"),
+    ],
+)
+def test_member_backend_gap_matches_the_start_gate_sets(backend, limited, expected):
+    assert member_backend_gap(backend, limited) == expected
+
+
+def test_tool_limited_servers_skips_muted_and_unlimited_entries():
+    spec = {
+        "mcpServers": {
+            "b": {"command": "x", "disabledTools": ["t"]},
+            "a": {"command": "x", "disabledTools": ["t"]},
+            "plain": {"command": "x"},
+            "empty": {"command": "x", "disabledTools": []},
+            "muted": {"command": "x", "disabledTools": ["t"], "disabled": True},
+        }
+    }
+    assert tool_limited_servers(spec) == ("a", "b")
+
+
+def test_saved_view_has_no_backend_warning_on_the_default_backend(editor):
+    service, home, specs, parent = editor
+    assert save(service, enroll=True)["backend_warning"] is None
+
+
+def test_preview_and_save_warn_when_kas_cannot_apply_single_tool_limits(editor):
+    service, home, specs, parent = editor
+    _set_member_backend(home, "kas")
+    body = {
+        "revision": service.get("A")["revision"],
+        "enroll": True,
+        "operations": [_LIMITED_DOCS],
+    }
+    preview = service.preview("A", body)
+    expected = {
+        "code": "tool_limits_unsupported",
+        "backend": "kas",
+        "setting": "agent.member_acp_backend",
+        "servers": ["docs"],
+    }
+    assert preview["backend_warning"] == expected
+    # A warning, never a refusal: the save lands and its view repeats it.
+    saved = service.put("A", {**body, "preview_token": preview["preview_token"]})
+    assert saved["backend_warning"] == expected
+    assert spec_for(home, specs)["mcpServers"]["docs"]["disabledTools"] == ["wipe"]
+    assert service.get("A")["backend_warning"] == expected
+
+
+def test_kiro_backend_applies_single_tool_limits_without_warning(editor):
+    service, home, specs, parent = editor
+    _set_member_backend(home, "")
+    assert save(service, [_LIMITED_DOCS], enroll=True)["backend_warning"] is None
+
+
+def test_unsupported_member_backend_warns_on_preview_and_save(editor):
+    service, home, specs, parent = editor
+    _set_member_backend(home, "codex")
+    body = {"revision": service.get("A")["revision"], "enroll": True}
+    preview = service.preview("A", body)
+    expected = {
+        "code": "harness_unsupported",
+        "backend": "codex",
+        "setting": "agent.member_acp_backend",
+    }
+    assert preview["backend_warning"] == expected
+    saved = service.put("A", {**body, "preview_token": preview["preview_token"]})
+    assert saved["backend_warning"] == expected
+
+
+def test_default_backend_refusal_is_named_when_the_member_backend_is_fine(editor):
+    # Slack threads, cron jobs and spawned sessions of the member start on
+    # agent.acp_backend and reach the same chat-start gate.
+    service, home, specs, parent = editor
+    config = json.loads((home / "config.json").read_text())
+    config["agent"] = {"member_acp_backend": "kas", "acp_backend": "codex"}
+    (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    loader._invalidate_config_cache()
+    assert save(service, enroll=True)["backend_warning"] == {
+        "code": "harness_unsupported",
+        "backend": "codex",
+        "setting": "agent.acp_backend",
+    }
+
+
+def test_member_backend_refusal_is_named_before_the_default_backend(editor):
+    service, home, specs, parent = editor
+    config = json.loads((home / "config.json").read_text())
+    config["agent"] = {"member_acp_backend": "claude", "acp_backend": "codex"}
+    (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    loader._invalidate_config_cache()
+    warning = save(service, enroll=True)["backend_warning"]
+    assert (warning["setting"], warning["backend"]) == ("agent.member_acp_backend", "claude")
+
+
+def test_harness_warning_also_names_limited_servers(editor):
+    # The switch the page suggests (kas) would refuse these next.
+    service, home, specs, parent = editor
+    _set_member_backend(home, "codex")
+    warning = save(service, [_LIMITED_DOCS], enroll=True)["backend_warning"]
+    assert (warning["code"], warning["servers"]) == ("harness_unsupported", ["docs"])
+
+
+def test_unenrolled_member_gets_no_backend_warning(editor):
+    service, home, specs, parent = editor
+    _set_member_backend(home, "codex")
+    assert service.get("A")["backend_warning"] is None

@@ -45,6 +45,21 @@ what gets sent for something no gate here ever saw.
 upload, and each one exists because the reply text is not trustworthy input -- a
 prompt-injected agent chooses what it writes:
 
+* a containment check against the approved roots (:func:`approved_roots`):
+  the provider's working directory the channel authorized, plus the browser
+  CLI's own output directory. Anywhere else -- ``![x](~/Pictures/id.png)`` --
+  is refused before a single metadata probe, because "any readable raster on
+  the host" is not what the reader of a chat channel agreed to receive. The
+  browser directory is admitted because it holds only what ``playwright-cli``
+  wrote while the agent drove it, and because the gateway pins that directory
+  under its data home (:func:`kiro_crew.browser_cli.snapshots.snapshot_dir`)
+  rather than under any working directory, so a screenshot the agent was asked
+  to send could otherwise never be sent inline -- and admitting it grants
+  nothing the explicit ``file_send`` tool does not already deliver from that
+  same directory. The read below is pinned to whichever root admitted the
+  path, so a linked ancestor inside one root cannot reach outside it -- and the
+  browser root is pinned by its CANONICAL spelling (real data home, literal
+  leaf), so replacing the snapshot directory itself with a link admits nothing
 * a denylist check (:func:`kiro_crew.security.is_sensitive_path`), so
   ``![x](~/.aws/credentials)`` cannot be turned into an upload
 * a refusal to follow a symlink, so the bytes come from the inode the written
@@ -82,6 +97,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from kiro_crew.browser_cli.snapshots import snapshot_dir
 from kiro_crew.hooks import (
     FileTooLargeError,
     is_unc_shape,
@@ -785,6 +801,77 @@ def _payload_is_flagged(data: bytes) -> bool:
         return True
 
 
+@dataclass(frozen=True)
+class ApprovedRoot:
+    """One directory an outbound reference may name, and how its read is pinned.
+
+    ``lexical`` is the spelling a destination is compared against, as the agent
+    sees it. ``read_root`` is what the descriptor-pinned read must contain the
+    opened file in, and ``read_root_is_canonical`` says whether that spelling is
+    handed over literally (already resolved here) or resolved by the read.
+    """
+
+    lexical: str
+    read_root: str
+    read_root_is_canonical: bool = False
+
+
+def approved_roots(within_root: str) -> tuple[ApprovedRoot, ...]:
+    """The directories an outbound reference may name, authorized first.
+
+    *within_root* is the provider's resolved working directory, handed over by
+    the channel dispatcher once the provider is acquired; its read pin is
+    unchanged from before the browser root existed. The browser CLI's output
+    directory comes second: the gateway forces every ``playwright-cli``
+    invocation to write there (``PLAYWRIGHT_MCP_OUTPUT_DIR``), so it is the one
+    place a screenshot the agent just took can be, and it is never inside a
+    working directory by construction.
+
+    The browser root's read pin is CANONICAL: the data home around it resolved
+    (a ``/home`` alias or a dotfile manager's link to the data home is an
+    ordinary layout), the ``playwright-snapshots`` leaf kept literal and never
+    followed. The read compares the opened descriptor's real path against that
+    literal spelling, so a snapshot directory replaced by a link -- at rest or
+    swapped in after this call -- resolves the file somewhere else and fails the
+    comparison instead of moving the boundary there with it. The cwd keeps its
+    resolved-by-the-read pin because a linked working directory is the layout
+    it was authorized with.
+
+    An empty *within_root* contributes nothing, so the browser root never
+    stands in for an authorization the dispatcher withheld.
+    """
+    if not within_root:
+        return ()
+    snap = snapshot_dir()
+    return (
+        ApprovedRoot(lexical=os.path.abspath(within_root), read_root=within_root),
+        ApprovedRoot(
+            lexical=os.path.abspath(snap),
+            read_root=os.path.join(os.path.realpath(snap.parent), snap.name),
+            read_root_is_canonical=True,
+        ),
+    )
+
+
+def containing_root(path: Path, within_root: str) -> ApprovedRoot | None:
+    """The approved root that lexically contains *path*, or ``None``.
+
+    Lexical on purpose: ``abspath`` collapses ``..`` so a traversal spelling
+    cannot land inside a root it names, and nothing here follows a link. The
+    link cases belong to the read that follows, which is pinned to the root
+    returned here and rechecks the opened descriptor's real path against it.
+    """
+    target = os.path.abspath(path)
+    for root in approved_roots(within_root):
+        try:
+            if os.path.commonpath((target, root.lexical)) == root.lexical:
+                return root
+        except ValueError:
+            # Different drives on Windows: not inside this root.
+            continue
+    return None
+
+
 def _inspect(
     dest: str,
     path: Path,
@@ -813,12 +900,13 @@ def _inspect(
         read_cap = max_file_bytes
         over_reason = REASON_OVER_FILE_BYTES
         over_detail = f"larger than this channel's {max_file_bytes}-byte per-file limit"
+    root: ApprovedRoot | None = None
     if within_root is not None:
         try:
-            root = os.path.abspath(within_root)
-            if not within_root or os.path.commonpath((os.path.abspath(path), root)) != root:
-                return Rejection(dest, REASON_SENSITIVE, "outside the approved workspace")
+            root = containing_root(path, within_root)
         except (OSError, ValueError):
+            root = None
+        if root is None:
             return Rejection(dest, REASON_SENSITIVE, "outside the approved workspace")
     try:
         # A linked ANCESTOR defeats local_destination's lexical UNC screen:
@@ -852,8 +940,17 @@ def _inspect(
         if not path.is_file():
             return Rejection(dest, REASON_MISSING, "no such file")
         try:
+            # Pinned to the root that admitted the path, not to the authorized
+            # cwd alone: a screenshot under the browser root must be contained
+            # by THAT root at the descriptor, or a linked ancestor inside it
+            # could hand over bytes from anywhere. The browser root's pin is
+            # its canonical spelling, so the snapshot directory itself being a
+            # link moves the file out of the pin rather than the pin to it.
             data = safe_read_file_bytes_nolink(
-                str(path), within_root=within_root, max_bytes=read_cap
+                str(path),
+                within_root=root.read_root if root is not None else None,
+                within_root_is_canonical=root.read_root_is_canonical if root is not None else False,
+                max_bytes=read_cap,
             )
         except FileTooLargeError:
             return Rejection(dest, over_reason, over_detail)

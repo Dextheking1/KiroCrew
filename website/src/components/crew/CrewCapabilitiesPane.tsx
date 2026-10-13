@@ -2,10 +2,11 @@ import { useEffect, useLayoutEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ApiError } from '../../api/apiError'
-import { capabilityKey, crewCapabilitiesApi, crewCapabilitiesKey, type CapabilityDraft, type CapabilityOperation, type CapabilityPreview, type CapabilityRef, type CapabilityRow, type CapabilitySection } from '../../api/crewCapabilities'
+import { capabilityKey, crewCapabilitiesApi, crewCapabilitiesKey, type CapabilityBackendWarning, type CapabilityDraft, type CapabilityOperation, type CapabilityPreview, type CapabilityRef, type CapabilityRow, type CapabilitySection } from '../../api/crewCapabilities'
 import { Badge, Btn, Checkbox, Input, PanelSectionHeader, SendBtn } from '../ui'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog'
 import ErrorNotice from '../ErrorNotice'
+import CopyBranchButton from '../CopyBranchButton'
 import SearchableSelect from '../SearchableSelect'
 import SimpleSelect from '../SimpleSelect'
 import Tablist from '../Tablist'
@@ -35,6 +36,44 @@ function refusedFile(body: string | undefined): string {
   } catch {
     return ''
   }
+}
+
+/** A member chat on the backend the warning's setting names would refuse this
+ * spec. A note, not an error: the save still lands and the setting can change
+ * afterwards. Three cases:
+ * - member DMs (`agent.member_acp_backend`) cannot load saved specs: no page
+ *   edits that setting, so the note carries the command that does, on its own
+ *   line with a copy button. kas is the member default and loads saved specs;
+ *   if the spec also limits single tools, kas would refuse those next, so the
+ *   note names that second fix too.
+ * - only the default backend (`agent.acp_backend`) refuses: that setting moves
+ *   every session, so the note names the affected entry points and offers no
+ *   one-line switch.
+ * - single-tool limits: the fix is on this page, in the MCP Servers tab, which
+ *   the note opens. On the default backend it names the same entry points.
+ * The copy opens "Saving works" so it reads true before and after the save.
+ * Setting and backend ids stay untranslated. */
+function BackendWarning({ warning, member, onOpenTab }: { warning: CapabilityBackendWarning | null | undefined; member: string; onOpenTab: () => void }) {
+  const { t } = useTranslation()
+  if (!warning) return null
+  const values = { name: member, backend: warning.backend, servers: (warning.servers ?? []).join(', '), tab: t(CATEGORY_KEYS.mcpServers) }
+  const harness = warning.code === 'harness_unsupported'
+  const memberSetting = warning.setting === 'agent.member_acp_backend'
+  const key = harness
+    ? memberSetting ? 'crewCapabilities.backendUnsupported' : 'crewCapabilities.backendDefaultUnsupported'
+    : memberSetting ? 'crewCapabilities.backendToolLimits' : 'crewCapabilities.backendDefaultToolLimits'
+  const opensTab = !!values.servers && (!harness || memberSetting)
+  return <div role="note" className="mt-2 break-words text-[13px] text-warn" data-testid="capability-backend-warning">
+    <p>{t(key, values)}</p>
+    {harness && memberSetting && <>
+      {/* The copy icon stays visible: this is the only fix for the case. */}
+      <code className="mt-1 inline-flex max-w-full rounded border border-border bg-bg px-2 py-1 font-mono text-[12px] text-text [&_svg]:opacity-70" translate="no" data-testid="capability-backend-command">
+        <CopyBranchButton branch={`kirocrew config set ${warning.setting} kas`} label={t('crewCapabilities.backendCommandLabel')} />
+      </code>
+      {values.servers && <p className="mt-1">{t('crewCapabilities.backendAlsoLimits', values)}</p>}
+    </>}
+    {opensTab && <Btn className="mt-2" onClick={onOpenTab} data-testid="capability-backend-open-tab">{values.tab}</Btn>}
+  </div>
 }
 
 /** Mounted for the entire editor opening, even when a different rail pane is
@@ -194,6 +233,8 @@ export default function CrewCapabilitiesPane({ member, members = [], hidden, onD
                 ? refused ? null : <ErrorNotice message={drifted ? t('crewCapabilities.driftHint', { member }) : t(view.runtime.error_code ? 'crewCapabilityEditing.sourceFailed' : 'crewCapabilities.runtime_failed')} variant="inline" />
                 : <p role="status" className="mt-2">{t(capabilityLabels.runtime[view.runtime.status])}</p>}
             <p className="mt-1 text-muted">{t('crewCapabilities.newRuntime')}</p>
+            {/* The preview carries its own copy for the reviewed draft. */}
+            {!preview && <BackendWarning warning={view.backend_warning} member={member} onOpenTab={() => setCategory('mcpServers')} />}
             {view.mode !== 'inherited' && <div className="mt-3">
               <label htmlFor="crew-capabilities-enroll" className="flex items-start gap-2"><Checkbox id="crew-capabilities-enroll" aria-labelledby="crew-capabilities-enroll-label" aria-describedby="crew-capabilities-enroll-guarantee crew-capabilities-enroll-help" checked={draft?.enroll ?? false} disabled={busy || !view.template.available} onChange={e => edit(current => ({ ...current, enroll: e.target.checked }))} /><span className="min-w-0 break-words"><span id="crew-capabilities-enroll-label">{t('crewCapabilities.enroll')}</span><span id="crew-capabilities-enroll-guarantee" className="mt-1 block text-text">{t('crewCapabilities.enrollGuarantee')}</span></span></label>
               <p id="crew-capabilities-enroll-help" className="mt-1 text-[12px] text-muted" data-testid={enrollmentBlocksEditing ? 'capability-enroll-to-edit' : undefined}>{t('crewCapabilities.enrollHelp')}</p>
@@ -292,6 +333,7 @@ export default function CrewCapabilitiesPane({ member, members = [], hidden, onD
                 {item.approval_expanded && <p className="text-warn">{t('crewCapabilities.expanded')}</p>}
               </li>
             })}</ul>
+            <BackendWarning warning={preview.backend_warning} member={member} onOpenTab={() => setCategory('mcpServers')} />
             <p className="mt-2 text-muted">{t('crewCapabilities.newRuntime')}</p>
           </section>}
           {invalidTransport && <p className="text-[13px] text-warn">{t('crewCapabilityEditing.invalid')}</p>}

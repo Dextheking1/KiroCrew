@@ -6,7 +6,7 @@ created: 2026-10-10
 last-audited: 2026-10-10
 audited-at: bf1723d3f
 doc-pr: 18982
-implementation-prs: []
+implementation-prs: [19068]
 tracking-issues: [18583]
 supersedes: []
 superseded-by: []
@@ -14,7 +14,7 @@ superseded-by: []
 
 # RFC: Work fold forgets closed items
 
-Status: draft. Nothing built. Every code reference below was read at `bf1723d3f`.
+Status: accepted. Implementation in [#19068](https://github.com/kirodotdev/KiroCrew/pull/19068); see the implementation note in §4.2. Every code reference below was read at `bf1723d3f`.
 
 This document lands on its own, before any implementation, because it removes a
 user-visible limit (a conductor board stops dispatching after 256 lifetime items)
@@ -124,6 +124,15 @@ The writer's cache (`work-ledger/<slot>/items/`) must agree with the fold:
 the cache keeps the same set the fold keeps. Closed records past the recent window
 leave the cache. This removal runs in the server (rebuild, or the ledger-sweep's
 existing per-store maintenance), never as a side effect of a model's `create`.
+
+**Implementation note (#19068).** The implementation keeps every record in the
+writer's cache instead: only the fold forgets. A rebuild keeps a record the fold
+forgot, so no record is ever deleted to match the fold. This is the safer choice:
+each way of trimming the cache that review examined had a path that lost a record.
+The cost is that `list_work_items` still reads every record file under the board
+lock, so a board in the thousands of items reads more on each create. A trim or an
+open-count index is the follow-up if that cost shows up. Where §5 says "trim closed
+records past the window", the implementation does not.
 
 ## 5. What changes
 

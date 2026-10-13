@@ -351,6 +351,7 @@ class TestTheReadBroker:
                 "staged": "/wt/staged",
                 "staged_cancel_available": True,
                 "previous": "/wt/previous",
+                "live_verified": True,
             }
             assert recorded["state_fresh"] is True
         finally:
@@ -469,6 +470,22 @@ class TestTheBackendClient:
         with pytest.raises(live.PointerUnavailable, match="no port"):
             await provider(False)
 
+    async def test_live_verified_crosses_the_broker(self) -> None:
+        """A pointer-only live row must reach the backend as unverified, or the
+        fleet view would badge it "live" as if the gateway ran from it."""
+        state = pointer_broker._parse_state(
+            {"live": "/wt/live", "staged": None, "live_verified": False}
+        )
+        assert state.live == "/wt/live"
+        assert state.live_verified is False
+
+    async def test_live_verified_defaults_to_true_when_absent(self) -> None:
+        assert pointer_broker._parse_state({"live": "/wt/live"}).live_verified is True
+
+    async def test_a_non_bool_live_verified_is_an_outage(self) -> None:
+        with pytest.raises(live.PointerUnavailable, match="live_verified"):
+            pointer_broker._parse_state({"live": "/wt/live", "live_verified": "no"})
+
 
 class TestLiveModuleSeam:
     """``live`` answers locally in the gateway and through the provider in the backend."""
@@ -520,6 +537,7 @@ def test_pointer_state_payload_is_json_shaped() -> None:
         "staged": None,
         "staged_cancel_available": False,
         "previous": None,
+        "live_verified": True,
     }
 
 

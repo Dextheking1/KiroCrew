@@ -615,6 +615,19 @@ server, and cron child processes it spawns, those descendants no longer inherit
 a shell-exported `PYTHONPATH` or `PYTHONHOME` either; a child that relied on one
 to resolve its imports under the desktop app must set it for itself.
 
+The bundled launchers themselves drop the same two variables, so the scrub also
+covers every caller the shell is not: `kirocrew token` or `kirocrew stop` typed
+into a development shell, the `~/.local/bin/kirocrew` symlink the gateway
+plants, and the AppImage token page's bundled CLI path. The POSIX
+`bin/kirocrew` script runs `unset PYTHONPATH PYTHONHOME` before it execs the
+bundled `python3.12`; the Windows `bin\kirocrew.cmd` shim runs `set
+"PYTHONPATH="` and `set "PYTHONHOME="` under `setlocal`, so an interactive
+`cmd` window keeps its own variables after the command returns. Neither uses
+`-E`, which would also discard `PYTHONUTF8` and the bytecode settings above.
+The shell's own scrub stays as a second guard for the gateway it spawns, and on
+Windows it is the only one on that path, because the shell unwraps the `.cmd`
+and spawns `python.exe` directly.
+
 Host-runtime discovery stays behind the same main-process ownership boundaries.
 The `wsl:detect` handler in
 [`ipc-registrar.js`](../../website/electron/ipc-registrar.js) fails closed unless
@@ -627,6 +640,25 @@ manual SSH tunnel, foreign listener, unbound port, or unavailable owner probe is
 therefore refused; only then may
 [`wsl-detection.js`](../../website/electron/wsl-detection.js) run the trusted
 system `wsl.exe` path.
+
+The project picker's **Open system folder picker…** button rides the same gate.
+`window.folderPickAPI` in [`preload.js`](../../website/electron/preload.js) has
+two calls, and neither passes anything to the main process. `available()`
+invokes `dashboard:can-pick-folder`, which runs the three checks above and
+answers a boolean without opening anything; the picker shows the button only on
+`true`, so a browser tab, the PWA and a connection window pointed at a remote
+gateway keep the in-app picker alone. `pick()` invokes `dashboard:pick-folder`,
+which runs the same checks and then opens Electron's own
+`dialog.showOpenDialog` parented to the sender's window with fixed
+`openDirectory` options. The page cannot choose a default path, properties or
+filters. The dialog is drawn by the main process, so nothing is spawned and the
+sandbox is unchanged. It answers the one absolute folder chosen, or `null` for a
+cancel or a malformed result, and a second request while a dialog is open
+answers `null`; a dialog that fails to open rejects, so the picker can say so
+rather than read it as a cancel. The chosen path is never logged. The picker
+then lists the folder through `/api/browse-dirs`, the read its path field uses,
+and commits it only when that listing succeeds; a refusal, a failed dialog and
+a refused gate are each told beside the button.
 
 Before spawning a **bundled** backend the shell checks that the bundle's Python
 stdlib is fully on disk
@@ -980,7 +1012,16 @@ the matching backend in a universal app:
    install manager leaves it mid-update, and what `PATH` names is not this app's
    backend. The launch shows the "installation still finishing" dialog instead,
    whose probe re-runs this resolution and starts the backend once a probed path
-   is back. Unpackaged (source checkout) launches keep the `PATH` fallback.
+   is back. When the refusal follows a stale-asset re-resolve, the tree the app
+   was running from was removed and nothing is installing, so the same dialog
+   says the app files were removed and asks the user to quit and reopen the
+   app (or reinstall), with the accent on Quit, and the splash behind it says
+   the same; the probe stays armed without the copy promising it. This holds
+   across a Retry
+   and clears once a launcher resolves to a real backend. The pruned copy stays
+   until the probe finds a complete tree, which paints the usual completion
+   frame and starts the backend.
+   Unpackaged (source checkout) launches keep the `PATH` fallback.
 
 The function is pure — `fs`, `os`, `path`, `process.resourcesPath`,
 `__dirname`, and the arch are injected — so both arch branches are

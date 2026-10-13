@@ -55,6 +55,7 @@ from . import migrate
 from .model import (
     ACTIVE,
     ADMITTED,
+    ADOPTED_RESUME_EVENT,
     CANCELLED,
     CLAIMABLE,
     LEASE_SECS,
@@ -770,20 +771,28 @@ class TaskStore:
 
     @_typed_read
     def lost_owner_recoveries(self, task_id: str) -> int:
-        """How many times the boot reconciler sent *task_id* back to ``recovering``.
+        """How many lost-owner recoveries *task_id* was granted by earlier gateway lives.
 
-        Counted from the row's own ``transition`` events (``reconciled:
-        lost_owner`` into ``recovering``), so the count survives every restart
-        and is not capped by the :meth:`events` window.
+        Two writers grant one. The boot reconciler sends a row back to
+        ``recovering`` (a ``transition`` event, ``reconciled: lost_owner``). A
+        runner kind's adoption sweep resumes the row and records an
+        ``adopted_resume`` event naming its incarnation; those are counted once
+        per incarnation other than this one, so a second sweep in the same
+        gateway life spends nothing. Counted from the row's own events, so the
+        count survives every restart and is not capped by the :meth:`events`
+        window.
         """
         with self._lock:
             row = (
                 self._c()
                 .execute(
-                    "SELECT COUNT(*) AS n FROM task_events WHERE task_id=? AND kind='transition' "
-                    "AND json_extract(data_json, '$.to')=? "
-                    "AND json_extract(data_json, '$.reconciled')='lost_owner'",
-                    (task_id, RECOVERING),
+                    "SELECT (SELECT COUNT(*) FROM task_events WHERE task_id=? "
+                    "AND kind='transition' AND json_extract(data_json, '$.to')=? "
+                    "AND json_extract(data_json, '$.reconciled')='lost_owner') + "
+                    "(SELECT COUNT(DISTINCT json_extract(data_json, '$.incarnation')) "
+                    "FROM task_events WHERE task_id=? AND kind=? "
+                    "AND json_extract(data_json, '$.incarnation')!=?) AS n",
+                    (task_id, RECOVERING, task_id, ADOPTED_RESUME_EVENT, self.incarnation),
                 )
                 .fetchone()
             )
@@ -1035,7 +1044,9 @@ class TaskStore:
         claimable state, eligible now (``next_run_at``), and either unleased
         or past its lease. The generation is bumped and ``attempts`` counts
         this dispatch, so every callback the run makes afterwards can be
-        fenced against a later re-dispatch.
+        fenced against a later re-dispatch. The earlier attempt's progress
+        marker is cleared in the same statement, so the new attempt starts
+        with none.
         """
         ts = self.now()
         lease = self._lease_secs if lease_secs is None else float(lease_secs)
@@ -1047,7 +1058,7 @@ class TaskStore:
                 cur = conn.execute(
                     "UPDATE tasks SET state=?, lease_owner=?, lease_expires_at=?, "
                     "generation=generation+1, attempts=attempts+1, next_run_at=NULL, "
-                    "updated_at=? "
+                    "progress_json=NULL, updated_at=? "
                     f"WHERE id=? AND state IN {_SQL_CLAIMABLE} "
                     "AND (next_run_at IS NULL OR next_run_at<=?) "
                     "AND (lease_expires_at IS NULL OR lease_expires_at<?)",

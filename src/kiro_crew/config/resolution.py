@@ -68,6 +68,7 @@ _KNOWN_CONFIG_SECTIONS: frozenset = frozenset(
         "default_memory_store",
         "stt",
         "computer_use",
+        "aws",
         "instances",
         "mcp_gateway",
         "mcp",

@@ -286,6 +286,19 @@ describe('SkillsTab', () => {
     expect(screen.queryByText('Edit')).not.toBeInTheDocument()
     expect(screen.queryByText('Delete')).not.toBeInTheDocument()
   })
+
+  it('does NOT show Edit/Delete for a Kiro Crew row outside the skills folder (owned: false)', async () => {
+    // A skill reached through skills.extra_paths lists as source 'kirocrew',
+    // but Edit/Delete write into the skills folder, so the row is read-only.
+    mockApi.skills.mockResolvedValue([
+      { key: 'x', name: 'x', description: 'extra-x', source: 'kirocrew', owned: false, loaded_by_agents: [] },
+    ])
+    renderWithQuery()
+
+    await waitFor(() => expect(screen.getByTestId('dir-browser')).toBeInTheDocument())
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument()
+  })
 })
 
 describe('SkillsTab create gate and coded refusal', () => {

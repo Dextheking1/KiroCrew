@@ -86,7 +86,11 @@ from kiro_crew.dashboard.chat_persistence import (
     _recent_session_slot_name,
     save_slot_off_loop,
 )
-from kiro_crew.dashboard.chat_title import apply_manual_title
+from kiro_crew.dashboard.chat_title import (
+    apply_manual_title,
+    apply_regenerated_title,
+    generate_manual_title,
+)
 from kiro_crew.dashboard.chat_utils import (
     _history_key_for,
     _normalize_model,
@@ -95,7 +99,9 @@ from kiro_crew.dashboard.chat_utils import (
     slot_history_key,
 )
 from kiro_crew.dashboard.create_rate_limit import (
+    GENERATE_TITLE,
     SESSION_CREATE,
+    WINDOW_SECS,
     allow_create,
     has_create_budget,
 )
@@ -5437,7 +5443,64 @@ async def retry_target(
 
     ``caller_fenced`` has the meaning :func:`stop_target` documents.
     """
-    # The retry re-reads the target's last turn: a target restored as a
+    slot_key, _body = await _continue_turn_of_target(
+        state,
+        caller_session_key=caller_session_key,
+        target=target,
+        caller_fenced=caller_fenced,
+        operation="retry",
+        require_interrupted=True,
+    )
+    return {"ok": True, "target": slot_key}
+
+
+async def continue_target(
+    state: "DashboardState",
+    *,
+    caller_session_key: str,
+    target: str,
+    caller_fenced: bool | None = None,
+) -> dict[str, Any]:
+    """Hand *target*'s thread back to its agent, as the Continue button does.
+
+    The same call as :func:`retry_target` without ``require_interrupted``: a
+    force-quit turn runs no ``finally`` and leaves no error row, so it reads as
+    finished, and only this verb can pick it up. ``continue_slot_turn`` chooses
+    the body exactly as it does for the button, and the result reports which one
+    it queued in ``body``: ``"resumed"`` (the interrupted pick-up) or
+    ``"continued"`` (carry on from a turn that ended cleanly). No prompt text is
+    accepted; the body is always one of the two fixed continuation messages.
+
+    Not readiness-gated, for the reason :func:`retry_target` gives.
+    ``caller_fenced`` has the meaning :func:`stop_target` documents.
+    """
+    slot_key, body = await _continue_turn_of_target(
+        state,
+        caller_session_key=caller_session_key,
+        target=target,
+        caller_fenced=caller_fenced,
+        operation="continue",
+        require_interrupted=False,
+    )
+    return {"ok": True, "target": slot_key, "body": body}
+
+
+async def _continue_turn_of_target(
+    state: "DashboardState",
+    *,
+    caller_session_key: str,
+    target: str,
+    caller_fenced: bool | None,
+    operation: str,
+    require_interrupted: bool,
+) -> tuple[str, str]:
+    """Authorize *target* and queue a continuation on it; the core of retry and continue.
+
+    Returns the target's slot key and the body ``continue_slot_turn`` queued
+    (``"resumed"`` or ``"continued"``). *operation* names the verb on every audit
+    line and on the gate's refusals.
+    """
+    # Both verbs re-read the target's last turn: a target restored as a
     # sidebar row loads its window first, ahead of the prewarm below.
     await load_target_window(state, target)
     # Same prewarm ordering as `close_target`: the SEL and config reads must be
@@ -5445,7 +5508,7 @@ async def retry_target(
     # the re-check under the slot lock never loads config on the loop.
     try:
         await asyncio.to_thread(sel)
-    except Exception:  # noqa: BLE001 - a prewarm failure must not fail the retry
+    except Exception:  # noqa: BLE001 - a prewarm failure must not fail the call
         logger.warning("session-control SEL prewarm failed", exc_info=True)
     await prewarm_enabled_check()
 
@@ -5457,14 +5520,14 @@ async def retry_target(
         state,
         caller_session_key=caller_session_key,
         target=target,
-        operation="retry",
+        operation=operation,
         precomputed_ownership_fenced=caller_fenced,
     )
     slot_key = slot.key
     # Deferred for the same import cycle `stop_target` documents.
     from kiro_crew.dashboard.chat_handlers import SlotContinueRefusal, continue_slot_turn
 
-    def _reassert_retryable() -> None:
+    def _reassert_reachable() -> None:
         # The slot lock `continue_slot_turn` takes, and its sub-agent probe, are
         # awaits: a target that was reachable at the gate above can become
         # channel-linked or mirrored, or be replaced under the same key, before
@@ -5476,7 +5539,7 @@ async def retry_target(
                 state,
                 caller_session_key=caller_session_key,
                 target=slot_key,
-                operation="retry",
+                operation=operation,
                 skip_enabled_check=True,
                 precomputed_ownership_fenced=caller_fenced,
             )
@@ -5484,38 +5547,39 @@ async def retry_target(
             raise SlotContinueRefusal(exc.message, exc.code, status=exc.status) from exc
         if live is not slot:
             raise SlotContinueRefusal(
-                "the target session was replaced during the retry", "target_replaced"
+                f"the target session was replaced during the {operation}", "target_replaced"
             )
 
     with _audit_denials(
-        caller_session_key=caller_session_key, operation="retry", slot_key=slot_key
+        caller_session_key=caller_session_key, operation=operation, slot_key=slot_key
     ):
         # The same predicate the Continue endpoint refuses on, so the button and
-        # the verb cannot drift: a relay archive would run the crew's old turn on
+        # the verbs cannot drift: a relay archive would run the crew's old turn on
         # this machine.
         if is_relay_archive(slot):
             raise SessionControlError(RELAY_ARCHIVE_ERROR, code=RELAY_ARCHIVE_CODE, status=409)
         try:
-            await continue_slot_turn(
+            body = await continue_slot_turn(
                 state,
                 slot,
                 # An agent asked for this, not the person at the keyboard: the
                 # turn must not gain the authenticated-human flag.
                 directive_user_origin=False,
                 via="session_control",
-                require_interrupted=True,
-                before_dispatch=_reassert_retryable,
+                require_interrupted=require_interrupted,
+                before_dispatch=_reassert_reachable,
                 extra_meta=send_origin_meta(state, caller_key),
             )
         except SlotContinueRefusal as exc:
             raise SessionControlError(exc.message, status=exc.status, code=exc.code) from exc
     _audit(
         caller_session_key=caller_session_key,
-        operation="retry",
+        operation=operation,
         slot_key=slot_key,
         outcome="allowed",
+        detail={"body": body},
     )
-    return {"ok": True, "target": slot_key}
+    return slot_key, body
 
 
 async def end_wait_target(
@@ -6054,6 +6118,172 @@ async def rename_target(
     return {"ok": True, "target": slot.key, "title": slot.title}
 
 
+def _admit_generate_title(slot_key: str) -> None:
+    """Spend *slot_key*'s one title generation for this window, or refuse."""
+    if not allow_create(GENERATE_TITLE, slot_key):
+        raise SessionControlError(
+            f"{slot_key!r} had its title generated within the last "
+            f"{int(WINDOW_SECS)} seconds; try again later",
+            status=429,
+            code="title_rate_limited",
+        )
+
+
+async def generate_title_target(
+    state: "DashboardState",
+    *,
+    caller_session_key: str,
+    target: str,
+    caller_fenced: bool | None = None,
+) -> dict[str, Any]:
+    """Regenerate *target*'s sidebar title, the way "Regenerate title" does.
+
+    Runs the sidebar's own code (:func:`chat_title.generate_manual_title` and
+    :func:`chat_title.apply_regenerated_title`), so the result is the one a
+    person clicking it would get: one titling-model call, awaited before this
+    returns, and a new name that replaces the current one (a hand-set title
+    included) and stays "auto" so the background refresh may revise it.
+
+    Reach is narrower than :func:`stop_target`'s. After every
+    :func:`authorize_target` rule, the target must be a session the caller
+    created (``_created_by``), for EVERY caller class: the verb spends a model
+    call to relabel a session, and a session the person opened is theirs to
+    name. The caller itself is refused too.
+
+    One admitted call per target per ``create_rate_limit.WINDOW_SECS``, stamped
+    before the model call, so a patrol loop or a concurrent retry cannot spend
+    twice. A call refused before the stamp spends nothing.
+
+    The model call suspends, so the whole gate runs again, synchronously, after
+    it answers and before anything changes: a target that was closed, replaced
+    under the same key, linked to a channel or otherwise put out of reach in the
+    meantime keeps its title (``target_replaced`` or the gate's own refusal).
+    From there the title is assigned with no suspension in between, the same
+    guarantee :func:`rename_target` gives; the save that follows only makes an
+    already-authorized change durable.
+
+    ``caller_fenced`` has the meaning :func:`stop_target` documents.
+    """
+    # Same prewarm ordering as `stop_target`: nothing may suspend between the
+    # gate and the write it authorizes.
+    try:
+        await asyncio.to_thread(sel)
+    except Exception:  # noqa: BLE001 - a prewarm failure must not fail the call
+        logger.warning("session-control SEL prewarm failed", exc_info=True)
+    await prewarm_enabled_check()
+
+    operation = "generate_title"
+    slot = authorize_target(
+        state,
+        caller_session_key=caller_session_key,
+        target=target,
+        operation=operation,
+        precomputed_ownership_fenced=caller_fenced,
+    )
+    caller_key = caller_slot_key(state, caller_session_key)
+    with _audit_denials(
+        caller_session_key=caller_session_key, operation=operation, slot_key=slot.key
+    ):
+        if _created_by_other(slot, caller_key):
+            raise SessionControlError(
+                "session_generate_title only reaches sessions this session created",
+                status=403,
+                code="not_creator",
+            )
+        _admit_generate_title(slot.key)
+
+    epoch = slot._title_epoch
+    title = await generate_manual_title(state, slot)
+
+    # Re-gate after the suspension. The creator rule was settled above and
+    # ``_created_by`` belongs to this slot object, so the fence is passed as
+    # settled and the switch read skipped: neither reads config on the loop.
+    with _audit_denials(
+        caller_session_key=caller_session_key, operation=operation, slot_key=slot.key
+    ):
+        if state._slots.get(slot.key) is not slot or slot.is_closing:
+            raise SessionControlError(
+                f"{slot.key!r} was closed while its title was being generated; "
+                "nothing was changed",
+                status=409,
+                code="target_replaced",
+            )
+    authorize_target(
+        state,
+        caller_session_key=caller_session_key,
+        target=slot.key,
+        operation=operation,
+        skip_enabled_check=True,
+        precomputed_ownership_fenced=True,
+    )
+
+    # A rename that landed during the model call outranks a generated name, as
+    # in the sidebar; an empty result means the model had nothing better.
+    if not title or slot._title_epoch != epoch:
+        _audit(
+            caller_session_key=caller_session_key,
+            operation=operation,
+            slot_key=slot.key,
+            outcome="allowed",
+            detail={"applied": False},
+        )
+        return {"ok": True, "target": slot.key, "title": slot.title, "changed": False}
+
+    previous = slot.title
+
+    # `apply_regenerated_title` assigns every field before its first await, so
+    # the title is on the slot before this coroutine can suspend.
+    # `still_current` is re-checked under the history write lock, so a slot
+    # closed and replaced under the same key while the write was queued never
+    # stamps its title over the successor's saved one.
+    def _still_current() -> bool:
+        return state._slots.get(slot.key) is slot
+
+    if not await apply_regenerated_title(state, slot, title, still_current=_still_current):
+        if not _still_current():
+            _audit(
+                caller_session_key=caller_session_key,
+                operation=operation,
+                slot_key=slot.key,
+                outcome="denied",
+                detail={"applied": False, "reason": "target_replaced"},
+            )
+            raise SessionControlError(
+                f"{slot.key!r} was closed while its title was being saved; " "nothing was changed",
+                status=409,
+                code="target_replaced",
+            )
+        _audit(
+            caller_session_key=caller_session_key,
+            operation=operation,
+            slot_key=slot.key,
+            outcome="error",
+            detail={"applied": True, "reason": "title_persist_failed"},
+        )
+        raise SessionControlError(
+            f"{slot.key!r} now shows the new title, but it could not be saved yet; "
+            "the session's next save writes it, and until then a restart brings back "
+            "the previous title",
+            status=500,
+            code="title_persist_failed",
+        )
+    _audit(
+        caller_session_key=caller_session_key,
+        operation=operation,
+        slot_key=slot.key,
+        outcome="allowed",
+        detail={"applied": True},
+    )
+    # The slot's title, not this call's: a rename that overtook this one while it
+    # saved has already replaced it, and the caller acts on what the reply names.
+    return {
+        "ok": True,
+        "target": slot.key,
+        "title": slot.title,
+        "changed": slot.title != previous,
+    }
+
+
 @dataclass(frozen=True)
 class PendingModelPick:
     """A ``session_set_model`` pick waiting for the target's next turn.
@@ -6169,6 +6399,41 @@ def effort_commit_needs_reset(provider: object) -> bool:
     return provider.supports_effort() is not False  # type: ignore[attr-defined]
 
 
+def model_switch_deferred(state: "DashboardState", slot: "_ChatSlot") -> str:
+    """Why a between-turns model switch on *slot* must wait, or ``""`` if it may land.
+
+    Shared by every writer that changes ``slot.model`` between turns and arms the
+    deferred reset: a queued ``session_set_model`` pick and an Issue Radar crew's
+    triage switch. Two reasons, both about a switch the next turn would not see:
+
+    * a model-picker switch is mid-transaction -- its pick generation is
+      provisional and may still roll back, so the next turn start decides against
+      the settled generation;
+    * another slot drives the same session and has a turn in flight (or is
+      cold-starting it) -- a commit now would reset nothing that turn can see, since
+      get_or_create attaches to that session on its old model.
+    """
+    if slot._model_pick_lock.locked():
+        return "picker in flight"
+    if _another_alias_is_mid_turn(state, slot):
+        return "alias mid-turn"
+    return ""
+
+
+def arm_model_switch_reset(state: "DashboardState", slot: "_ChatSlot") -> None:
+    """Make the next turn start on ``slot.model`` instead of the live session's.
+
+    Armed only when a session can still be on the old model: one already
+    registered, or an eager spawn in flight that may register one before
+    get_or_create. With neither, get_or_create cold-starts on the new model, and
+    an armed reset would tear that session down at turn end for nothing.
+    """
+    key = effective_session_key(slot)
+    eager = slot._eager_spawn_task
+    if state.sessions.get_provider(key) is not None or (eager is not None and not eager.done()):
+        slot._pending_reset_history_key = slot._pending_reset_history_key or key
+
+
 def apply_pending_model_pick(state: "DashboardState", slot: "_ChatSlot") -> bool:
     """Commit *slot*'s pending ``session_set_model`` pick, if it is still allowed.
 
@@ -6193,21 +6458,11 @@ def apply_pending_model_pick(state: "DashboardState", slot: "_ChatSlot") -> bool
     pick = slot._pending_model_pick
     if pick is None:
         return False
-    if slot._model_pick_lock.locked():
-        # A model-picker switch is mid-transaction: its pick generation is
-        # provisional and may still roll back. Leave the pick pending and run
-        # this turn on the current model; the next turn start decides against
-        # the settled generation (a committed picker choice then supersedes the
-        # pick, a rolled-back one lets it apply). Nothing is decided yet, so
-        # nothing is audited here.
-        logger.info("session-control set_model: pick on %s deferred, picker in flight", slot.key)
-        return False
-    if _another_alias_is_mid_turn(state, slot):
-        # Another slot drives the same session and has a turn in flight (or is
-        # cold-starting it). A commit now would reset nothing the turn can see:
-        # get_or_create attaches to that session on its old model. Leave the
-        # pick pending; a later turn start applies it once the session is idle.
-        logger.info("session-control set_model: pick on %s deferred, alias mid-turn", slot.key)
+    deferred = model_switch_deferred(state, slot)
+    if deferred:
+        # The pick stays pending and a later turn start decides it (see
+        # model_switch_deferred). Nothing is decided yet, so nothing is audited.
+        logger.info("session-control set_model: pick on %s deferred, %s", slot.key, deferred)
         return False
     slot._pending_model_pick = None
     # Each half of the pick yields separately to a newer choice the user made

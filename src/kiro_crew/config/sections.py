@@ -18,7 +18,7 @@ import logging
 import math
 import re as _re
 import unicodedata as _unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, overload
@@ -71,6 +71,8 @@ from kiro_crew.config.integration_sections import (  # noqa: F401
     _RECOVER_BACKOFF_CEILING,
     _WARM_SET_CAP_AUTO,
     FORWARD_DECLARED_ENV_DEFAULT,
+    MANAGED_STUB_FOLLOWERS,
+    AwsConfig,
     ComputerUseConfig,
     ExternalRegistryConfig,
     InstancesConfig,
@@ -78,6 +80,7 @@ from kiro_crew.config.integration_sections import (  # noqa: F401
     McpGatewayConfig,
     PublishConfig,
     TunnelConfig,
+    _resolve_stub_base,
     _resolve_stub_overrides,
     _resolve_stub_roster,
     _resolve_stub_servers,
@@ -316,6 +319,67 @@ def coerce_role_efforts(raw: object) -> dict[str, str]:
         val = raw.get(role)
         if isinstance(val, str) and val.strip() and is_valid_effort(val.strip()):
             out[role] = val.strip()
+    return out
+
+
+# agent.model_context_tokens: the context window an operator says an exact model id is
+# served with. The value bounds keep a typo from declaring a nonsense window; the entry cap
+# bounds the map a hand-edited file can make every process carry.
+MODEL_CONTEXT_TOKENS_MIN = 1_024
+MODEL_CONTEXT_TOKENS_MAX = 10_000_000
+MODEL_CONTEXT_TOKENS_MAX_ENTRIES = 64
+
+
+def coerce_model_context_tokens(raw: object) -> dict[str, int]:
+    """Normalize ``agent.model_context_tokens`` from hand-edited config / request bodies.
+
+    An entry survives when its key is a model id (non-empty, no surrounding whitespace,
+    at most :data:`model_registry.ADVERTISED_MODEL_ID_MAX_CHARS` characters) and its value
+    is a real ``int`` (not a bool, float or string) from :data:`MODEL_CONTEXT_TOKENS_MIN`
+    to :data:`MODEL_CONTEXT_TOKENS_MAX`. A key is taken as written: never stripped, folded
+    or read as a path. Only the first :data:`MODEL_CONTEXT_TOKENS_MAX_ENTRIES` entries are
+    read. Every entry that is dropped is named in a warning (the key only, quoted
+    truncated), so a typo costs that one declaration and never goes unseen.
+    """
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning("agent.model_context_tokens is not a mapping; ignoring it")
+        return {}
+    if len(raw) > MODEL_CONTEXT_TOKENS_MAX_ENTRIES:
+        logger.warning(
+            "agent.model_context_tokens: ignoring %d entries past the first %d",
+            len(raw) - MODEL_CONTEXT_TOKENS_MAX_ENTRIES,
+            MODEL_CONTEXT_TOKENS_MAX_ENTRIES,
+        )
+    out: dict[str, int] = {}
+    for index, (key, value) in enumerate(raw.items()):
+        if index >= MODEL_CONTEXT_TOKENS_MAX_ENTRIES:
+            break
+        if not (
+            isinstance(key, str)
+            and key
+            and key == key.strip()
+            and len(key) <= model_registry.ADVERTISED_MODEL_ID_MAX_CHARS
+        ):
+            logger.warning(
+                "agent.model_context_tokens: ignoring %.80r, a key must be a model id of "
+                "1 to %d characters with no surrounding whitespace",
+                key,
+                model_registry.ADVERTISED_MODEL_ID_MAX_CHARS,
+            )
+        elif (
+            not isinstance(value, int)
+            or not MODEL_CONTEXT_TOKENS_MIN <= value <= MODEL_CONTEXT_TOKENS_MAX
+        ):
+            logger.warning(
+                "agent.model_context_tokens: ignoring %.80r, the window must be an "
+                "integer from %d to %d",
+                key,
+                MODEL_CONTEXT_TOKENS_MIN,
+                MODEL_CONTEXT_TOKENS_MAX,
+            )
+        else:
+            out[key] = value
     return out
 
 
@@ -1032,6 +1096,21 @@ class AgentConfig:
             "(keys: 'background', 'subagent'). Empty for a role inherits the chat "
             "default (agent.reasoning_effort) and then the provider/model default. "
             "Only applies on reasoning-capable models.",
+        ),
+    )
+    model_context_tokens: dict[str, int] = field(
+        default_factory=dict,
+        metadata=_meta(
+            "Served context windows",
+            "Context window, in tokens, that an exact model id is served with, for "
+            'example {"server-a/org/model-7b": 32768}. The key is the id exactly as '
+            "agent.model carries it, so two servers of the same weights stay "
+            "distinct. A declared window budgets the first prompt of a new session, "
+            "before the backend has reported one, and outranks the catalog and "
+            "registry windows. A value is an integer from 1024 to 10000000, at most "
+            "64 entries are read, and an invalid entry is ignored with a warning. "
+            "Empty by default: a model with no window of its own keeps the "
+            "1,000,000-token reference. Takes effect on the next config reload.",
         ),
     )
     fallback_model: str = field(
@@ -2089,6 +2168,7 @@ class AgentConfig:
         # feeds coerced input.
         self.role_models = coerce_role_models(self.role_models)
         self.role_efforts = coerce_role_efforts(self.role_efforts)
+        self.model_context_tokens = coerce_model_context_tokens(self.model_context_tokens)
         # Same defensive TYPE coercion for the DeepSeek provider-key map. What its
         # names and values may BE is refused at spawn, by name -- see
         # coerce_deepseek_env.
@@ -2542,6 +2622,17 @@ class TailscaleConfig:
     )
 
 
+def effective_pin_scope(raw: object) -> str:
+    """The pin scope the loader applies for a stored *raw* value.
+
+    Case and surrounding space are ignored, an empty value is the default
+    ``node``, and anything else unrecognised falls back to ``node`` (the
+    narrower scope).
+    """
+    value = str(raw or "node").strip().lower()
+    return value if value in ("node", "login") else "node"
+
+
 def _tailscale_config_from(
     raw: object,
     degraded: set[str] | None = None,
@@ -2684,14 +2775,14 @@ def _tailscale_config_from(
         if isinstance(raw_logins, list)
         else section.default("allowed_logins")
     )
-    pin_scope = str(data.get("pin_scope") or section.default("pin_scope")).strip().lower()
-    if pin_scope not in ("node", "login"):
+    raw_pin_scope = str(data.get("pin_scope") or section.default("pin_scope")).strip().lower()
+    pin_scope = effective_pin_scope(raw_pin_scope)
+    if pin_scope != raw_pin_scope:
         logger.warning(
             "dashboard.tailscale.pin_scope %r is not recognised; falling back to "
             "'node' (the narrower scope)",
-            pin_scope,
+            raw_pin_scope,
         )
-        pin_scope = "node"
     if trust_identity and not allowed_logins:
         logger.error(
             "dashboard.tailscale.trust_identity is on but allowed_logins is "
@@ -3637,6 +3728,24 @@ class DashboardConfig:
             "Probability of picking a random catalog tip instead of personalized (0-1). Higher = more general discovery.",
         ),
     )
+    github_hosts: list[str] = field(
+        default_factory=list,
+        metadata=_meta(
+            "GitHub Enterprise Hosts",
+            "Exact hostnames of GitHub Enterprise Server instances that gh-backed "
+            "features may reach: the Changes and Issues panels and session source "
+            "links. "
+            "Empty = github.com only (deny-by-default): a pull-request or issue "
+            "URL on any other host is only sent to the gh CLI if its host is an "
+            "exact member of this list. Suffixes, wildcards and ports are not "
+            "accepted (gh cannot address a host on a non-default port). "
+            "Each listed host authenticates only from its own `gh auth login "
+            "--hostname <host>` entry; the github.com token is never sent to it. "
+            "A host that is also listed in gitlab_hosts or jira_hosts is refused. "
+            "The Code Review Sage app reads its own github_hosts list from its "
+            "app config, not this one; list a host in both to use it in both.",
+        ),
+    )
     gitlab_hosts: list[str] = field(
         default_factory=list,
         metadata=_meta(
@@ -3690,6 +3799,10 @@ class DashboardConfig:
             "an inline code span whose whole text matches becomes a link chip.",
         ),
     )
+
+
+#: The template kiro-cli runs when ``agent.default_agent`` names none.
+DEFAULT_KIRO_TEMPLATE = "kirocrew"
 
 
 @dataclass
@@ -5993,6 +6106,48 @@ def _coerce_jira_hosts(raw: object) -> list[str]:
         else:
             host = name
         if host in out:
+            continue
+        out.append(host)
+    return out
+
+
+_GITHUB_PUBLIC_HOSTS = frozenset({"github.com", "www.github.com"})
+
+
+def _coerce_github_hosts(raw: object, *, claimed: Iterable[str] = ()) -> list[str]:
+    """Coerce the GitHub Enterprise allowlist to clean hostname entries.
+
+    Entries follow the self-hosted GitLab grammar (see
+    :func:`_coerce_gitlab_hosts`), so the same malformed entries are dropped and
+    the same canonical form reaches the exact-match check. github.com needs no
+    entry and is dropped, as is gitlab.com, which that grammar already refuses.
+    An entry with a non-default port is refused with a warning: ``gh`` rejects a
+    port in ``--hostname``, so such a host can never be reached, and pinning the
+    bare name instead would aim the call at a different port.
+
+    ``claimed`` holds the hosts another provider allowlist already owns
+    (``gitlab_hosts``, ``jira_hosts``). Such an entry is refused here with a
+    warning rather than kept: one host cannot name two providers, and keeping it
+    on the GitLab or Jira side means this list never changes how those resolve.
+    """
+    taken = set(claimed)
+    out: list[str] = []
+    for host in _coerce_gitlab_hosts(raw):
+        if host in _GITHUB_PUBLIC_HOSTS:
+            continue
+        if ":" in host:
+            logger.warning(
+                "dashboard.github_hosts entry %r names a port; gh cannot reach a "
+                "GitHub host on a non-default port, so it is ignored",
+                host,
+            )
+            continue
+        if host in taken:
+            logger.warning(
+                "dashboard.github_hosts entry %r is also listed in gitlab_hosts or "
+                "jira_hosts; it is ignored as a GitHub Enterprise host",
+                host,
+            )
             continue
         out.append(host)
     return out

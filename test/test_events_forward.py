@@ -357,6 +357,23 @@ class TestExtractSharedText:
         }
         assert _extract_shared_text(event) == "actual content from blocks"
 
+    def test_field_only_section_keeps_forwarded_output_empty(self):
+        event = {
+            "attachments": [
+                {
+                    "is_share": True,
+                    "fallback": "This message contains interactive elements.",
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "fields": [{"type": "mrkdwn", "text": "trusted-only field"}],
+                        }
+                    ],
+                }
+            ]
+        }
+        assert _extract_shared_text(event) == ""
+
     def test_event_level_blocks_fallback(self):
         """When attachments yield nothing, try event-level blocks."""
         event = {
@@ -928,6 +945,16 @@ class TestPastedTableBlocks:
     def test_malformed_table_rows_are_skipped(self):
         block = {"type": "table", "rows": [None, "x", [None, {"type": "raw_text", "text": None}, {"type": "raw_text", "text": "ok"}]]}
         assert _extract_blocks_text([block]) == "| ok"
+
+    def test_blank_rows_add_no_line_and_inner_separators_are_kept(self):
+        raw = lambda t: {"type": "raw_text", "text": t}  # noqa: E731
+        block = {"type": "table", "rows": [[raw("a"), raw("")], [raw(""), raw("")], [raw("b"), raw("c")]]}
+        assert _extract_blocks_text([block]) == "a | \nb | c"
+
+    def test_table_rendering_stays_within_the_budget(self):
+        rows = [[{"type": "raw_text", "text": "x" * 100}] for _ in range(1000)]
+        rendered = _extract_blocks_text([{"type": "table", "rows": rows}], 250)
+        assert len(rendered) == 250
 
     async def _routed_text(self, event: dict) -> str:
         orch = AsyncMock()

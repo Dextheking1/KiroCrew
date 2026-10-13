@@ -475,7 +475,9 @@ export function InlineCode({ children, ...props }: { children?: React.ReactNode 
   const gatewayPlatform = useGatewayPlatform()
   const { directLocal } = useBranding()
   const raw = codeStr.trim()
-  const pathResolution = usePathResolution(raw, probeEnabled)
+  // Inside a link to a web page the span never becomes a chip (see the early
+  // return below), so it never asks the backend whether its text names a path.
+  const pathResolution = usePathResolution(raw, probeEnabled && insideLink !== 'external')
   // Before the early returns below (rules of hooks): a closed session's chip
   // waits on a gateway probe. Same text the chip branch below would see.
   const sessionTarget = useSessionChip(visibleText === null || raw === '' ? null : raw, sessionActions)
@@ -499,6 +501,17 @@ export function InlineCode({ children, ...props }: { children?: React.ReactNode 
       return !name.startsWith('data-path') && !name.startsWith('data-session') && !name.startsWith('data-folder') && name !== 'data-chip-action'
     }),
   )
+
+  // Inside a link to a web page (or any other scheme) a code span used as its
+  // label is plain code text: never a chip, whatever its text names. Any chip's
+  // handler calls preventDefault, which cancels the enclosing anchor's
+  // navigation — a copy chip copied instead of navigating (#5730), and a
+  // confirmed path chip opened the local file instead (#5745). Stated ahead of
+  // every chip branch, so no resolution outcome can bring a chip back, and no
+  // glyph reserve, since no chip will ever arrive to fill it. It IS a link
+  // label, so it keeps the link colour (`navigate`: the stylesheet's actionable
+  // rule — the class alone loses to the Kiro inline-code colour).
+  if (insideLink === 'external') return <code className={`${CHIP_BASE} text-accent`} {...safeProps} data-chip-action="navigate">{children}</code>
 
   if (pathResolution.probePending
     || (pathResolution.kind !== 'file' && pathResolution.kind !== 'dir')) {
@@ -525,11 +538,12 @@ export function InlineCode({ children, ...props }: { children?: React.ReactNode 
     const folderChipPossible = !!(folderActions.onFolderReveal && folderActions.folders)
     const folderReserve = folderChipPossible && folderSegmentsOf(raw) !== null ? <FolderGlyphReserve /> : null
     const reserve = pathResolution.shaped ? <ChipGlyphReserve path={pathResolution.splitPath} /> : folderReserve
-    // Inside an anchor the link owns the click, so stay the inert span this was
-    // before #4433 rather than cancelling the navigation to copy. Nothing is
-    // lost: the browser's own "Copy link address" still reaches the URL. It IS
-    // a link label, so it keeps the link colour (`navigate`: the stylesheet's
-    // actionable rule — the class alone loses to the Kiro inline-code colour).
+    // Inside a link to a local address (a path, a `#heading`, an in-app route)
+    // the link still owns the click unless the label is a confirmed path, so
+    // stay the inert span this was before #4433 rather than cancelling the
+    // navigation to copy. A confirmed path falls through to its chip below: the
+    // href is often that same file, and the anchor cannot open every local
+    // spelling of it itself. Same link colour as the early return above.
     if (insideLink) return <code className={`${CHIP_BASE} text-accent`} {...safeProps} data-chip-action="navigate">{reserve}{children}</code>
     // Nothing a chip could honestly act on: the tree cannot vouch that its text
     // is what the reader sees (`codeTextOf` -> null: a styled or collapsible

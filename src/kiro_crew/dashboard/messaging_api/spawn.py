@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         internal_memory_scope,
         parent_spawn_allowlists,
         parent_work_supported,
+        spawn_parent_claim,
         validate_tool_args,
         warm_project_agents_for_spawn,
     )
@@ -141,6 +142,41 @@ async def _requested_backend(raw: object) -> tuple[str | None, web.Response | No
     )
 
 
+def _qualified_model_refusal(
+    request: web.Request, model: str, backend: str | None, raw_backend: object
+) -> web.Response | None:
+    """Refuse a ``provider/model`` id that the backend this request names cannot take.
+
+    Bare and bracketed names, and a request that names no backend, keep the shape
+    check alone. Only a backend that resolves its model from an advertised list takes
+    such ids; once it has advertised one, the id must be on it, read as the models
+    picker reads it. An empty list is trusted.
+    """
+    from kiro_crew.agent_sdk.capabilities import capabilities_for
+    from kiro_crew.dashboard.handlers.agents import _advertised_backend_models
+
+    if backend is None or "/" not in model:
+        return None
+    if not capabilities_for(backend).resolves_model_from_advertised_list:
+        return web.json_response(
+            {
+                "error": f"backend {raw_backend!r} does not take provider-qualified model ids",
+                "code": "model_unavailable",
+            },
+            status=400,
+        )
+    advertised = {row["model_name"] for row in _advertised_backend_models(request, backend)}
+    if advertised - {"auto"} and model not in advertised:
+        return web.json_response(
+            {
+                "error": f"model {model!r} is not among the models backend {raw_backend!r} advertises",
+                "code": "model_unavailable",
+            },
+            status=400,
+        )
+    return None
+
+
 async def api_spawn(request: web.Request) -> web.Response:
     """POST /api/spawn — spawn a subagent.
 
@@ -203,6 +239,11 @@ async def api_spawn(request: web.Request) -> web.Response:
     backend, backend_refusal = await _requested_backend(cleaned.get("backend"))
     if backend_refusal is not None:
         return backend_refusal
+    model_refusal = _qualified_model_refusal(
+        request, cleaned.get("model") or "", backend, cleaned.get("backend")
+    )
+    if model_refusal is not None:
+        return model_refusal
     parent_session = body.get("parent_session", "")
     if not isinstance(parent_session, str):
         return web.json_response(
@@ -210,7 +251,7 @@ async def api_spawn(request: web.Request) -> web.Response:
             status=400,
         )
     _, refusal = await internal_memory_scope(
-        request, "spawn.create", claimed_session=parent_session
+        request, "spawn.create", claimed_session=spawn_parent_claim(request, parent_session)
     )
     if refusal is not None:
         return refusal
@@ -504,7 +545,9 @@ async def api_spawn_continue(request: web.Request) -> web.Response:
     if not task:
         return web.json_response({"error": "task is required", "code": "task_required"}, status=400)
     parent_session = str(body.get("parent_session", "") or "")
-    refusal = await _spawn_scope_refusal(request, claimed_session=parent_session)
+    refusal = await _spawn_scope_refusal(
+        request, claimed_session=spawn_parent_claim(request, parent_session)
+    )
     if refusal is not None:
         return refusal
     try:

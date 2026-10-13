@@ -21,7 +21,6 @@ from collections.abc import Mapping
 from typing import Any, Callable, Literal, NamedTuple, Optional, overload
 
 from kiro_crew import platform_compat
-from kiro_crew.acp.types import JSONRPC_METHOD_NOT_FOUND
 from kiro_crew.config.loader import KiroCrewConfig, config_dir, read_local_secret  # noqa: F401
 from kiro_crew.dashboard.origin import parse_dashboard_url  # noqa: F401
 from kiro_crew.install_liveness import (
@@ -63,6 +62,11 @@ from kiro_crew.validation import (
     validate_jsonrpc_request,
     validate_jsonrpc_response,
 )
+
+#: JSON-RPC 2.0 "method not found". Spelled here, not imported from
+#: ``kiro_crew.acp.types``: importing that module runs the ``kiro_crew.acp``
+#: package, which pulls the whole ACP client into every stdio MCP server.
+JSONRPC_METHOD_NOT_FOUND = -32601
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +113,16 @@ DEFERRED_PARKED_MAX = 64
 # process; retaining them in an unbounded set leaks one entry per cancel. Once
 # this cap is reached the oldest ids are evicted FIFO.
 CANCELLED_IDS_MAX = 1024
+# Max frames the Windows stdin pump (``_start_stdin_pump``) reads ahead of the
+# loop. Past it the pump blocks and the rest stays in the pipe, so the client
+# feels backpressure exactly as it does when the POSIX loop is slow to read.
+STDIN_PUMP_MAX_FRAMES = 64
 
-#: Largest Content-Length body :func:`_read_message` reads whole: the gateway's
-#: default per-line read limit (``mcp_gateway.pool._DEFAULT_READ_BUFFER_LIMIT``,
+#: Largest frame body :func:`_read_message` reads whole, Content-Length body
+#: or bare-JSON line alike: the gateway's default per-line read limit (``mcp_gateway.pool._DEFAULT_READ_BUFFER_LIMIT``,
 #: pinned equal by a test so this server need not import the gateway). A larger
-#: body is drained in bounded chunks and answered as too large, so a corrupt
-#: header can neither allocate it nor desync the framing.
+#: body is drained in bounded chunks and answered as too large, so neither a
+#: corrupt header nor an endless line can allocate it or desync the framing.
 MAX_CONTENT_LENGTH_BYTES = 64 * 1024 * 1024
 #: A declared length past this is no body any sender drains to: the header is
 #: corrupt, and draining to it would swallow every later request.
@@ -210,9 +218,9 @@ class DeferredTool:
     dispatch thread, so a step that blocks on a stalled gateway delays other
     steps, never the loop's ``ping`` answers or the single worker.
 
-    Outside the POSIX dispatch loop -- the synchronous Windows path, a direct
-    ``_call_tool`` from a test or the CLI -- :func:`drive_deferred` runs the
-    steps inline, so a deferred tool behaves exactly like a blocking one there.
+    Outside the dispatch loop -- a direct ``_call_tool`` from a test or the
+    CLI -- :func:`drive_deferred` runs the steps inline, so a deferred tool
+    behaves exactly like a blocking one there.
     """
 
     def due_at(self) -> float:
@@ -1708,9 +1716,23 @@ def _read_message(stdin) -> dict[str, Any] | _Skipped | None:
     """
     global _framing
     raw = stdin.buffer
-    line = raw.readline()
+    # Room for the cap plus a CRLF terminator; the cap counts the body only.
+    line = raw.readline(MAX_CONTENT_LENGTH_BYTES + 2)
     if not line:
         return None  # EOF
+    terminated = line.endswith(b"\n")
+    body_len = len(line) - (2 if line.endswith(b"\r\n") else 1 if terminated else 0)
+    if body_len > MAX_CONTENT_LENGTH_BYTES:
+        head = line[:ID_PROBE_BYTES]
+        tail = line[-ID_PROBE_BYTES:]
+        while not terminated:
+            chunk = raw.readline(_DRAIN_CHUNK_BYTES)
+            if not chunk:
+                break
+            tail = (tail + chunk[-ID_PROBE_BYTES:])[-ID_PROBE_BYTES:]
+            terminated = chunk.endswith(b"\n")
+        _refuse_oversized(f"A line of more than {MAX_CONTENT_LENGTH_BYTES} bytes", head, tail)
+        return SKIP
     stripped = line.strip()
     if stripped[:15].lower() != b"content-length:":
         # Bare JSON line (backwards compat).
@@ -1771,22 +1793,7 @@ def _read_message(stdin) -> dict[str, Any] | _Skipped | None:
             head += chunk[: ID_PROBE_BYTES - len(head)]
         tail = (tail + chunk[-ID_PROBE_BYTES:])[-ID_PROBE_BYTES:]
     if not keep:
-        req_id = recover_top_level_id(head, tail, requests_only=True)
-        logger.warning(
-            "Content-Length %d is over the %d-byte cap; body discarded (id %r)",
-            length,
-            MAX_CONTENT_LENGTH_BYTES,
-            req_id,
-        )
-        if req_id is not None:
-            respond(
-                req_id,
-                None,
-                error={
-                    "code": JSONRPC_INVALID_REQUEST,
-                    "message": f"Request over the {MAX_CONTENT_LENGTH_BYTES}-byte limit",
-                },
-            )
+        _refuse_oversized(f"Content-Length {length}", head, tail)
         return SKIP
     body = b"".join(chunks)
     msg = parse_json_object_line(body)
@@ -1794,6 +1801,27 @@ def _read_message(stdin) -> dict[str, Any] | _Skipped | None:
         _answer_unparseable(body)
         return SKIP
     return msg
+
+
+def _refuse_oversized(what: str, head: bytes, tail: bytes) -> None:
+    """Log a frame drained for being over :data:`MAX_CONTENT_LENGTH_BYTES`, and
+    answer it as too large under the top-level id found at either end."""
+    req_id = recover_top_level_id(head, tail, requests_only=True)
+    logger.warning(
+        "%s is over the %d-byte cap; body discarded (id %r)",
+        what,
+        MAX_CONTENT_LENGTH_BYTES,
+        req_id,
+    )
+    if req_id is not None:
+        respond(
+            req_id,
+            None,
+            error={
+                "code": JSONRPC_INVALID_REQUEST,
+                "message": f"Request over the {MAX_CONTENT_LENGTH_BYTES}-byte limit",
+            },
+        )
 
 
 def _answer_unparseable(frame: bytes) -> None:
@@ -1843,6 +1871,48 @@ def _stdin_holds_a_line(stdin) -> bool:
         with contextlib.suppress(OSError, ValueError):
             os.set_blocking(fd, was_blocking)
     return b"\n" in held
+
+
+class _NoFrame:
+    """What the loop's frame read returns when no frame arrived in time."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "NO_FRAME"
+
+
+NO_FRAME = _NoFrame()
+
+
+def _start_stdin_pump(stdin) -> "queue.Queue[Any]":
+    """Read *stdin* frames on a daemon thread, in order, into a queue.
+
+    Windows ``select.select`` accepts only sockets, so a loop there cannot poll
+    stdin between ticks of a running call. A thread blocked in ``readline``
+    waits on it instead, which lets the loop answer pings, cancels and queued
+    calls while a tool runs exactly as it does on POSIX. Each item is what
+    :func:`_read_message` returned; ``None`` (end of stream) is the last one.
+    An exception raised reading a frame is queued as the last item, for the
+    loop to raise where a direct read would have. At most
+    :data:`STDIN_PUMP_MAX_FRAMES` frames wait in the queue; the pump blocks
+    until the loop takes one.
+    """
+    frames: "queue.Queue[Any]" = queue.Queue(maxsize=STDIN_PUMP_MAX_FRAMES)
+
+    def _pump() -> None:
+        while True:
+            try:
+                msg = _read_message(stdin)
+            except BaseException as exc:  # noqa: BLE001 - re-raised by the loop
+                frames.put(exc)
+                return
+            frames.put(msg)
+            if msg is None:
+                return
+
+    threading.Thread(target=_pump, name="mcp-stdin-pump", daemon=True).start()
+    return frames
 
 
 def _tool_call_name(params: dict[str, Any]) -> str | None:
@@ -1923,9 +1993,10 @@ def run_mcp_stdio_loop(
     that never came). Queue overflow gets an immediate busy error response.
 
     On Windows ``select.select`` cannot poll ``sys.stdin`` (it only accepts
-    sockets), so tool calls dispatch synchronously exactly as the pre-worker
-    loop did — no in-flight cancel/ping interleave there (POSIX-only feature),
-    and a deferred tool is driven to completion inline.
+    sockets), so frames are read there on a pump thread
+    (:func:`_start_stdin_pump`) and the loop waits on its queue instead: the
+    worker, the parked-call timer, cancels and ping answers behave the same on
+    every platform.
 
     Before serving anything, a private dup of stdout is captured
     (:func:`snapshot_stdout_fd`) so responses survive a library's process-wide
@@ -1964,6 +2035,73 @@ def run_mcp_stdio_loop(
         # Non-zero so the pool records a death and the next call respawns this
         # server from the current install's launch command.
         sys.exit(INSTALL_PRUNED_EXIT_CODE)
+
+
+#: Backstop wait while only a worker runs. Not a latency: the wake pipe ends
+#: the wait as soon as the worker finishes (see :class:`_WakePipe`).
+_WORKER_WAIT_SECS = 1.0
+#: Poll interval when no wake pipe could be made, and while parked calls are
+#: waiting for their next ``due_at`` (their schedule is still polled).
+_POLL_SECS = 0.1
+
+
+class _WakePipe:
+    """A self-pipe that wakes the read loop's ``select`` when work finishes.
+
+    The tool worker and the deferred-step pool write one byte when they finish;
+    the loop selects on stdin AND :attr:`read_fd`, so a finished call is
+    answered at once instead of at the next poll tick. POSIX only: Windows
+    ``select`` cannot take a pipe, so its stdin-pump loop keeps the
+    _POLL_SECS tick.
+
+    Writes and close share one lock, so a worker still running after the loop
+    exits (EOF joins it with a timeout) never writes into a closed -- or
+    reused -- descriptor.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.read_fd: int | None = None
+        self._write_fd: int | None = None
+        if not platform_compat.IS_POSIX:
+            return
+        try:
+            r, w = os.pipe()
+        except OSError:
+            return
+        try:
+            os.set_blocking(r, False)
+            os.set_blocking(w, False)
+        except OSError:
+            os.close(r)
+            os.close(w)
+            return
+        self.read_fd, self._write_fd = r, w
+
+    def wake(self, *_args: Any) -> None:
+        """Never raises: a full pipe already wakes the loop. Accepts and ignores
+        a future, so it doubles as a ``Future.add_done_callback`` hook."""
+        with self._lock:
+            if self._write_fd is None:
+                return
+            with contextlib.suppress(OSError):
+                os.write(self._write_fd, b"\0")
+
+    def drain(self) -> None:
+        with self._lock:
+            if self.read_fd is None:
+                return
+            with contextlib.suppress(OSError):
+                while os.read(self.read_fd, 4096):
+                    pass
+
+    def close(self) -> None:
+        with self._lock:
+            for fd in (self.read_fd, self._write_fd):
+                if fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+            self.read_fd = self._write_fd = None
 
 
 def _run_stdio_dispatch_loop(
@@ -2177,6 +2315,7 @@ def _run_stdio_dispatch_loop(
             set_current_caller(None)
             set_current_tenant_nonce("")
             _result_ready.set()
+            _wake.wake()
             return
         except Exception as exc:
             result = f"Error: {neutralize_markers(str(exc))}"  # not a directive: see call_tool_with_logging
@@ -2220,6 +2359,7 @@ def _run_stdio_dispatch_loop(
                 )
                 _worker_audited[0] = True
         _result_ready.set()
+        _wake.wake()
 
     def _cancel_quietly(
         deferred: DeferredTool,
@@ -2380,13 +2520,11 @@ def _run_stdio_dispatch_loop(
                 # slot never receives gateway-authored metadata, which is how a
                 # session-scoped tool silently degrades to unattached behaviour.
                 _experimental.update(caller_identity_capability())
-            _sends_inflight = reports_inflight and platform_compat.IS_POSIX
+            _sends_inflight = reports_inflight
             if _sends_inflight:
-                # Only a server that opted in advertises, and only where the
-                # loop can send a report mid-call. The synchronous Windows path
-                # cannot, and a gateway that believed it could would apply the
-                # short recycle ceiling to calls this process has no way to
-                # vouch for.
+                # Only a server that opted in advertises: a gateway that
+                # believes a backend reports applies the short recycle ceiling
+                # to its calls.
                 _experimental[INFLIGHT_CAPABILITY_KEY] = {}
             if _experimental:
                 _caps["experimental"] = _experimental
@@ -2700,33 +2838,6 @@ def _run_stdio_dispatch_loop(
                         f"and does not name this one"
                     ),
                 )
-            elif not platform_compat.IS_POSIX:
-                # Windows: select.select() cannot poll sys.stdin (WinError
-                # 10038), so no worker-thread interleave — dispatch the tool
-                # synchronously exactly as the pre-worker loop did, a deferred
-                # one driven to completion inline (no loop timer exists here).
-                # Exception handling mirrors the worker path: the client gets
-                # an Error response and the failure is SEL-audited with the
-                # caller identity (an escaped exception would kill the loop).
-                set_current_caller(_caller_ctx)
-                set_current_tenant_nonce(_tenant_nonce)
-                try:
-                    result = call_tool_fn(tool_name, tool_args)
-                    result_text = (
-                        drive_deferred(result) if isinstance(result, DeferredTool) else result
-                    )
-                except Exception as exc:
-                    result_text = f"Error: {neutralize_markers(str(exc))}"  # not a directive: see call_tool_with_logging
-                    _sel_audit(
-                        "failed",
-                        tool_name,
-                        req_id,
-                        _caller_ctx.session_key if _caller_ctx else "",
-                    )
-                finally:
-                    set_current_caller(None)
-                    set_current_tenant_nonce("")
-                respond(req_id, _tool_response(result_text))
             else:
                 # Dispatch tool in worker thread so we can receive cancel notifications
                 _cancel_event = threading.Event()
@@ -2983,6 +3094,8 @@ def _run_stdio_dispatch_loop(
                 entry.step_queued = now
                 entry.step_started = 0.0  # queued; _run_step stamps the start
                 entry.stepping = _step_pool.submit(_run_step, entry)
+                # A finished step is harvested at once, not at the next tick.
+                entry.stepping.add_done_callback(_wake.wake)
             except Exception:  # noqa: BLE001 - one parked call must not end the server
                 # Same contract as the per-message guard on the read loop:
                 # whatever this entry's bookkeeping raised (a ``due_at`` that
@@ -3129,31 +3242,75 @@ def _run_stdio_dispatch_loop(
             },
         )
 
+    # Windows: select() cannot poll stdin, so a pump thread reads it.
+    _frames = None if platform_compat.IS_POSIX else _start_stdin_pump(sys.stdin)
+
+    def _next_frame(timeout: float | None) -> dict[str, Any] | _Skipped | _NoFrame | None:
+        """The next stdin frame, or :data:`NO_FRAME` when *timeout* seconds
+        pass with none (``None`` waits for one). A line already buffered is
+        read first: select cannot see it. On POSIX the wait also ends, with
+        :data:`NO_FRAME`, the moment the wake pipe fires (a worker or a step
+        finished)."""
+        if _frames is None:
+            if timeout is not None and not _stdin_holds_a_line(sys.stdin):
+                wake_fd = _wake.read_fd
+                waits: list[Any] = [sys.stdin] if wake_fd is None else [sys.stdin, wake_fd]
+                ready = select.select(waits, [], [], timeout)[0]
+                if wake_fd is not None and wake_fd in ready:
+                    _wake.drain()
+                if not any(r is sys.stdin for r in ready):
+                    return NO_FRAME
+            return _read_message(sys.stdin)
+        while True:
+            try:
+                # A bounded get even when waiting: an untimed lock acquire on
+                # Windows cannot be interrupted.
+                item = _frames.get(timeout=1.0 if timeout is None else timeout)
+            except queue.Empty:
+                if timeout is None:
+                    continue
+                return NO_FRAME
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+    # Made here, right before the ``try`` that closes it, so no exit path
+    # leaks the two descriptors. The worker and step hooks above read it late.
+    _wake = _WakePipe()
     try:
         while True:
             worker_busy = _worker_thread is not None and _worker_thread.is_alive()
             if not worker_busy and _worker_thread is not None:
                 # Worker just finished: deliver (or register a deferred).
                 _deliver_finished_worker(0.1)
-            req: dict[str, Any] | _Skipped | None
+            req: dict[str, Any] | _Skipped | _NoFrame | None
             if not worker_busy and _pending_calls:
                 # Dispatch a queued tools/call (FIFO) before reading new input.
                 req = _pending_calls.popleft()
             elif worker_busy or _deferred:
-                # Something is in flight: poll stdin with a short timeout so
-                # the loop can also deliver the worker, step parked calls and
-                # answer pings. A line already buffered is read first: select
-                # cannot see it.
+                # Something is in flight: wait for stdin with a timeout so the
+                # loop can also deliver the worker, step parked calls and
+                # answer pings. The wake pipe ends the wait the moment the
+                # worker or a step finishes; the timeout is then only a
+                # backstop, except while parked calls wait for their next
+                # ``due_at`` (polled every _POLL_SECS), and on Windows, which
+                # has no wake pipe and keeps the _POLL_SECS tick.
                 _service_deferred()
                 _maybe_report_inflight()
-                readable = (
-                    _stdin_holds_a_line(sys.stdin) or select.select([sys.stdin], [], [], 0.1)[0]
-                )
-                if not readable:
+                if worker_busy and _result_ready.is_set():
+                    # Deliver a finished result before reading on: an EOF
+                    # read next would end the loop with it unsent.
+                    req = NO_FRAME
+                else:
+                    if _deferred or _wake.read_fd is None:
+                        timeout = _POLL_SECS
+                    else:
+                        timeout = _WORKER_WAIT_SECS
+                    req = _next_frame(timeout)
+                if isinstance(req, _NoFrame):
                     if worker_busy and _result_ready.is_set():
                         _deliver_finished_worker(1.0)
                     continue
-                req = _read_message(sys.stdin)
                 if req is None:
                     # EOF: wait for worker then exit. Parked calls die with the
                     # client that owned them; the ``finally`` below cancels
@@ -3167,10 +3324,11 @@ def _run_stdio_dispatch_loop(
                     # result is delivered before the next blocking read.
                     continue
             else:
-                req = _read_message(sys.stdin)
+                req = _next_frame(None)
                 if req is None:
                     break
-                if isinstance(req, _Skipped):
+                # An untimed read never answers NO_FRAME; the check narrows it.
+                if isinstance(req, (_Skipped, _NoFrame)):
                     continue
 
             envelope = _servable(req)
@@ -3254,3 +3412,4 @@ def _run_stdio_dispatch_loop(
                 entry.stepping.cancel()
         if _step_pool is not None:
             _step_pool.shutdown()
+        _wake.close()

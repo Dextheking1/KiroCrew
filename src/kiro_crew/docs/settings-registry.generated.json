@@ -744,6 +744,13 @@
       "description": "Display used and total tokens next to the context progress bar"
     },
     {
+      "id": "chat.show-full-titles-while-scrolling",
+      "label": "Show Full Titles While Scrolling",
+      "tab": "chat",
+      "route": "/settings/chat/sessions?highlight=chat.show-full-titles-while-scrolling",
+      "description": "While you scroll the session list, titles cut off by the sidebar show in full over it; they hide when the pointer leaves or shortly after scrolling stops"
+    },
+    {
       "id": "chat.show-pasted-text-in-full",
       "label": "Show Pasted Text in Full",
       "tab": "chat",
@@ -989,7 +996,7 @@
       "label": "Automatic cards for all sessions",
       "tab": "developer",
       "route": "/settings/developer?highlight=key%3Adashboard.dynamic_dashboard_cards",
-      "description": "Summaries of each session’s recent work and next steps.",
+      "description": "Summaries of each session’s recent work and next steps, shown on the All Dashboards page, which the Sessions list’s ⋮ menu opens. A model call writes each one, so they use model credits.",
       "configKey": "dashboard.dynamic_dashboard_cards"
     },
     {
@@ -1026,13 +1033,6 @@
       "tab": "developer",
       "route": "/settings/developer?highlight=developer.developer-mode",
       "description": "Show Developer page in sidebar with Logs, System metrics, and Memory internals"
-    },
-    {
-      "id": "developer.dynamic-dashboard",
-      "label": "Dynamic Dashboard",
-      "tab": "developer",
-      "route": "/settings/developer?highlight=developer.dynamic-dashboard",
-      "description": "Turns on the in-development Dynamic Dashboard: a status row above the chat composer, a Dashboard view in the side panel and on a crewmate’s page, and an All Dashboards page. Its layout is still being designed, so it is not shown until you turn it on. Also holds the switch for automatic cards."
     },
     {
       "id": "developer.earlier-conversation-one-decision-may-carry-in-characters",

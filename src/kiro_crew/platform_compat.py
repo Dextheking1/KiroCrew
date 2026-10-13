@@ -6539,7 +6539,9 @@ def process_start_time(pid: int) -> str | None:
     generations on the same host while the PID still names the same process
     object, and unequal once that PID has been recycled onto another. Units
     differ per platform and are deliberately not normalised -- nothing ever
-    compares one host's value against another's, and no caller parses it.
+    compares one host's value against another's. One caller parses the
+    Windows token: ``session_pid._pid_age_seconds`` turns that FILETIME into a
+    process age, so a change to the Windows encoding must change that parser too.
 
     Callers use it as a PID-reuse guard before signalling, so an unreadable
     value must fail SAFE: ``None`` means "identity unconfirmed", which every
@@ -8965,6 +8967,77 @@ def _malloc_trim() -> bool:
         return False
 
 
+# glibc's ``M_ARENA_MAX`` mallopt parameter (malloc.h). Glibc otherwise creates
+# up to 8 x cores per-thread arenas, each reserving 64 MiB heaps that keep freed
+# memory per thread: on a 32-core host a pod gateway under dashboard load grew
+# ~90 such heaps holding ~2.2 GB. A/B on paired seeded pods:
+# a cap of 4 cut peak RSS ~4.0 -> ~3.1 GB and heap RSS ~2.2 -> ~1.1 GB with no
+# throughput or p95 regression; a cap of 2 saved slightly more but cost ~3%
+# throughput and +5-7% p95 on /api/sessions under saturation, so 4 is the default.
+_M_ARENA_MAX = -8
+GATEWAY_MALLOC_ARENA_MAX = 4
+#: Operator override for the gateway's arena cap: a positive integer replaces the
+#: default, ``0`` (or any non-positive value) leaves glibc's own default alone.
+MALLOC_ARENA_MAX_ENV = "KIROCREW_MALLOC_ARENA_MAX"
+
+
+def _glibc_mallopt() -> Callable[[int, int], int] | None:
+    """glibc's ``mallopt``, or ``None`` on musl / non-glibc / no libc."""
+    try:
+        libc = ctypes.CDLL(None)
+        libc.gnu_get_libc_version  # noqa: B018 - glibc probe; musl lacks it
+        fn = libc.mallopt
+        fn.argtypes = [ctypes.c_int, ctypes.c_int]
+        fn.restype = ctypes.c_int
+        return fn
+    except (AttributeError, OSError):
+        return None
+
+
+def limit_malloc_arenas(
+    *,
+    environ: Mapping[str, str] | None = None,
+    mallopt: Callable[[int, int], int] | None = None,
+) -> int:
+    """Cap glibc malloc arenas for THIS process; return the cap applied, else 0.
+
+    Called first thing in the gateway command, so it holds for every launcher
+    (systemd unit, pod, detached start, Dev Fleet re-exec) without depending on
+    each one exporting ``MALLOC_ARENA_MAX`` before exec. ``mallopt`` is used
+    rather than the env var because glibc reads that variable once, at its first
+    allocation -- long before any Python code runs. Arenas made before the call
+    keep serving; only new ones are refused, so calling it before the gateway
+    starts its thread pools is what makes it effective.
+
+    An operator's own ``MALLOC_ARENA_MAX`` or ``glibc.malloc.arena_max`` tunable
+    already took effect at process start and wins: nothing is changed. No-op on
+    every non-Linux platform and on a non-glibc libc. Never raises.
+    """
+    if not IS_LINUX:
+        return 0
+    env = os.environ if environ is None else environ
+    if env.get("MALLOC_ARENA_MAX", "").strip():
+        return 0
+    if "glibc.malloc.arena_max" in env.get("GLIBC_TUNABLES", ""):
+        return 0
+    value = GATEWAY_MALLOC_ARENA_MAX
+    raw = env.get(MALLOC_ARENA_MAX_ENV, "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = GATEWAY_MALLOC_ARENA_MAX
+    if value <= 0:
+        return 0
+    try:
+        fn = mallopt or _glibc_mallopt()
+        if fn is None:
+            return 0
+        return value if fn(_M_ARENA_MAX, value) == 1 else 0
+    except Exception:  # noqa: BLE001 - an allocator hint must never stop the boot
+        return 0
+
+
 def trim_heap_if_needed(
     *,
     rss_reader: Callable[[], int | None] | None = None,
@@ -10262,6 +10335,28 @@ def boottime_now() -> float | None:
         if sys.platform == "darwin":
             return time.time()
         return None
+
+
+def awake_now() -> float:
+    """Now, in seconds, on a clock that stands still while the host is suspended.
+
+    ``time.monotonic()`` is that clock on Linux (``CLOCK_MONOTONIC``) and macOS
+    (the mach timebase). On Windows it counts a sleep, so there this reads the
+    unbiased interrupt time (``QueryUnbiasedInterruptTime``, in 100 ns units,
+    which leaves out sleep and hibernation) and falls back to
+    ``time.monotonic()`` only if that call fails. Liveness checks measure
+    silence on it, so a resume does not read as the whole sleep having passed
+    without a heartbeat.
+    """
+    if IS_WINDOWS:
+        ticks = ctypes.c_ulonglong(0)
+        try:
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            if kernel32.QueryUnbiasedInterruptTime(ctypes.byref(ticks)):
+                return ticks.value / 10_000_000
+        except (AttributeError, OSError):
+            pass
+    return time.monotonic()
 
 
 def process_start_boot_secs(starttime_ticks: float) -> float | None:

@@ -325,14 +325,14 @@ _MEMBER_DASHBOARD_ITEM = """
    lists its fields, `dashboard_types` says which folds exist and what each one holds so
    you read a number from a real path instead of guessing one, and `dashboard_write`
    fills the fields that are yours. Anything a person must ACT on goes into
-   `panel_publish` and those fields, not only into your reply — the tab is what they
-   read when they are not reading this thread. To change the PAGE itself, load the
+   `panel_publish` and those fields, not only into your reply — the Dashboard tab is
+   what they read when they are not reading this thread. `panel_publish` shows only on
+   a page that reads it, such as `kirocrew-conductor`; a needs-you item there goes into
+   the page's agentic field. To change the PAGE itself, load the
    `dashboard` skill and follow it: `dashboard_templates` to search, `dashboard_preview`
    to stage one, `dashboard_apply` once they say yes, `dashboard_rollback` to go back.
    ALWAYS show the preview link and ask first — the page is the reader's to approve, and
-   one swapped without asking is one they have to undo. With the 'Dynamic Dashboard'
-   Feature Preview off (the default) the tab shows your `panel_publish` record; this page
-   shows only for readers who turned the preview on. You cannot write a page
+   one swapped without asking is one they have to undo. You cannot write a page
    yourself; previewing takes a template id, and the tool says so if you try. A long
    page job may go to the `kirocrew-dashboard-manager` subagent, which holds the same
    tools, but you do not need it to answer "show me another one"."""
@@ -558,10 +558,12 @@ def build_member_section(
             "thread instead)"
         )
     if not desk_withheld:
-        # Which page is in force and which of its fields are the member's, so a
-        # write starts from the right names. Rides with item 7: both describe the
-        # desk's own Dashboard tab. The shapes and the mistake book stay behind
-        # `dashboard_fields`; this block is paid for on every turn.
+        # Which page is in force, which of its fields are the member's, and the one
+        # pointer line naming its upkeep skill. Rides with item 7: both describe the
+        # desk's own Dashboard tab, and with this section the pointer is re-injected
+        # after a compaction. The shapes and the mistake book stay behind
+        # `dashboard_fields`, the upkeep behind the skill; this block is paid for on
+        # every build.
         from kiro_crew import dashboard_agentic
 
         dashboard = dashboard_agentic.turn_block(slug)

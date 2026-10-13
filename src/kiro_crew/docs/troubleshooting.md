@@ -63,6 +63,8 @@ never changes. The fix is `launchctl setenv PATH "$PATH"` plus a full quit and
 relaunch — see the
 [macOS troubleshooting guide](https://github.com/kirodotdev/KiroCrew/blob/main/docs/guides/macos-troubleshooting.md)
 for the recipe and how to persist it across reboots.
+To add only a few directories, a `PATH=` line in `~/.kiro/crew/.env` does it
+without touching launchd; see [Credentials](configuration.md#credentials).
 
 ### Dashboard asks for sign-in but `kiro-cli` is already authenticated
 
@@ -207,6 +209,19 @@ Your administrator also has to add `kirocrew-core`, `kirocrew-cron` and
 prints an `MCP Governance (enterprise)` section on Identity Center hosts with the
 current state. Full walkthrough, including the registry JSON your administrator
 needs: `docs/guides/enterprise-mcp-governance.md`.
+
+### A server from your organization's MCP registry shows "Not verified"
+
+A server you installed from your organization's MCP registry (through Kiro IDE or
+the Kiro CLI) shows **Not verified** under Connections → MCP Servers, with no
+command. That is expected. The Kiro CLI wrote it into `~/.kiro/settings/mcp.json`
+as a pointer, `{"type": "registry"}`, and loads the real server from the registry
+when a session starts. Kiro Crew cannot read the registry, so the dashboard does
+not start or check that server itself.
+
+Kiro Crew passes the pointer on to every Kiro CLI session unchanged. To see
+whether it connected, run `kiro-cli mcp list`, or ask an agent to use one of its
+tools. Sessions on the Claude or KAS backends do not load registry servers.
 
 ### A remote MCP server shows "Not verified"
 

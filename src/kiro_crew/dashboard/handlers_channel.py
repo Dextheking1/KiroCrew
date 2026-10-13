@@ -13,7 +13,7 @@ from kiro_crew.channel import (
     ApprovalPolicy,
     ChannelManager,
     ListenMode,
-    _shell_base_binary,
+    _offerable_base_binary,
     run_channel_agent,
 )
 from kiro_crew.config.loader import coerce_config_field, config_path, read_config_text
@@ -515,7 +515,7 @@ async def api_channel_approve_agent(request: web.Request) -> web.Response:
                 # segment would run outside the shell context the user read
                 # ("cd /tmp/safe && rm target" does not license a bare
                 # "rm target" elsewhere).
-                base = _shell_base_binary(cmd)
+                base = _offerable_base_binary(cmd)
                 if base is None:
                     return _deny_trust_grant(
                         agent,

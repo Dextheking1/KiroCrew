@@ -21,6 +21,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from kiro_crew.agent_spec_format import iter_agent_spec_files
+from kiro_crew.aws_project_profiles import (
+    AWS_PROFILE_ENV,
+    bound_profile_env,
+    configured_project_profiles,
+    resolve_project_profile,
+)
 from kiro_crew.kiro_prerequisite import pre_spawn_identity, spawn_pid, stamp_spawn_identity
 from kiro_crew.messaging.queue_drain import entry_channel, wake_other_drains
 from kiro_crew.metrics.sessions import (
@@ -1156,6 +1162,10 @@ class SessionAllocationService:
         # An idle Semaphore(1) acquires without suspension, so this is the
         # authoritative non-waiting claim boundary after the locked check.
         await session.semaphore.acquire()
+        # Named before the lock wait below: a reset that pops this session
+        # during that wait reads ``turn_owner`` to learn whose permit it
+        # releases, and from here on that is this task's.
+        session.turn_owner = asyncio.current_task()
         try:
             async with self._lock:
                 self._refuse_if_ending(key, reservation)
@@ -1167,13 +1177,24 @@ class SessionAllocationService:
         except BaseException:
             # The held-semaphore contract was never returned to the caller
             # (a fence refusal above included).
-            session.semaphore.release()
+            self._release_reacquired(key, session)
             raise
         if not still_valid:
-            session.semaphore.release()
-        else:
-            session.turn_owner = asyncio.current_task()
+            self._release_reacquired(key, session)
         return still_valid
+
+    def _release_reacquired(self, key: str, session: Any) -> None:
+        """Give back the permit :meth:`_reacquire_and_validate` took, unless a reset already did.
+
+        A reset that pops the session while this task waits for the lock records
+        this task as the permit's holder and releases the permit to wake the
+        claimants parked on it (``session_lifecycle._wake_turn_waiters``), so a
+        second release here would over-release it. Only a popped session can
+        carry that record, so a session still registered is always released.
+        """
+        if self._sessions.get(key) is not session and self._owner.absorb_orphaned_release(key):
+            return
+        session.semaphore.release()
 
     async def _evict_stale_session(self, key: str, session: Any) -> None:
         """Pop only the observed stale object and close it outside the lock."""
@@ -1240,6 +1261,22 @@ class SessionAllocationService:
             # label (and failing outright when kiro-cli is not installed). Route
             # those to the dedicated per-session path instead, exactly as
             # ``get_bg_session`` serves them a provider-backed session.
+            return await owner.get_or_create(
+                key,
+                agent=agent,
+                approval_policy=approval_policy,
+                cwd=cwd,
+                start_priority=start_priority,
+            )
+        project_profiles = configured_project_profiles(owner._cfg)
+        if (
+            project_profiles
+            and cwd
+            and await asyncio.to_thread(resolve_project_profile, project_profiles, cwd)
+        ):
+            # The run's shared runtime is one process with one environment, so a
+            # step in a project bound to an AWS profile takes the dedicated path,
+            # where get_or_create sets that profile for its own process.
             return await owner.get_or_create(
                 key,
                 agent=agent,
@@ -1414,6 +1451,49 @@ class SessionAllocationService:
         if session.loaded_capabilities is not None:
             return False
         return getattr(session.provider, "is_session_sharing_eligible", False)
+
+    def _parent_aws_profile(self, parent_session_key: str) -> str | None:
+        """The profile ``aws.project_profiles`` set on the parent's process, if any."""
+        session = self._sessions.get(parent_session_key)
+        recorded = getattr(session, "aws_project_profile", None)
+        return recorded if isinstance(recorded, str) else None
+
+    def aws_profile_split_possible(self, parent_session_key: str) -> bool:
+        """Whether a subagent of the parent could need another AWS profile than it.
+
+        A subagent on the shared arm runs inside the parent's process (or a
+        companion runtime that mirrors the parent's environment), so it carries
+        whatever profile ``aws.project_profiles`` set on the parent at its cold
+        start; the dedicated arm sets the profile bound to the subagent's own
+        ``cwd``. Those can differ only while the map holds a binding or the
+        parent carries one. Reads no path, so a synchronous caller may ask.
+        """
+        if configured_project_profiles(self._owner._cfg):
+            return True
+        return self._parent_aws_profile(parent_session_key) is not None
+
+    def project_aws_profile(self, cwd: str) -> str | None:
+        """The profile ``aws.project_profiles`` binds *cwd* to, or ``None``.
+
+        Resolves every mapped directory with ``realpath``, so a directory on a
+        mount that stops answering blocks the calling thread: an async caller
+        runs this off the event loop.
+        """
+        project_profiles = configured_project_profiles(self._owner._cfg)
+        if not project_profiles or not cwd:
+            return None
+        return resolve_project_profile(project_profiles, cwd)
+
+    def aws_profile_differs_from_parent(
+        self, parent_session_key: str, child_profile: str | None
+    ) -> bool:
+        """Whether a subagent bound to *child_profile* differs from the parent's profile.
+
+        *child_profile* is the subagent's own binding, already resolved
+        (:meth:`project_aws_profile`); a bound parent with an unbound child
+        differs, and so does the reverse. Reads no path.
+        """
+        return child_profile != self._parent_aws_profile(parent_session_key)
 
     @staticmethod
     def _runtime_pid(runtime: Any) -> int | None:
@@ -1665,6 +1745,12 @@ class SessionAllocationService:
                     key,
                 )
             else:
+                # The holding this release ends is over, so its record goes in the
+                # same step. A waiter the permit was just handed to names itself
+                # when it next runs; until then the record names nobody, rather
+                # than a task that has let the permit go
+                # (``compaction_waits_for_turn``, ``cancel_owned_turn``).
+                session.turn_owner = None
                 # A release marks the end of a live turn, not the start of
                 # idleness: refresh liveness so the idle sweep measures from
                 # when the session went quiet rather than when it was
@@ -2339,6 +2425,28 @@ class SessionAllocationService:
             effective_cwd = preparation.project or effective_cwd
             extra_factory_kwargs["crew_agent"] = preparation.member
 
+        # A project bound to an AWS profile (aws.project_profiles) starts its
+        # agent with AWS_PROFILE set, unless the caller chose a profile itself.
+        # Set before the pool decision so a bound session never takes a pooled
+        # process spawned without it. An empty map leaves extra_env untouched.
+        project_profiles = configured_project_profiles(owner._cfg)
+        # Stamped on the session this call registers, so a subagent asking to
+        # share its process can compare against the profile the process holds.
+        bound_profile: str | None = None
+        if project_profiles and effective_cwd:
+            bound_env = await asyncio.to_thread(
+                bound_profile_env, project_profiles, effective_cwd, extra_env
+            )
+            if bound_env is not extra_env and bound_env is not None:
+                bound_profile = bound_env[AWS_PROFILE_ENV]
+                # The profile NAME only: the binding never holds a credential.
+                self._deps.logger.info(
+                    "session %s: AWS profile %r from aws.project_profiles",
+                    key,
+                    bound_profile,
+                )
+            extra_env = bound_env
+
         # Reconciliation can publish a new template model. Resolve only after
         # that boundary, while retaining an explicit caller model unchanged.
         if model is None:
@@ -2786,6 +2894,7 @@ class SessionAllocationService:
                     # what keeps the id sent and the id read identical.
                     session.requested_model = model or ""
                     session.backend_override = extra_factory_kwargs.get("backend_override")
+                    session.aws_project_profile = bound_profile
                     session.loaded_capabilities = stamp
                     self.state.capability_failures.pop(key, None)
                     replay_needed = getattr(provider, "_history_replay_needed", False) is True

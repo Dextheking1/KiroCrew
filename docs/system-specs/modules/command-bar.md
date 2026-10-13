@@ -223,12 +223,15 @@ that.
   label, and the group header above the row already names it. Under a query there is no header
   (see the group bullet above), so a `recent` row whose session is idle — no pill, no dot, no
   kind word — would carry no naming at all; it renders its group's own name,
-  `group_recent_sessions`, in that otherwise empty column. An `attention` row needs no such
-  substitution: it reaches that group only because its status is a pill, so the column is never
-  empty. `view` is named separately from its group because it opens a surface instead of acting
+  `group_recent_sessions`, in that otherwise empty column. An `attention` row gets no such
+  substitution: a session row reaches that group only because its status is a pill, so its
+  column always shows one. The group's `+N more blocked` overflow row (below) is not a session
+  and carries no status, so its column renders empty; its title already names what it is.
+  `view` is named separately from its group because it opens a surface instead of acting
   and closing.
-- `PER_GROUP_LIMIT = 6` caps each group so one group cannot push the others off the page;
-  settings carry a second, tighter `SETTINGS_WEAK_LIMIT = 2` on WEAK matches whether or not a
+- `PER_GROUP_LIMIT = 6` caps each group so one group cannot push the others off the page
+  (`attention` keeps the cap but ends on an overflow row that can lift it -- see the known gap
+  below); settings carry a second, tighter `SETTINGS_WEAK_LIMIT = 2` on WEAK matches whether or not a
   query is present, and `recent` is capped ahead of ranking by the overlay at
   `RECENT_SESSION_ROWS = 3` rather than by this limit. A weak settings match is one that does not
   name the setting — an empty query (every row is weak), or a typed query that is not a substring
@@ -244,8 +247,11 @@ that.
   `settings` groups. The `attention` group no longer shares it (#12622): a session waiting on
   the reader has no `view` to recover it from, so past `PER_GROUP_LIMIT` `rankRootRows` counts
   the held-back rows and ends the group on a `+N more blocked` overflow row
-  (`attentionOverflowRow`, id `attention:more`); pressing it sets `attentionExpanded`, which
-  lifts the cap for that group in place without recording frecency or closing the bar. The
+  (`attentionOverflowRow`, id `attention:more`). That row is a selectable option, not a
+  passive line: pressing it, or Enter while it is selected, sets `attentionExpanded`, which
+  lifts the cap for that group in place without recording frecency or closing the bar.
+  Expansion is opt-in per opening: the overlay resets `attentionExpanded` to false every time
+  the bar opens, so each opening starts capped again. The
   artifacts view does not share the remaining gap either — it renders a `+N more` line under its
   list, outside the listbox so it cannot become an option that Enter does nothing with — and that
   line is the shape to copy when the other root caps are closed.

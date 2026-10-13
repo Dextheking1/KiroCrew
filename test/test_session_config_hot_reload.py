@@ -110,6 +110,7 @@ class TestSubscription:
             "agents",
             "workspaces",
             "default_workspace",
+            "aws",
         )
         assert mgr._config_sub is subs[0]
 

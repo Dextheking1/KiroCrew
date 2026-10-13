@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from aiohttp import web
 from aiohttp.client_exceptions import ClientConnectionResetError
 
-from kiro_crew import crew_recency
 from kiro_crew import members as members_mod
 from kiro_crew import model_registry
 from kiro_crew.acp.client import AcpModelUnavailable
@@ -41,6 +40,8 @@ from kiro_crew.config.loader import (
     config_dir,
     crew_autocompact_pct,
     default_project_dir,
+    default_template,
+    dispatch_kiro_agent,
     published_autocompact_pct,
     resolve_agent_bindings,
 )
@@ -188,6 +189,7 @@ from kiro_crew.dashboard.chat_utils import (  # noqa: F401
     _remove_queued_by_id,
     _resettle_restricted_key,
     _sync_dashboard_slots,
+    chunk_generation,
     drained_to_thread,
     effective_session_key,
     history_corpus_unreadable,
@@ -313,9 +315,13 @@ from kiro_crew.session_lifecycle import compaction_in_flight
 from kiro_crew.session_summary import count_user_turns_in_records
 from kiro_crew.start_priority import person_priority
 from kiro_crew.trust_patterns import (
+    GrantDeadline,
     base_consent_pattern,
     base_trust_patterns,
     exact_trust_pattern,
+    grant_deadline,
+    parse_grant_ttl,
+    record_trust_grant,
 )
 from kiro_crew.validation import (
     ARTIFACT_SLUG_RE,
@@ -1052,6 +1058,7 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
                 effective_session_key(slot),
                 slot.workspace,
                 slot._app,
+                slot.agent_kind,
             )
             try:
                 # Config load is file IO (stat + read + jsonschema validate on a
@@ -1077,6 +1084,7 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
                             compared_binding[3],
                             compared_binding[0],
                             compared_binding[1] or None,
+                            agent_kind=compared_binding[6],
                         ),
                         resolve_agent_bindings(_cfg, agent, compared_binding[1] or None),
                     )
@@ -1103,6 +1111,7 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
                 effective_session_key(slot),
                 slot.workspace,
                 slot._app,
+                slot.agent_kind,
             ):
                 return web.json_response(
                     {"error": "slot changed during agent resolution", "code": "session_rebound"},
@@ -1162,13 +1171,6 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         return web.json_response(
             {"error": "message is required", "code": "message_required"}, status=400
         )
-
-    if not request_app and not cron_creator:
-        # The person typed this (no app token, no cron attestation; a peer's
-        # `relay=1` was refused above): the one signal the Crewmates list orders
-        # and filters by (crew_recency). An empty slot agent is the default crew,
-        # recorded under "" and resolved by the roster read. Best-effort, off-loop.
-        await asyncio.to_thread(crew_recency.record_user_chat, slot.agent or "")
 
     if slot.turn_running or slot._turn_admission_reserved:
         # Mid-turn steer: inject into the RUNNING turn instead of queueing for
@@ -1946,6 +1948,20 @@ _DEFERRED_PLAIN_CREATE_KNOWN_KEYS = frozenset(
 )
 
 
+def _default_template_stamp(cfg: KiroCrewConfig) -> str:
+    """The name an agent-less slot is stamped with: the default custom agent (a
+    template), as kiro-cli DECLARES it.
+
+    Runs OFF the event loop (``asyncio.to_thread``) on purpose: ``agent.default_agent``
+    may spell a spec's file stem, and :func:`dispatch_kiro_agent` can only warm a
+    cold materialized snapshot when called off-loop -- on the loop it returns its
+    input unchanged, which would stamp the stem during the boot window and strand
+    the slot once the default moves on. The stamp outlives a later change of the
+    default, so it has to be the declared name from the first write.
+    """
+    return dispatch_kiro_agent(default_template(cfg))
+
+
 async def api_chat_slot_create(request: web.Request) -> web.Response:
     """POST /api/chat/slots — create a new chat slot."""
     state: DashboardState = request.app["state"]
@@ -2061,15 +2077,21 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
         # Infra failure loading config must not block slot creation outright, so
         # validation below is skipped rather than failing closed.
         logger.warning("Failed to load config for slot create", exc_info=True)
-    # An agent-less create means "use the default agent": stamp the RESOLVED
-    # default alias into the slot instead of storing "", so the slot's
-    # metadata records what will actually answer — otherwise the dashboard
-    # footer chip renders its literal 'default' fallback while dispatch
-    # quietly resolves the real default. Placed BEFORE the normalization
-    # below so the stamped alias also gets its workspace resolved by the
-    # existing binding path.
+    # An agent-less create means "the default TEMPLATE": stamp it into the slot
+    # in the template namespace instead of storing "", so the slot's metadata
+    # records what will actually answer — otherwise the dashboard footer chip
+    # renders its literal 'default' fallback while dispatch quietly resolves
+    # the real default. The default template, never the `default` crewmate
+    # alias: a plain session is a template on the default folder and
+    # memory store, and stamping the alias made every plain chat that
+    # crewmate's — its workspace, its model pin, its roster recency. Placed
+    # BEFORE the normalization below so the stamped template also gets its
+    # workspace resolved by the existing binding path.
+    # Stamped as the name kiro-cli DECLARES (`_default_template_stamp`), not a
+    # file stem `agent.default_agent` may spell.
     if cfg is not None and not agent:
-        agent = cfg.default_agent or ""
+        agent = await asyncio.to_thread(_default_template_stamp, cfg)
+        agent_kind = "template"
     # Normalize an agent nothing will dispatch to the one that WILL answer.
     # Otherwise the name is stored verbatim and resolve_agent_bindings silently
     # falls back to the default agent: the sidebar advertises the requested agent
@@ -2252,6 +2274,12 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
                     exc,
                 )
             return web.json_response({"error": str(exc)}, status=409)
+        if is_new_slot and agent_kind and not slot.agent_kind:
+            # The namespace the name was stated (or stamped) in travels with the
+            # slot from birth, for every caller: the owner branch below re-records
+            # it from the committed resolution, and a non-owner create would
+            # otherwise leave a template-stamped slot reading as a bare name.
+            slot.agent_kind = agent_kind
         if reopening_persisted_cron:
             # The creator fence already loaded and authorized this metadata
             # snapshot. Reuse it so a closed-session reopen restores the user's
@@ -4137,12 +4165,15 @@ async def continue_slot_turn(
     before_dispatch: Callable[[], None] | None = None,
     extra_meta: dict[str, Any] | None = None,
     replaced: Callable[[], bool] | None = None,
-) -> None:
+) -> str:
     """Queue the Resume/Continue body at the head of *slot* and dispatch it.
 
     The mechanism behind ``api_chat_slot_continue``, shared with
-    ``session_control.retry_target`` so the button and the ``session_retry``
-    tool run one path and refuse the same states. Authorization is the
+    ``session_control.retry_target`` and ``session_control.continue_target`` so
+    the button and the ``session_retry`` / ``session_continue`` tools run one
+    path and refuse the same states. Returns which body was queued:
+    ``"resumed"`` for the interrupted pick-up, ``"continued"`` for the carry-on
+    message a cleanly finished slot gets. Authorization is the
     caller's: this function checks only whether the slot can take a
     continuation right now, and raises :class:`SlotContinueRefusal` when it
     cannot.
@@ -4280,6 +4311,7 @@ async def continue_slot_turn(
         # The turn is running either way, so this is not an error for the caller.
         logger.info("continue: queue entry consumed by a concurrent dequeue (slot %s)", slot.key)
     state.push_slots_update()
+    return "resumed" if interrupted else "continued"
 
 
 #: Consecutive tagged session-start failures at which Continue stops re-running
@@ -4970,6 +5002,10 @@ async def _record_explicit_agent_selection(
     )
 
     selected = agent_name or bindings.resolved_alias
+    if not selected and bindings.selection_kind == "template":
+        # A plain session selected its template (the default one): record it,
+        # so the conversation stays on it whatever is discovered later.
+        selected = bindings.kiro_agent
     if bindings.selection_kind == "member":
         bindings.execution_context = resolve_member_execution(
             config, selected, memory_mode=memory_mode, app=app, validate_memory_files=False
@@ -5032,6 +5068,23 @@ class _CommitToken(str):
     """
 
     __slots__ = ()
+
+
+def clear_slot_model_binding(slot: Any) -> None:
+    """Reset the fallback walk; the pin itself is kept.
+
+    The walk belongs to the old agent's provider and cannot resume on its
+    replacement. The stored pin is scoped on read and stays unchanged.
+
+    Use a fresh identity token so rollback restores the prior walk only while
+    this reset still owns it; a later reset must remain distinguishable.
+    """
+    slot._fallback_candidate_idx = 0
+    slot._fallback_walked = []
+    slot._active_fallback_model = _CommitToken("")
+    slot._fallback_primary_model = ""
+    slot._fallback_slot_model = ""
+    slot._fallback_pick_gen = 0
 
 
 # Serializes slot SWITCH transactions that share one session, keyed by
@@ -5174,7 +5227,10 @@ def _switch_target_busy(
     (the value the probe and the reset act on). Callers keep the atomic
     ``skip_if_busy`` decline in ``SessionManager.reset`` as the backstop for
     a turn that starts after this read: message dispatch takes none of the
-    switch locks, so this is a fast path, not the authority.
+    switch locks, so this is a fast path, not the authority. The two teardown
+    routes read it the same way: reload inside the locks it shares with the
+    switches, reset-conversation (which takes no switch lock) on the key it
+    then discards with ``skip_if_busy``.
 
     *own_turn* is the in-turn ``/agent <name>`` command (``switch_slot_agent``
     called from the slot's own turn, before it acquires a session): that turn
@@ -5379,6 +5435,20 @@ async def switch_slot_agent(
         return web.json_response(
             {"error": "invalid agent kind", "code": "invalid_agent_kind"}, status=400
         )
+    stamped_default = not agent_name
+    if stamped_default:
+        # "Use the default" is the default TEMPLATE, stamped in its namespace
+        # exactly as the create route stamps an agent-less slot -- so
+        # the switch records a selection, and the slot never reads as the
+        # `default` crewmate.
+        try:
+            agent_name = await asyncio.to_thread(
+                lambda: _default_template_stamp(KiroCrewConfig.load())
+            )
+        except Exception:
+            logger.warning("Failed to load config for the default template", exc_info=True)
+            agent_name = default_template(KiroCrewConfig())
+        agent_kind = "template"
     if slot.mode == "member" and (agent_name != slot.agent or agent_kind == "template"):
         # Member DM threads are pinned to their crew: refuse the switch before
         # any state is touched. A same-name "switch" stays allowed — it is a
@@ -5470,7 +5540,13 @@ async def switch_slot_agent(
                 denied = await caller.require_owner("chat.slot_agent")
                 if denied is not None:
                     return denied
-        if agent_name != slot.agent:
+        # A name change, or the stamped default landing on the slot's own name:
+        # the default template may carry a private member's name, and "use the
+        # default" on that member's conversation is a namespace change that
+        # would rebind it to Global memory, so the durable pin is checked
+        # before anything is touched. An explicit same-name template pick is
+        # the owner's stated choice and keeps its existing path.
+        if agent_name != slot.agent or stamped_default:
             from kiro_crew.execution_context import read_session_execution
 
             try:
@@ -5747,6 +5823,27 @@ async def switch_slot_agent(
         slot.agent_kind = _CommitToken(new_agent_kind)
         committed_agent = slot.agent
         committed_agent_kind = slot.agent_kind
+        # The resolved namespace decides, not the request's spelling alone: a
+        # name-only pick can still change member/template (the member lookup
+        # answered by the shared template, or the reverse), which is a rebind
+        # even though the name stood still. Both commits see the resolved kind,
+        # so both the decision and the rollback below are made here.
+        agent_changed = agent_name != prior_agent or (
+            new_agent_kind != "" and prior_agent_kind != "" and new_agent_kind != prior_agent_kind
+        )
+        prior_fallback_candidate_idx = slot._fallback_candidate_idx
+        prior_fallback_walked = slot._fallback_walked
+        prior_active_fallback_model = slot._active_fallback_model
+        prior_fallback_primary_model = slot._fallback_primary_model
+        prior_fallback_slot_model = slot._fallback_slot_model
+        prior_fallback_pick_gen = slot._fallback_pick_gen
+        committed_active_fallback_model: str | None = None
+        if agent_changed:
+            # Fallback recovery is tied to the provider that serves this agent,
+            # so a stale walk must not resume on the replacement session. The
+            # pin is deliberately kept (see clear_slot_model_binding).
+            clear_slot_model_binding(slot)
+            committed_active_fallback_model = slot._active_fallback_model
 
         # Derived fields commit BEFORE the reset too, compare-and-set against
         # the pre-await baseline: a send landing during the reset teardown
@@ -5797,10 +5894,26 @@ async def switch_slot_agent(
             token object, so an identity match proves the field is still
             this commit's; a field this request never committed (the
             write-side CAS lost) has a None token and is never touched.
+
+            ``slot.model`` is NOT part of the commit at all: the pin is kept by
+            design, so a rollback leaves it alone either way. The fallback walk
+            the commit reset is unwound here instead, on the same ownership
+            test — a refused switch that keeps the reset has changed something
+            while reporting failure.
             """
             if slot.agent is committed_agent and slot.agent_kind is committed_agent_kind:
                 slot.agent = prior_agent
                 slot.agent_kind = prior_agent_kind
+                if (
+                    committed_active_fallback_model is not None
+                    and slot._active_fallback_model is committed_active_fallback_model
+                ):
+                    slot._fallback_candidate_idx = prior_fallback_candidate_idx
+                    slot._fallback_walked = prior_fallback_walked
+                    slot._active_fallback_model = prior_active_fallback_model
+                    slot._fallback_primary_model = prior_fallback_primary_model
+                    slot._fallback_slot_model = prior_fallback_slot_model
+                    slot._fallback_pick_gen = prior_fallback_pick_gen
             if committed_workspace is not None and slot.workspace is committed_workspace:
                 slot.workspace = pre_await_workspace
             if committed_project is not None and slot.project is committed_project:
@@ -8172,8 +8285,21 @@ async def api_chat_slot_reload(request: web.Request) -> web.Response:
         return _app_cancel_denied(request, slot, "chat.slot_reload", session_key)
 
     def _busy(session_key: str) -> bool:
+        # The registered provider's own view first, as this route always read
+        # it (any provider object, not only an ``LLMProvider``). Then
+        # ``_switch_target_busy``, the predicate the switch handlers and the
+        # ``session_reload`` verb refuse with: it adds this slot's own
+        # ``running`` reservation and every SIBLING alias's turn on the same
+        # session. Both cover a first turn still in ``provider.start()``, which
+        # has no registered provider to ask -- reloading then finds no session,
+        # reports success and eagerly spawns a second start beside the one in
+        # flight. The menu item is already disabled while this slot runs; this
+        # makes the route agree with it. A fast path: the reset's
+        # ``skip_if_busy`` stays the authority.
         provider = state.sessions.get_provider(session_key)
-        return provider is not None and provider.has_active_turn()
+        if provider is not None and provider.has_active_turn():
+            return True
+        return _switch_target_busy(state, slot, session_key, provider)
 
     return await reload_slot_session(
         state,
@@ -8282,10 +8408,6 @@ async def reload_slot_session(
         refusal = denied(session_key)
         if refusal is not None:
             return refusal
-        if busy(session_key):
-            return web.json_response(
-                {"error": "a turn is in flight", "code": "turn_in_flight"}, status=409
-            )
         # Children guard, shared with api_chat_slot_continue: RUNNING children
         # die with the parent runtime, and _subagents_attached_response
         # documents why queued children and in-flight deliveries count too.
@@ -8308,6 +8430,17 @@ async def reload_slot_session(
         # was torn down.
         if not still_ours(False):
             return slot_not_found()
+        # The busy probe goes LAST, after every await above, for the same
+        # reason the switch handlers re-probe right before their reset: message
+        # dispatch takes neither lock held here, so a turn -- this slot's own
+        # or a sibling alias's cold start, neither of which has a provider to
+        # ask yet -- can begin during the children probe. Read before it, that
+        # turn would be invisible to this check and to the reset's
+        # ``skip_if_busy`` alike, which sees only a registered session.
+        if busy(session_key):
+            return web.json_response(
+                {"error": "a turn is in flight", "code": "turn_in_flight"}, status=409
+            )
         teardown_incomplete = False
 
         async def _reset() -> bool:
@@ -10095,6 +10228,13 @@ def _deny_approval_mode(
     )
 
 
+def _grant_deadline(ttl: int | None) -> GrantDeadline | None:
+    """Return a timed grant's deadline from now, ``None`` for a chat-long grant."""
+    if ttl is None:
+        return None
+    return grant_deadline(ttl, wall=time.time(), mono=time.monotonic())
+
+
 def _deny_trust_pattern(name: str, request_id: str, action: str, code: str) -> web.Response:
     """Refuse and audit a command-scoped trust grant without resolving it."""
     try:
@@ -10112,6 +10252,8 @@ def _deny_trust_pattern(name: str, request_id: str, action: str, code: str) -> w
         "pattern_underivable": "the pending tool has no grantable command scope",
         "approval_superseded": "pattern does not match the pending command",
         "approval_not_slot_owned": "command-scoped trust requires a live slot approval",
+        "ttl_unsupported": "only a command or command-family grant can be timed",
+        "ttl_invalid": "ttl_seconds must be a whole number of seconds from 1 to 86400",
     }
     return web.json_response({"error": errors[code], "code": code}, status=400)
 
@@ -10177,6 +10319,17 @@ async def api_chat_slot_approve(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "no pending approval", "code": "approval_not_pending"}, status=404
             )
+    # A timed grant names its lifetime in ``ttl_seconds``. Only the two
+    # command-scoped tiers carry one, and an unreadable lifetime refuses the
+    # whole decision BEFORE any side effect: it never falls back to a grant
+    # that lasts for the chat, and never to an approval with no grant.
+    grant_ttl: int | None = None
+    if "ttl_seconds" in body:
+        if original_action not in ("trust_command", "trust_base"):
+            return _deny_trust_pattern(name, request_id, original_action, "ttl_unsupported")
+        grant_ttl = parse_grant_ttl(body["ttl_seconds"])
+        if grant_ttl is None:
+            return _deny_trust_pattern(name, request_id, original_action, "ttl_invalid")
     # Locate the slot that OWNS the pending approval future. It is usually the
     # addressed slot, but under session-sharing or a rehydrated/replaced slot the
     # future can live on a different slot object under a different key. All
@@ -10285,7 +10438,12 @@ async def api_chat_slot_approve(request: web.Request) -> web.Response:
             # ``_trusted_patterns`` is the existing fnmatch store.  Escape every
             # metacharacter so an exact grant for ``rm *.tmp`` cannot authorize
             # ``rm secret.tmp``.
-            owner._trusted_patterns.add(exact_trust_pattern(trust_key))
+            record_trust_grant(
+                owner._trusted_patterns,
+                owner._trusted_pattern_deadlines,
+                (exact_trust_pattern(trust_key),),
+                _grant_deadline(grant_ttl),
+            )
         action = "approved"
     # Trust-base: derive bases from the same canonical pending command, never
     # from the client pattern or model-authored title.
@@ -10300,7 +10458,12 @@ async def api_chat_slot_approve(request: web.Request) -> web.Response:
                 return _deny_trust_pattern(name, request_id, original_action, "pattern_underivable")
             if pattern != base_consent_pattern(base):
                 return _deny_trust_pattern(name, request_id, original_action, "approval_superseded")
-            owner._trusted_patterns.update(base_trust_patterns(base))
+            record_trust_grant(
+                owner._trusted_patterns,
+                owner._trusted_pattern_deadlines,
+                base_trust_patterns(base),
+                _grant_deadline(grant_ttl),
+            )
         action = "approved"
     # YOLO: auto-approve all tools globally (all slots)
     elif action == "yolo":

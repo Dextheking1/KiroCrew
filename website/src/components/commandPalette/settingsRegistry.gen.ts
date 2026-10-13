@@ -1334,6 +1334,18 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     }
   },
   {
+    "id": "chat.show-full-titles-while-scrolling",
+    "label": "Show Full Titles While Scrolling",
+    "labelKey": "pages.settings.chatPanel.full_titles_on_scroll",
+    "description": "While you scroll the session list, titles cut off by the sidebar show in full over it; they hide when the pointer leaves or shortly after scrolling stops",
+    "tab": "chat",
+    "type": "toggle",
+    "occurrence": 1,
+    "params": {
+      "sub": "sessions"
+    }
+  },
+  {
     "id": "chat.show-pasted-text-in-full",
     "label": "Show Pasted Text in Full",
     "labelKey": "pages.settings.chatPanel.show_pasted_text_in_full",
@@ -1715,7 +1727,7 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "id": "developer.automatic-cards-for-all-sessions",
     "label": "Automatic cards for all sessions",
     "labelKey": "commandCenter.automatic_cards",
-    "description": "Summaries of each session’s recent work and next steps.",
+    "description": "Summaries of each session’s recent work and next steps, shown on the All Dashboards page, which the Sessions list’s ⋮ menu opens. A model call writes each one, so they use model credits.",
     "tab": "developer",
     "type": "toggle",
     "occurrence": 1,
@@ -1762,15 +1774,6 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "label": "Developer Mode",
     "labelKey": "pages.settings.developerPanel.developer_mode",
     "description": "Show Developer page in sidebar with Logs, System metrics, and Memory internals",
-    "tab": "developer",
-    "type": "toggle",
-    "occurrence": 1
-  },
-  {
-    "id": "developer.dynamic-dashboard",
-    "label": "Dynamic Dashboard",
-    "labelKey": "pages.developer.featurePreviewsTab.dashboard",
-    "description": "Turns on the in-development Dynamic Dashboard: a status row above the chat composer, a Dashboard view in the side panel and on a crewmate’s page, and an All Dashboards page. Its layout is still being designed, so it is not shown until you turn it on. Also holds the switch for automatic cards.",
     "tab": "developer",
     "type": "toggle",
     "occurrence": 1

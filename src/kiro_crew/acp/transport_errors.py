@@ -219,11 +219,22 @@ class AcpError(Exception):
     """
 
     def __init__(
-        self, *args: object, transient: bool | None = None, code: int | None = None
+        self,
+        *args: object,
+        transient: bool | None = None,
+        code: int | None = None,
+        user_worded: bool = False,
     ) -> None:
         super().__init__(*args)
         self.transient = transient
         self.code = code
+        # Whether Kiro Crew wrote this message for a person to read: a curated
+        # formatter branch, or a raise site with fixed recovery wording. False
+        # for the formatter's fallback, which passes the provider's own text or
+        # the raw error dict through. A surface that shows backend errors to a
+        # chat audience keys on this, not on ``transient``, which is a retry
+        # verdict and is set on the fallback too.
+        self.user_worded = user_worded
         # Reactive-fallback metadata, set by :func:`_raise_acp_error` when a
         # prompt-time error names a rejected model (so run_bg_oneliner can retry
         # once with a served model). Guarded so AcpModelUnavailable — which sets
@@ -483,6 +494,7 @@ class AcpModelUnavailable(AcpError):  # noqa: N818
                 f"account restriction; try another entry from the list or restart "
                 f"the session. Available models: {usable}.",
                 transient=False,
+                user_worded=True,
             )
             return
         # The hint is for every harness that signs in through the host kiro-cli
@@ -498,6 +510,7 @@ class AcpModelUnavailable(AcpError):  # noqa: N818
                 f"account you are signed in as with `kiro-cli whoami` — a Builder ID "
                 f"sign-in carries a different entitlement than organization SSO.",
                 transient=False,
+                user_worded=True,
             )
             return
         # The sign-in advice above is about the host kiro-cli identity store:
@@ -518,7 +531,7 @@ class AcpModelUnavailable(AcpError):  # noqa: N818
                 f"The model {model_id!r} is not among the models this {backend} "
                 f"session advertises."
             )
-        super().__init__(f"{detail} Available models: {usable}.", transient=False)
+        super().__init__(f"{detail} Available models: {usable}.", transient=False, user_worded=True)
 
     @classmethod
     def for_recorded_refusal(
@@ -1069,6 +1082,21 @@ _RE_IMAGE_FORMAT_UNSUPPORTED = re.compile(
 # co-occurring retry hint or 5xx wrapper must not rescue a size verdict.
 _RE_OVERSIZED_REQUEST = re.compile(r"[Tt]his message is too large to send")
 
+# The claude adapter's spelling of a request larger than the model accepts:
+# ``Internal error: API Error: 400 Input is too long.`` (or ``Prompt is too
+# long``). Unlike kiro-cli it puts the sentence in the JSON-RPC ``message``, not
+# in ``data`` (which carries only ``{"errorKind": "unknown"}``), so this one is
+# matched against ``message`` -- anchored at its start, so it reads the adapter's
+# own wording and never a phrase echoed further into some other error. The
+# overflow is in the conversation history the adapter re-sends on every turn
+# (accumulated images are the usual cause), so the identical payload is refused
+# on every retry and on every model: a CONTEXT OVERFLOW in the same sense as
+# _RE_CONTEXT_WINDOW_OVERFLOW, and tagged the same way at raise time.
+_RE_ADAPTER_INPUT_TOO_LONG = re.compile(
+    r"^\s*(?:Internal error:\s*)?(?:API Error:\s*\d{3}\s+)?(?:Input|Prompt) is too long\b",
+    re.IGNORECASE,
+)
+
 # kiro-cli's wording for a concurrent in-flight prompt on the session, read by
 # the user-facing formatter below and by `_raise_acp_error`'s AcpPromptBusy
 # classification. One pattern, but two haystacks: the formatter scopes to the
@@ -1154,6 +1182,7 @@ def _is_transient_raw_error(error: object, available_models: Sequence[str] | Non
     unentitled-model(terminal) → usage-limit(terminal) →
     malformed-request(terminal) → context-window-overflow(terminal) →
     unsupported-image(terminal) → oversized-request(terminal) →
+    adapter input-too-long(terminal) →
     model-unavailable → throttle →
     credential-propagation(transient) → auth(terminal) →
     session-expiry(terminal) → connection failure(transient) → generic 5xx /
@@ -1212,6 +1241,12 @@ def _is_transient_raw_error(error: object, available_models: Sequence[str] | Non
         # retry. Stated here because the sentence itself ends in "try again":
         # left to the unknown fall-through, a retry-hint pattern added below
         # could read a size verdict as a momentary blip.
+        return False
+    if _RE_ADAPTER_INPUT_TOO_LONG.search(message):
+        # Terminal: the claude adapter re-sends the same oversized history on
+        # every attempt and every model, so neither a retry nor the fallback
+        # chain can make it fit. Stated explicitly so a 5xx token or retry hint
+        # added to the same frame cannot rescue a size verdict.
         return False
     if _RE_MODEL_UNAVAILABLE.search(data):
         return True
@@ -1357,6 +1392,23 @@ def _format_acp_error(
 ) -> str:
     """Format a JSON-RPC error from the ACP backend into actionable user text.
 
+    See :func:`_format_acp_error_worded`, which also reports whether the text
+    came from a curated branch.
+    """
+    return _format_acp_error_worded(error, available_models, backend=backend)[0]
+
+
+def _format_acp_error_worded(
+    error: object,
+    available_models: Sequence[str] | None = None,
+    *,
+    backend: str = "",
+) -> tuple[str, bool]:
+    """Format a JSON-RPC error, and say whether a curated branch worded it.
+
+    The flag is False only for the fallback below, which shows the provider's own
+    message or the raw error dict. Every other branch writes fixed recovery text.
+
     The ACP backend (kiro-cli or claude-agent-acp) surfaces upstream Bedrock
     failures as JSON-RPC ``error`` objects with shape
     ``{"code": int, "message": str, "data": str}``.  The ``data`` field
@@ -1376,6 +1428,7 @@ def _format_acp_error(
     through ``redact_credentials`` and ``redact_exfiltration_urls`` before
     being raised to the dashboard / Slack / CLI surfaces.
     """
+    worded = True
     if isinstance(error, dict):
         data = str(error.get("data", "") or "")
         message = str(error.get("message", "") or "")
@@ -1476,6 +1529,16 @@ def _format_acp_error(
                 "conversation the accumulated history no longer fits, so start a fresh "
                 "session; in a fresh session the always-loaded agent resources and "
                 "tools already fill the window, so reduce them."
+                f"{req_id_suffix}"
+            )
+        elif _RE_ADAPTER_INPUT_TOO_LONG.search(message):
+            # The provider's sentence first (it is what the CLI prints), then
+            # the fix. Surface-blind like its kiro-cli sibling above: it names
+            # no dashboard control, only the remedy every surface has.
+            formatted = (
+                "This chat is too big for the model to read in one request (Input is "
+                "too long), often because it holds many images such as screenshots. "
+                "Retrying or switching models will not help. Start a fresh session."
                 f"{req_id_suffix}"
             )
         elif _RE_IMAGE_FORMAT_UNSUPPORTED.search(data):
@@ -1681,6 +1744,7 @@ def _format_acp_error(
             # no fix; the declared message names the one that works.
             formatted = f"{host_auth.signed_out_message(backend)}{req_id_suffix}"
         else:
+            worded = False
             # Unrecognised failure mode. Show the PROVIDER'S OWN message when
             # there is one — it is the true error, and the same words the CLI
             # prints, so the two surfaces agree. This is the path every provider
@@ -1706,6 +1770,7 @@ def _format_acp_error(
             else:
                 formatted = f"Prompt error: {error}"
     else:
+        worded = False
         formatted = f"Prompt error: {error}"
 
     # Defense-in-depth: scrub any credentials or suspicious exfiltration URLs
@@ -1724,7 +1789,7 @@ def _format_acp_error(
             len(url_warnings),
             len(cred_warnings),
         )
-    return redacted
+    return redacted, worded
 
 
 # ---------------------------------------------------------------------------
@@ -1768,14 +1833,18 @@ def _raise_acp_error(
     so kiro's message is the right answer for it. The retry verdict does not
     depend on it.
     """
-    formatted = _format_acp_error(error, available_models, backend=backend)
+    formatted, worded = _format_acp_error_worded(error, available_models, backend=backend)
     # Detect prompt-busy from the raw error (before formatting rewrites it)
     raw_data = ""
     if isinstance(error, dict):
         raw_data = f"{error.get('data', '')} {error.get('message', '')}"
     if _PROMPT_BUSY_RE.search(raw_data):
-        raise AcpPromptBusy(formatted)
-    err = AcpError(formatted, transient=_is_transient_raw_error(error, available_models))
+        raise AcpPromptBusy(formatted, user_worded=worded)
+    err = AcpError(
+        formatted,
+        transient=_is_transient_raw_error(error, available_models),
+        user_worded=worded,
+    )
     # Tag a network-path drop so the interactive retry ladder can wait out a
     # short outage instead of spending the fixed provider-error budget. Only a
     # transient verdict qualifies, so a terminal frame never becomes waitable.
@@ -1789,7 +1858,13 @@ def _raise_acp_error(
     # validation failure, and kiro-cli's own refusal of a request it could not
     # shrink to fit -- each reproduced exactly by re-sending the same context.
     raw_data_field = str(error.get("data", "") or "") if isinstance(error, dict) else ""
-    _context_overflow = bool(_RE_CONTEXT_WINDOW_OVERFLOW.search(raw_data_field))
+    raw_message_field = str(error.get("message", "") or "") if isinstance(error, dict) else ""
+    # The claude adapter's overflow rides in ``message`` (anchored match, see
+    # _RE_ADAPTER_INPUT_TOO_LONG); every other tag below stays data-scoped.
+    _context_overflow = bool(
+        _RE_CONTEXT_WINDOW_OVERFLOW.search(raw_data_field)
+        or _RE_ADAPTER_INPUT_TOO_LONG.search(raw_message_field)
+    )
     _image_format_unsupported = bool(_RE_IMAGE_FORMAT_UNSUPPORTED.search(raw_data_field))
     if (
         _context_overflow
