@@ -53,6 +53,22 @@ class TestABodyTheLineCanRunIsRead:
         "$(cat <<eof\nalpha bravo\neof\n)",
         'eval "$(cat <<eof\nalpha bravo\neof\n)"',
         "m=$(cat <<eof\nalpha bravo\neof\n); $m",
+        # a consumer outside the data list reads the printed text
+        "cat <<eof | fish\nalpha bravo\neof",
+        "cat <<eof | sort\nalpha bravo\neof",
+        # a written file that a later command runs
+        "cat > f <<eof\nalpha bravo\neof\nchmod +x f && ./f",
+        # git/gh only through a listed subcommand right after the program
+        "git -c alias.x='!sh' x <<eof\nalpha bravo\neof",
+        "git x <<eof\nalpha bravo\neof",
+        "gh x <<eof\nalpha bravo\neof",
+        # a leading assignment or a path in program position
+        "x=1 cat <<eof\nalpha bravo\neof",
+        "/bin/cat <<eof\nalpha bravo\neof",
+        # an operator glued inside a word
+        "cat f|sh <<eof\nalpha bravo\neof",
+        # a process substitution that runs the output
+        "tee >(sh) <<eof\nalpha bravo\neof",
     )
 
     @pytest.mark.parametrize("command", READ)
@@ -67,6 +83,17 @@ class TestOnlyTheSimpleShapeIsSetAside:
     def test_two_heredocs_on_a_line_keep_their_bodies(self) -> None:
         assert _body_is_read("cat <<a <<b\nalpha\na\nbravo\nb", "alpha")
         assert _body_is_read("cat <<a <<b\nalpha\na\nbravo\nb", "bravo")
+
+    def test_an_opener_line_continued_by_a_backslash_keeps_its_body(self) -> None:
+        # The backslash joins the next line onto the command, so it is not body.
+        assert _body_is_read("cat <<eof \\\n&& alpha bravo\ndelta\neof", "alpha", "bravo")
+
+    def test_a_set_aside_body_leaves_the_source_as_well(self) -> None:
+        # Readers of the frame source see the same command shape as the tokens.
+        sources = [
+            source for source, _tokens in sn._shell_payload_walk("cat <<eof\nalpha bravo\neof")
+        ]
+        assert sources and not any("alpha" in source for source in sources)
 
     def test_a_substitution_inside_a_data_body_is_still_its_own_frame(self) -> None:
         # ``cat`` only prints the body, but the substitution inside it runs on its

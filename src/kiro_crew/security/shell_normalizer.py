@@ -3518,24 +3518,33 @@ def _structural_len(text: str) -> int:
     return len(text)
 
 
-#: Consumers that read a heredoc body as DATA rather than running it.  The shared
-#: data-consumer vocabulary, minus the few whose own grammar can run a line
-#: (``sed`` ``e``, ``awk`` ``system()``, pagers that shell out), plus ``git``/``gh``
-#: whose heredoc is a message or patch to a builtin subcommand.
-_HEREDOC_DATA_PROGRAMS = (_DATA_CONSUMER_PROGRAMS - {"sed", "awk", "less", "more"}) | {"git", "gh"}
+#: Programs whose heredoc body is DATA: each only reads, prints, filters or writes
+#: its input, and no option of any of them starts another program.  A positive
+#: list, so an unlisted program (``fish``, ``sort --compress-program``, ``./f``)
+#: keeps the body as commands.
+_HEREDOC_DATA_PROGRAMS = frozenset(
+    {"cat", "tac", "tee", "head", "tail", "wc", "nl", "cut", "tr", "uniq", "fold"}
+    | {"grep", "egrep", "fgrep", "base64", "md5sum", "sha256sum"}
+)
 
-#: Programs and verbs that RUN text another command prints: a shell, an evaluator,
-#: or ``xargs`` appending it to a command line.
-_PRINTED_TEXT_RUNNERS = _NESTED_SHELL_PROGRAMS | _NESTED_SHELL_VERBS | {"xargs"}
+#: ``git``/``gh`` subcommands that read a heredoc as a message, body or patch.
+#: Taken only as the word right after the program, with no global option before
+#: it, so ``-c alias.x=...`` or ``--exec-path`` keeps the body; an alias never
+#: shadows a builtin in either tool.
+_HEREDOC_DATA_SUBCOMMANDS = {
+    "git": frozenset({"commit", "tag", "notes"}),
+    "gh": frozenset({"pr", "issue", "release"}),
+}
 
 #: A ``<<`` that opens a heredoc (not a ``<<<`` here-string), anywhere in a word.
 _HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)")
 _HEREDOC_TAG_QUOTES = "'\"\\"
 
-#: A word whose OUTPUT is what it becomes once the quotes and parentheses the shell
-#: strips first are off: a command substitution or a parameter expansion.  Where
-#: such a word sits in a position that runs its output, the output is a command.
-_EXPANSION_LEAD_RE = re.compile(r"\A[\"'(]*[$`]")
+#: A word made only of the characters a plain program name uses.
+_BARE_PROGRAM_RE = re.compile(r"\A[a-z0-9_.+-]+\Z")
+
+#: A word that is only closing parentheses.
+_SUBSTITUTION_CLOSE_RE = re.compile(r"\A\)+\Z")
 
 
 def _heredoc_tag(tokens: "list[str]", index: int) -> "tuple[str, bool] | None":
@@ -3557,85 +3566,112 @@ def _heredoc_tag(tokens: "list[str]", index: int) -> "tuple[str, bool] | None":
     return (tag, strips_tabs) if tag else None
 
 
-def _without_data_heredoc_body(source: str, tokens: "list[str]") -> "list[str] | None":
-    """*tokens* re-read with a data consumer's heredoc body removed, else None.
+def _opener_line_is_closed(line: str) -> bool:
+    """True if the heredoc's opener *line* ends its command at the newline.
+
+    A trailing backslash joins the next line onto the command, and an open quote
+    carries it on, so either way the line after the opener is not yet body.
+    """
+    if line.endswith("\\"):
+        return False
+    try:
+        shlex.split(line)
+    except ValueError:
+        return False
+    return True
+
+
+def _without_data_heredoc_body(source: str, tokens: "list[str]") -> "tuple[str, list[str]] | None":
+    """``(source, tokens)`` re-read with a data consumer's heredoc body removed.
 
     Only the simple shape is handled: exactly one heredoc in the frame, opened on
-    one line of *source*.  The body runs from the line after it to the first line
-    that is exactly the tag (``<<-`` strips leading tabs first), as bash ends it; a
-    missing tag runs the body to the end, as bash does.  Every other shape keeps
-    its body, the fail-closed reading.
+    one line of *source* that ends its command at the newline.  The body runs
+    from the line after it to the first line that is exactly the tag (``<<-``
+    strips leading tabs first), as bash ends it; a missing tag runs the body to
+    the end, as bash does.  Every other shape is None, which keeps the body.
     """
     openers = [i for i, token in enumerate(tokens) if _HEREDOC_OPEN_RE.search(token)]
     if len(openers) != 1 or len(_HEREDOC_OPEN_RE.findall(source)) != 1:
         return None
-    index = openers[0]
-    if _argv_programs(tokens)[index] not in _HEREDOC_DATA_PROGRAMS:
-        return None
-    tag_info = _heredoc_tag(tokens, index)
+    tag_info = _heredoc_tag(tokens, openers[0])
     if tag_info is None:
         return None
     tag, strips_tabs = tag_info
     lines = source.split("\n")
     opener_line = next(i for i, line in enumerate(lines) if _HEREDOC_OPEN_RE.search(line))
-    end = len(lines)
+    if not _opener_line_is_closed(lines[opener_line]):
+        return None
+    rest: list[str] = []
     for i in range(opener_line + 1, len(lines)):
         if (lines[i].lstrip("\t") if strips_tabs else lines[i]) == tag:
-            end = i
+            rest = lines[i + 1 :]
             break
-    return _self_tokens("\n".join(lines[: opener_line + 1] + lines[end:]))
+    stripped = "\n".join(lines[: opener_line + 1] + rest)
+    return stripped, _self_tokens(stripped)
 
 
-def _can_run_printed_text(frames: "list[list[str]]") -> bool:
-    """True if any frame could execute text another command PRINTS.
+def _runs_only_data_consumers(tokens: "list[str]") -> bool:
+    """True if every command in *tokens* is a heredoc data consumer.
 
-    A word counts when it sits where its text becomes a command: program position
-    (past any leading assignments), or an argument of a program outside the data
-    vocabulary (``sudo``, ``env``, ``find -exec``).  Such a word is a shell, an
-    evaluator or ``xargs`` by name, or an expansion whose output is the command.
-    When no frame has one, nothing in the command runs a data consumer's printed
-    heredoc body, so that body is data and is set aside; when one does, the body
-    is kept, the fail-closed reading.
+    Each command's program word must be a bare name in
+    :data:`_HEREDOC_DATA_PROGRAMS`, or ``git``/``gh`` followed directly by a
+    subcommand in :data:`_HEREDOC_DATA_SUBCOMMANDS`.  A leading assignment, a
+    path, an expansion, or a control operator inside a word all fail the test.
     """
-    for tokens in frames:
-        programs = _argv_programs(tokens)
-        expect_program = True
-        for index, token in enumerate(tokens):
-            at_program = expect_program and ENV_ASSIGNMENT_RE.match(token) is None
-            if at_program or programs[index] not in _HEREDOC_DATA_PROGRAMS:
-                if _program_basename(token) in _PRINTED_TEXT_RUNNERS:
-                    return True
-                if _EXPANSION_LEAD_RE.match(token):
-                    return True
-            if _ends_argv(token):
-                expect_program = True
-            elif at_program:
-                expect_program = False
-    return False
+    expect_program = True
+    for index, token in enumerate(tokens):
+        if _ends_argv(token):
+            if token not in {"|", ";", "&&", "||", "\n", "&"}:
+                return False
+            expect_program = True
+            continue
+        whole_substitution = token.startswith("$(") and token.endswith(")")
+        if _CONTROL_OPERATOR_RE.search(token) and not (whole_substitution and not expect_program):
+            # An operator glued inside a word (``f|sh``) starts a command the
+            # attribution above never sees.  A word that is one whole
+            # substitution is an argument; its body is a frame of its own.
+            return False
+        if not expect_program:
+            continue
+        if _SUBSTITUTION_CLOSE_RE.match(token):
+            # The ``)`` that closes the substitution this frame was read from.
+            continue
+        expect_program = False
+        if _BARE_PROGRAM_RE.match(token) is None:
+            return False
+        if token in _HEREDOC_DATA_PROGRAMS:
+            continue
+        subcommands = _HEREDOC_DATA_SUBCOMMANDS.get(token)
+        if subcommands is None or index + 1 >= len(tokens) or tokens[index + 1] not in subcommands:
+            return False
+    return True
 
 
 def _without_inert_heredoc_bodies(
     out: "list[tuple[str, list[str]]]",
 ) -> "list[tuple[str, list[str]]]":
-    """*out* with each frame's data-consumer heredoc body set aside, when inert.
+    """*out* with each frame's heredoc body set aside, when the command only reads it.
 
     A heredoc body folds into the frame's token stream as commands, so a body that
     a data consumer only reads (``cat``/``tee``/``git commit -F -``) is scanned as
     if it ran -- a message or file that merely NAMES a refused command is refused.
-    The body is a command only when something can run the text that consumer
-    prints: a shell or evaluator consuming it, a pipe into one, or an expansion in
-    a position that runs its output.  When nothing in the whole command can
-    (:func:`_can_run_printed_text` over every frame), each data-consumer body is
-    set aside; otherwise every body is kept, the fail-closed reading.  A
-    substitution inside a body is its own frame of the walk and is judged on its
-    own either way.
+    The body is set aside only when, with it removed, every command of EVERY
+    frame is a data consumer (:func:`_runs_only_data_consumers`): then nothing in
+    the command can run what the consumer prints.  Any other program anywhere --
+    a shell, an evaluator, ``xargs``, a path, an expansion in program position,
+    a process substitution's frame -- keeps every body, the fail-closed reading.
     """
-    if _can_run_printed_text([tokens for _source, tokens in out]):
-        return out
     rebuilt: list[tuple[str, list[str]]] = []
+    changed = False
     for source, tokens in out:
         stripped = _without_data_heredoc_body(source, tokens)
-        rebuilt.append((source, tokens if stripped is None else stripped))
+        if stripped is None:
+            rebuilt.append((source, tokens))
+        else:
+            rebuilt.append(stripped)
+            changed = True
+    if not changed or not all(_runs_only_data_consumers(tokens) for _source, tokens in rebuilt):
+        return out
     return rebuilt
 
 
