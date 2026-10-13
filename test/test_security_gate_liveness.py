@@ -277,7 +277,15 @@ def _url_payload_command(n: int) -> str:
 #: are two catalog rows the keystone both enforces (one row would need a top-level
 #: alternation, which leaves the linear fragment matcher); only grep's text
 #: selector lets ``aws-account-id=`` pass.
-_PACKAGE_LINE_BUDGET = 28_939
+#:
+#: Raised again, from 28,939, for the shared shell walk in ``shell_normalizer.py``:
+#: it attributes a heredoc body to its consumer, setting the body aside only when
+#: every command in every frame is a listed data consumer and reading it as
+#: commands in every other shape, and measures
+#: the descent bound with the home path discounted so the bound is independent of
+#: the length of ``$HOME``. The growth is the body-attribution helpers and their
+#: docstrings; the frames the walk returns are otherwise the same.
+_PACKAGE_LINE_BUDGET = 29_197
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
