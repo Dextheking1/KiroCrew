@@ -116,6 +116,13 @@ inserts a line break, and an Enter used to commit an input method editor (IME)
 candidate does not send. The box grows with the draft up to 240 pixels, then
 keeps its height and scrolls vertically.
 
+Without `onSend`, a send is `POST /api/chat?ws=1`, covered by the app's
+`/api/chat` grant. It returns a JSON receipt as soon as the turn is dispatched,
+and the reply arrives through the embed's poll of the slot. The composer is busy
+only for that request, so the user can send again while the agent is working:
+the gateway queues that message behind the running turn, as it does for a
+plain send from the main chat.
+
 A host that boxes the embed at a fixed height passes `composerMaxHeight` (in
 pixels) to lower that cap, so a long draft cannot take most of the box from the
 transcript. The resting (empty) size of the composer is unchanged; only the cap

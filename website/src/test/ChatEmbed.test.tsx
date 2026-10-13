@@ -227,7 +227,7 @@ describe('ChatEmbed', () => {
         fireEvent.click(screen.getByLabelText('Send message'))
       })
 
-      expect(mockPost).toHaveBeenCalledWith('/api/chat', {
+      expect(mockPost).toHaveBeenCalledWith('/api/chat?ws=1', {
         message: 'hello world',
         slot: 'slot-1',
         agent: 'test-agent',
@@ -261,7 +261,7 @@ describe('ChatEmbed', () => {
         fireEvent.keyDown(input, { key: 'Enter', shiftKey: false })
       })
 
-      expect(mockPost).toHaveBeenCalledWith('/api/chat', expect.objectContaining({
+      expect(mockPost).toHaveBeenCalledWith('/api/chat?ws=1', expect.objectContaining({
         message: 'hello',
       }))
     })
@@ -379,7 +379,7 @@ describe('ChatEmbed', () => {
       })
 
       expect(onSend).toHaveBeenCalledWith('hi')
-      expect(mockPost).not.toHaveBeenCalledWith('/api/chat', expect.anything())
+      expect(mockPost).not.toHaveBeenCalledWith('/api/chat?ws=1', expect.anything())
     })
 
     it('still posts to /api/chat when no onSend is supplied', async () => {
@@ -394,8 +394,52 @@ describe('ChatEmbed', () => {
       })
 
       expect(mockPost).toHaveBeenCalledWith(
-        '/api/chat',
+        '/api/chat?ws=1',
         expect.objectContaining({ message: 'hi', slot: 'slot-1' }),
+      )
+    })
+
+    it('keeps the composer usable while the turn it started is still running', async () => {
+      // The gateway's bare POST /api/chat answers with an SSE stream that only
+      // closes at the turn's `done`; `?ws=1` answers with a JSON receipt at
+      // dispatch. Model exactly that: the bare route never settles here. With
+      // the receipt form the mutation settles at once, so the composer is
+      // enabled again mid-turn and a second message can be sent (the gateway
+      // queues it behind the running turn, as for the main chat).
+      mockPost.mockImplementation((path: string) =>
+        path === '/api/chat?ws=1'
+          ? Promise.resolve({ ok: true, slot: 'slot-1' })
+          : new Promise(() => {}),
+      )
+      mockGet.mockResolvedValue({ messages: [], running: true, title: '' })
+      await act(async () => {
+        renderWithProviders(<ChatEmbed slotKey="slot-1" />)
+      })
+      const input = screen.getByLabelText('Chat message') as HTMLTextAreaElement
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'first' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Send message'))
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(100)
+      })
+
+      expect(screen.getByTestId('chat-message-list')).toHaveAttribute('data-running', 'true')
+      expect(input).not.toBeDisabled()
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'second' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Send message'))
+      })
+
+      expect(mockPost).toHaveBeenLastCalledWith(
+        '/api/chat?ws=1',
+        expect.objectContaining({ message: 'second', slot: 'slot-1' }),
       )
     })
   })
@@ -625,7 +669,7 @@ describe('ChatEmbed follow-up options', () => {
     })
 
     expect(input.value).toBe('Run tests')
-    expect(mockPost).not.toHaveBeenCalledWith('/api/chat', expect.anything())
+    expect(mockPost).not.toHaveBeenCalledWith('/api/chat?ws=1', expect.anything())
   })
 
   it('picking an option twice removes it from the draft again', async () => {

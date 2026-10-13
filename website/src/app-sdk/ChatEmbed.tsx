@@ -100,6 +100,10 @@ interface ChatSlotData {
 export const EMBED_PAGE_LIMIT = 200
 /** The handler clamps `limit` here; a wider ask is silently this. */
 export const EMBED_PAGE_LIMIT_MAX = 500
+/** The send route: the JSON-receipt form of `POST /api/chat` (see sendMutation).
+ *  The scoped api checks only the pathname, so an app's existing `/api/chat`
+ *  grant covers it. Exported for tests. */
+export const EMBED_SEND_PATH = '/api/chat?ws=1'
 /** Poll cadence while the slot runs (see the query's `refetchInterval`). */
 const RUNNING_POLL_MS = 1000
 /** How long a streaming reply must stay unchanged before the working indicator
@@ -228,12 +232,14 @@ function ChatEmbed({
   const sendMutation = useMutation({
     mutationFn: (msg: string) => {
       if (onSend) return Promise.resolve(onSend(msg))
-      return api.post('/api/chat', { message: msg, slot: slotKey, agent: agent || '' })
-        .catch((err) => {
-          // POST /api/chat returns SSE — JSON parse fails, expected.
-          if (err instanceof SyntaxError) return
-          throw err
-        })
+      // `?ws=1` asks for the JSON dispatch receipt instead of the SSE stream.
+      // The bare route holds the response open until the turn's `done`;
+      // awaiting it would keep this mutation pending -- and the composer
+      // disabled -- for the whole turn, so the user could not queue a
+      // follow-up the way the main chat can. The transcript arrives through
+      // the slot poll above, not the POST, so nothing is lost by not reading
+      // a stream.
+      return api.post(EMBED_SEND_PATH, { message: msg, slot: slotKey, agent: agent || '' })
     },
     onSettled: () => { void refetch() },
   })
