@@ -4199,6 +4199,11 @@ def _dequeue_next_message(slot, merge_enabled: bool) -> tuple:
                 # Its note speaks for one message; merged, it would vouch that
                 # messages never written to any pipe may already have run.
                 or (item.get("meta") or {}).get(STEER_POSSIBLY_DELIVERED_META)
+                # HELD by the admission sweep: its manager could not be read, so it is
+                # neither deliverable nor droppable yet. A merge run is a DELIVERY, so
+                # folding it in would carry it past the hold -- the sweep refuses the
+                # head, and this refuses it anywhere else in the run.
+                or item.get("_held_for_manager") is True
             ):
                 break
             if to_merge and _stamped_turn_actor(item) != _stamped_turn_actor(to_merge[0]):
@@ -4208,6 +4213,20 @@ def _dequeue_next_message(slot, merge_enabled: bool) -> tuple:
             del slot._queue[: len(to_merge)]
             merged = "\n\n".join(item["content"] for item in to_merge)
             return f"[{len(to_merge)} queued messages merged]\n\n{merged}", to_merge
+    # THE HOLD IS READ ON THE ENTRY BEING POPPED, here, at the moment it is popped.
+    # Not on a conclusion drawn earlier about the queue: the admission sweep marks the
+    # hold and stops the drain only when the HEAD was held when IT ran, and between
+    # that sweep and this pop the queue moves -- the superseded-continuation purge and
+    # the revoked-replay drop each remove entries, and an explicit card promotes one.
+    # Any of them can put a marked entry at the head that the sweep passed over, and
+    # popping it delivers a message whose sender's reach this gateway cannot verify.
+    #
+    # Declining is the same answer the sweep's own refusal gives: the entry stays
+    # queued, its card stays visible, and the read that ends the hold calls the drain
+    # back when it lands -- armed by the refusal the sweep already took on this entry,
+    # which is what bounds the wait.
+    if slot._queue and slot._queue[0].get("_held_for_manager") is True:
+        return None, []
     item = slot.queue_pop(0)
     return item["content"], [item]
 
@@ -4225,6 +4244,12 @@ def _dequeue_next_system_message(slot) -> tuple:
     """
     for i, item in enumerate(slot._queue):
         if is_system_injection_item(item):
+            if item.get("_held_for_manager") is True:
+                # The entry this path would dispatch, read at the moment it is chosen.
+                # A held entry is neither deliverable nor droppable, so the scan stops
+                # here rather than reaching past it for a later system entry: skipping
+                # it would reorder deliveries around a hold that is about to end.
+                return None, []
             popped = slot.queue_pop(i)
             return popped["content"], [popped]
     return None, []

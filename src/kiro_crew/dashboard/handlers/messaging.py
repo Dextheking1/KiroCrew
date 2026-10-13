@@ -868,6 +868,33 @@ _SLACK_ONLY_BODY_FIELDS = (
 _SLACK_SECTION_TEXT_MAX = 3000
 
 
+def _evictable_queue_index(slot: Any) -> "int | None":
+    """The index of the oldest queued entry that may be EVICTED, or None if none may.
+
+    Index 0 is what a queue bound reaches for, and an index reaches whichever entry is
+    there -- not the entry anything decided about. One kind of entry may not be the one
+    it reaches: an entry held for an unreadable manager is neither deliverable nor
+    droppable, because its sender was told it was accepted and the hold ends by itself
+    when the read lands. Evicting it would destroy a message on the strength of a queue
+    bound, which is the one outcome nobody can undo.
+
+    So the flag is read on the entry being taken, the same rule the dequeue paths
+    follow, and the answer is an INDEX rather than a boolean: the caller removes exactly
+    what this chose.
+
+    ``None`` means every queued entry is held. The caller then gives way itself rather
+    than taking one.
+    """
+    return next(
+        (
+            index
+            for index, item in enumerate(slot._queue)
+            if item.get("_held_for_manager") is not True
+        ),
+        None,
+    )
+
+
 async def api_send_message(request: web.Request) -> web.Response:
     """POST /api/send-message — send a message to a chat surface and/or dashboard.
 
@@ -1085,17 +1112,38 @@ async def api_send_message(request: web.Request) -> web.Response:
                     if slot.running:
                         from kiro_crew.dashboard.slot_queue_repository import MAX_LIVE_QUEUE_ENTRIES
 
+                        queued_twin = True
+
                         if len(slot._queue) >= MAX_LIVE_QUEUE_ENTRIES:
-                            evicted = slot.queue_pop(0)
-                            logger.warning(
-                                "Queue full for slot %s — evicting oldest message", slot_key
-                            )
-                            _remove_queued_by_id(slot.messages, evicted["id"])
-                        qid = slot.queue_append(wrapped, kind=CRON_NOTIFICATION_KIND)
-                        _cls = json.loads(inject_cls)
-                        _cls["queue_id"] = qid
-                        slot.append("queued", wrapped, json.dumps(_cls))
-                        state.push_slots_update()
+                            victim = _evictable_queue_index(slot)
+                            if victim is None:
+                                # Nothing here may be taken, so THIS notification is
+                                # what gives way. A cron notice is minted fresh on the
+                                # next tick; a held cross-session delivery had its
+                                # sender told it was accepted, and nothing mints that
+                                # again.
+                                logger.warning(
+                                    "Queue full for slot %s and every entry is held for "
+                                    "an unreadable manager — dropping this cron "
+                                    "notification rather than evicting a held delivery",
+                                    slot_key,
+                                )
+                                queued_twin = False
+                            else:
+                                evicted = slot.queue_pop(victim)
+                                logger.warning(
+                                    "Queue full for slot %s — evicting the oldest "
+                                    "EVICTABLE message (index %d)",
+                                    slot_key,
+                                    victim,
+                                )
+                                _remove_queued_by_id(slot.messages, evicted["id"])
+                        if queued_twin:
+                            qid = slot.queue_append(wrapped, kind=CRON_NOTIFICATION_KIND)
+                            _cls = json.loads(inject_cls)
+                            _cls["queue_id"] = qid
+                            slot.append("queued", wrapped, json.dumps(_cls))
+                            state.push_slots_update()
                     else:
                         # circular import: chat_runner imports from
                         # kiro_crew.dashboard.handlers (for MAX_PROMPT_BYTES,

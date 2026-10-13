@@ -284,7 +284,16 @@ def sanitize_restored_queue(raw: object) -> list[dict[str, Any]]:
     restored entry must not arrive wearing a ``kind``, a ``payload``, or a
     callback key, because each of those changes what the drain DOES with it.
 
-    Provenance is dropped for the same reason and matters most:
+    WHICH WAY A FIELD FAILS decides whether it is dropped, and a field this reader
+    cannot vouch for is dropped when its ABSENCE is the conservative reading (the
+    containment snapshot, the turn actor, the sending slot). The admission provenance is
+    the other kind -- absent, it means "no sender to re-compare" and the entry runs -- so
+    it is KEPT, unmodified. Nothing here writes a safer value into it either: an
+    authorization decision that can be recomputed from live state must not take a
+    persisted field as its input, and whether the ownership fence governs a sender is a
+    property of the live sender. The drain recomputes it.
+
+    Provenance flags are dropped for the same reason and matter most:
     ``_directive_user_origin``, ``_directive_channel_origin`` and the entry's
     ``meta`` turn actor are never restored, so a restored entry is non-directive
     and actor-less by construction. The drain
@@ -416,6 +425,23 @@ def sanitize_restored_queue(raw: object) -> list[dict[str, Any]]:
             # blast radius: it names a conversation on a network surface and the
             # drop notice would carry the entry's text there, so an edited stamp
             # would turn a file write into an outbound channel message.
+            #
+            # The ADMISSION PROVENANCE is the one stamp that is KEPT, and the
+            # asymmetry is why: the drain re-checks the entry's stamped sender
+            # against the slot's current manager, so an absent provenance means
+            # "no sender to re-compare" and the entry runs. Dropping it here
+            # would therefore fail OPEN -- a message queued by a manager the
+            # handoff revoked would come back unstamped and deliver.
+            #
+            # It is kept AS IT IS, and nothing here rewrites it. Its one permissive
+            # field says whether the ownership fence governed the sender, and that is
+            # a property of the LIVE SENDER rather than a fact about this entry's
+            # past: the drain recomputes it from the sender's current class
+            # (``session_control.sender_fence_applies``), so neither a forged value
+            # nor a value written here decides anything. Overwriting it to the
+            # conservative reading looks safe and is not -- it makes a sender the
+            # fence never governed, a person's own tab, read as fenced, and the drain
+            # then drops a message that person had already been told was accepted.
             entry["meta"] = {
                 k: v
                 for k, v in meta.items()
@@ -788,6 +814,22 @@ class SlotQueueRepository:
             else:
                 item["content"] = prune_attachment_meta(item.get("meta"), content, previous)
             prune_quote_meta(item.get("meta"), item["content"])
+            # THE TEXT IS GONE, SO THE ADMISSION THAT DESCRIBED IT IS TOO. A
+            # cross-session admission stamps who authorized the words it put on
+            # this queue, and the drain re-checks that sender's reach against
+            # the target's manager. After a replacement the sender did not write
+            # what is in the entry, so re-checking it deletes text on the
+            # strength of a grant that was never about this text -- and when the
+            # editor is the person at the dashboard, what gets deleted is their
+            # own words, which exist nowhere else until a save carries the queue.
+            #
+            # Deferred import: this module is reached from ``state``, which
+            # ``session_control`` imports, so a module-scope import closes a
+            # cycle. One function there owns which keys describe an admission,
+            # so this layer does not enumerate them.
+            from kiro_crew.dashboard.session_control import forget_admission_provenance
+
+            forget_admission_provenance(item.get("meta"))
             if directive_user_origin:
                 item["_directive_user_origin"] = True
             else:
