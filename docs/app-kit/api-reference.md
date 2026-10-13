@@ -153,7 +153,7 @@ in the manifest to turn attachments on; nothing grants it by default:
 ```
 
 Without the grant the paperclip is not rendered, and a pasted or dropped file
-shows "This app can't attach files" above the composer instead of uploading.
+shows "This app doesn't accept files. Attach them in the main chat instead." above the composer instead of uploading.
 A server refusal (unsupported type, over the size cap) shows the same way with
 the server's reason.
 

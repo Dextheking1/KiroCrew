@@ -296,6 +296,8 @@ function ChatEmbed({
    *  send's proof can still retire its notice and take the restored copy
    *  back instead of stranding it in the composer for a duplicate resend. */
   const [sendTails, setSendTails] = useState<SendTail[]>([])
+  const attachments = useEmbedAttachments(api, slotKey)
+  const { restore: restoreFiles, removeFile } = attachments
   const shownMessages = useMemo<ChatMessage[]>(
     () => sendTails.length === 0 ? messages : [...messages, ...sendTails.map(t => ({ role: t.role, content: t.content, cls: '' }))],
     [messages, sendTails],
@@ -341,13 +343,16 @@ function ChatEmbed({
       const r = retireSendTail(tails, t.sendId, draft, mergeRecoveredDraft)
       tails = r.tails
       if (r.draft != null) draft = r.draft
+      // The send's files were delivered with it: unstage the handed-back
+      // copies still in the composer so they are not sent a second time.
+      for (const path of t.restoreFiles ?? []) removeFile(path)
     }
     setSendTails(tails)
     if (draft !== draftRef.current) {
       draftRef.current = draft
       setDraft(draft)
     }
-  }, [messages, sendTails, setDraft])
+  }, [messages, sendTails, setDraft, removeFile])
 
   // startAtBottom follow is owned by the virtualizer behind ChatMessageList.
   // Non-startAtBottom embeds keep the message-arrival smooth scroll: it fires
@@ -395,8 +400,10 @@ function ChatEmbed({
    *  outcome differently. */
   const applyRecovery = useCallback((rec: PendingEmbedRecovery) => {
     const restore = rec.restoreText == null ? undefined : { text: rec.restoreText, ...restoreIntoComposer(rec.restoreText) }
-    setSendTails(prev => [...prev.filter(t => t.sendId !== rec.tail.sendId), { ...rec.tail, restore }])
-  }, [restoreIntoComposer])
+    // Staged files ride back with the text, so a retry needs no new upload.
+    if (rec.restoreFiles?.length) restoreFiles(rec.restoreFiles)
+    setSendTails(prev => [...prev.filter(t => t.sendId !== rec.tail.sendId), { ...rec.tail, restore, restoreFiles: rec.restoreFiles }])
+  }, [restoreIntoComposer, restoreFiles])
 
   /** Whether this instance is still mounted, and which slot it currently
    *  shows. A receipt is asynchronous: by the time it lands the host may have
@@ -472,19 +479,19 @@ function ChatEmbed({
   // ChatPage keep). The unconfirmed notice says so in its own words for a
   // chip send -- "tap the suggestion again" -- instead of claiming a restore that
   // did not happen.
-  const attachments = useEmbedAttachments(api, slotKey)
-
   const sendMutation = useMutation({
     // `msg` is the trimmed wire text; `draftText` is what the composer held,
     // whitespace and all -- a recovery must give back what the user typed, not
     // what the wire carried.
-    mutationFn: async ({ msg, meta, draftText, override, sendId, slot }: { msg: string; meta?: ChatEmbedSendMeta; draftText: string; override: boolean; sendId: string; slot: string }) => {
+    mutationFn: async ({ msg, meta, files, draftText, override, sendId, slot }: { msg: string; meta?: ChatEmbedSendMeta; files: string[]; draftText: string; override: boolean; sendId: string; slot: string }) => {
       // Where the outcome goes: onto this embed if it is still mounted and still
       // showing the slot the send belonged to; otherwise parked by that slot for
       // the next embed that shows it. Only a composer submit has text to hand
       // back -- a chip send never consumed the draft.
       const deliver = (tail: PendingEmbedRecovery['tail']) => {
-        const rec: PendingEmbedRecovery = { tail, restoreText: override ? undefined : draftText }
+        const rec: PendingEmbedRecovery = override
+          ? { tail }
+          : { tail, restoreText: draftText, ...(files.length ? { restoreFiles: files } : {}) }
         if (mountedRef.current && slotKeyRef.current === slot) applyRecovery(rec)
         else stashEmbedRecovery({ app: appName, slot }, rec)
       }
@@ -533,7 +540,9 @@ function ChatEmbed({
     // Staged files belong to the composer, so only a composer submit takes them;
     // a follow-up chip's override send carries its own text alone.
     const files = override == null ? attachments.files : []
-    if (files.length && attachments.uploading) return
+    // A composer submit (Enter or Send) waits for uploads still in flight, so
+    // a file pasted just before Enter is not left behind for the next message.
+    if (override == null && attachments.uploading) return
     const draftText = override ?? draft
     const text = draftText.trim()
     if (!text && !files.length) return
@@ -545,12 +554,12 @@ function ChatEmbed({
     // poll show THIS send", and the address a receipt is delivered to if this
     // embed is gone by then.
     const vars = { draftText, override: override != null, sendId: mintSendId(), slot: slotKey }
-    if (!files.length) { sendMutation.mutate({ ...vars, msg: text }); return }
+    if (!files.length) { sendMutation.mutate({ ...vars, msg: text, files }); return }
     // The same wire shape as the main chat: image lines inline, other files
     // as `[attached_file N]` markers naming `meta.files`.
     const turn = buildOutgoingTurn({ text, files }, 'send')
     attachments.clear()
-    sendMutation.mutate({ ...vars, msg: turn.wire, meta: turn.meta.files ? { files: turn.meta.files } : undefined })
+    sendMutation.mutate({ ...vars, msg: turn.wire, meta: turn.meta.files ? { files: turn.meta.files } : undefined, files })
   }, [draft, setDraft, sendMutation, slotKey, attachments])
 
   // Resolve a pending tool approval from inside the embed.
@@ -715,6 +724,8 @@ function ChatEmbed({
 
       {attachments.notice && (
         <div className={`shrink-0 px-3 pt-2 ${frameless ? '' : 'border-t border-border bg-bg-accent'}`}>
+          {/* No hand-off: the unsaved composer draft and the staged attachments
+              are local state that the hand-off's navigation would discard. */}
           <ErrorNotice
             testId="chat-embed-attach-notice"
             message={attachments.notice}
