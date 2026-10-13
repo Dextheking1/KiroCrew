@@ -285,7 +285,7 @@ def _url_payload_command(n: int) -> str:
 #: the descent bound with the home path discounted so the bound is independent of
 #: the length of ``$HOME``. The growth is the body-attribution helpers and their
 #: docstrings; the frames the walk returns are otherwise the same.
-_PACKAGE_LINE_BUDGET = 29_126
+_PACKAGE_LINE_BUDGET = 29_192
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

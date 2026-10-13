@@ -128,3 +128,29 @@ class TestTheDescentBoundIsHomeLengthIndependent:
         self._set_home(monkeypatch, "/srv/" + "x" * 200)
         command = 'sh -c "sh -c \\"ls \'$home\'\\""'
         assert len(_frames(command)) >= 2
+
+
+class TestTheBodyEndsWhereTheShellEndsIt:
+    """The body boundary is read from the raw line, as the shell reads it, so a
+    command the shell runs after the body is always a command of the walk."""
+
+    AFTER_THE_BODY = (
+        # a redirect or parenthesis glued to the delimiter is not part of it
+        "cat <<eof>out.txt\nalpha\neof\ndelta echo",
+        "cat <<eof>/dev/null\nalpha\neof\ndelta echo",
+        "cat <<eof)\nalpha\neof\ndelta echo",
+        # a quoted or escaped ``<<`` is text, not an opener
+        "cat '<<eof'\ndelta echo",
+        'cat --help "<<eof"\ndelta echo',
+        'grep "<<eof" notes.txt\ndelta echo',
+        "cat \\<<eof\ndelta echo",
+        # a body no line closes is kept whole
+        "cat <<eof\nalpha\ndelta echo",
+    )
+
+    @pytest.mark.parametrize("command", AFTER_THE_BODY)
+    def test_the_command_after_the_body_is_read(self, command: str) -> None:
+        assert _body_is_read(command, "delta", "echo"), command
+
+    def test_a_closed_body_with_a_glued_redirect_is_still_set_aside(self) -> None:
+        assert not _body_is_read("cat <<eof>out.txt\nalpha bravo\neof", "alpha", "bravo")

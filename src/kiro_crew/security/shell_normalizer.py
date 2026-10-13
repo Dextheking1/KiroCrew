@@ -3538,7 +3538,17 @@ _HEREDOC_DATA_SUBCOMMANDS = {
 
 #: A ``<<`` that opens a heredoc (not a ``<<<`` here-string), anywhere in a word.
 _HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)")
-_HEREDOC_TAG_QUOTES = "'\"\\"
+
+#: Characters that end a heredoc delimiter word when unquoted.
+_HEREDOC_TAG_END = frozenset(" \t;&|<>()")
+
+#: An opener line carrying any of these is not attributed: a comment, a
+#: substitution, a subshell or an ANSI-C string changes where ``<<`` sits in the
+#: shell's grammar in ways a single-line scan does not model.
+_HEREDOC_OPENER_LINE_EXCLUDED = ("#", "`", "(", ")", "$'")
+
+#: A delimiter, once its quotes are removed, that the scan reads exactly.
+_HEREDOC_PLAIN_TAG_RE = re.compile(r"\A[a-z0-9_.-]+\Z")
 
 #: A word made only of the characters a plain program name uses.
 _BARE_PROGRAM_RE = re.compile(r"\A[a-z0-9_.+-]+\Z")
@@ -3547,23 +3557,73 @@ _BARE_PROGRAM_RE = re.compile(r"\A[a-z0-9_.+-]+\Z")
 _SUBSTITUTION_CLOSE_RE = re.compile(r"\A\)+\Z")
 
 
-def _heredoc_tag(tokens: "list[str]", index: int) -> "tuple[str, bool] | None":
-    """``(tag, strips_tabs)`` for a heredoc opened in ``tokens[index]``, else None."""
-    token = tokens[index]
-    found = _HEREDOC_OPEN_RE.search(token)
-    if found is None:
+def _unquoted_heredoc_openers(line: str) -> "list[int]":
+    """Offsets of every ``<<`` in *line* that the shell reads as a heredoc operator.
+
+    A ``<<`` inside single or double quotes, or behind a backslash, is literal
+    text, and ``<<<`` is a here-string; neither opens a heredoc.
+    """
+    found: list[int] = []
+    quote = ""
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+        elif ch == "\\":
+            i += 2
+            continue
+        elif quote == '"':
+            if ch == '"':
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif line.startswith("<<", i) and not line.startswith("<<<", i):
+            found.append(i)
+            i += 2
+            continue
+        elif line.startswith("<<<", i):
+            i += 3
+            continue
+        i += 1
+    return found
+
+
+def _heredoc_tag(line: str, at: int) -> "tuple[str, bool] | None":
+    """``(tag, strips_tabs)`` for the heredoc operator at ``line[at]``, else None.
+
+    The delimiter is the word after ``<<`` / ``<<-``, ended by an unquoted blank
+    or metacharacter, as the shell reads it (``<<eof>out`` is the tag ``eof``
+    and a redirect).  Its quotes are removed; a tag that is not then a plain
+    word is None.
+    """
+    i = at + 2
+    strips_tabs = line.startswith("-", i)
+    if strips_tabs:
+        i += 1
+    while i < len(line) and line[i] in " \t":
+        i += 1
+    word: list[str] = []
+    quote = ""
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+            else:
+                word.append(ch)
+        elif ch in "'\"":
+            quote = ch
+        elif ch in _HEREDOC_TAG_END:
+            break
+        else:
+            word.append(ch)
+        i += 1
+    tag = "".join(word)
+    if quote or _HEREDOC_PLAIN_TAG_RE.match(tag) is None:
         return None
-    marker = _heredoc_marker(token[found.start() :])
-    if marker is None:
-        return None
-    strips_tabs = token[found.start() :].startswith("<<-")
-    if marker == "":
-        if index + 1 >= len(tokens):
-            return None
-        marker = tokens[index + 1]
-    tag = re.split(r"[;&|]", marker)[0]
-    tag = "".join(ch for ch in tag if ch not in _HEREDOC_TAG_QUOTES)
-    return (tag, strips_tabs) if tag else None
+    return tag, strips_tabs
 
 
 def _opener_line_is_closed(line: str) -> bool:
@@ -3584,30 +3644,36 @@ def _opener_line_is_closed(line: str) -> bool:
 def _without_data_heredoc_body(source: str, tokens: "list[str]") -> "tuple[str, list[str]] | None":
     """``(source, tokens)`` re-read with a data consumer's heredoc body removed.
 
-    Only the simple shape is handled: exactly one heredoc in the frame, opened on
-    one line of *source* that ends its command at the newline.  The body runs
-    from the line after it to the first line that is exactly the tag (``<<-``
-    strips leading tabs first), as bash ends it; a missing tag runs the body to
-    the end, as bash does.  Every other shape is None, which keeps the body.
+    Only the simple shape is handled: the frame's raw *source* holds exactly one
+    ``<<``, it is an unquoted, unescaped heredoc operator, and its line ends its
+    command at the newline and carries no comment, substitution, subshell or
+    ANSI-C string.  The delimiter is read from that raw line, and the body runs
+    from the next line to the first line that is exactly the delimiter
+    (``<<-`` strips leading tabs first), as bash ends it.  When no line closes
+    the body, or any other shape is met, the result is None, which keeps the
+    body.  *tokens* is the frame's own reading and is not consulted for the
+    boundary: it has already removed quotes and escapes.
     """
-    openers = [i for i, token in enumerate(tokens) if _HEREDOC_OPEN_RE.search(token)]
-    if len(openers) != 1 or len(_HEREDOC_OPEN_RE.findall(source)) != 1:
+    del tokens
+    if len(_HEREDOC_OPEN_RE.findall(source)) != 1:
         return None
-    tag_info = _heredoc_tag(tokens, openers[0])
+    lines = source.split("\n")
+    opener_line = next(i for i, line in enumerate(lines) if _HEREDOC_OPEN_RE.search(line))
+    line = lines[opener_line]
+    if any(mark in line for mark in _HEREDOC_OPENER_LINE_EXCLUDED):
+        return None
+    openers = _unquoted_heredoc_openers(line)
+    if len(openers) != 1 or not _opener_line_is_closed(line):
+        return None
+    tag_info = _heredoc_tag(line, openers[0])
     if tag_info is None:
         return None
     tag, strips_tabs = tag_info
-    lines = source.split("\n")
-    opener_line = next(i for i, line in enumerate(lines) if _HEREDOC_OPEN_RE.search(line))
-    if not _opener_line_is_closed(lines[opener_line]):
-        return None
-    rest: list[str] = []
     for i in range(opener_line + 1, len(lines)):
         if (lines[i].lstrip("\t") if strips_tabs else lines[i]) == tag:
-            rest = lines[i + 1 :]
-            break
-    stripped = "\n".join(lines[: opener_line + 1] + rest)
-    return stripped, _self_tokens(stripped)
+            stripped = "\n".join(lines[: opener_line + 1] + lines[i + 1 :])
+            return stripped, _self_tokens(stripped)
+    return None
 
 
 def _runs_only_data_consumers(tokens: "list[str]") -> bool:
