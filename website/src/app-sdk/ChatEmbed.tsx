@@ -22,9 +22,12 @@
  */
 import { useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { ArrowUp, Loader2 } from 'lucide-react'
+import { ArrowUp, Loader2, Paperclip } from 'lucide-react'
 import ChatMessageList, { type VirtualTranscriptHandle } from './ChatMessageList'
 import ErrorNotice from '../components/ErrorNotice'
+import { FilePreviewStrip } from '../components/chat-input/FilePreviewStrip'
+import { buildOutgoingTurn } from '../chat-core/composer/outgoingTurn'
+import { useEmbedAttachments } from './useEmbedAttachments'
 import { JumpToBottomButton } from './ChatScrollChrome'
 import FollowUpBar from '../components/FollowUpBar'
 import ChatFooter from '../pages/chat/ChatFooter'
@@ -43,6 +46,13 @@ import QueueStack, { SubagentDeliveryProgress, splitPaneMessages } from '../comp
 import { hydrateQueuedBubbles, normalizeQueueEntries } from '../store/chatSlice'
 
 import { i18nT } from '../i18n/t'
+
+/** The `meta` a send with attachments carries (see `onSend`). */
+export interface ChatEmbedSendMeta {
+  /** Non-image attachments; `[attached_file N]` in the message names `files[N-1]`. */
+  files?: string[]
+}
+
 export interface ChatEmbedProps {
   slotKey: string
   agent?: string
@@ -72,8 +82,13 @@ export interface ChatEmbedProps {
    * tools run from the gateway's own directory. A host app that owns its slots
    * passes its own endpoint here, which can carry the app's identity checks and
    * refuse a stale send. Omitted, behaviour is unchanged.
+   *
+   * A send with non-image attachments passes a second `meta` argument whose
+   * `files` the message's `[attached_file N]` markers name; a host forwards it
+   * as `meta` on its own chat POST. A send without attachments passes only the
+   * message, as before.
    */
-  onSend?: (message: string) => Promise<unknown> | void
+  onSend?: (message: string, meta?: ChatEmbedSendMeta) => Promise<unknown> | void
   /**
    * Content rendered in normal flow directly ABOVE the composer, inside the
    * embed's own column, so it always sits on top of the input regardless of the
@@ -165,6 +180,7 @@ function ChatEmbed({
   // The parking scope for receipts that outlive this instance: this app's
   // embeds for this slot (see embedSendRecovery).
   const appName = useAppInfo().name
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const lastHashRef = useRef('')
   // The transcript is ChatMessageList's virtualized mount: it owns the scroller
   // and, in startAtBottom mode, the stick-to-bottom follow (the same
@@ -456,11 +472,13 @@ function ChatEmbed({
   // ChatPage keep). The unconfirmed notice says so in its own words for a
   // chip send -- "tap the suggestion again" -- instead of claiming a restore that
   // did not happen.
+  const attachments = useEmbedAttachments(api, slotKey)
+
   const sendMutation = useMutation({
     // `msg` is the trimmed wire text; `draftText` is what the composer held,
     // whitespace and all -- a recovery must give back what the user typed, not
     // what the wire carried.
-    mutationFn: async ({ msg, draftText, override, sendId, slot }: { msg: string; draftText: string; override: boolean; sendId: string; slot: string }) => {
+    mutationFn: async ({ msg, meta, draftText, override, sendId, slot }: { msg: string; meta?: ChatEmbedSendMeta; draftText: string; override: boolean; sendId: string; slot: string }) => {
       // Where the outcome goes: onto this embed if it is still mounted and still
       // showing the slot the send belonged to; otherwise parked by that slot for
       // the next embed that shows it. Only a composer submit has text to hand
@@ -483,13 +501,13 @@ function ChatEmbed({
       }
       if (onSend) {
         try {
-          await onSend(msg)
+          await (meta ? onSend(msg, meta) : onSend(msg))
         } catch {
           unconfirmed()
         }
         return
       }
-      const receipt = await sendTurn({ message: msg, slot, meta: { sendId }, wire })
+      const receipt = await sendTurn({ message: msg, slot, meta: { ...meta, sendId }, wire })
       // `transport-error` is not handled: the app-sdk wire never yields it (a raw
       // rejection is indeterminate -> `response-late`), so a clause for it here
       // would be dead code kept for symmetry.
@@ -511,9 +529,14 @@ function ChatEmbed({
    *  and an override send that wiped them would leave a late-accepted send's
    *  restored text with no proof path left to retire it. */
   const send = useCallback((override?: string) => {
+    if (sendMutation.isPending) return
+    // Staged files belong to the composer, so only a composer submit takes them;
+    // a follow-up chip's override send carries its own text alone.
+    const files = override == null ? attachments.files : []
+    if (files.length && attachments.uploading) return
     const draftText = override ?? draft
-    const msg = draftText.trim()
-    if (!msg || sendMutation.isPending) return
+    const text = draftText.trim()
+    if (!text && !files.length) return
     if (override == null) {
       setSendTails([])
       setDraft('')
@@ -521,8 +544,14 @@ function ChatEmbed({
     // A fresh id and the slot the send belongs to: the yardstick for "did the
     // poll show THIS send", and the address a receipt is delivered to if this
     // embed is gone by then.
-    sendMutation.mutate({ msg, draftText, override: override != null, sendId: mintSendId(), slot: slotKey })
-  }, [draft, setDraft, sendMutation, slotKey])
+    const vars = { draftText, override: override != null, sendId: mintSendId(), slot: slotKey }
+    if (!files.length) { sendMutation.mutate({ ...vars, msg: text }); return }
+    // The same wire shape as the main chat: image lines inline, other files
+    // as `[attached_file N]` markers naming `meta.files`.
+    const turn = buildOutgoingTurn({ text, files }, 'send')
+    attachments.clear()
+    sendMutation.mutate({ ...vars, msg: turn.wire, meta: turn.meta.files ? { files: turn.meta.files } : undefined })
+  }, [draft, setDraft, sendMutation, slotKey, attachments])
 
   // Resolve a pending tool approval from inside the embed.
   //
@@ -684,7 +713,55 @@ function ChatEmbed({
         </div>
       )}
 
-      <div className={`flex items-end gap-2 px-3 py-2 shrink-0 ${frameless ? '' : 'border-t border-border bg-bg-accent'}`}>
+      {attachments.notice && (
+        <div className={`shrink-0 px-3 pt-2 ${frameless ? '' : 'border-t border-border bg-bg-accent'}`}>
+          <ErrorNotice
+            testId="chat-embed-attach-notice"
+            message={attachments.notice}
+            onDismiss={attachments.dismissNotice}
+            dismissLabel={i18nT('app.dismiss')}
+          />
+        </div>
+      )}
+      {attachments.files.length > 0 && (
+        <div className="shrink-0">
+          <FilePreviewStrip files={attachments.files} resizedInfo={attachments.resizedInfo} onRemove={attachments.removeFile} />
+        </div>
+      )}
+
+      <div
+        className={`flex items-end gap-2 px-3 py-2 shrink-0 ${frameless ? '' : `${attachments.notice || attachments.files.length ? '' : 'border-t'} border-border bg-bg-accent`}`}
+      >
+        {attachments.granted && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              tabIndex={-1}
+              aria-hidden="true"
+              data-testid="chat-embed-file-input"
+              onChange={e => {
+                attachments.addFiles(Array.from(e.target.files ?? []))
+                // Reset so picking the same file again still fires a change.
+                e.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              className="p-2 rounded-md text-muted hover:text-text hover:bg-bg-elevated disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sendMutation.isPending}
+              title={i18nT('components.chatInput.attach_files')}
+              aria-label={i18nT('components.chatInput.attach_files')}
+            >
+              {attachments.uploading
+                ? <Loader2 size={16} className="animate-spin" aria-label={i18nT('appSdk.chatEmbed.uploading_files')} />
+                : <Paperclip size={16} />}
+            </button>
+          </>
+        )}
         <textarea
           ref={textareaRef}
           rows={1}
@@ -694,13 +771,16 @@ function ChatEmbed({
           value={draft}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={e => submitOnEnter(e, () => send())}
+          onPaste={attachments.onPaste}
+          onDragOver={attachments.onDragOver}
+          onDrop={attachments.onDrop}
           placeholder={running ? i18nT('appSdk.chatEmbed.agent_is_working') : (placeholder || i18nT('appSdk.chatEmbed.message'))}
           disabled={sendMutation.isPending}
         />
         <button
           className="p-2 rounded-md bg-accent text-accent-fg disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-80 transition-opacity"
           onClick={() => send()}
-          disabled={sendMutation.isPending || !draft.trim()}
+          disabled={sendMutation.isPending || attachments.uploading || (!draft.trim() && !attachments.files.length)}
           title={i18nT('appSdk.chatEmbed.send')}
           aria-label={i18nT('appSdk.chatEmbed.send_message')}
         >
