@@ -271,14 +271,21 @@ def _url_payload_command(n: int) -> str:
 #: matching logic and no floor change: the growth is the helper's signature, the flag
 #: and its docstring.
 #:
-#: Raised again, from 28,906, for the shared shell walk in ``shell_normalizer.py``:
+#: Raised again, from 28,906, for the AWS env-filter rules. grep reads the
+#: selector as text, while awk evaluates it as code and sed can delimit an
+#: address with any character, so they
+#: are two catalog rows the keystone both enforces (one row would need a top-level
+#: alternation, which leaves the linear fragment matcher); only grep's text
+#: selector lets ``aws-account-id=`` pass.
+#:
+#: Raised again, from 28,939, for the shared shell walk in ``shell_normalizer.py``:
 #: it attributes a heredoc body to its consumer, setting the body aside only when
 #: every command in every frame is a listed data consumer and reading it as
 #: commands in every other shape, and measures
 #: the descent bound with the home path discounted so the bound is independent of
 #: the length of ``$HOME``. The growth is the body-attribution helpers and their
 #: docstrings; the frames the walk returns are otherwise the same.
-_PACKAGE_LINE_BUDGET = 29_093
+_PACKAGE_LINE_BUDGET = 29_126
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

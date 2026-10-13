@@ -44,10 +44,28 @@ _CHECK_TASKS: set[asyncio.Task] = set()  # keep strong refs until done
 # bounds a rapid multi-turn session to one forced provider read per URL per
 # interval; every other caller stays on plain TTL pacing.
 _CHECK_FORCE_MIN_INTERVAL_SECS = 10.0
+# The idle tier: chips on slots nobody is using (no turn running, and no turn
+# ended and no owner opened the slot recently -- every tab restored at boot starts
+# here). An open pull request on such a chip is re-read on this slower clock, and
+# at most ``_IDLE_CHECK_PER_ROUND`` of those re-reads start per chip TTL across
+# the whole gateway, oldest read first. So the provider cost of a long sidebar
+# history is a small constant instead of a burst that grows with every PR link
+# the dashboard ever showed. A chip never read since boot is not on this budget:
+# it gets its first read at the normal admission pace, so chips still fill in
+# after a restart.
+_IDLE_CHECK_TTL_SECS = 15 * 60
+_IDLE_CHECK_PER_ROUND = 2
+# [window start, idle re-reads started in it]. One window for every owner
+# socket's driver, so a second dashboard window does not double the idle cost.
+_idle_check_window: list[float] = [float("-inf"), 0.0]
 
 
 def _chip_refresh_due(
-    entry: tuple[float, dict[str, str] | None] | None, now: float, *, force: bool
+    entry: tuple[float, dict[str, str] | None] | None,
+    now: float,
+    *,
+    force: bool,
+    open_ttl: float | None = None,
 ) -> bool:
     """Whether a chip-cache entry has aged out of its TTL.
 
@@ -55,6 +73,9 @@ def _chip_refresh_due(
     ``merged``: a PR the agent may have just reopened is worth a forced read, a
     merged one cannot change and would only spend a provider subprocess per turn
     for as long as its chip stays in the sidebar.
+
+    ``open_ttl`` replaces the open-PR TTL (the idle tier passes
+    ``_IDLE_CHECK_TTL_SECS``); merged and closed chips keep their own clocks.
     """
     if entry is None:
         return True
@@ -67,7 +88,7 @@ def _chip_refresh_due(
     ttl = (
         cache._lifecycle_ttl(state)
         if state in projection._TERMINAL_CHIP_STATES
-        else chip_status._CHECK_TTL_SECS
+        else (chip_status._CHECK_TTL_SECS if open_ttl is None else open_ttl)
     )
     return now - stamped_at >= ttl
 
@@ -117,6 +138,74 @@ def schedule_check_refresh(
         _CHECK_TASKS.add(task)
         task.add_done_callback(_CHECK_TASKS.discard)
     return refreshing
+
+
+def schedule_idle_check_refresh(
+    urls: list[str], on_update: _CheckUpdateCallback | None = None
+) -> list[str]:
+    """The idle tier of the chip sweep: chips on slots nobody is using.
+
+    Same fire-and-forget contract and return value as ``schedule_check_refresh``,
+    with two differences that bound the cost of a long sidebar history:
+
+    * a chip that has been read is due again only after ``_IDLE_CHECK_TTL_SECS``
+      (merged and closed chips keep their longer lifecycle clocks), and at most
+      ``_IDLE_CHECK_PER_ROUND`` such re-reads start per chip TTL, gateway-wide,
+      the longest-unread first so none is starved;
+    * a chip never read since boot is read now, but only up to the free pending
+      capacity. Submitting more would make the pending cap stamp the overflow as
+      "backed off", and a stamped entry is indistinguishable from a read one, so
+      it would wait out the slow clock with no status at all. A chip that has
+      never yielded a status (its first read failed, or the pending cap backed it
+      off) is retried on that same path once the chip TTL has passed, so a boot
+      hiccup does not leave it blank for the slow clock.
+    """
+    now = time.monotonic()
+    unread: list[str] = []
+    due: list[tuple[float, str]] = []
+    for url in dict.fromkeys(urls):
+        if url in chip_status._check_inflight:
+            continue
+        entry = chip_status._check_cache.get(url)
+        if entry is None:
+            unread.append(url)
+        elif entry[1] is None:
+            if now - entry[0] >= chip_status._CHECK_TTL_SECS:
+                unread.append(url)
+        elif _chip_refresh_due(entry, now, force=False, open_ttl=_IDLE_CHECK_TTL_SECS):
+            due.append((entry[0], url))
+    free = max(_CHECK_PENDING_MAX - len(chip_status._check_inflight), 0)
+    refreshing = schedule_check_refresh(unread[:free], on_update) if unread[:free] else []
+    window_start, started = _idle_check_window
+    if now - window_start >= chip_status._CHECK_TTL_SECS:
+        window_start, started = now, 0.0
+    free = max(_CHECK_PENDING_MAX - len(chip_status._check_inflight), 0)
+    budget = min(max(_IDLE_CHECK_PER_ROUND - int(started), 0), free)
+    picked = [url for _, url in sorted(due)[:budget]]
+    if picked:
+        reread = schedule_check_refresh(picked, on_update)
+        started += len(reread)
+        refreshing.extend(reread)
+    _idle_check_window[:] = [window_start, started]
+    return refreshing
+
+
+def schedule_tiered_check_refresh(
+    urls: list[str], idle: set[str], on_update: _CheckUpdateCallback | None = None
+) -> None:
+    """Split one chip sweep between the two tiers, keeping its order.
+
+    ``idle`` is the set of URLs that only idle slots link
+    (``DashboardState.idle_source_link_urls``): those go to
+    :func:`schedule_idle_check_refresh`, the rest to the chip TTL. Every
+    periodic or list-driven sweep goes through here, so none can skip the tier.
+    """
+    fast_urls = [url for url in urls if url not in idle]
+    idle_urls = [url for url in urls if url in idle]
+    if fast_urls:
+        schedule_check_refresh(fast_urls, on_update)
+    if idle_urls:
+        schedule_idle_check_refresh(idle_urls, on_update)
 
 
 def request_check_refresh_now(

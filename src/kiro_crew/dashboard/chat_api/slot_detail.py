@@ -56,9 +56,9 @@ async def api_chat_slots(request: web.Request) -> web.Response:
     from kiro_crew.dashboard.handlers.source_providers import (
         ensure_gitlab_hosts_loaded,
         is_owner_dashboard_request,
-        schedule_check_refresh,
         schedule_visibility_refresh,
     )
+    from kiro_crew.dashboard.source_providers.chip_refresh import schedule_tiered_check_refresh
 
     # Same warm-up as the WebSocket connect path: slot source-link extraction is
     # synchronous and cannot load the self-managed GitLab allowlist itself, so a
@@ -105,7 +105,11 @@ async def api_chat_slots(request: web.Request) -> web.Response:
         ]
         if urls:
             schedule_visibility_refresh(urls, state.push_slots_update)
-            schedule_check_refresh(urls, state.push_slots_update)
+            # Same two tiers as the owner WebSocket driver: a sidebar fetch must
+            # not re-read every restored tab's chips at the fast cadence.
+            schedule_tiered_check_refresh(
+                urls, state.idle_source_link_urls(), state.push_slots_update
+            )
     # Same offender diagnostic as the slots broadcast, on the same
     # projection: ``web.json_response`` would run this exact dump internally and
     # raise a bare TypeError naming neither slot nor field. Dump here so the
@@ -751,6 +755,33 @@ def _bounded_slot_page(
     return messages, total, start > 0, start
 
 
+def _note_owner_focus(request: web.Request, state: "DashboardState", key: str) -> None:
+    """The owner opened this session: keep its chips fresh, starting now.
+
+    The slot's PR/MR chips move to the fast tier of the periodic driver for a
+    while, and any of them older than the chip TTL is re-read now -- a restored
+    tab otherwise sits on the idle tier's slow clock while the owner looks at it.
+    Owner only, like every path that drives a credentialed provider read, and
+    best-effort: it must never fail the transcript read it rides on.
+    """
+    from kiro_crew.dashboard.handlers.source_providers import (
+        is_owner_dashboard_request,
+        schedule_check_refresh,
+        schedule_visibility_refresh,
+    )
+
+    try:
+        if not is_owner_dashboard_request(request):
+            return
+        state.note_source_activity(key)
+        urls = state.source_link_urls_for_slot(key)
+        if urls:
+            schedule_visibility_refresh(urls, state.push_slots_update)
+            schedule_check_refresh(urls, state.push_slots_update)
+    except Exception:
+        logger.debug("focus chip refresh failed for %s", key, exc_info=True)
+
+
 async def api_chat_slot_detail(request: web.Request) -> web.Response:
     """GET /api/chat/slots/{slot} — message history for a slot.
 
@@ -775,6 +806,7 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
     denied = deny_app_slot_access(request.get("app", ""), slot, name, "slot_detail")
     if denied is not None:
         return denied
+    _note_owner_focus(request, state, name)
 
     limit_raw = request.query.get("limit")
     before_raw = request.query.get("before")
