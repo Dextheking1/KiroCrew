@@ -996,7 +996,14 @@ def _register_agents(
         for agent_path_str in manifest.agents:
             agent_path = app_root / agent_path_str
             # Path containment check — reject paths that escape the app root
-            if not path_within_app_root(agent_path, app_root):
+            contained = app_root_containment(agent_path, app_root)
+            if contained is None:
+                # Unverified is not refused: report it as retryable.
+                logger.warning("App %s: agent path could not be checked: %s", app_name, agent_path)
+                if io_failures is not None:
+                    io_failures.append(str(agent_path))
+                continue
+            if not contained:
                 logger.warning("App %s: agent path escapes app root: %s", app_name, agent_path)
                 continue
             if not agent_path.is_file():
@@ -1226,7 +1233,7 @@ def _register_skills(app_name: str, manifest: AppManifest, app_root: Path) -> li
 
     for skill_path_str in manifest.skills:
         skill_path = app_root / skill_path_str
-        if not skill_path.resolve().is_relative_to(app_root.resolve()):
+        if not path_within_app_root(skill_path, app_root):
             logger.warning("App %s: skill path escapes app root: %s", app_name, skill_path)
             continue
         if not skill_path.is_dir():
