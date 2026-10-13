@@ -19,6 +19,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { ArrowUp, Loader2 } from 'lucide-react'
 import ChatMessageList, { type VirtualTranscriptHandle } from './ChatMessageList'
 import ErrorNotice from '../components/ErrorNotice'
+import { mergeIntoDraft } from '../utils/chatDrafts'
 import { JumpToBottomButton } from './ChatScrollChrome'
 import FollowUpBar from '../components/FollowUpBar'
 import ChatFooter from '../pages/chat/ChatFooter'
@@ -245,13 +246,23 @@ function ChatEmbed({
    *  chip's send arrow (unlike the composer's own Send button) can't fire a second
    *  turn before the first settles. Only a composer submit owns the composer's
    *  text — an override send carries its own text, so clearing the draft here would
-   *  throw away a draft the user has not sent yet. */
+   *  throw away a draft the user has not sent yet. A rejected send merges its text
+   *  back into the draft, so a failure never loses what the user wrote. */
   const send = useCallback((override?: string) => {
     const msg = (override ?? draft).trim()
     if (!msg || sendMutation.isPending) return
     if (override == null) setDraft('')
-    sendMutation.mutate(msg)
+    sendMutation.mutate(msg, {
+      // Nothing was accepted (a 403 because the host did not grant /api/chat, a
+      // network error, a 5xx), so hand the text back -- merged, not chosen, the
+      // same as SideChat: a follow-up chip may have edited the draft meanwhile.
+      // The error itself renders above the composer.
+      onError: () => { setDraft(prev => mergeIntoDraft(prev, msg)) },
+    })
   }, [draft, setDraft, sendMutation])
+  // The failure's own text (e.g. `API 403: ...`) under a plain lead line; an
+  // error with no text shows the lead line alone rather than it twice.
+  const sendErrorDetail = sendMutation.error?.message || null
 
   // Resolve a pending tool approval from inside the embed.
   //
@@ -393,6 +404,18 @@ function ChatEmbed({
             picked={picked}
             onSelect={toggleOption}
             onSend={text => send(text)}
+          />
+        </div>
+      )}
+
+      {sendMutation.isError && (
+        <div className={`shrink-0 px-3 pt-2 ${frameless ? '' : 'bg-bg-accent'}`}>
+          <ErrorNotice
+            testId="chat-embed-send-error"
+            title={sendErrorDetail ? i18nT('appSdk.chatEmbed.send_failed') : undefined}
+            message={sendErrorDetail ?? i18nT('appSdk.chatEmbed.send_failed')}
+            messagePlacement="below"
+            onDismiss={() => sendMutation.reset()}
           />
         </div>
       )}

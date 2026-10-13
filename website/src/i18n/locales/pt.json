@@ -364,7 +364,8 @@
       "send": "Enviar",
       "send_message": "Enviar mensagem",
       "session_ready_type_a_message_to_start": "Sessão pronta. Digite uma mensagem para começar.",
-      "streaming": "em streaming"
+      "streaming": "em streaming",
+      "send_failed": "Não foi possível enviar. Sua mensagem voltou para a caixa."
     },
     "chatMessageList": {
       "copied": "Copiado!",

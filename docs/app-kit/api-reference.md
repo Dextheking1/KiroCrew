@@ -116,6 +116,11 @@ inserts a line break, and an Enter used to commit an input method editor (IME)
 candidate does not send. The box grows with the draft up to 240 pixels, then
 keeps its height and scrolls vertically.
 
+A send that fails is not lost. If `POST /api/chat` is refused (for example the
+host did not grant `/api/chat`), the network drops, or an `onSend` handler
+rejects, the message goes back into the composer and an error notice shows above
+it with the failure's text. Dismissing the notice or sending again clears it.
+
 A host that boxes the embed at a fixed height passes `composerMaxHeight` (in
 pixels) to lower that cap, so a long draft cannot take most of the box from the
 transcript. The resting (empty) size of the composer is unchanged; only the cap

@@ -508,28 +508,96 @@ describe('ChatEmbed', () => {
       expect(screen.getByLabelText('Chat message')).toBeInTheDocument()
     })
 
-    it('tolerates send failure gracefully (SSE response expected)', async () => {
-      mockPost.mockRejectedValue(new Error('JSON parse error'))
+    it('treats the SSE body\'s JSON SyntaxError as a successful send', async () => {
+      mockPost.mockRejectedValue(new SyntaxError('Unexpected token d in JSON'))
 
       await act(async () => {
         renderWithProviders(<ChatEmbed slotKey="slot-1" />)
       })
-
+      const input = screen.getByLabelText('Chat message') as HTMLInputElement
       await act(async () => {
-        fireEvent.change(screen.getByLabelText('Chat message'), { target: { value: 'test' } })
+        fireEvent.change(input, { target: { value: 'test' } })
       })
-
-      // Should not throw
       await act(async () => {
         fireEvent.click(screen.getByLabelText('Send message'))
       })
-
-      // Advance timers so React Query processes the rejected promise chain
       await act(async () => {
         vi.advanceTimersByTime(100)
       })
 
-      expect((screen.getByLabelText('Chat message') as HTMLInputElement).disabled).toBe(false)
+      expect(input.disabled).toBe(false)
+      expect(input.value).toBe('')
+      expect(screen.queryByTestId('chat-embed-send-error')).toBeNull()
+    })
+
+    // A rejected send (403 because the host did not grant /api/chat, a network
+    // error, a 5xx) must not lose the message: the text goes back into the
+    // composer and the failure is shown above it. Before the fix the draft was
+    // cleared on submit and the error never rendered, so the message vanished.
+    it('restores the draft and shows the error when the send is rejected', async () => {
+      mockPost.mockRejectedValue(new Error('API 403: not permitted'))
+
+      await act(async () => {
+        renderWithProviders(<ChatEmbed slotKey="slot-1" />)
+      })
+      const input = screen.getByLabelText('Chat message') as HTMLInputElement
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'please keep me' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Send message'))
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(100)
+      })
+
+      expect(input.value).toBe('please keep me')
+      expect(input.disabled).toBe(false)
+      const notice = screen.getByTestId('chat-embed-send-error')
+      expect(notice).toHaveTextContent("Couldn't send. Your message is back in the box.")
+      expect(notice).toHaveTextContent('API 403: not permitted')
+    })
+
+    it('restores a rejected onSend message and clears the notice on dismiss and on the next send', async () => {
+      const onSend = vi.fn().mockRejectedValueOnce(new Error('host refused')).mockResolvedValue(undefined)
+
+      await act(async () => {
+        renderWithProviders(<ChatEmbed slotKey="slot-1" onSend={onSend} />)
+      })
+      const input = screen.getByLabelText('Chat message') as HTMLInputElement
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'first try' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Send message'))
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(100)
+      })
+      expect(input.value).toBe('first try')
+      expect(screen.getByTestId('chat-embed-send-error')).toHaveTextContent('host refused')
+
+      // Dismiss hides the notice and leaves the restored draft alone.
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+      })
+      // React Query notifies observers on a timer, which the fake clock holds.
+      await act(async () => {
+        vi.advanceTimersByTime(10)
+      })
+      expect(screen.queryByTestId('chat-embed-send-error')).toBeNull()
+      expect(input.value).toBe('first try')
+
+      // A retry that succeeds clears the draft and shows no notice.
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Send message'))
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(100)
+      })
+      expect(onSend).toHaveBeenLastCalledWith('first try')
+      expect(input.value).toBe('')
+      expect(screen.queryByTestId('chat-embed-send-error')).toBeNull()
     })
   })
 })

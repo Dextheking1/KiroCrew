@@ -132,6 +132,10 @@ it is not persisted or sent to the OS notification center. Failed app creation
 uses the same notice with or without an origin slot, without re-arming a new
 session for the next manual send. No failed app turn inserts a synthetic user
 row into a busy slot, so its pending approvals remain visible.
+`ChatEmbed`'s own composer keeps the same promise: a rejected send (the host did
+not grant `/api/chat`, a network error, a 5xx, or an `onSend` that rejects)
+merges the message back into the draft and shows an error notice above the
+composer until it is dismissed or the next send starts.
 Embedded chat surfaces never consume the
 dashboard's launch intent. Repeated rendering of a `new=1` navigation consumes
 that new-session request once, including while creation is pending. A failed
