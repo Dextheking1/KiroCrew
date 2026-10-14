@@ -55,21 +55,21 @@ Four reasons the in-memory state cannot be the carrier:
 4. The log is append-only, so "this handoff did not happen" has exactly one
    expression: another entry. That is the write that failed.
 
-## Why ordering cannot remove it
+## Why ordering cannot remove THIS one
 
 The obvious shape — make the log append the single commit point, with every
-earlier step idempotent and discardable — is already the shape. The append is
-first and the index write follows it, and nothing forces that order (the index
-writer takes only the slot key, needs no sequence number, and is idempotent).
-Reordering would remove the correction debt from four of the five refusal paths
-that currently owe one.
+earlier step idempotent and discardable — is the right one, and the handoff verb
+has it: the index write goes first and the append is last. Nothing forced the
+other order (the index writer takes only the slot key, needs no sequence number,
+and is idempotent), and that change removed the correction debt from four of the
+five refusal paths that owed one.
 
 It cannot remove this one. The debt here does not come from a step ordered after
 the commit point; it comes from a commit point whose **outcome is unknown**. No
 reordering removes an unknown, and the three-valued settlement exists because
 that unknown is irreducible.
 
-Two paths would still owe a correction after any reorder:
+Two paths owe a correction under that order, and no other order removes them:
 
 | path | why it survives |
 |---|---|
