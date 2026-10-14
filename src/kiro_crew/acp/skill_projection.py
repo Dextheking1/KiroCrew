@@ -3100,6 +3100,16 @@ def prepare_native_skill_projection(
         display_sizes[agent.name] = (_display_text_bytes(spec), source.absolute().as_posix())
         view = copy.deepcopy(spec)
         _strip_alias_display_text(view)
+        # Remote MCP servers (entries carrying a url key) rely on a local
+        # OAuth callback listener bound to a fixed port. A skill-view alias that
+        # inherits such a server starts that listener on every launch; concurrent
+        # aliases for the same provider then collide on the port. Remote servers
+        # have no role in skill search, so they are excluded here.
+        _raw_servers = view.get("mcpServers")
+        if isinstance(_raw_servers, dict):
+            view["mcpServers"] = {
+                k: v for k, v in _raw_servers.items() if not (isinstance(v, dict) and "url" in v)
+            }
         resources = view.get("resources", [])
         resources = resources if isinstance(resources, list) else []
         view["resources"] = [

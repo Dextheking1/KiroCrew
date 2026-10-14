@@ -555,6 +555,28 @@ def test_unmapped_custom_agent_does_not_gain_tools_or_servers(native_tree):
     assert "custom" not in prepared.search_agents
 
 
+def test_remote_mcp_servers_are_excluded_from_skill_view_alias(native_tree):
+    # A spec with both a remote server (url-based OAuth) and a local stdio server.
+    # The skill-view alias must carry only the local server; the remote one binds
+    # a fixed callback port on initialization, which collides across concurrent aliases.
+    _home, agents, project = native_tree
+    spec = {
+        "name": "custom",
+        "resources": ["skill://skills/a/SKILL.md"],
+        "mcpServers": {
+            "github": {"url": "https://api.githubcopilot.com/mcp/"},
+            "local-tool": {"command": "local-helper", "args": [], "env": {}},
+        },
+    }
+    (agents / "custom.json").write_text(json.dumps(spec), encoding="utf-8")
+    prepared = projection.prepare_native_skill_projection(project)
+    assert prepared is not None
+    view = prepared.specs["custom"]
+    servers = view.get("mcpServers", {})
+    assert "github" not in servers, "remote OAuth server must not appear in skill-view alias"
+    assert "local-tool" in servers, "local stdio server must be preserved"
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
