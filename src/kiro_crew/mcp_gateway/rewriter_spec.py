@@ -313,7 +313,7 @@ def _build_stub_entry(
     # upgrade instead of served from cache.
     rust_stub = rust_stub_binary()
     if rust_stub is not None:
-        # EXPERIMENTAL opt-in (``stub_impl``): the Rust port takes the same
+        # The Rust port (``stub_impl``, default when built) takes the same
         # envelope plus the install facts a Python stub reads off its own
         # interpreter. Only this branch adds the flag, because the Python
         # stub's argparse would refuse it.
