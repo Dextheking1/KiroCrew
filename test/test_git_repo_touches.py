@@ -912,6 +912,21 @@ class TestReposRoute:
         ]
 
     @pytest.mark.asyncio
+    async def test_a_remote_session_lists_no_gateway_repository(
+        self, tmp_path, mock_sel, monkeypatch
+    ):
+        from kiro_crew.dashboard.handlers import files
+
+        proj = _init_repo(tmp_path / "proj")
+        state = _State(s=_Slot(project=str(proj), repos=[_real(proj)]))
+        monkeypatch.setattr(files, "session_runs_remotely", lambda key: True)
+        async with TestClient(TestServer(_app(state))) as client:
+            resp = await client.get("/api/project/git/repos?slot=s")
+            assert resp.status == 200
+            body = await resp.json()
+        assert body["repos"] == []
+
+    @pytest.mark.asyncio
     async def test_project_outside_a_repo_is_not_listed(self, tmp_path, mock_sel):
         plain = tmp_path / "workspace"
         plain.mkdir()
