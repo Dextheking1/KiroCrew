@@ -15,7 +15,7 @@ grows into a subsystem should become a spec under
 | [mcp-gateway-oversize-response.md](mcp-gateway-oversize-response.md) | Handling an MCP tool response that exceeds the gateway read buffer. |
 | [oversized-image-session-wedge.md](oversized-image-session-wedge.md) | Why one oversized screenshot fails every later turn, which capture path escapes the inline-image caps, and how to repair a wedged transcript. |
 | [mcp-stub-decoupling.md](mcp-stub-decoupling.md) | Why the stub roster is opt-in per server (`mcp_gateway.stub_servers`, empty by default) and separate from pooling, and why per-connection backends stay outside the pooling budget. |
-| [handoff-durable-takeback.md](handoff-durable-takeback.md) | Why a `session_handoff` take-back that cannot record itself survives only in memory, and why neither reordering the commit nor the in-flight mark closes it. |
+| [handoff-durable-takeback.md](handoff-durable-takeback.md) | Why a `session_handoff` take-back that cannot record itself survives only in memory, why neither reordering the commit nor the in-flight mark closes it, and two in-process races accepted with the handoff. |
 | [profiling.md](profiling.md) | The debug-only stack sampler and desktop app metrics. |
 | [tool-stall-watchdog-placement.md](tool-stall-watchdog-placement.md) | Which stall checks belong in the ACP read loop and which must be judged out of band. |
 | [memory-benchmarks.md](memory-benchmarks.md) | Measuring the memory layer against LongMemEval and LoCoMo, and why the retrieval ruler is deterministic. |
