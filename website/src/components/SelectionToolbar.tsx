@@ -7,6 +7,7 @@ import { isTouchDevice } from '../utils/isTouchDevice'
 import { containedSelectionRange } from '../utils/selectionContainment'
 import { useImeGuard } from '../hooks/useImeGuard'
 import { measureAutoGrowTextarea } from '../hooks/useAutoGrowTextarea'
+import { useRemoteCrewActive } from '../hooks/useRemoteCrewActive'
 import ErrorNotice from './ErrorNotice'
 import { i18nT } from '../i18n/t'
 import { isEditableTarget } from '../utils/editableTarget'
@@ -447,7 +448,12 @@ function safeAreaBottomPx(): number {
 
 /** Generic floating toolbar that appears when user selects text within a container.
  *  Extensible — pass any actions (quote, copy, etc.) via the `actions` prop. */
-export default function SelectionToolbar({ containerRef, actions, externalSelection, composer, suspended = false, externalOnly = false, dock: dockProp = false }: SelectionToolbarProps) {
+export default function SelectionToolbar({ containerRef, actions, externalSelection, composer, suspended: suspendedProp = false, externalOnly = false, dock: dockProp = false }: SelectionToolbarProps) {
+  // The toolbar portals to `document.body`, outside the local dashboard's
+  // wrapper that a remote Crew hides, so it suspends itself while one is
+  // showing. Like a hidden tab, the draft survives and returns with the Crew.
+  const remoteCrewActive = useRemoteCrewActive()
+  const suspended = suspendedProp || remoteCrewActive
   // The composer is a floating annotation box by design; it never docks.
   const dock = dockProp && !composer
   const [visible, setVisible] = useState(false)

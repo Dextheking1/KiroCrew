@@ -391,6 +391,7 @@ import { countDiffStats } from '../utils/diffLineCounts'
 import { i18nT } from '../i18n/t'
 import { useDocumentImeLatch, useImeGuard } from '../hooks/useImeGuard'
 import { useScrollMemory } from '../hooks/useScrollMemory'
+import { useRemoteCrewActive } from '../hooks/useRemoteCrewActive'
 import FilePathMenu, { revealOrOpen, useRevealLabel, useCanOpenFile } from './FilePathMenu'
 import { pathBasename } from '../utils/pathBasename'
 
@@ -1367,6 +1368,10 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
   const [refreshing, setRefreshing] = useState(false)
   const [hintDismissed, setHintDismissed] = useState(() => localStorage.getItem(HINT_KEY) === '1')
   const [fullscreen, setFullscreen] = useState(false)
+  // The full-screen view and the comment tooltip both live on `document.body`,
+  // outside the local dashboard wrapper a remote Crew hides, so they hide
+  // themselves while one is showing.
+  const remoteCrewActive = useRemoteCrewActive()
   // Shared IME latch for the full-screen preview's Tab trap: a Tab that lands
   // during an IME composition (or its post-`compositionend` window) is
   // choosing a candidate, not leaving the field, so the trap must decline it
@@ -1578,7 +1583,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!hasCommandModifier(e) || e.key.toLowerCase() !== 'f') return
-      if (!active) return                                   // hidden tab: never claim the key
+      if (!active || remoteCrewActive) return               // hidden tab or another Crew showing: never claim the key
       if (editing) return                                   // editor owns it (#6397)
       if (!findActiveRef.current) return                    // cursor is in chat → let chat-find handle
       if (diffMode || !isMarkdown) {
@@ -1598,7 +1603,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [active, editing, diffMode, isMarkdown])
+  }, [active, editing, diffMode, isMarkdown, remoteCrewActive])
 
   const findBar = findOpen ? (
     <div data-mc-mdpanel className="absolute top-2 right-3 z-30 flex items-center gap-1.5 bg-bg-elevated border border-border focus-within:border-accent rounded-lg shadow-md px-2.5 py-1.5 text-[13px]">
@@ -2354,6 +2359,9 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
     commentTooltipRef.current?.remove()
     commentTooltipRef.current = null
   }, [])
+  // The tooltip follows the pointer and is removed on mouseleave, which never
+  // fires when the panel is hidden under it by a Crew switch.
+  useEffect(() => { if (remoteCrewActive) removeCommentTooltip() }, [remoteCrewActive, removeCommentTooltip])
   // Tracks the currently-flashing sidebar comment row so a new click cancels
   // the previous flash immediately (instead of leaving two rows highlighted
   // until the first one's timeout fires).
@@ -2714,8 +2722,9 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
       // A background tab is mounted but invisible, so neither key may reach it:
       // Escape would close — or raise a discard prompt for — a document the user
       // cannot see, and Cmd+S would let a hidden dirty editor answer a save the
-      // user aimed at the tab in front of them.
-      if (!active) return
+      // user aimed at the tab in front of them. The whole local dashboard is
+      // equally invisible while a remote Crew is showing.
+      if (!active || remoteCrewActive) return
       // While the discard-confirm dialog is open, the keyboard belongs to it.
       // Escape dismisses it via the dialog's own handler (re-running the guard
       // here would re-open the dialog the same keystroke just closed), and the
@@ -2742,7 +2751,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
     }
     document.addEventListener('keydown', h)
     return () => document.removeEventListener('keydown', h)
-  }, [active, guardedClose, editing, dirty, fullscreen, confirmOpen])
+  }, [active, guardedClose, editing, dirty, fullscreen, confirmOpen, remoteCrewActive])
 
   // The first edit of a clean buffer fences the disk. A read still in flight
   // describes a buffer the user has now typed into: if the user saves before it
@@ -2947,6 +2956,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
       // role="dialog"/aria-modal container legitimately owns keyboard handling.
       // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
       <div className="fixed inset-0 z-[9999] bg-bg flex flex-col p-safe" role="dialog" aria-modal="true" aria-label={i18nT('components.markdownPanel.full_screen_file_preview')}
+        style={remoteCrewActive ? { display: 'none' } : undefined}
         ref={el => { if (el && !el.dataset.focused) { el.dataset.focused = '1'; const first = el.querySelector<HTMLElement>('button:not([disabled]),textarea,input,a[href],select,[tabindex]:not([tabindex="-1"])'); first?.focus() } }}
         onKeyDown={e => {
           if (e.key !== 'Tab') return

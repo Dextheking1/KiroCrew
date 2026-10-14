@@ -25,6 +25,7 @@ import type { Artifact } from '../types'
 import { i18nT } from '../i18n/t'
 import { useLanguageGeneration } from '../i18n/useLanguageGeneration'
 import { isEditableTarget } from '../utils/editableTarget'
+import { useRemoteCrewActive } from '../hooks/useRemoteCrewActive'
 interface Props {
   slug: string
   /** Kind captured at open time; the live query overrides it once loaded. */
@@ -151,6 +152,9 @@ export default memo(function ArtifactPanel({ slug, kind, content, onClose, activ
   const fsPreviewRef = useRef<HTMLDivElement>(null)
   const fsScrollRef = useRef<HTMLDivElement>(null)
   const [fullscreen, setFullscreen] = useState(false)
+  // The full-screen view portals to `document.body`, outside the local
+  // dashboard wrapper a remote Crew hides, so it hides itself while one shows.
+  const remoteCrewActive = useRemoteCrewActive()
   // Shared IME latch for the full-screen preview's Tab trap: a Tab that lands
   // during an IME composition (or its post-`compositionend` window) is
   // choosing a candidate, not leaving the field, so the trap must decline it
@@ -322,8 +326,9 @@ export default memo(function ArtifactPanel({ slug, kind, content, onClose, activ
       // A background tab, or any tab in a closed-but-mounted panel, is still
       // listening — closing it would dismiss an artifact that is nowhere on
       // screen. Aliased from the `active` prop: a local `active` in this file
-      // already names the fullscreen icon.
-      if (!visible) return
+      // already names the fullscreen icon. While a remote Crew is showing, the
+      // whole local dashboard is off screen too.
+      if (!visible || remoteCrewActive) return
       // Don't hijack Esc while the user is in an editable field (e.g. the
       // add-instruction textarea) — let the field handle it instead of
       // closing/exiting the panel out from under them.
@@ -337,7 +342,7 @@ export default memo(function ArtifactPanel({ slug, kind, content, onClose, activ
     }
     document.addEventListener('keydown', h)
     return () => document.removeEventListener('keydown', h)
-  }, [visible, fullscreen, exitFullscreen, requestClose, active])
+  }, [visible, fullscreen, exitFullscreen, requestClose, active, remoteCrewActive])
   useEffect(() => {
     if (!fullscreen) return
     document.body.style.overflow = 'hidden'
@@ -503,6 +508,7 @@ export default memo(function ArtifactPanel({ slug, kind, content, onClose, activ
     {fullscreen && createPortal(
       // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- `dialog` is a structural role, and this onKeyDown is the modal focus trap the house a11y contract requires, not an activation: it only redirects a boundary Tab back inside. The operable controls are the buttons and the artifact body within.
       <div className="fixed inset-0 z-[9999] bg-bg flex flex-col p-safe" role="dialog" aria-modal="true" aria-label={i18nT('components.artifactPanel.full_screen_artifact_preview')}
+        style={remoteCrewActive ? { display: 'none' } : undefined}
         ref={el => { if (el && !el.dataset.focused) { el.dataset.focused = '1'; const first = el.querySelector<HTMLElement>('button:not([disabled]),textarea,input,a[href],select,[tabindex]:not([tabindex="-1"])'); first?.focus() } }}
         onKeyDown={e => {
           if (e.key !== 'Tab') return
