@@ -105,7 +105,7 @@ class TestPageOrderAndFallbacks:
         assert "upcoming: next.length" in html
         assert "finished: finishedCount()" in html
         assert "forgottenCount()" in html
-        for invented in ("percent", "eta", "health", "level", "rarity", "score"):
+        for invented in ("percent", "eta", "health", "rarity", "score"):
             assert re.search(rf"\b{invented}\b", html, re.IGNORECASE) is None
 
     def test_finished_tasks_are_counted_but_never_drawn(self, html: str) -> None:
@@ -201,6 +201,48 @@ class TestResponsiveThemeAndMotion:
             "xmlhttprequest",
         ):
             assert forbidden not in lowered
+
+
+class TestWarRoomMotion:
+    def test_the_map_has_bounded_pointer_parallax(self, html: str) -> None:
+        assert "perspective: 780px" in html
+        assert "Math.max(-6, Math.min(6" in html
+        assert "pointerleave" in html
+        assert "requestAnimationFrame(paint)" in html
+
+    def test_embers_are_bounded_and_gpu_moved(self, html: str) -> None:
+        assert "var EMBER_CAP = 18;" in html
+        assert "i < EMBER_CAP" in html
+        assert "translate3d" in html
+        assert "will-change: transform, opacity" in html
+
+    def test_cards_flip_by_click_or_keyboard(self, html: str) -> None:
+        assert "row.addEventListener('click', flip)" in html
+        assert "row.addEventListener('keydown', flip)" in html
+        assert "event.key !== 'Enter' && event.key !== ' '" in html
+        assert "rotateY(180deg)" in html
+        assert "ql-state-pulse" in html
+
+    def test_progress_uses_only_folded_accepted_and_total_counts(self, html: str) -> None:
+        assert "function acceptedCount()" in html
+        assert "function totalCount()" in html
+        assert "accepted / total" in html
+        assert "lastAccepted" in html
+        assert "ql-level-up" in html
+
+    def test_markers_and_party_states_come_from_task_status(self, html: str) -> None:
+        for marker in ("ql-pin-need", "ql-pin-ready", "ql-pin-blocked", "ql-pin-stale"):
+            assert marker in html
+        assert "function drawParty(list)" in html
+        assert "text(item.status)" in html
+        assert "worker_session_key" not in html
+
+    def test_hidden_pages_pause_and_reduced_motion_stays_static(self, html: str) -> None:
+        assert "visibilitychange" in html
+        assert "animation-play-state: paused !important" in html
+        assert "prefers-reduced-motion: reduce" in html
+        assert ".ql-embers { display: none !important; }" in html
+        assert ".ql-war-table { transform: none !important; }" in html
 
 
 class TestPreviewOnly:

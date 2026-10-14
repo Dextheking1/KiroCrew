@@ -129,7 +129,7 @@ describe('quest-log dashboard', () => {
     render(fields)
 
     expect(document.querySelector('.ql img')).toBeNull()
-    expect(document.querySelector('.ql svg')).toBeNull()
+    expect(document.querySelector('.ql svg[onload]')).toBeNull()
     expect(document.querySelector('.ql script')).toBeNull()
     expect(document.querySelector('#ql-needs')?.textContent).toContain('<img src=x onerror=')
     expect(document.querySelector('#ql-advice')?.textContent).toContain('<b>Do not trust markup</b>')
@@ -192,6 +192,47 @@ describe('quest-log dashboard', () => {
 
     expect(document.querySelector('#ql-upcoming .ql-tag')?.textContent).toBe('Dependency')
     expect(document.querySelector<HTMLElement>('#ql-upcoming .ql-row')?.style.getPropertyValue('--ql-tone')).toBe('var(--ql-gold)')
+  })
+
+  it('draws map markers and party frames from real task status', () => {
+    render()
+
+    expect(document.querySelectorAll('#ql-map-pins .ql-pin')).toHaveLength(4)
+    expect(document.querySelector('#ql-map-pins .ql-pin-need')?.textContent).toBe('!')
+    expect(document.querySelector('#ql-map-pins .ql-pin-ready')?.textContent).toBe('?')
+    expect(document.querySelectorAll('#ql-party .ql-member')).toHaveLength(3)
+    expect(document.querySelector('#ql-xp-count')?.textContent).toBe('5 / 11')
+  })
+
+  it('flips a quest card by click and Enter', () => {
+    render()
+
+    const card = document.querySelector<HTMLElement>('#ql-active .ql-row')
+    expect(card).not.toBeNull()
+    expect(card?.classList.contains('is-flipped')).toBe(false)
+    card?.click()
+    expect(card?.classList.contains('is-flipped')).toBe(true)
+    expect(card?.querySelector('.ql-back')?.textContent).toContain('Last report')
+    card?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(card?.classList.contains('is-flipped')).toBe(false)
+  })
+
+  it('does not arm pointer parallax with reduced motion', () => {
+    const original = window.matchMedia
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} }),
+    })
+    try {
+      render()
+      const table = document.querySelector<HTMLElement>('#ql-war-table')
+      table?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, clientX: 10, clientY: 10 }))
+      table?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 200, clientY: 100 }))
+      expect(table?.style.transform).toBe('')
+      expect(document.querySelector('.ql')?.textContent).toContain('War table')
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: original })
+    }
   })
 
   it('makes each PR a safe real link', () => {

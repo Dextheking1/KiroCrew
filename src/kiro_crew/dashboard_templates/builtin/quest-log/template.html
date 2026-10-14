@@ -1,374 +1,400 @@
 <div class="ql">
   <style>
     .ql {
-      --ql-stone: color-mix(in oklab, var(--bg, #101217) 91%, #4a4031 9%);
-      --ql-iron: color-mix(in oklab, var(--card, #191c22) 89%, #40382d 11%);
-      --ql-paper: color-mix(in oklab, var(--bg-elevated, #24221d) 84%, #8c7449 16%);
-      --ql-paper-soft: color-mix(in oklab, var(--card, #1b1d22) 94%, #9b7a42 6%);
-      --ql-edge: color-mix(in oklab, var(--border, #34363c) 78%, #9a8156 22%);
-      --ql-gold: color-mix(in oklab, var(--warn, #d6ad57) 82%, var(--text, #ece8df));
-      --ql-blue: var(--info, #65a8e8);
-      --ql-red: var(--danger, #d76b63);
-      --ql-green: var(--ok, #64b881);
-      --ql-ink: var(--text, #e9e5dc);
-      --ql-strong: var(--text-strong, #fffdf7);
-      --ql-muted: var(--muted, #aaa398);
-      background: var(--ql-stone);
-      color: var(--ql-ink);
-      font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-      padding: 10px;
-      min-width: 0;
+      --ql-stone: color-mix(in oklab, var(--bg, #0d1015) 88%, #51452f 12%);
+      --ql-iron: color-mix(in oklab, var(--card, #171a20) 84%, #453a2a 16%);
+      --ql-paper: color-mix(in oklab, var(--bg-elevated, #28241c) 74%, #b18a49 26%);
+      --ql-paper-soft: color-mix(in oklab, var(--card, #1b1d22) 88%, #876c3e 12%);
+      --ql-edge: color-mix(in oklab, var(--border, #34363c) 60%, #a8894f 40%);
+      --ql-gold: color-mix(in oklab, var(--warn, #e0b85d) 88%, var(--text, #f7edcf));
+      --ql-blue: var(--info, #63b3ed); --ql-red: var(--danger, #e06d62); --ql-green: var(--ok, #68c58a);
+      --ql-ink: var(--text, #ece8df); --ql-strong: var(--text-strong, #fffdf7); --ql-muted: var(--muted, #aaa398);
+      --ql-motion-fast: 180ms; --ql-motion-slow: 720ms; --ql-ease: cubic-bezier(.2,.75,.2,1);
+      background: radial-gradient(circle at 50% -10%, color-mix(in oklab, var(--ql-gold) 9%, transparent), transparent 38%), var(--ql-stone);
+      color: var(--ql-ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 12px; min-width: 0;
     }
     @media (prefers-color-scheme: light) {
-      .ql {
-        --ql-stone: color-mix(in oklab, var(--bg, #f5f2e9) 93%, #746040 7%);
-        --ql-iron: color-mix(in oklab, var(--card, #fffdf7) 88%, #8c754d 12%);
-        --ql-paper: color-mix(in oklab, var(--bg-elevated, #fbf4df) 84%, #c9a966 16%);
-        --ql-paper-soft: color-mix(in oklab, var(--card, #fffdf7) 92%, #c7a35d 8%);
-        --ql-edge: color-mix(in oklab, var(--border, #d1c7b3) 72%, #826a40 28%);
-        --ql-gold: color-mix(in oklab, var(--warn, #9a6a15) 84%, var(--text, #2d261c));
-        --ql-blue: var(--info, #2266a6);
-        --ql-red: var(--danger, #a63e38);
-        --ql-green: var(--ok, #257343);
-        --ql-ink: var(--text, #302b23);
-        --ql-strong: var(--text-strong, #17130e);
-        --ql-muted: var(--muted, #6f685c);
-      }
+      .ql { --ql-stone: color-mix(in oklab, var(--bg, #eee9dc) 86%, #806b48 14%); --ql-iron: color-mix(in oklab, var(--card, #fffdf7) 78%, #8d7650 22%);
+        --ql-paper: color-mix(in oklab, var(--bg-elevated, #fbefd0) 78%, #c59d56 22%); --ql-paper-soft: color-mix(in oklab, var(--card, #fffdf7) 86%, #c3a064 14%);
+        --ql-edge: color-mix(in oklab, var(--border, #cfc4ae) 58%, #7c6339 42%); --ql-gold: color-mix(in oklab, var(--warn, #986416) 88%, var(--text, #2d261c));
+        --ql-blue: var(--info, #2266a6); --ql-red: var(--danger, #a63e38); --ql-green: var(--ok, #257343); --ql-ink: var(--text, #302b23);
+        --ql-strong: var(--text-strong, #17130e); --ql-muted: var(--muted, #6f685c); }
     }
     .ql *, .ql *::before, .ql *::after { box-sizing: border-box; }
-    .ql-frame { max-width: 860px; margin: 0 auto; border: 1px solid var(--ql-edge); border-radius: 10px;
-      background: var(--ql-iron); box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--ql-edge) 22%, transparent), 0 12px 36px -24px #000; overflow: hidden; }
-    .ql-head { padding: 12px 13px; border-bottom: 1px solid var(--ql-edge); background: var(--ql-iron); }
-    .ql-kicker { margin: 0; color: var(--ql-gold); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
-    .ql-goal { margin: 3px 0 0; color: var(--ql-strong); font: 650 16px/1.3 Georgia, "Times New Roman", serif; overflow-wrap: anywhere; }
+    .ql-frame { position: relative; max-width: 940px; margin: 0 auto; border: 2px solid var(--ql-edge); border-radius: 15px; background: var(--ql-iron);
+      box-shadow: inset 0 0 0 3px color-mix(in oklab, var(--ql-stone) 72%, transparent), inset 0 0 28px color-mix(in oklab, #000 38%, transparent),
+        0 2px 0 color-mix(in oklab, var(--ql-gold) 35%, transparent), 0 18px 42px -18px #000; overflow: hidden; transform-style: preserve-3d; }
+    .ql-frame::before, .ql-frame::after { content: ""; position: absolute; inset: 7px auto 7px 7px; width: 5px; border-radius: 5px;
+      background: linear-gradient(90deg, color-mix(in oklab, #000 60%, var(--ql-edge)), var(--ql-edge), color-mix(in oklab, #fff 14%, var(--ql-edge)));
+      box-shadow: 0 0 0 1px #0007, 2px 0 8px #0008; z-index: 8; pointer-events: none; }
+    .ql-frame::after { inset: 7px 7px 7px auto; transform: scaleX(-1); }
+    .ql-paused *, .ql-paused *::before, .ql-paused *::after { animation-play-state: paused !important; }
+
+    .ql-torch { position: absolute; top: 12px; width: 20px; height: 34px; z-index: 12; pointer-events: none; }
+    .ql-torch-left { left: 13px; } .ql-torch-right { right: 13px; transform: scaleX(-1); }
+    .ql-torch::before { content: ""; position: absolute; left: 7px; top: 13px; width: 7px; height: 20px; border-radius: 3px;
+      background: linear-gradient(90deg, #0008, var(--ql-edge), #0008); transform: rotate(7deg); }
+    .ql-flame { position: absolute; left: 5px; top: 0; width: 11px; height: 18px; border-radius: 70% 30% 65% 35%;
+      background: color-mix(in oklab, var(--ql-gold) 82%, #ff6b32); box-shadow: 0 0 12px var(--ql-gold), 0 0 22px #ff6b3266;
+      transform-origin: 50% 100%; animation: ql-flicker 480ms ease-in-out infinite alternate; }
+    .ql-embers { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 10; }
+    .ql-ember { position: absolute; bottom: -8px; width: 3px; height: 3px; border-radius: 50%; background: var(--ql-gold); opacity: 0;
+      box-shadow: 0 0 5px var(--ql-gold); animation: ql-ember var(--ember-time, 6s) linear var(--ember-delay, 0s) infinite; will-change: transform, opacity; }
+
+    .ql-head { position: relative; padding: 14px 42px 12px; border-bottom: 1px solid var(--ql-edge); background: var(--ql-iron); overflow: hidden; }
+    .ql-head::after { content: ""; position: absolute; inset: auto 10% 0; height: 1px; background: var(--ql-gold); opacity: .42; }
+    .ql-banner { transform-origin: 50% 0; animation: ql-unfurl 700ms var(--ql-ease) both; }
+    .ql-kicker { margin: 0; color: var(--ql-gold); font-size: 10px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    .ql-goal { margin: 3px 0 0; color: var(--ql-strong); font: 700 17px/1.3 Georgia, "Times New Roman", serif; overflow-wrap: anywhere; text-shadow: 0 2px 3px #0008; }
     .ql-state { margin: 6px 0 0; color: var(--ql-muted); font-size: 11.5px; overflow-wrap: anywhere; }
     .ql-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 7px; color: var(--ql-muted); font-size: 10.5px; }
-    .ql-meta b { color: var(--ql-ink); font-weight: 600; }
-    .ql-body { display: grid; gap: 9px; padding: 9px; }
-    .ql-panel { border: 1px solid var(--ql-edge); border-radius: 8px; background: var(--ql-paper-soft); overflow: hidden; min-width: 0; }
-    .ql-panel-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 7px 9px;
-      border-bottom: 1px solid color-mix(in oklab, var(--ql-edge) 75%, transparent); background: var(--ql-paper); }
-    .ql-panel-h h2 { margin: 0; color: var(--ql-strong); font: 700 11px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .06em; text-transform: uppercase; }
-    .ql-count { color: var(--ql-muted); font: 600 10px/1 system-ui, sans-serif; white-space: nowrap; }
-    .ql-list { list-style: none; margin: 0; padding: 0; }
-    .ql-row { position: relative; padding: 8px 9px 8px 13px; min-width: 0; }
-    .ql-row + .ql-row { border-top: 1px solid color-mix(in oklab, var(--ql-edge) 52%, transparent); }
-    .ql-row::before { content: ""; position: absolute; inset: 8px auto 8px 5px; width: 3px; border-radius: 3px; background: var(--ql-tone, var(--ql-blue)); }
+    .ql-meta b { color: var(--ql-ink); font-weight: 650; }
+    .ql-xp { margin-top: 9px; display: grid; grid-template-columns: 1fr auto; gap: 5px 9px; align-items: center; }
+    .ql-xp-label { color: var(--ql-gold); font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .ql-xp-count { color: var(--ql-muted); font-size: 10px; }
+    .ql-xp-track { grid-column: 1 / -1; height: 7px; border: 1px solid color-mix(in oklab, var(--ql-edge) 75%, #000); border-radius: 999px;
+      background: color-mix(in oklab, var(--ql-stone) 86%, #000); overflow: hidden; box-shadow: inset 0 2px 4px #0009; }
+    .ql-xp-fill { width: 100%; height: 100%; transform: scaleX(0); transform-origin: 0 50%; background: linear-gradient(90deg, var(--ql-green), var(--ql-gold));
+      box-shadow: 0 0 9px var(--ql-gold); transition: transform var(--ql-motion-slow) var(--ql-ease); }
+    .ql-xp-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle at 50% 40%, var(--ql-gold), transparent 45%); }
+    .ql-level-up .ql-xp-flash { animation: ql-level-flash 800ms ease-out 1; }
+
+    .ql-war-wrap { padding: 12px 11px 7px; perspective: 780px; background: color-mix(in oklab, var(--ql-stone) 91%, #000); }
+    .ql-war-table { position: relative; min-height: 225px; border: 1px solid var(--ql-edge); border-radius: 12px; overflow: hidden; transform-style: preserve-3d;
+      background: radial-gradient(circle at 34% 24%, color-mix(in oklab, var(--ql-paper) 82%, #fff 18%), transparent 26%),
+        repeating-linear-gradient(12deg, transparent 0 28px, color-mix(in oklab, var(--ql-edge) 12%, transparent) 29px 30px), var(--ql-paper);
+      box-shadow: inset 0 0 0 5px color-mix(in oklab, var(--ql-iron) 76%, var(--ql-edge)), inset 0 0 26px #0007, 0 16px 25px -13px #000;
+      transform: rotateX(5deg) rotateY(0deg); transition: transform 260ms var(--ql-ease); will-change: transform; }
+    .ql-map-svg { position: absolute; inset: 13px; width: calc(100% - 26px); height: calc(100% - 26px); opacity: .28; color: color-mix(in oklab, var(--ql-ink) 60%, var(--ql-edge)); }
+    .ql-map-svg path, .ql-map-svg circle { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .ql-map-zones { position: absolute; inset: 12px; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; }
+    .ql-zone { position: relative; border: 1px dashed color-mix(in oklab, var(--ql-edge) 52%, transparent); border-radius: 8px; }
+    .ql-zone-name { position: absolute; left: 7px; top: 5px; color: color-mix(in oklab, var(--ql-ink) 70%, var(--ql-muted));
+      font: 800 8.5px/1 Georgia, "Times New Roman", serif; letter-spacing: .08em; text-transform: uppercase; }
+    .ql-map-pins { position: absolute; inset: 12px; pointer-events: none; transform: translateZ(18px); }
+    .ql-pin { position: absolute; width: 27px; height: 27px; border: 1px solid currentColor; border-radius: 50%; display: grid; place-items: center;
+      color: var(--pin-tone, var(--ql-blue)); background: color-mix(in oklab, var(--ql-iron) 86%, var(--pin-tone) 14%); box-shadow: 0 5px 8px #0009, 0 0 12px color-mix(in oklab, var(--pin-tone) 58%, transparent);
+      font: 900 11px/1 system-ui, sans-serif; transform: translate(-50%, -50%); }
+    .ql-pin::after { content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: 10px; background: currentColor; box-shadow: 1px 1px 2px #000; }
+    .ql-pin-need { --pin-tone: var(--ql-gold); animation: ql-bob 1.6s ease-in-out infinite; }
+    .ql-pin-ready { --pin-tone: var(--ql-green); animation: ql-glow 1.8s ease-in-out infinite; }
+    .ql-pin-blocked { --pin-tone: var(--ql-red); animation: ql-rune 1.35s ease-in-out infinite; }
+    .ql-pin-stale { --pin-tone: var(--ql-muted); border-radius: 10px; font-size: 8px; animation: ql-sleep 2.2s ease-in-out infinite; }
+    .ql-pin-live { --pin-tone: var(--ql-blue); }
+    .ql-table-title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) translateZ(4px); color: color-mix(in oklab, var(--ql-ink) 38%, transparent);
+      font: 900 22px/1 Georgia, "Times New Roman", serif; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+
+    .ql-party { margin: 0 11px 10px; border: 1px solid var(--ql-edge); border-radius: 10px; background: color-mix(in oklab, var(--ql-iron) 92%, #000); padding: 8px; }
+    .ql-party-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+    .ql-party-head h2 { margin: 0; color: var(--ql-gold); font: 800 10px/1 Georgia, "Times New Roman", serif; letter-spacing: .1em; text-transform: uppercase; }
+    .ql-party-note { color: var(--ql-muted); font-size: 9px; }
+    .ql-party-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px; }
+    .ql-member { display: grid; grid-template-columns: 34px 1fr; gap: 7px; align-items: center; min-width: 0; padding: 6px; border: 1px solid var(--ql-edge); border-radius: 8px;
+      background: var(--ql-paper-soft); box-shadow: inset 0 1px color-mix(in oklab, var(--ql-gold) 20%, transparent); }
+    .ql-portrait { width: 34px; height: 34px; color: var(--member-tone, var(--ql-blue)); filter: drop-shadow(0 3px 3px #0008); }
+    .ql-portrait circle { fill: color-mix(in oklab, var(--ql-iron) 85%, currentColor); stroke: currentColor; stroke-width: 2; }
+    .ql-portrait path { fill: currentColor; opacity: .68; }
+    .ql-member-name { color: var(--ql-strong); font-size: 10.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ql-member-state { margin-top: 2px; color: var(--member-tone, var(--ql-blue)); font-size: 9.5px; font-weight: 700; }
+    .ql-member-progress { --member-tone: var(--ql-blue); } .ql-member-question { --member-tone: var(--ql-gold); }
+    .ql-member-blocked { --member-tone: var(--ql-red); } .ql-member-done { --member-tone: var(--ql-green); } .ql-member-stale { --member-tone: var(--ql-muted); }
+
+    .ql-body { display: grid; gap: 10px; padding: 0 11px 11px; }
+    .ql-panel { position: relative; border: 1px solid var(--ql-edge); border-radius: 10px; background: var(--ql-paper-soft); overflow: hidden; min-width: 0;
+      box-shadow: inset 0 1px color-mix(in oklab, var(--ql-gold) 18%, transparent), 0 7px 13px -10px #000; }
+    .ql-panel-h { position: relative; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 10px;
+      border-bottom: 1px solid color-mix(in oklab, var(--ql-edge) 75%, transparent); background: var(--ql-paper); overflow: hidden; }
+    .ql-panel-h::after { content: ""; position: absolute; top: 0; bottom: 0; left: -35%; width: 24%; transform: skewX(-18deg);
+      background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--ql-gold) 35%, transparent), transparent); animation: ql-title-sweep 5.2s ease-in-out infinite; }
+    .ql-panel-h h2 { margin: 0; color: var(--ql-strong); font: 800 11px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .07em; text-transform: uppercase; }
+    .ql-count { color: var(--ql-muted); font: 700 10px/1 system-ui, sans-serif; white-space: nowrap; }
+    .ql-list { list-style: none; margin: 0; padding: 8px; display: grid; gap: 8px; }
+    .ql-row { --ql-tone: var(--ql-blue); position: relative; min-height: 92px; perspective: 700px; border-radius: 9px; outline: none; }
+    .ql-card-inner { position: relative; width: 100%; min-height: 92px; transform-style: preserve-3d; transition: transform 520ms var(--ql-ease); will-change: transform; }
+    .ql-row.is-flipped .ql-card-inner { transform: rotateY(180deg); }
+    .ql-face { position: absolute; inset: 0; min-height: 92px; padding: 9px 10px 9px 14px; border: 1px solid color-mix(in oklab, var(--ql-edge) 72%, var(--ql-tone));
+      border-radius: 9px; background: color-mix(in oklab, var(--ql-paper-soft) 93%, var(--ql-tone) 7%); backface-visibility: hidden;
+      box-shadow: inset 0 1px color-mix(in oklab, #fff 12%, transparent), 0 5px 8px -5px #000; overflow: hidden; }
+    .ql-face::before { content: ""; position: absolute; inset: 8px auto 8px 5px; width: 3px; border-radius: 3px; background: var(--ql-tone); }
+    .ql-face::after { content: ""; position: absolute; inset: -30% auto -30% -45%; width: 28%; transform: skewX(-18deg) translateX(0);
+      background: linear-gradient(90deg, transparent, color-mix(in oklab, #fff 30%, transparent), transparent); opacity: 0; pointer-events: none; }
+    .ql-back { transform: rotateY(180deg); display: grid; align-content: start; }
+    .ql-row:hover .ql-card-inner, .ql-row:focus-visible .ql-card-inner { transform: translateY(-4px) rotateX(1.5deg); }
+    .ql-row.is-flipped:hover .ql-card-inner, .ql-row.is-flipped:focus-visible .ql-card-inner { transform: translateY(-4px) rotateY(180deg); }
+    .ql-row:hover .ql-front::after, .ql-row:focus-visible .ql-front::after { animation: ql-card-sweep 800ms ease-out 1; }
+    .ql-row:focus-visible { box-shadow: 0 0 0 2px var(--ql-gold), 0 0 0 4px var(--ql-stone); }
+    .ql-row.ql-state-pulse .ql-card-inner { animation: ql-state-pulse 620ms ease-out 1; }
     .ql-row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
-    .ql-title { color: var(--ql-strong); font-weight: 650; overflow-wrap: anywhere; min-width: 0; }
-    .ql-tag { flex: none; border: 1px solid var(--ql-tone, var(--ql-blue)); border-radius: 999px; padding: 1px 6px;
-      color: var(--ql-tone, var(--ql-blue)); font-size: 9.5px; font-weight: 700; white-space: nowrap; }
-    .ql-action { margin-top: 4px; color: var(--ql-ink); font-size: 11.5px; overflow-wrap: anywhere; }
+    .ql-title { color: var(--ql-strong); font-weight: 700; overflow-wrap: anywhere; min-width: 0; }
+    .ql-tag { flex: none; border: 1px solid var(--ql-tone); border-radius: 999px; padding: 1px 7px; color: var(--ql-tone); font-size: 9.5px; font-weight: 800; white-space: nowrap; }
+    .ql-action { margin-top: 5px; color: var(--ql-ink); font-size: 11.5px; overflow-wrap: anywhere; }
     .ql-action b { color: var(--ql-gold); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; }
-    .ql-summary { margin-top: 3px; color: var(--ql-muted); font-size: 10.5px; overflow-wrap: anywhere; }
-    .ql-foot { display: flex; flex-wrap: wrap; gap: 5px 9px; align-items: center; margin-top: 5px; color: var(--ql-muted); font-size: 10px; }
+    .ql-summary { margin-top: 4px; color: var(--ql-muted); font-size: 10.5px; overflow-wrap: anywhere; }
+    .ql-foot { display: flex; flex-wrap: wrap; gap: 5px 9px; align-items: center; margin-top: 6px; color: var(--ql-muted); font-size: 10px; }
     .ql-id { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
-    .ql-link { color: var(--ql-blue); text-decoration: underline; text-underline-offset: 2px; font-weight: 650; }
+    .ql-link { position: relative; z-index: 3; color: var(--ql-blue); text-decoration: underline; text-underline-offset: 2px; font-weight: 700; }
     .ql-link:visited { color: color-mix(in oklab, var(--ql-blue) 65%, var(--ql-muted)); }
     .ql-link:focus-visible { outline: 2px solid var(--ql-gold); outline-offset: 2px; border-radius: 2px; }
-    .ql-empty, .ql-more { margin: 0; padding: 9px; color: var(--ql-muted); font-size: 11px; }
+    .ql-flip-hint { position: absolute; right: 9px; bottom: 6px; color: var(--ql-muted); font-size: 8.5px; opacity: .72; }
+    .ql-marker { position: absolute; right: 8px; top: 31px; z-index: 4; min-width: 22px; height: 22px; padding: 0 4px; display: grid; place-items: center;
+      color: var(--ql-tone); font: 900 11px/1 system-ui, sans-serif; text-shadow: 0 0 7px currentColor; pointer-events: none; }
+    .ql-marker-need { animation: ql-bob 1.6s ease-in-out infinite; }
+    .ql-marker-ready { animation: ql-glow 1.8s ease-in-out infinite; }
+    .ql-marker-blocked { animation: ql-rune 1.35s ease-in-out infinite; }
+    .ql-marker-stale { font-size: 8px; animation: ql-sleep 2.2s ease-in-out infinite; }
+    .ql-empty, .ql-more { margin: 0; padding: 10px; color: var(--ql-muted); font-size: 11px; }
     .ql-more { border-top: 1px dashed var(--ql-edge); color: var(--ql-gold); }
-    .ql-advice .ql-row { --ql-tone: var(--ql-gold); }
-    .ql-advice-mark { color: var(--ql-gold); font-size: 9px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+
+    .ql-advice { background: color-mix(in oklab, var(--ql-paper) 88%, var(--ql-iron)); }
+    .ql-advice::before, .ql-advice::after { content: ""; position: absolute; left: 5px; right: 5px; height: 8px; z-index: 2; border-radius: 50%;
+      background: color-mix(in oklab, var(--ql-paper) 76%, #000); box-shadow: 0 2px 4px #0008; }
+    .ql-advice::before { top: 34px; } .ql-advice::after { bottom: 3px; }
+    .ql-advice .ql-list { padding: 15px 12px 14px; transform-origin: 50% 0; animation: ql-scroll-open 760ms var(--ql-ease) both; }
+    .ql-advice .ql-row { --ql-tone: var(--ql-gold); min-height: auto; perspective: none; }
+    .ql-advice .ql-row { padding: 8px 4px; border-bottom: 1px dashed color-mix(in oklab, var(--ql-edge) 58%, transparent); }
+    .ql-advice-mark { color: var(--ql-gold); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
     .ql-advice-stale { color: var(--ql-muted); }
-    .ql-finished { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 10px;
-      border-top: 1px solid var(--ql-edge); color: var(--ql-muted); background: color-mix(in oklab, var(--ql-iron) 93%, #000 7%); font-size: 10.5px; }
-    .ql-finished b { color: var(--ql-green); font-size: 13px; }
-    .ql-omitted { color: var(--ql-gold); text-align: right; }
-    .ql-live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; background: var(--ql-blue);
-      animation: ql-breathe 2.4s ease-in-out infinite; vertical-align: 1px; }
-    @keyframes ql-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .42; } }
-    @media (min-width: 720px) {
-      .ql-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-      .ql-needs { grid-column: 1 / -1; }
-      .ql-upcoming { grid-column: 1 / -1; }
-    }
+    .ql-finished { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 15px;
+      border-top: 1px solid var(--ql-edge); color: var(--ql-muted); background: color-mix(in oklab, var(--ql-iron) 91%, #000); font-size: 10.5px; }
+    .ql-finished b { color: var(--ql-green); font-size: 13px; } .ql-omitted { color: var(--ql-gold); text-align: right; }
+
+    @keyframes ql-unfurl { from { opacity: 0; transform: scaleY(.15) translateY(-12px); } to { opacity: 1; transform: none; } }
+    @keyframes ql-flicker { from { opacity: .7; transform: rotate(-5deg) scale(.9, 1.05); } to { opacity: 1; transform: rotate(5deg) scale(1.08, .94); } }
+    @keyframes ql-ember { 0% { opacity: 0; transform: translate3d(0, 0, 0) scale(.5); } 12% { opacity: .82; } 82% { opacity: .45; }
+      100% { opacity: 0; transform: translate3d(var(--ember-drift, 18px), -470px, 0) scale(1.2); } }
+    @keyframes ql-title-sweep { 0%, 62% { opacity: 0; transform: translateX(0) skewX(-18deg); } 72% { opacity: .8; } 90%, 100% { opacity: 0; transform: translateX(650%) skewX(-18deg); } }
+    @keyframes ql-card-sweep { from { opacity: 0; transform: skewX(-18deg) translateX(0); } 35% { opacity: .72; }
+      to { opacity: 0; transform: skewX(-18deg) translateX(650%); } }
+    @keyframes ql-bob { 0%, 100% { transform: translate(-50%, -50%) translateY(0); } 50% { transform: translate(-50%, -50%) translateY(-6px); } }
+    @keyframes ql-glow { 0%, 100% { opacity: .7; transform: translate(-50%, -50%) scale(.94); } 50% { opacity: 1; transform: translate(-50%, -50%) scale(1.12); } }
+    @keyframes ql-rune { 0%, 100% { opacity: .62; transform: translate(-50%, -50%) scale(.92); } 50% { opacity: 1; transform: translate(-50%, -50%) scale(1.14); } }
+    @keyframes ql-sleep { 0%, 100% { opacity: .45; transform: translate(-50%, -50%) translateY(0); } 50% { opacity: .9; transform: translate(-50%, -50%) translateY(-3px); } }
+    @keyframes ql-state-pulse { 0% { opacity: .55; transform: scale(.97); } 45% { opacity: 1; transform: scale(1.015); } 100% { opacity: 1; transform: none; } }
+    @keyframes ql-level-flash { 0% { opacity: 0; transform: scale(.85); } 35% { opacity: .42; transform: scale(1.05); } 100% { opacity: 0; transform: scale(1.18); } }
+    @keyframes ql-scroll-open { from { opacity: 0; transform: scaleY(.2); } to { opacity: 1; transform: none; } }
+
+    @media (min-width: 720px) { .ql-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .ql-needs, .ql-upcoming { grid-column: 1 / -1; } }
     @media (max-width: 360px) {
-      .ql { padding: 5px; font-size: 12px; }
-      .ql-head { padding: 10px; }
-      .ql-body { padding: 6px; gap: 7px; }
-      .ql-row-top { display: block; }
-      .ql-tag { display: table; margin-top: 4px; }
+      .ql { padding: 5px; font-size: 12px; } .ql-head { padding: 12px 34px 10px; } .ql-war-wrap { padding: 8px 7px 4px; }
+      .ql-war-table { min-height: 190px; } .ql-party { margin: 0 7px 8px; } .ql-body { padding: 0 7px 8px; gap: 8px; }
+      .ql-row-top { display: block; padding-right: 26px; } .ql-tag { display: table; margin-top: 4px; } .ql-party-list { grid-template-columns: 1fr; }
     }
     @media (prefers-reduced-motion: reduce) {
       .ql *, .ql *::before, .ql *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+      .ql-embers { display: none !important; } .ql-war-table { transform: none !important; }
+      .ql-row.is-flipped .ql-front { display: none; } .ql-row.is-flipped .ql-back { position: relative; transform: none; }
+      .ql-row:hover .ql-card-inner, .ql-row:focus-visible .ql-card-inner, .ql-row.is-flipped:hover .ql-card-inner,
+      .ql-row.is-flipped:focus-visible .ql-card-inner { transform: none; }
     }
   </style>
 
   <div class="ql-frame">
+    <div class="ql-torch ql-torch-left" aria-hidden="true"><span class="ql-flame"></span></div>
+    <div class="ql-torch ql-torch-right" aria-hidden="true"><span class="ql-flame"></span></div>
+    <div class="ql-embers" id="ql-embers" aria-hidden="true"></div>
     <header class="ql-head">
-      <p class="ql-kicker" data-i18n="quest_log">Quest log</p>
-      <h1 class="ql-goal" data-dashboard-field="goal">-</h1>
-      <p class="ql-state" id="ql-state" aria-live="polite">-</p>
-      <div class="ql-meta">
-        <span id="ql-round-wrap"><span data-i18n="round">Round</span> <b data-dashboard-field="round">-</b></span>
-        <span id="ql-updated-wrap"><span data-i18n="updated">Updated</span> <b data-dashboard-field="last_entry_at">-</b></span>
+      <div class="ql-banner">
+        <p class="ql-kicker" data-i18n="quest_log">Quest log</p>
+        <h1 class="ql-goal" data-dashboard-field="goal">-</h1>
+        <p class="ql-state" id="ql-state" aria-live="polite">-</p>
+        <div class="ql-meta">
+          <span id="ql-round-wrap"><span data-i18n="round">Round</span> <b data-dashboard-field="round">-</b></span>
+          <span id="ql-updated-wrap"><span data-i18n="updated">Updated</span> <b data-dashboard-field="last_entry_at">-</b></span>
+        </div>
+        <div class="ql-xp" id="ql-xp">
+          <span class="ql-xp-label" data-i18n="campaign_progress">Campaign progress</span><span class="ql-xp-count" id="ql-xp-count">0 / 0</span>
+          <div class="ql-xp-track" id="ql-xp-track" role="progressbar" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+            <div class="ql-xp-fill" id="ql-xp-fill"></div>
+          </div>
+        </div>
       </div>
+      <div class="ql-xp-flash" aria-hidden="true"></div>
     </header>
+
+    <div class="ql-war-wrap">
+      <section class="ql-war-table" id="ql-war-table" aria-labelledby="ql-map-title">
+        <svg class="ql-map-svg" viewBox="0 0 400 220" aria-hidden="true">
+          <path d="M18 80 C74 31 111 51 147 27 S236 21 270 52 S349 44 383 21 M24 160 C76 119 121 153 169 124 S250 105 294 141 S348 162 382 128"/>
+          <path d="M83 18 C73 69 111 90 90 134 S92 191 123 210 M274 12 C254 62 286 93 260 123 S244 181 282 210"/>
+          <circle cx="201" cy="106" r="37"/><circle cx="201" cy="106" r="9"/>
+          <path d="M176 106 L226 106 M201 81 L201 131 M39 42 L55 54 L45 70 M343 172 L361 184 L350 201"/>
+        </svg>
+        <div class="ql-map-zones" aria-hidden="true">
+          <div class="ql-zone"><span class="ql-zone-name" data-i18n="needs_you">Needs you</span></div>
+          <div class="ql-zone"><span class="ql-zone-name" data-i18n="active">Active quests</span></div>
+          <div class="ql-zone"><span class="ql-zone-name" data-i18n="turn_in">Turn-in ready</span></div>
+          <div class="ql-zone"><span class="ql-zone-name" data-i18n="upcoming">Upcoming quests</span></div>
+        </div>
+        <div class="ql-table-title" id="ql-map-title" data-i18n="war_table">War table</div>
+        <div class="ql-map-pins" id="ql-map-pins"></div>
+      </section>
+    </div>
+
+    <section class="ql-party" aria-labelledby="ql-party-title">
+      <div class="ql-party-head"><h2 id="ql-party-title" data-i18n="party">Party frame</h2><span class="ql-party-note" data-i18n="party_note">one slot per live assignment</span></div>
+      <div class="ql-party-list" id="ql-party"></div>
+    </section>
 
     <main class="ql-body">
       <section class="ql-panel ql-needs" aria-labelledby="ql-needs-title">
         <div class="ql-panel-h"><h2 id="ql-needs-title" data-i18n="needs_you">Needs you</h2><span class="ql-count" id="ql-needs-count">0</span></div>
         <ul class="ql-list" id="ql-needs"></ul>
       </section>
-
       <section class="ql-panel ql-active" aria-labelledby="ql-active-title">
         <div class="ql-panel-h"><h2 id="ql-active-title" data-i18n="active">Active quests</h2><span class="ql-count" id="ql-active-count">0</span></div>
         <ul class="ql-list" id="ql-active"></ul>
       </section>
-
       <section class="ql-panel ql-advice" aria-labelledby="ql-advice-title">
         <div class="ql-panel-h"><h2 id="ql-advice-title" data-i18n="advice">War table advice</h2><span class="ql-advice-mark" data-i18n="agent_advice">Agent advice</span></div>
         <ul class="ql-list" id="ql-advice"></ul>
       </section>
-
       <section class="ql-panel ql-upcoming" aria-labelledby="ql-upcoming-title">
         <div class="ql-panel-h"><h2 id="ql-upcoming-title" data-i18n="upcoming">Upcoming quests</h2><span class="ql-count" id="ql-upcoming-count">0</span></div>
         <ul class="ql-list" id="ql-upcoming"></ul>
       </section>
     </main>
-
     <footer class="ql-finished">
-      <span><span data-i18n="finished">Finished</span> <b id="ql-finished">0</b></span>
-      <span class="ql-omitted" id="ql-omitted"></span>
+      <span><span data-i18n="finished">Finished</span> <b id="ql-finished">0</b></span><span class="ql-omitted" id="ql-omitted"></span>
     </footer>
-
-    <span data-dashboard-field="items" hidden></span>
-    <span data-dashboard-field="omitted" hidden></span>
-    <span data-dashboard-field="forgotten" hidden></span>
-    <span data-dashboard-field="advice" hidden></span>
+    <span data-dashboard-field="items" hidden></span><span data-dashboard-field="omitted" hidden></span>
+    <span data-dashboard-field="forgotten" hidden></span><span data-dashboard-field="advice" hidden></span>
   </div>
 
   <script>
     (function () {
-      var DASH = '\u2014';
-      var ROW_CAP = 12;
+      var DASH = '\u2014'; var ROW_CAP = 12; var EMBER_CAP = 18; var QUIET_MS = 20 * 60 * 1000;
       var PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[0-9]+\/?$/;
       var I18N = {
         en: {
-          quest_log: 'Quest log', round: 'Round', updated: 'Updated', needs_you: 'Needs you', active: 'Active quests',
-          advice: 'War table advice', agent_advice: 'Agent advice', upcoming: 'Upcoming quests', finished: 'Finished',
+          quest_log: 'Quest log', round: 'Round', updated: 'Updated', needs_you: 'Needs you', active: 'Active quests', turn_in: 'Turn-in ready',
+          advice: 'War table advice', agent_advice: 'Agent advice', upcoming: 'Upcoming quests', finished: 'Finished', war_table: 'War table', party: 'Party frame',
+          party_note: 'one slot per live assignment', campaign_progress: 'Campaign progress', no_party: 'No live assignment is recorded.',
           no_goal: 'No current goal in the work log.', no_needs: 'Nothing needs you right now.', no_active: 'No quest is active right now.',
           no_advice: 'No current advice. The task facts above still stand.', stale_advice: 'Advice is older than the work log, so it is hidden.',
           no_upcoming: 'No queued quest or dependency is recorded.', state: '{active} active \u00b7 {needs} needs you \u00b7 {upcoming} upcoming \u00b7 {finished} finished',
           action: 'Action', answer: 'Answer this in chat: {summary}', approve: 'Approve the pending request in chat.', clear: 'Resolve this in chat: {summary}',
-          working: 'Working', review: 'Awaiting verdict', conductor: 'Conductor deciding', active_tag: 'Open', queued: 'Queued', dependency: 'Dependency', question: 'Question', blocked: 'Blocked',
-          pr: 'PR #{n} \u2197', more: '{n} more not shown', omitted: '{n} log entries omitted', task: 'Task {id}', why: 'Why',
-          status_progress: 'worker reports progress', status_done: 'worker reports done', updated_value: '{v}'
+          working: 'Working', review: 'Awaiting verdict', conductor: 'Conductor deciding', queued: 'Queued', dependency: 'Dependency', question: 'Question', blocked: 'Blocked', stale: 'Stale',
+          pr: 'PR #{n} \u2197', more: '{n} more not shown', omitted: '{n} log entries omitted', task: 'Task {id}', why: 'Why', reported: 'Last report',
+          flip: 'Open details', close: 'Return to quest', status_progress: 'working', status_done: 'turn-in ready', status_question: 'question', status_blocked: 'blocked', status_stale: 'sleeping'
         },
         'zh-CN': {
-          quest_log: '\u4efb\u52a1\u65e5\u5fd7', round: '\u8f6e\u6b21', updated: '\u66f4\u65b0\u4e8e', needs_you: '\u9700\u8981\u4f60', active: '\u8fdb\u884c\u4e2d\u7684\u4efb\u52a1',
-          advice: '\u4f5c\u6218\u684c\u5efa\u8bae', agent_advice: '\u667a\u80fd\u5efa\u8bae', upcoming: '\u5f85\u5f00\u59cb\u7684\u4efb\u52a1', finished: '\u5df2\u7ed3\u675f',
+          quest_log: '\u4efb\u52a1\u65e5\u5fd7', round: '\u8f6e\u6b21', updated: '\u66f4\u65b0\u4e8e', needs_you: '\u9700\u8981\u4f60', active: '\u8fdb\u884c\u4e2d\u7684\u4efb\u52a1', turn_in: '\u53ef\u4ea4\u4ed8',
+          advice: '\u4f5c\u6218\u684c\u5efa\u8bae', agent_advice: '\u667a\u80fd\u5efa\u8bae', upcoming: '\u5f85\u5f00\u59cb\u7684\u4efb\u52a1', finished: '\u5df2\u7ed3\u675f', war_table: '\u4f5c\u6218\u684c', party: '\u961f\u4f0d',
+          party_note: '\u6bcf\u4e2a\u8fdb\u884c\u4e2d\u4efb\u52a1\u4e00\u4e2a\u4f4d\u7f6e', campaign_progress: '\u76ee\u6807\u8fdb\u5ea6', no_party: '\u6ca1\u6709\u8bb0\u5f55\u8fdb\u884c\u4e2d\u7684\u4efb\u52a1\u3002',
           no_goal: '\u5de5\u4f5c\u8bb0\u5f55\u4e2d\u8fd8\u6ca1\u6709\u5f53\u524d\u76ee\u6807\u3002', no_needs: '\u73b0\u5728\u6ca1\u6709\u4e8b\u60c5\u9700\u8981\u4f60\u3002', no_active: '\u73b0\u5728\u6ca1\u6709\u8fdb\u884c\u4e2d\u7684\u4efb\u52a1\u3002',
           no_advice: '\u73b0\u5728\u6ca1\u6709\u5efa\u8bae\u3002\u4e0a\u65b9\u7684\u4efb\u52a1\u4e8b\u5b9e\u4ecd\u7136\u6709\u6548\u3002', stale_advice: '\u5efa\u8bae\u65e9\u4e8e\u5de5\u4f5c\u8bb0\u5f55\uff0c\u56e0\u6b64\u5df2\u9690\u85cf\u3002',
           no_upcoming: '\u6ca1\u6709\u8bb0\u5f55\u5f85\u5f00\u59cb\u4efb\u52a1\u6216\u4f9d\u8d56\u3002', state: '{active} \u9879\u8fdb\u884c\u4e2d \u00b7 {needs} \u9879\u9700\u8981\u4f60 \u00b7 {upcoming} \u9879\u5f85\u5f00\u59cb \u00b7 {finished} \u9879\u5df2\u7ed3\u675f',
           action: '\u64cd\u4f5c', answer: '\u5728\u804a\u5929\u4e2d\u56de\u7b54\uff1a{summary}', approve: '\u5728\u804a\u5929\u4e2d\u6279\u51c6\u5f85\u5904\u7406\u8bf7\u6c42\u3002', clear: '\u5728\u804a\u5929\u4e2d\u89e3\u51b3\uff1a{summary}',
-          working: '\u8fdb\u884c\u4e2d', review: '\u5f85\u88c1\u5b9a', conductor: '\u6307\u6325\u6b63\u5728\u51b3\u5b9a', active_tag: '\u5df2\u5f00\u59cb', queued: '\u5df2\u6392\u961f', dependency: '\u4f9d\u8d56', question: '\u95ee\u9898', blocked: '\u53d7\u963b',
-          pr: 'PR #{n} \u2197', more: '\u8fd8\u6709 {n} \u9879\u672a\u663e\u793a', omitted: '{n} \u6761\u65e5\u5fd7\u8bb0\u5f55\u672a\u663e\u793a', task: '\u4efb\u52a1 {id}', why: '\u539f\u56e0',
-          status_progress: '\u6267\u884c\u8005\u6b63\u5728\u8fdb\u884c', status_done: '\u6267\u884c\u8005\u5df2\u62a5\u544a\u5b8c\u6210', updated_value: '{v}'
+          working: '\u8fdb\u884c\u4e2d', review: '\u5f85\u88c1\u5b9a', conductor: '\u6307\u6325\u6b63\u5728\u51b3\u5b9a', queued: '\u5df2\u6392\u961f', dependency: '\u4f9d\u8d56', question: '\u95ee\u9898', blocked: '\u53d7\u963b', stale: '\u4f11\u7720',
+          pr: 'PR #{n} \u2197', more: '\u8fd8\u6709 {n} \u9879\u672a\u663e\u793a', omitted: '{n} \u6761\u65e5\u5fd7\u8bb0\u5f55\u672a\u663e\u793a', task: '\u4efb\u52a1 {id}', why: '\u539f\u56e0', reported: '\u6700\u540e\u6c47\u62a5',
+          flip: '\u6253\u5f00\u8be6\u7ec6\u4fe1\u606f', close: '\u8fd4\u56de\u4efb\u52a1', status_progress: '\u8fdb\u884c\u4e2d', status_done: '\u53ef\u4ea4\u4ed8', status_question: '\u6709\u95ee\u9898', status_blocked: '\u53d7\u963b', status_stale: '\u4f11\u7720'
         }
       };
-      function locale() {
-        var l = (window.kirocrew || {}).locale;
-        return typeof l === 'string' && Object.prototype.hasOwnProperty.call(I18N, l) ? l : 'en';
-      }
-      function i18n(key, vars) {
-        var table = I18N[locale()];
-        var out = Object.prototype.hasOwnProperty.call(table, key) ? table[key] : I18N.en[key];
-        if (out === undefined) out = key;
-        if (vars) out = out.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m; });
-        return out;
-      }
-      function applyStatic() {
-        var nodes = document.querySelectorAll('[data-i18n]');
-        for (var i = 0; i < nodes.length; i++) nodes[i].textContent = i18n(nodes[i].getAttribute('data-i18n'));
-      }
+      function locale() { var l = (window.kirocrew || {}).locale; return typeof l === 'string' && Object.prototype.hasOwnProperty.call(I18N, l) ? l : 'en'; }
+      function i18n(key, vars) { var table = I18N[locale()]; var out = Object.prototype.hasOwnProperty.call(table, key) ? table[key] : I18N.en[key];
+        if (out === undefined) out = key; if (vars) out = out.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m; }); return out; }
+      function applyStatic() { var nodes = document.querySelectorAll('[data-i18n]'); for (var i = 0; i < nodes.length; i++) nodes[i].textContent = i18n(nodes[i].getAttribute('data-i18n')); }
       function fields() { return (window.kirocrew || {}).fields || {}; }
       function text(v) { return typeof v === 'string' && v.trim() ? v.trim() : null; }
       function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
-      function el(tag, cls, words) {
-        var node = document.createElement(tag);
-        if (cls) node.className = cls;
-        if (words !== undefined && words !== null) node.textContent = String(words);
-        return node;
-      }
-      function items() {
-        var value = fields().items;
-        return Array.isArray(value) ? value.filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); }) : [];
-      }
+      function el(tag, cls, words) { var node = document.createElement(tag); if (cls) node.className = cls; if (words !== undefined && words !== null) node.textContent = String(words); return node; }
+      function items() { var value = fields().items; return Array.isArray(value) ? value.filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); }) : []; }
       function openItems() { return items().filter(function (item) { return text(item.state) === 'open'; }); }
-      function needsYou(item) {
-        if (text(item.state) !== 'open') return false;
-        return (item.status === 'question' || item.status === 'blocked') &&
-          (item.reason === 'approval' || item.reason === 'needs_human');
-      }
-      function upcoming(item) {
-        if (text(item.state) !== 'open' || needsYou(item)) return false;
-        return !text(item.status) || item.status === 'blocked';
-      }
+      function needsYou(item) { if (text(item.state) !== 'open') return false; return (item.status === 'question' || item.status === 'blocked') && (item.reason === 'approval' || item.reason === 'needs_human'); }
+      function upcoming(item) { if (text(item.state) !== 'open' || needsYou(item)) return false; return !text(item.status) || item.status === 'blocked'; }
       function active(item) { return text(item.state) === 'open' && !needsYou(item) && !upcoming(item); }
-      function forgottenCount() {
-        var value = fields().forgotten;
-        var found = value && typeof value === 'object' && !Array.isArray(value) ? num(value.items) : null;
-        return found !== null && found > 0 ? Math.floor(found) : 0;
-      }
-      function finishedCount() {
-        return items().filter(function (item) { return text(item.state) && text(item.state) !== 'open'; }).length + forgottenCount();
-      }
-      function stamp(v) {
-        var raw = text(v);
-        if (!raw) return null;
-        var ms = Date.parse(raw);
-        if (!isFinite(ms)) return raw;
-        try { return new Date(ms).toLocaleString(locale(), { dateStyle: 'medium', timeStyle: 'short' }); }
-        catch (e) { return raw; }
-      }
+      function forgottenCount() { var value = fields().forgotten; var found = value && typeof value === 'object' && !Array.isArray(value) ? num(value.items) : null; return found !== null && found > 0 ? Math.floor(found) : 0; }
+      function acceptedCount() { var listed = items().filter(function (item) { return text(item.state) === 'accepted'; }).length; var value = fields().forgotten;
+        var old = value && typeof value === 'object' && !Array.isArray(value) ? num(value.accepted) : null; return listed + (old !== null && old > 0 ? Math.floor(old) : 0); }
+      function finishedCount() { return items().filter(function (item) { return text(item.state) && text(item.state) !== 'open'; }).length + forgottenCount(); }
+      function totalCount() { return items().length + forgottenCount(); }
+      function stamp(v) { var raw = text(v); if (!raw) return null; var ms = Date.parse(raw); if (!isFinite(ms)) return raw;
+        try { return new Date(ms).toLocaleString(locale(), { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return raw; } }
+      function isStale(item) { var raw = text(item.last_report_at); var at = raw ? Date.parse(raw) : NaN; return item.status === 'progress' && isFinite(at) && Date.now() - at > QUIET_MS; }
       function tone(row, value) { row.style.setProperty('--ql-tone', value); }
       function taskTitle(item) { return text(item.title) || text(item.item_id) || DASH; }
-      function taskById(id) {
-        var match = items().filter(function (item) { return text(item.item_id) === id; });
-        return match.length ? match[0] : null;
-      }
-      function taskFoot(row, item) {
-        var foot = el('div', 'ql-foot');
-        var id = text(item.item_id);
-        if (id) foot.appendChild(el('span', 'ql-id', i18n('task', { id: id })));
-        var pr = num(item.pr);
-        var acceptance = item.acceptance && typeof item.acceptance === 'object' && !Array.isArray(item.acceptance) ? item.acceptance : {};
-        var repo = text(acceptance.repo);
-        var url = repo && pr !== null ? 'https://github.com/' + repo + '/pull/' + Math.floor(pr) : null;
-        if (url && PR_URL.test(url)) {
-          var link = el('a', 'ql-link', i18n('pr', { n: Math.floor(pr) }));
-          link.href = url;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.addEventListener('click', function (event) {
-            event.preventDefault();
-            try { parent.postMessage({ type: 'kirocrew-dashboard:open', url: url }, '*'); }
-            catch (e) { /* The host is absent, so the sandbox keeps the link closed. */ }
-          });
-          foot.appendChild(link);
-        }
-        if (foot.childNodes.length) row.appendChild(foot);
-      }
-      function summary(row, value) {
-        var words = text(value);
-        if (words) row.appendChild(el('div', 'ql-summary', words));
-      }
-      function exactAction(item) {
-        if (item.reason === 'approval') return i18n('approve');
-        var detail = text(item.summary) || taskTitle(item);
-        return i18n(item.status === 'question' ? 'answer' : 'clear', { summary: detail });
-      }
+      function taskById(id) { var match = items().filter(function (item) { return text(item.item_id) === id; }); return match.length ? match[0] : null; }
+      function taskLink(item) { var pr = num(item.pr); var acceptance = item.acceptance && typeof item.acceptance === 'object' && !Array.isArray(item.acceptance) ? item.acceptance : {};
+        var repo = text(acceptance.repo); var url = repo && pr !== null ? 'https://github.com/' + repo + '/pull/' + Math.floor(pr) : null;
+        if (!url || !PR_URL.test(url)) return null; var link = el('a', 'ql-link', i18n('pr', { n: Math.floor(pr) })); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        link.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); try { parent.postMessage({ type: 'kirocrew-dashboard:open', url: url }, '*'); } catch (e) {} }); return link; }
+      function markerKind(item) { if (needsYou(item)) return ['need', '!']; if (item.status === 'done') return ['ready', '?']; if (item.status === 'blocked') return ['blocked', '\u25c6'];
+        if (isStale(item)) return ['stale', 'zzz']; return ['live', '\u2691']; }
+      function statusLabel(item, kind) { if (isStale(item)) return i18n('stale'); if (kind === 'active') { if (item.status === 'done') return i18n('review');
+        if (item.status === 'question') return i18n('conductor'); return i18n('working'); } if (kind === 'upcoming') return item.status === 'blocked' ? i18n('dependency') : i18n('queued');
+        return item.status === 'question' ? i18n('question') : i18n('blocked'); }
+      function exactAction(item) { if (item.reason === 'approval') return i18n('approve'); var detail = text(item.summary) || taskTitle(item);
+        return i18n(item.status === 'question' ? 'answer' : 'clear', { summary: detail }); }
+      var lastStates = {}; var lastAccepted = null;
       function taskRow(item, kind) {
-        var row = el('li', 'ql-row');
-        var top = el('div', 'ql-row-top');
-        top.appendChild(el('span', 'ql-title', taskTitle(item)));
-        var label = kind;
-        if (kind === 'active') {
-          if (item.status === 'done') label = i18n('review');
-          else if (item.status === 'question') label = i18n('conductor');
-          else label = i18n('working');
-        }
-        if (kind === 'upcoming') label = item.status === 'blocked' ? i18n('dependency') : i18n('queued');
-        if (kind === 'needs') label = item.status === 'question' ? i18n('question') : i18n('blocked');
-        top.appendChild(el('span', 'ql-tag', label));
-        row.appendChild(top);
-        if (kind === 'needs') {
-          var action = el('div', 'ql-action');
-          action.appendChild(el('b', null, i18n('action') + ': '));
-          action.appendChild(document.createTextNode(exactAction(item)));
-          row.appendChild(action);
-          tone(row, 'var(--ql-red)');
-        } else if (kind === 'active') {
-          tone(row, item.status === 'done' ? 'var(--ql-green)' : 'var(--ql-blue)');
-        } else {
-          tone(row, 'var(--ql-gold)');
-        }
-        if (kind !== 'needs') summary(row, item.summary || item.decision);
-        else if (!text(item.summary)) summary(row, item.decision);
-        taskFoot(row, item);
-        return row;
+        var row = el('li', 'ql-row'); row.tabIndex = 0; row.setAttribute('role', 'button'); row.setAttribute('aria-label', taskTitle(item) + '. ' + i18n('flip'));
+        var id = text(item.item_id) || taskTitle(item); var nowState = [text(item.state), text(item.status), text(item.reason)].join('/');
+        if (Object.prototype.hasOwnProperty.call(lastStates, id) && lastStates[id] !== nowState) row.classList.add('ql-state-pulse'); lastStates[id] = nowState;
+        if (kind === 'needs') tone(row, 'var(--ql-red)'); else if (kind === 'active') tone(row, item.status === 'done' ? 'var(--ql-green)' : (isStale(item) ? 'var(--ql-muted)' : 'var(--ql-blue)'));
+        else tone(row, 'var(--ql-gold)');
+        var inner = el('div', 'ql-card-inner'); var front = el('div', 'ql-face ql-front'); var top = el('div', 'ql-row-top');
+        top.appendChild(el('span', 'ql-title', taskTitle(item))); top.appendChild(el('span', 'ql-tag', statusLabel(item, kind))); front.appendChild(top);
+        if (kind === 'needs') { var action = el('div', 'ql-action'); action.appendChild(el('b', null, i18n('action') + ': ')); action.appendChild(document.createTextNode(exactAction(item))); front.appendChild(action); }
+        else { var short = text(item.summary) || text(item.decision); if (short) front.appendChild(el('div', 'ql-summary', short)); }
+        var mark = markerKind(item); front.appendChild(el('span', 'ql-marker ql-marker-' + mark[0], mark[1])); front.appendChild(el('span', 'ql-flip-hint', i18n('flip')));
+        var back = el('div', 'ql-face ql-back'); back.appendChild(el('div', 'ql-title', taskTitle(item))); var detail = text(item.summary) || text(item.decision) || DASH;
+        back.appendChild(el('div', 'ql-summary', detail)); var foot = el('div', 'ql-foot'); var link = taskLink(item); if (link) foot.appendChild(link);
+        var reported = stamp(item.last_report_at); if (reported) foot.appendChild(el('span', null, i18n('reported') + ': ' + reported)); back.appendChild(foot); back.appendChild(el('span', 'ql-flip-hint', i18n('close')));
+        inner.appendChild(front); inner.appendChild(back); row.appendChild(inner);
+        function flip(event) { if (event && event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return; if (event && event.type === 'keydown') event.preventDefault();
+          row.classList.toggle('is-flipped'); row.setAttribute('aria-pressed', row.classList.contains('is-flipped') ? 'true' : 'false'); }
+        row.addEventListener('click', flip); row.addEventListener('keydown', flip); return row;
       }
-      function drawTasks(hostId, countId, list, kind, emptyKey) {
-        var host = document.getElementById(hostId);
-        var count = document.getElementById(countId);
-        if (!host || !count) return;
-        host.textContent = '';
-        count.textContent = String(list.length);
-        for (var i = 0; i < list.length && i < ROW_CAP; i++) host.appendChild(taskRow(list[i], kind));
-        if (!list.length) host.appendChild(el('li', 'ql-empty', i18n(emptyKey)));
-        if (list.length > ROW_CAP) host.appendChild(el('li', 'ql-more', i18n('more', { n: list.length - ROW_CAP })));
-      }
-      function adviceRows() {
-        var api = window.kirocrew || {};
-        var names = Array.isArray(api.agentic) ? api.agentic : [];
-        var raw = fields().advice;
-        if (names.indexOf('advice') === -1 || !Array.isArray(raw)) return { state: 'empty', rows: [] };
-        var rows = raw.filter(function (entry) { return entry && typeof entry === 'object' && text(entry.text) && text(entry.why); }).slice(0, 3);
-        if (!rows.length) return { state: 'empty', rows: [] };
-        var wrote = text((api.written_at || {}).advice);
-        var moved = text(fields().last_entry_at);
-        var wroteMs = wrote ? Date.parse(wrote) : NaN;
-        var movedMs = moved ? Date.parse(moved) : NaN;
-        if (!isFinite(wroteMs) || (isFinite(movedMs) && movedMs > wroteMs)) return { state: 'stale', rows: [] };
-        return { state: 'current', rows: rows };
-      }
-      function drawAdvice() {
-        var host = document.getElementById('ql-advice');
-        if (!host) return;
-        host.textContent = '';
-        var advice = adviceRows();
-        if (advice.state !== 'current') {
-          host.appendChild(el('li', 'ql-empty ql-advice-stale', i18n(advice.state === 'stale' ? 'stale_advice' : 'no_advice')));
-          return;
-        }
-        for (var i = 0; i < advice.rows.length; i++) {
-          var item = advice.rows[i];
-          var row = el('li', 'ql-row');
-          row.appendChild(el('div', 'ql-title', text(item.text)));
-          var why = el('div', 'ql-summary');
-          why.appendChild(el('b', null, i18n('why') + ': '));
-          why.appendChild(document.createTextNode(text(item.why)));
-          row.appendChild(why);
-          var taskId = text(item.task_id);
-          var linked = taskId ? taskById(taskId) : null;
-          if (linked) row.appendChild(el('div', 'ql-foot', taskTitle(linked)));
-          host.appendChild(row);
-        }
-      }
-      function drawHead(need, act, next) {
-        var goal = document.querySelector('[data-dashboard-field="goal"]');
-        if (goal) goal.textContent = text(fields().goal) || i18n('no_goal');
-        var state = document.getElementById('ql-state');
-        if (state) state.textContent = i18n('state', { active: act.length, needs: need.length, upcoming: next.length, finished: finishedCount() });
-        var round = document.getElementById('ql-round-wrap');
-        if (round) round.hidden = !(num(fields().round) > 0);
-        var updated = document.getElementById('ql-updated-wrap');
-        if (updated) updated.hidden = !text(fields().last_entry_at);
-        var updatedValue = document.querySelector('[data-dashboard-field="last_entry_at"]');
-        if (updatedValue && text(fields().last_entry_at)) updatedValue.textContent = stamp(fields().last_entry_at);
-      }
-      function render() {
-        applyStatic();
-        var open = openItems();
-        var need = open.filter(needsYou);
-        var act = open.filter(active);
-        var next = open.filter(upcoming);
-        drawHead(need, act, next);
-        drawTasks('ql-needs', 'ql-needs-count', need, 'needs', 'no_needs');
-        drawTasks('ql-active', 'ql-active-count', act, 'active', 'no_active');
-        drawAdvice();
-        drawTasks('ql-upcoming', 'ql-upcoming-count', next, 'upcoming', 'no_upcoming');
-        var finished = document.getElementById('ql-finished');
-        if (finished) finished.textContent = String(finishedCount());
-        var omitted = document.getElementById('ql-omitted');
-        var omittedCount = num(fields().omitted);
-        if (omitted) omitted.textContent = omittedCount && omittedCount > 0 ? i18n('omitted', { n: Math.floor(omittedCount) }) : '';
-      }
-      render();
-      window.addEventListener('load', render);
-      window.addEventListener('message', function () { setTimeout(render, 0); });
+      function drawTasks(hostId, countId, list, kind, emptyKey) { var host = document.getElementById(hostId); var count = document.getElementById(countId); if (!host || !count) return;
+        host.textContent = ''; count.textContent = String(list.length); for (var i = 0; i < list.length && i < ROW_CAP; i++) host.appendChild(taskRow(list[i], kind));
+        if (!list.length) host.appendChild(el('li', 'ql-empty', i18n(emptyKey))); if (list.length > ROW_CAP) host.appendChild(el('li', 'ql-more', i18n('more', { n: list.length - ROW_CAP }))); }
+      function adviceRows() { var api = window.kirocrew || {}; var names = Array.isArray(api.agentic) ? api.agentic : []; var raw = fields().advice;
+        if (names.indexOf('advice') === -1 || !Array.isArray(raw)) return { state: 'empty', rows: [] }; var rows = raw.filter(function (entry) { return entry && typeof entry === 'object' && text(entry.text) && text(entry.why); }).slice(0, 3);
+        if (!rows.length) return { state: 'empty', rows: [] }; var wrote = text((api.written_at || {}).advice); var moved = text(fields().last_entry_at);
+        var wroteMs = wrote ? Date.parse(wrote) : NaN; var movedMs = moved ? Date.parse(moved) : NaN; if (!isFinite(wroteMs) || (isFinite(movedMs) && movedMs > wroteMs)) return { state: 'stale', rows: [] };
+        return { state: 'current', rows: rows }; }
+      function drawAdvice() { var host = document.getElementById('ql-advice'); if (!host) return; host.textContent = ''; var advice = adviceRows();
+        if (advice.state !== 'current') { host.appendChild(el('li', 'ql-empty ql-advice-stale', i18n(advice.state === 'stale' ? 'stale_advice' : 'no_advice'))); return; }
+        for (var i = 0; i < advice.rows.length; i++) { var item = advice.rows[i]; var row = el('li', 'ql-row'); row.appendChild(el('div', 'ql-title', text(item.text)));
+          var why = el('div', 'ql-summary'); why.appendChild(el('b', null, i18n('why') + ': ')); why.appendChild(document.createTextNode(text(item.why))); row.appendChild(why);
+          var taskId = text(item.task_id); var linked = taskId ? taskById(taskId) : null; if (linked) row.appendChild(el('div', 'ql-foot', taskTitle(linked))); host.appendChild(row); } }
+      function drawHead(need, act, next) { var goal = document.querySelector('[data-dashboard-field="goal"]'); if (goal) goal.textContent = text(fields().goal) || i18n('no_goal');
+        var state = document.getElementById('ql-state'); if (state) state.textContent = i18n('state', { active: act.length, needs: need.length, upcoming: next.length, finished: finishedCount() });
+        var round = document.getElementById('ql-round-wrap'); if (round) round.hidden = !(num(fields().round) > 0); var updated = document.getElementById('ql-updated-wrap'); if (updated) updated.hidden = !text(fields().last_entry_at);
+        var updatedValue = document.querySelector('[data-dashboard-field="last_entry_at"]'); if (updatedValue && text(fields().last_entry_at)) updatedValue.textContent = stamp(fields().last_entry_at); }
+      function drawProgress() { var accepted = acceptedCount(); var total = totalCount(); var fill = document.getElementById('ql-xp-fill'); var count = document.getElementById('ql-xp-count'); var track = document.getElementById('ql-xp-track');
+        if (count) count.textContent = accepted + ' / ' + total; if (track) { track.setAttribute('aria-valuemax', String(total)); track.setAttribute('aria-valuenow', String(accepted)); }
+        if (fill) fill.style.transform = 'scaleX(' + (total ? Math.max(0, Math.min(1, accepted / total)) : 0) + ')';
+        var head = document.querySelector('.ql-head'); if (head && lastAccepted !== null && accepted > lastAccepted) { head.classList.remove('ql-level-up'); requestAnimationFrame(function () { requestAnimationFrame(function () { head.classList.add('ql-level-up'); }); }); }
+        lastAccepted = accepted; }
+      function drawMap(list) { var host = document.getElementById('ql-map-pins'); if (!host) return; host.textContent = ''; var slots = { need: 0, live: 0, ready: 0, upcoming: 0 };
+        for (var i = 0; i < list.length && i < 24; i++) { var item = list[i]; var mark = markerKind(item); var group = needsYou(item) ? 'need' : (item.status === 'done' ? 'ready' : (upcoming(item) ? 'upcoming' : 'live'));
+          var index = slots[group]++; var col = group === 'need' || group === 'ready' ? 0 : 1; var row = group === 'need' || group === 'live' ? 0 : 1;
+          var x = 13 + col * 50 + (index % 4) * 8; var y = 18 + row * 50 + Math.floor(index / 4) * 10; var pin = el('span', 'ql-pin ql-pin-' + mark[0], mark[1]);
+          pin.style.left = Math.min(92, x) + '%'; pin.style.top = Math.min(91, y) + '%'; pin.setAttribute('aria-label', taskTitle(item) + ': ' + statusLabel(item, group === 'upcoming' ? 'upcoming' : (group === 'need' ? 'needs' : 'active'))); host.appendChild(pin); } }
+      function portrait() { var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 40 40'); svg.setAttribute('class', 'ql-portrait'); svg.setAttribute('aria-hidden', 'true');
+        var circle = document.createElementNS(svg.namespaceURI, 'circle'); circle.setAttribute('cx', '20'); circle.setAttribute('cy', '20'); circle.setAttribute('r', '17');
+        var path = document.createElementNS(svg.namespaceURI, 'path'); path.setAttribute('d', 'M20 10c4 0 7 3 7 7 0 3-2 6-4 7 5 1 9 4 10 8H7c1-4 5-7 10-8-3-1-4-4-4-7 0-4 3-7 7-7z'); svg.appendChild(circle); svg.appendChild(path); return svg; }
+      function drawParty(list) { var host = document.getElementById('ql-party'); if (!host) return; host.textContent = ''; var live = list.filter(function (item) { return text(item.state) === 'open' && text(item.status); }).slice(0, 8);
+        for (var i = 0; i < live.length; i++) { var item = live[i]; var state = isStale(item) ? 'stale' : (text(item.status) || 'progress'); var member = el('div', 'ql-member ql-member-' + state); member.appendChild(portrait());
+          var words = el('div'); words.appendChild(el('div', 'ql-member-name', taskTitle(item))); words.appendChild(el('div', 'ql-member-state', i18n('status_' + state))); member.appendChild(words); host.appendChild(member); }
+        if (!live.length) host.appendChild(el('div', 'ql-empty', i18n('no_party'))); }
+      function seedEmbers() { var host = document.getElementById('ql-embers'); if (!host || host.childNodes.length) return; for (var i = 0; i < EMBER_CAP; i++) { var ember = el('i', 'ql-ember');
+          ember.style.left = (4 + ((i * 37) % 92)) + '%'; ember.style.setProperty('--ember-time', (4.8 + (i % 6) * .55) + 's'); ember.style.setProperty('--ember-delay', (-i * .43) + 's'); ember.style.setProperty('--ember-drift', (((i * 19) % 46) - 23) + 'px'); host.appendChild(ember); } }
+      function setupParallax() { var table = document.getElementById('ql-war-table'); if (!table || table.getAttribute('data-parallax')) return; table.setAttribute('data-parallax', '1');
+        var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; if (reduce) return; var rect = null; var frame = 0; var tx = 0; var ty = 5;
+        function paint() { frame = 0; table.style.transform = 'rotateX(' + ty.toFixed(2) + 'deg) rotateY(' + tx.toFixed(2) + 'deg)'; }
+        table.addEventListener('pointerenter', function () { rect = table.getBoundingClientRect(); }); table.addEventListener('pointermove', function (event) { if (!rect) return;
+          tx = Math.max(-6, Math.min(6, ((event.clientX - rect.left) / rect.width - .5) * 12)); ty = Math.max(-6, Math.min(6, -((event.clientY - rect.top) / rect.height - .5) * 12)); if (!frame) frame = requestAnimationFrame(paint); });
+        table.addEventListener('pointerleave', function () { rect = null; tx = 0; ty = 5; if (!frame) frame = requestAnimationFrame(paint); }); }
+      function setupVisibility() { var root = document.querySelector('.ql'); if (!root || root.getAttribute('data-visibility')) return; root.setAttribute('data-visibility', '1');
+        document.addEventListener('visibilitychange', function () { root.classList.toggle('ql-paused', document.hidden); }); }
+      function render() { applyStatic(); var open = openItems(); var need = open.filter(needsYou); var act = open.filter(active); var next = open.filter(upcoming); drawHead(need, act, next); drawProgress(); drawMap(open);
+        drawParty(open); drawTasks('ql-needs', 'ql-needs-count', need, 'needs', 'no_needs'); drawTasks('ql-active', 'ql-active-count', act, 'active', 'no_active'); drawAdvice();
+        drawTasks('ql-upcoming', 'ql-upcoming-count', next, 'upcoming', 'no_upcoming'); var finished = document.getElementById('ql-finished'); if (finished) finished.textContent = String(finishedCount());
+        var omitted = document.getElementById('ql-omitted'); var omittedCount = num(fields().omitted); if (omitted) omitted.textContent = omittedCount && omittedCount > 0 ? i18n('omitted', { n: Math.floor(omittedCount) }) : '';
+        seedEmbers(); setupParallax(); setupVisibility(); }
+      render(); window.addEventListener('load', render); window.addEventListener('message', function () { setTimeout(render, 0); });
     }());
   </script>
 </div>
