@@ -246,10 +246,22 @@ describe('selectContinuable', () => {
     ]))).toBe(true)
   })
 
-  it('is false when a queued message is waiting — the runner will resume on its own', () => {
-    // Offering Continue here would double-fire the turn.
+  it('is true even when restored queue items are present — they are never auto-drained', () => {
+    // A restored queue (queued_prompts loaded from metadata on restart) is never
+    // auto-drained, so there is no double-fire risk. The scan skips past queued
+    // rows via CONTINUE_SCAN_SKIP to find the real conversation content.
     expect(selectContinuable(state({
       messages: [msg('user'), msg('queued', 'next one')],
+    }))).toBe(true)
+  })
+
+  it('is false when a finished turn has a queued follow-up — the runner will drain it', () => {
+    // A settled conversation (user + assistant) with a queue: not interrupted,
+    // so the runner is about to drain the queue and Continue would double-fire.
+    // The selectTurnInterrupted(state) inner call returns false, so the early
+    // return fires and selectContinuable returns false.
+    expect(selectContinuable(state({
+      messages: [msg('user'), msg('assistant', 'done'), msg('queued', 'next one')],
     }))).toBe(false)
   })
 
@@ -317,12 +329,13 @@ describe('selectTurnInterrupted', () => {
     expect(selectContinuable(s)).toBe(false)
   })
 
-  it('is true with a message queued, which also cannot gate the card alone', () => {
-    // `queued` is in CONTINUE_SCAN_SKIP, so this scan walks past it rather than
-    // refusing — only selectContinuable has the queued early-return.
+  it('is true with a message queued behind an interrupted turn', () => {
+    // `queued` is in CONTINUE_SCAN_SKIP, so both scans walk past it. After the
+    // fix both selectors return true for an interrupted + restored-queue slot:
+    // the Resume button should be offered rather than hidden.
     const s = state({ messages: [msg('user', 'a'), msg('error', 'boom'), msg('queued', 'next')] })
     expect(selectTurnInterrupted(s)).toBe(true)
-    expect(selectContinuable(s)).toBe(false)
+    expect(selectContinuable(s)).toBe(true)
   })
 
   it('ignores an old error once the assistant replied after it', () => {

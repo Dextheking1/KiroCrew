@@ -129,17 +129,97 @@ class TestChatSlotContinue:
             assert (await resp.json())["code"] == "slot_running"
 
     @pytest.mark.asyncio
-    async def test_queued_message_is_refused(self, _patched):
-        # The runner is about to pick the thread up on its own; resuming here
-        # would double-fire the turn.
+    async def test_queued_on_finished_slot_is_refused(self, _patched):
+        # A settled conversation + live queue: the runner is about to pick up the
+        # next item on its own, so adding a continuation here would double-fire.
         slot = _ChatSlot("s")
         slot.append("user", "hi", "msg msg-u")
+        slot.append("assistant", "done", "msg msg-a")
         slot.queue_append("next one")
         state = _mock_state(slot)
         async with TestClient(TestServer(_make_app(state))) as client:
             resp = await client.post("/api/chat/slots/s/continue")
             assert resp.status == 409
             assert (await resp.json())["code"] == "slot_queue_pending"
+
+    @pytest.mark.asyncio
+    async def test_queued_on_interrupted_slot_is_allowed(self, _patched):
+        # A gateway-restart interruption with a restored queue must not block
+        # Resume: the restored queue is never auto-drained on boot, so there is
+        # no double-fire risk. The recovery is inserted at the head (position 0)
+        # and runs before the restored items.
+        slot = _ChatSlot("s")
+        slot.append("user", "hi", "msg msg-u")
+        slot.append(
+            "error",
+            "This turn was interrupted when the app restarted.",
+            "msg msg-err",
+            meta={"kind": "gateway_restart_interruption"},
+        )
+        slot.queue_append("also do this")
+        state = _mock_state(slot)
+        async with TestClient(TestServer(_make_app(state))) as client:
+            resp = await client.post("/api/chat/slots/s/continue")
+            assert resp.status == 200
+        # The recovery is at the head; the restored queue item is behind it.
+        assert slot._queue[0]["content"].startswith("[Continue ")
+        assert slot._queue[1]["content"] == "also do this"
+
+    @pytest.mark.asyncio
+    async def test_resume_with_restored_queue_orders_recovery_first(self, _patched):
+        # The order contract: recovery (interrupted turn) at position 0, then
+        # each restored queue item in their original order. Nothing is dropped
+        # or duplicated. _start_next_queued_turn is mocked, so the queue holds
+        # all entries after the call.
+        slot = _ChatSlot("s")
+        slot.append("user", "first request", "msg msg-u")
+        slot.append(
+            "error",
+            "This turn was interrupted when the app restarted.",
+            "msg msg-err",
+            meta={"kind": "gateway_restart_interruption"},
+        )
+        slot.queue_append("do A next")
+        slot.queue_append("do B after A")
+        state = _mock_state(slot)
+        async with TestClient(TestServer(_make_app(state))) as client:
+            resp = await client.post("/api/chat/slots/s/continue")
+            assert resp.status == 200
+        # Exact order: recovery first, then the two restored items unchanged.
+        assert len(slot._queue) == 3
+        assert slot._queue[0].get("kind") == "synthetic_recovery"
+        assert slot._queue[0]["content"].startswith("[Continue ")
+        assert slot._queue[1]["content"] == "do A next"
+        assert slot._queue[2]["content"] == "do B after A"
+
+    @pytest.mark.asyncio
+    async def test_second_resume_on_interrupted_with_pending_recovery_is_noop(self, _patched):
+        # Once the first Resume press inserts a recovery at the queue head,
+        # a second press before that recovery starts running must be refused:
+        # inserting a duplicate recovery would run the interrupted turn twice.
+        slot = _ChatSlot("s")
+        slot.append("user", "hi", "msg msg-u")
+        slot.append(
+            "error",
+            "This turn was interrupted when the app restarted.",
+            "msg msg-err",
+            meta={"kind": "gateway_restart_interruption"},
+        )
+        slot.queue_append("queued item")
+        state = _mock_state(slot)
+        async with TestClient(TestServer(_make_app(state))) as client:
+            # First press: recovery inserted at head.
+            resp1 = await client.post("/api/chat/slots/s/continue")
+            assert resp1.status == 200
+            assert slot._queue[0].get("kind") == "synthetic_recovery"
+            # Second press: recovery already at head -- must be a no-op.
+            resp2 = await client.post("/api/chat/slots/s/continue")
+            assert resp2.status == 409
+            assert (await resp2.json())["code"] == "slot_queue_pending"
+        # Queue is unchanged since the first insert; no duplicate.
+        assert len(slot._queue) == 2
+        assert slot._queue[0].get("kind") == "synthetic_recovery"
+        assert slot._queue[1]["content"] == "queued item"
 
     @pytest.mark.asyncio
     async def test_settled_conversation_is_allowed_as_a_plain_continue(self, _patched):

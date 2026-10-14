@@ -198,8 +198,14 @@ export const selectContinuable = (state: RootState, slot?: string | null): boole
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i]
     // A pending queued message means the backend is about to run the thread on
-    // its own — offering Continue would double-fire the turn.
-    if (m.role === 'queued') return false
+    // its own — offering Continue would double-fire the turn. Exception:
+    // when the slot is interrupted the queue is a restored snapshot that
+    // nothing drains on boot, so the runner is NOT about to pick it up.
+    // In that case Resume is correct; skip past the queued row to find
+    // the interrupted turn below. selectTurnInterrupted reads the same
+    // messages and ignores queued rows (they are in CONTINUE_SCAN_SKIP
+    // for that scan), so the two functions stay in sync.
+    if (m.role === 'queued') { if (selectTurnInterrupted(state)) continue; return false }
     if (CONTINUE_SCAN_SKIP.has(m.role)) continue
     if ((m.role === 'user' || m.role === 'assistant') && m.content) {
       // System notices (compaction, session reload) are assistant-role status

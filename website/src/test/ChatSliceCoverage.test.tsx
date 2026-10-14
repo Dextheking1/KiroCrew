@@ -925,8 +925,25 @@ describe('chatSlice selectors', () => {
     store.dispatch(appendMessage({ role: 'user', content: 'hello' } as ChatMessage))
     expect(selectContinuable(root(store))).toBe(true)
 
+    // A restored queue ('queued' bubbles from hydrateQueuedBubbles) does not
+    // block Resume: the restored items are never auto-drained on boot, so
+    // there is no double-fire risk. The scan skips past them to the real
+    // conversation content.
     store.dispatch(appendQueuedMessage({ slot: 'front', content: 'queued', ts: '1', queue_id: 'q-1' }))
-    expect(selectContinuable(root(store))).toBe(false)
+    expect(selectContinuable(root(store))).toBe(true)
+  })
+
+  it('offers Resume on an interrupted slot even with a restored queue', () => {
+    // The gateway_restart_interruption + restored-queue case: the Resume
+    // button must not be hidden just because the slot also has queued_prompts
+    // restored from the previous session.
+    const store = makeStore()
+    store.dispatch(setActiveSlot('front'))
+    store.dispatch(appendMessage({ role: 'user', content: 'do the thing' } as ChatMessage))
+    store.dispatch(appendMessage({ role: 'error', content: 'This turn was interrupted when the app restarted.', meta: { kind: 'gateway_restart_interruption' } } as ChatMessage))
+    store.dispatch(appendQueuedMessage({ slot: 'front', content: 'also this', ts: '2', queue_id: 'q-2' }))
+    expect(selectContinuable(root(store))).toBe(true)
+    expect(selectTurnInterrupted(root(store))).toBe(true)
   })
 
   it('withholds Continue while a turn is live, stopping, or mid-plan', () => {
