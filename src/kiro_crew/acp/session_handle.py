@@ -119,7 +119,11 @@ from kiro_crew.acp.mcp_session_report import (
     McpSessionReport,
     sanitize_sink_text,
 )
-from kiro_crew.acp.prompt_blocks import build_prompt_blocks, summarize_prompt_structure
+from kiro_crew.acp.prompt_blocks import (
+    SentImageLedger,
+    build_prompt_blocks,
+    summarize_prompt_structure,
+)
 from kiro_crew.acp.skill_reads import SkillReadTracker
 from kiro_crew.acp.types import (
     ACP_BACKEND_KAS,
@@ -1315,6 +1319,10 @@ class AcpSessionHandle:
         self._stale_probe = False
         self._tool_dispatched = False
         self._last_stop_reason = ""
+        # The pictures this session's conversation already holds, so text that
+        # names the same file every turn does not re-inline it every turn. The
+        # handle is one ACP session, so the record lives and dies with it.
+        self._sent_images = SentImageLedger()
         # The most recent tool result's infrastructure-error classification
         # (``recovery.ladder.InfraError``) or None. Public, like
         # ``last_compaction_transient``: the dashboard reads it through getattr
@@ -1685,6 +1693,13 @@ class AcpSessionHandle:
 
     # ── Prompt ──
 
+    def _forget_sent_images(self) -> None:
+        """A completed compaction summarized the conversation and dropped the
+        pictures it was sent: a later prompt naming one inlines it again."""
+        sent_images: SentImageLedger | None = getattr(self, "_sent_images", None)
+        if sent_images is not None:
+            sent_images.forget()
+
     async def prompt(
         self, message: str, timeout: float | None = None, *, allow_image: bool = True
     ) -> AsyncIterator[AcpEvent]:
@@ -1701,7 +1716,12 @@ class AcpSessionHandle:
         ``allow_image=False`` sends the message as text only: no path in it is
         read or inlined, whatever the agent advertises. For a prompt that is
         text ABOUT a session, where a path is quoted history, not an attachment.
+
+        A picture this session's conversation already holds (the same file
+        bytes) is not inlined again; see
+        :class:`~kiro_crew.acp.prompt_blocks.SentImageLedger`.
         """
+        sent_images: SentImageLedger | None = getattr(self, "_sent_images", None)
 
         async def _build() -> tuple[str, dict[str, Any]]:
             if self._kas_compact_request(message):
@@ -1710,6 +1730,10 @@ class AcpSessionHandle:
                 # context does not shrink. The verb takes no instructions, so any
                 # text after ``/compact`` is not sent.
                 self._kas_compact_turn = True
+                if sent_images is not None:
+                    # Nothing this turn inlines, so nothing an unanswered earlier
+                    # prompt staged may be committed by this turn's answer.
+                    sent_images.stage(())
                 return METHOD_KAS_SESSION_COMPACT, {"sessionId": self._session_id}
             # Offloaded: the builder stats and reads image files (up to
             # MAX_IMAGE_BYTES each) and base64-encodes them. Inline, that
@@ -1719,6 +1743,7 @@ class AcpSessionHandle:
                 build_prompt_blocks,
                 message,
                 allow_image=allow_image and self._runtime.supports_image_prompt,
+                sent_images=sent_images,
             )
             # Content-free outbound STRUCTURE diagnostics: one
             # line per turn build recording block counts, per-type counts, and
@@ -1766,6 +1791,16 @@ class AcpSessionHandle:
         turn = self._run_turn(_build, timeout)
         try:
             async for event in turn:
+                if (
+                    sent_images is not None
+                    and event.kind == EVENT_COMPLETE
+                    and self._last_stop_reason
+                ):
+                    # Only the backend's own answer to this prompt sets the stop
+                    # reason; a synthesized terminal (timeout, unacked cancel,
+                    # stall) leaves it empty, and a prompt the conversation may
+                    # not hold inlines its pictures again on the next try.
+                    sent_images.commit()
                 yield event
         finally:
             await turn.aclose()
@@ -4115,6 +4150,7 @@ class AcpSessionHandle:
                             # loop, so it must drop the stale counts itself —
                             # mirrors AcpClient._handle_compaction_status.
                             self.last_prompt_stats.reset_after_compaction()
+                            self._forget_sent_images()
                             poisoned = await self._drain_post_compaction_metadata(buffered=buffered)
                         # Redact backend-echoed summary before it reaches callers
                         # (compact() surfaces this to the dashboard).
@@ -5829,6 +5865,7 @@ class AcpSessionHandle:
                         # Mirrors AcpClient._handle_compaction_status.
                         self._compaction_failed_at = None
                         self.last_prompt_stats.reset_after_compaction()
+                        self._forget_sent_images()
                     # Compaction summary is backend-echoed text (LLM-influenced)
                     # that reaches the dashboard — redact exfil URLs/credentials
                     # before surfacing it (parity with other text surfaces).
@@ -7150,6 +7187,7 @@ class AcpSessionHandle:
                 # them so the meter resets and fresh telemetry re-derives real
                 # numbers (parity with the kiro-cli compaction handler).
                 self.last_prompt_stats.reset_after_compaction()
+                self._forget_sent_images()
                 self._compaction_failed_at = None
                 status_type = "completed"
             elif kind == kas_wire.KIND_SUMMARIZATION_FAILED:
@@ -7904,6 +7942,7 @@ class AcpSessionHandle:
         if status_type == "completed":
             self._compaction_failed_at = None
             self.last_prompt_stats.reset_after_compaction()
+            self._forget_sent_images()
         # No title: the adapter ships no summary with either frame, and an empty
         # string is what every consumer already renders for "compacted, no summary
         # offered".
