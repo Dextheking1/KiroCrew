@@ -1785,6 +1785,50 @@ describe('MarkdownPanel — comment hint banner', () => {
 })
 
 describe('MarkdownPanel — read-only working-tree diff (#9695)', () => {
+  it('renders a text diff for a JSON working-tree diff instead of a blank pane', async () => {
+    // JSON has a rich viewer, but it is text: the locked-diff tab must diff it.
+    vi.mocked(api.fileDiff).mockResolvedValue({ diff: 'x', original: '{"a": 1}\n', status: 'modified' } as never)
+    mountPanel({ filePath: '/tmp/settings/cli.json', content: '{"a": 2}\n', readOnly: true, initialDiffMode: true })
+    const view = await screen.findByTestId('pierre-diff')
+    expect(view.getAttribute('data-old')).toBe('{"a": 1}\n')
+    expect(view.getAttribute('data-new')).toBe('{"a": 2}\n')
+  })
+
+  it('opens a modified JSON file tab on its viewer, not a text diff', async () => {
+    vi.mocked(api.fileDiff).mockResolvedValue({ diff: 'x', original: '{"a": 1}\n', status: 'modified' } as never)
+    mountPanel({ filePath: '/tmp/settings/cli.json', content: '{"enableThinking": true}\n', initialDiffMode: undefined })
+    // The viewer has rendered, and the baseline is never requested, so no
+    // later diff response can switch the tab into diff mode.
+    await screen.findByText(/enableThinking/)
+    expect(api.fileDiff).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('pierre-diff')).toBeNull()
+    expect(screen.queryByLabelText('Toggle diff view')).toBeNull()
+  })
+
+  it('offers a JSON file tab its diff from the overflow menu', async () => {
+    vi.mocked(api.fileDiff).mockResolvedValue({ diff: 'x', original: '{"a": 1}\n', status: 'modified' } as never)
+    mountPanel({ filePath: '/tmp/settings/cli.json', content: '{"a": 2}\n' })
+    openPanelMenu()
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Toggle diff view/ }))
+    const view = await screen.findByTestId('pierre-diff')
+    expect(view.getAttribute('data-old')).toBe('{"a": 1}\n')
+  })
+
+  it('offers the same diff row in the fullscreen menu of a JSON file tab', async () => {
+    mountPanel({ filePath: '/tmp/settings/cli.json', content: '{"a": 2}\n' })
+    openPanelMenu()
+    fireEvent.click(screen.getByText('Full screen'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByTestId('markdown-panel-more-options'))
+    expect(screen.getByRole('menuitemcheckbox', { name: /Toggle diff view/ })).toBeInTheDocument()
+  })
+
+  it('keeps an image working-tree diff on its viewer, never a blank diff pane', async () => {
+    vi.mocked(api.fileDiff).mockResolvedValue({ diff: 'x', original: '', status: 'modified' } as never)
+    mountPanel({ filePath: '/tmp/logo.png', content: '', readOnly: true, initialDiffMode: true })
+    await waitFor(() => expect(screen.queryByTestId('pierre-diff')).toBeNull())
+    expect(screen.queryByText('No changes in this file')).toBeNull()
+  })
   it('locks a code file read-only: no editor, no Edit/Preview/Save, no diff toggle', async () => {
     // A .py file would normally open straight in the editor; readOnly must keep
     // it a non-editable view, so the wtdiff tab is never a second editable buffer.
