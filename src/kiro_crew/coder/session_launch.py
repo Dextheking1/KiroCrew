@@ -25,6 +25,7 @@ from kiro_crew.coder.remote_worker import (
     CoderShell,
     RemoteWorkerLaunch,
 )
+from kiro_crew.config.session_environments import PROVIDER_IDS, VM_PROVIDERS
 from kiro_crew.platform_compat import file_lock
 from kiro_crew.session_environment import SessionEnvironmentUnavailable, report_start_stage
 
@@ -83,7 +84,7 @@ class SessionEnvironmentChoices:
         """``(profile id, owner key)`` or None for local; the owner is the
         session itself or, for a subagent, the root it inherited from."""
         entry = self._read().get(session_key)
-        if not isinstance(entry, dict) or entry.get("provider") != PROVIDER_ID:
+        if not isinstance(entry, dict) or entry.get("provider") not in PROVIDER_IDS:
             return None
         profile = entry.get("configuration")
         if not isinstance(profile, str) or not _PROFILE_ID_RE.match(profile):
@@ -93,6 +94,12 @@ class SessionEnvironmentChoices:
             # A malformed inheritance row must not fall back to "local".
             raise SessionEnvironmentUnavailable("session environment choices are invalid")
         return profile, owner
+
+    def recorded_provider(self, session_key: str) -> str:
+        """The provider the choice row was written for, or "" when it has none."""
+        entry = self._read().get(session_key)
+        provider = entry.get("provider") if isinstance(entry, dict) else None
+        return provider if isinstance(provider, str) else ""
 
     def inherit(self, child_key: str, parent_key: str) -> Optional[str]:
         """Bind ``child_key`` to its parent's root workspace; the profile, or
@@ -113,8 +120,17 @@ class SessionEnvironmentChoices:
                         self._write(_pruned(sessions))
                     return None
                 profile, owner = parent
+                # The root's own recorded provider, never one derived from the
+                # config now: a subagent of a session whose profile id moved to
+                # another provider must be refused just as its root is.
+                owner_entry = sessions.get(owner)
+                recorded = owner_entry.get("provider") if isinstance(owner_entry, dict) else None
                 sessions[child_key] = {
-                    "provider": PROVIDER_ID,
+                    "provider": (
+                        recorded
+                        if isinstance(recorded, str) and recorded
+                        else _choice_provider(profile)
+                    ),
                     "configuration": profile,
                     "parent": owner,
                 }
@@ -162,7 +178,10 @@ class SessionEnvironmentChoices:
                 if profile_id is None:
                     sessions.pop(session_key, None)
                 else:
-                    sessions[session_key] = {"provider": PROVIDER_ID, "configuration": profile_id}
+                    sessions[session_key] = {
+                        "provider": _choice_provider(profile_id),
+                        "configuration": profile_id,
+                    }
                 self._write(sessions)
 
 
@@ -408,9 +427,125 @@ async def prepare_for_session(
     if config is None:
         config = await asyncio.to_thread(KiroCrewConfig.load)
     section = config.session_environments
+    # Keyed by the owner, so a subagent reuses its root's workspace. The id names
+    # the provider; collisions in a hand-edited config fail closed.
+    provider = profile_provider(section, profile_id)
+    # A row written for one provider never runs on another: a profile removed
+    # and its id reused by another provider would otherwise move the session
+    # onto a fresh, empty VM. A "coder" tag is also what every row carried
+    # before other providers existed, so whatever the tag says, a session that
+    # already owns a workspace or VM with another provider is pinned to it:
+    # moving it would skip that provider's resume check and leave its archived
+    # files due for deletion.
+    recorded = await asyncio.to_thread(choices.recorded_provider, session_key)
+    moved = recorded not in ("", PROVIDER_ID) and recorded != provider
+    if not moved:
+        moved = await asyncio.to_thread(_owned_elsewhere, home, owner_key, provider)
+    if moved and not _profile_configured(section, profile_id):
+        # Removed, not moved: no list holds the id, so there is nothing to look for.
+        raise SessionEnvironmentUnavailable(
+            f"this session's profile {profile_id!r} is no longer configured; "
+            "add it again in Settings > Session Environments"
+        )
+    if moved:
+        raise SessionEnvironmentUnavailable(
+            f"this session's profile {profile_id!r} now belongs to another provider; "
+            "restore the original profile in Settings > Session Environments"
+        )
+    vm_environments = _vm_environments().get(provider)
+    if vm_environments is not None:
+        return await vm_environments(section, home).prepare(owner_key, profile_id)
     environments = CoderSessionEnvironments(section, home)
-    # Keyed by the owner, so a subagent reuses its root's workspace.
     return await environments.prepare(owner_key, profile_id)
+
+
+def _vm_environments() -> dict[str, Any]:
+    """Each VM provider's environments class, keyed by its ``VM_PROVIDERS`` id.
+
+    The one place a VM provider is wired to its class: launch dispatches through
+    it and the move guard reads every registry it names, so a provider added
+    here is covered by both. A test checks it matches ``VM_PROVIDERS``.
+    """
+    from kiro_crew.boxd_session.launch import BoxdSessionEnvironments
+    from kiro_crew.sprites_session.launch import SpritesSessionEnvironments
+
+    return {"sprites": SpritesSessionEnvironments, "boxd": BoxdSessionEnvironments}
+
+
+def _profile_configured(section: Any, profile_id: str) -> bool:
+    """Whether any provider's list in ``section`` holds ``profile_id``."""
+    if profile_id in {p.id for p in getattr(section, "profiles", None) or []}:
+        return True
+    return any(profile_id in _dict_profile_ids(section, key) for _id, key, _ in VM_PROVIDERS)
+
+
+def _has_coder_binding(home: Path, owner_key: str) -> bool:
+    """Whether ``owner_key`` already owns a Coder workspace row (any state).
+
+    Never creates the registry or its lock on a gateway that has no Coder rows;
+    an unreadable registry raises, so the start fails closed.
+    """
+    path = home / "coder" / "session-envs.json"
+    if not path.exists():
+        return False
+    return WorkspaceBindingRegistry(path).get_by_session(owner_key) is not None
+
+
+def _owned_elsewhere(home: Path, owner_key: str, provider: str) -> bool:
+    """Whether ``owner_key`` owns a workspace or VM row with a provider other
+    than ``provider`` (any state, an archived one included).
+
+    Reads only: a registry file that is absent is not created. An unreadable
+    one raises, so the start fails closed.
+    """
+    from kiro_crew.coder.persistent_vm import SessionResourceRegistry
+
+    if provider != PROVIDER_ID and _has_coder_binding(home, owner_key):
+        return True
+    for name, cls in _vm_environments().items():
+        if name == provider:
+            continue
+        registry = SessionResourceRegistry(home / cls.registry_file, cls.label)
+        if registry.get(owner_key) is not None:
+            return True
+    return False
+
+
+def _dict_profile_ids(section: Any, key: str) -> set[str]:
+    return {
+        str(p.get("id"))
+        for p in (getattr(section, key, None) or [])
+        if isinstance(p, dict) and p.get("id")
+    }
+
+
+def profile_provider(section: Any, profile_id: str) -> str:
+    """Which provider serves ``profile_id``: ``sprites``, ``boxd`` or ``coder``.
+
+    ``coder`` also answers an id no list holds, so the Coder path reports the
+    profile as not configured, as it always has.
+    """
+    matches = []
+    if profile_id in {p.id for p in getattr(section, "profiles", None) or []}:
+        matches.append(PROVIDER_ID)
+    for provider, key, _label in VM_PROVIDERS:
+        if profile_id in _dict_profile_ids(section, key):
+            matches.append(provider)
+    if len(matches) > 1:
+        raise SessionEnvironmentUnavailable(
+            f"session environment profile {profile_id!r} is ambiguous across providers"
+        )
+    return matches[0] if matches else PROVIDER_ID
+
+
+def _choice_provider(profile_id: str) -> str:
+    from kiro_crew.config import live
+    from kiro_crew.config.loader import KiroCrewConfig
+
+    config = live.snapshot()
+    if config is None:
+        config = KiroCrewConfig.load()
+    return profile_provider(config.session_environments, profile_id)
 
 
 async def forget_subagent_environment(child_key: str) -> None:
