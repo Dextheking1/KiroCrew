@@ -96,6 +96,27 @@ class GateFacts:
         app: str,
         classifier_only: bool,
     ) -> None:
+        from dataclasses import replace
+
+        from kiro_crew.platform.governance import WORKSPACE_TOOL_KINDS
+        from kiro_crew.session_environment import WORKSPACE_SERVER_NAME, session_attached_remotely
+
+        if (
+            call.identity_trusted
+            and call.mcp_server == WORKSPACE_SERVER_NAME
+            and session_attached_remotely(session_key)
+        ):
+            kind = WORKSPACE_TOOL_KINDS.get(call.mcp_tool)
+            if kind == "execute":
+                command = (call.raw_params or {}).get("command")
+                call = replace(
+                    call,
+                    kind=kind,
+                    is_shell=kind == "execute",
+                    command=command if isinstance(command, str) else None,
+                )
+            elif kind:
+                call = replace(call, kind=kind)
         self.manager = manager
         self.call = call
         self.session_key = session_key
@@ -875,6 +896,13 @@ def _tier_governance(facts: GateFacts, tier: GateTier) -> ToolHookResult | None:
                 alias_groups = ((deepseek, deepseek_alias),)
             elif deepseek != call.title:
                 identity = (*identity, deepseek)
+    from kiro_crew.session_environment import WORKSPACE_DENY_ALIASES, WORKSPACE_SERVER_NAME
+
+    if call.mcp_server == WORKSPACE_SERVER_NAME:
+        # Deny-only, so it can only tighten: a ceiling on the replaced built-in binds.
+        deny_aliases = (*deny_aliases, *WORKSPACE_DENY_ALIASES.get(call.mcp_tool, ()))
+        if call.is_shell and call.command:
+            identity = (*identity, f"Running: {call.command}")
     gov_reason = _governance_denial(
         facts.ctx,
         call.title,
