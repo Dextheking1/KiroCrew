@@ -2497,6 +2497,24 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "occurrence": 1
   },
   {
+    "id": "session-environments.machine-size",
+    "label": "Machine size",
+    "labelKey": "sessionEnvironments.boxdSize",
+    "description": "A snapshot keeps the size it was saved with, so this applies only to profiles without one. Larger sizes bill more while the machine runs.",
+    "tab": "session-environments",
+    "type": "select",
+    "occurrence": 1
+  },
+  {
+    "id": "session-environments.secret-name-for-the-token-usually-sprites-token",
+    "label": "Secret name for the token (usually SPRITES_TOKEN)",
+    "labelKey": "sessionEnvironments.tokenSecret",
+    "description": "The name the token is stored under in Settings → Secrets. Change it only to use a different saved token.",
+    "tab": "session-environments",
+    "type": "input",
+    "occurrence": 1
+  },
+  {
     "id": "session-environments.start-new-chats-on-an-environment-profile",
     "label": "Start new chats on an environment profile",
     "labelKey": "sessionEnvironments.defaultEnabled",
@@ -2509,7 +2527,6 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "id": "session-environments.stop-workspaces-when-kiro-crew-shuts-down",
     "label": "Stop workspaces when Kiro Crew shuts down",
     "labelKey": "sessionEnvironments.stopOnShutdown",
-    "description": "On: Kiro Crew stops your workspaces when it shuts down. Off: they keep running, so chats reconnect faster after a restart. Coder's own auto-stop still applies.",
     "tab": "session-environments",
     "type": "toggle",
     "occurrence": 1,

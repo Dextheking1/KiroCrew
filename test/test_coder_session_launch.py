@@ -836,6 +836,9 @@ async def test_check_endpoint_reports_sign_in_and_each_profile(tmp_path, monkeyp
             "coder": {"ok": False, "error": "no Coder URL is saved"},
             "profiles": [],
             "git": git,
+            # No Sprites or boxd profile: their rows are empty, never omitted.
+            "sprites": [],
+            "boxd": [],
         }
         body = await (await client.post("/check")).json()
         assert "coder login" in body["coder"]["error"] and body["profiles"] == []
