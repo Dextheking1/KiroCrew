@@ -41,8 +41,8 @@ target rather than trust the lookup. Two conditions here, mirroring what
   alone is not the check.
 
 The cost is stated rather than hidden: an application a user installed only for
-themselves cannot be launched by name. The refusal says so and names the remedy (move
-the bundle, or open it by hand), which is recoverable — where a launch verb that runs
+themselves cannot be launched by name. The refusal names the reason and tells the user
+to open the application themselves, which is recoverable — where a launch verb that runs
 whatever the agent wrote is not.
 
 The no-arguments rule holds on top of both: ``open -a`` opens an application and can
@@ -97,26 +97,15 @@ _OPEN_BIN = "/".join(("", "usr", "bin", "open"))
 #: root, not for trusting it.
 #:
 #: The cost is real and is the right trade: an application a user installed only for
-#: themselves cannot be launched, and the refusal names the catalog rule so the user can
-#: move the bundle to ``/Applications`` (or open it themselves) rather than being left
-#: guessing. Losing one install location is recoverable; a launch verb that
-#: runs whatever the agent wrote is not.
+#: themselves cannot be launched. The refusal names the reason and tells the user to
+#: open the application themselves rather than being left guessing. Losing one install
+#: location is recoverable; a launch verb that runs whatever the agent wrote is not.
 _APP_ROOTS: tuple[str, ...] = (
     "/System/Applications",
     "/System/Applications/Utilities",
     "/Applications",
     "/Applications/Utilities",
 )
-
-#: The subset of :data:`_APP_ROOTS` that macOS makes admin-writable by default.
-#: ``/Applications`` and ``/Applications/Utilities`` carry ``drwxrwxr-x root admin``
-#: on a stock install — the mode that allows drag-installs without an authentication
-#: prompt — so the parent probe fires for every admin user (the default for a Mac's
-#: primary account). ``/System/Applications`` and its sibling live on the read-only
-#: system volume and are never writable.
-#: Used by :func:`resolve_target` to select a refusal message that does not direct the
-#: user to "Move it under /Applications" when the bundle is already there.
-_ADMIN_WRITABLE_ROOTS: frozenset[str] = frozenset({"/Applications", "/Applications/Utilities"})
 
 _BUNDLE_SUFFIX = ".app"
 
@@ -152,15 +141,7 @@ _REFUSED_BUNDLES: frozenset[str] = frozenset(
 _ERR_WRITABLE_ROOT = (
     "'{name}' is installed in a directory this user can write, so it was not launched: "
     "a bundle anyone can drop there is indistinguishable from one the operator "
-    "installed. Move it under /Applications, or open it yourself"
-)
-#: Used when the bundle's parent is one of the :data:`_ADMIN_WRITABLE_ROOTS` — telling
-#: the user to "Move it under /Applications" is unsatisfiable because the bundle is
-#: already there. The message names the real reason and skips the move hint.
-_ERR_WRITABLE_SYSTEM_PARENT = (
-    "'{name}' was not launched: admin users can write {parent} on this machine "
-    "(the default on macOS), so a bundle there is indistinguishable from one "
-    "the operator installed. Open the application yourself"
+    "installed. Open the application yourself"
 )
 _ERR_SHELL_TARGET = (
     "'{name}' is a terminal, so it is not a launch target: a shell takes its "
@@ -297,10 +278,12 @@ def _writable_component(app: InstalledApp) -> bool:
       ``CFBundleIdentifier`` and defeats :func:`target_identity`'s pre-spawn deny;
     * ``Contents/MacOS`` — the binary itself swapped in place.
 
-    None of this is hypothetical or exotic. On a machine where ``/Applications`` is not
-    admin-writable (not the stock default), a bundle installed there by a user-space
-    installer — every drag-install and every Homebrew cask — is owned by the installing
-    user, so the agent runs as someone who can replace its executable. A parent-only probe
+    None of this is hypothetical or exotic. A bundle installed under ``/Applications``
+    by a user-space installer — every drag-install and every Homebrew cask — is owned by
+    the installing user, so the agent runs as someone who can replace its executable.
+    On a stock macOS install the parent-directory probe catches these bundles too
+    (``/Applications`` is admin-writable by default), but the two probes are independent:
+    an unwritable parent is not evidence of an unwritable bundle. A parent-only probe
     passes that bundle and launches whatever was written into it.
 
     **The directories are FIXED, never read from the bundle.** Asking the bundle's own
@@ -462,17 +445,14 @@ def resolve_target(query: str) -> "tuple[str, str]":
     #   a stock macOS install ``/Applications`` is ``drwxrwxr-x root admin`` so this probe
     #   fires for every admin user (the default for a Mac's primary account), and a bundle
     #   dropped there is indistinguishable from an installed one;
-    # * the bundle ITSELF and the directory holding its main executable. This is the case
-    #   the parent-only probe misses on a machine where the parent is not admin-writable:
-    #   a bundle installed there by a user-space installer (any drag-install, and every
-    #   Homebrew cask) is owned by that user, so ``Foo.app/Contents/MacOS/Foo`` can be
-    #   REPLACED without the parent ever being writable. The bundle would then pass every
-    #   check here while running agent-authored native code — the exact hole the root list
-    #   exists to close, one level down.
+    # * the bundle ITSELF and the directory holding its main executable. The parent probe
+    #   and the bundle probes are independent: an unwritable parent is not evidence of an
+    #   unwritable bundle. A bundle installed by a user-space installer (any drag-install,
+    #   and every Homebrew cask) is owned by that user, so ``Foo.app/Contents/MacOS/Foo``
+    #   can be REPLACED even when the parent denies creates. The bundle would then pass
+    #   every check here while running agent-authored native code — the exact hole the
+    #   root list exists to close, one level down.
     if _writable_component(app):
-        parent = os.path.dirname(app.path)
-        if parent in _ADMIN_WRITABLE_ROOTS:
-            raise ComputerUseError(_ERR_WRITABLE_SYSTEM_PARENT.format(name=app.name, parent=parent))
         raise ComputerUseError(_ERR_WRITABLE_ROOT.format(name=app.name))
     # The verified PATH, not the name. Returning the name would throw the verification
     # away: ``open -a <name>`` asks LaunchServices to resolve it again, from its own
