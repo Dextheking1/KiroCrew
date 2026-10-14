@@ -7548,6 +7548,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "Diese Datei als Artefakt speichern (versioniert, dauerhaft, kommentierbar)",
       "saving": "Wird gespeichert…",
       "select_any_text_to_add_inline_comments_then_subm": "Markieren Sie beliebigen Text, um Inline-Kommentare hinzuzufügen, und senden Sie sie dann alle an den Chat.",
+      "show_changes": "Änderungen anzeigen",
       "show_full_file": "Ganze Datei anzeigen",
       "show_in_file_manager": "Im Dateimanager anzeigen",
       "snapshot_version": "Snapshot erstellen",

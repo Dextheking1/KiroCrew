@@ -7670,6 +7670,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "Guarda este archivo como artefacto (con versiones, persistente y comentable)",
       "saving": "Guardando…",
       "select_any_text_to_add_inline_comments_then_subm": "Selecciona cualquier texto para añadir comentarios en línea y luego envíalos todos al chat.",
+      "show_changes": "Mostrar cambios",
       "show_full_file": "Mostrar archivo completo",
       "show_in_file_manager": "Mostrar en el gestor de archivos",
       "snapshot_version": "Crear versión de instantánea",

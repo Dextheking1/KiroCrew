@@ -7792,6 +7792,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "Сохранить этот файл как артефакт (с версиями, постоянный, с комментариями)",
       "saving": "Сохранение…",
       "select_any_text_to_add_inline_comments_then_subm": "Выделите любой текст, чтобы добавить встроенные комментарии, затем отправьте их все в чат.",
+      "show_changes": "Показать изменения",
       "show_full_file": "Показать весь файл",
       "show_in_file_manager": "Показать в файловом менеджере",
       "snapshot_version": "Снимок версии",

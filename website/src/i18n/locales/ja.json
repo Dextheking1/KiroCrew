@@ -7426,6 +7426,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "このファイルをアーティファクトとして保存 (バージョン管理、永続化、コメント可能)",
       "saving": "保存中…",
       "select_any_text_to_add_inline_comments_then_subm": "任意のテキストを選択してインラインコメントを追加し、すべてをチャットに送信します。",
+      "show_changes": "変更を表示",
       "show_full_file": "ファイル全体を表示",
       "show_in_file_manager": "ファイルマネージャーに表示",
       "snapshot_version": "スナップショットバージョン",

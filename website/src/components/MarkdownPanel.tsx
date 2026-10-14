@@ -626,7 +626,7 @@ function useFilesAppTarget(): { label: string } | null {
   }, [apps])
 }
 
-export function OverflowMenu({ filePath, content, onError, onRefresh, refreshDisabled, refreshTitle, onFullscreen, fullscreen, onSnapshot, snapshotting, wordWrap, onToggleWordWrap, lineNums, onToggleLineNums, collapseUnchanged, onToggleCollapseUnchanged, diffSplit, onToggleDiffSplit, onDownload }: {
+export function OverflowMenu({ filePath, content, onError, onRefresh, refreshDisabled, refreshTitle, onFullscreen, fullscreen, onSnapshot, snapshotting, wordWrap, onToggleWordWrap, lineNums, onToggleLineNums, collapseUnchanged, onToggleCollapseUnchanged, diffSplit, onToggleDiffSplit, diffView, onToggleDiffView, onDownload }: {
   filePath: string; content: string
   /** Where a failed row action (add to knowledge, promote, snapshot, save,
    *  download, open/reveal, an app-contributed row's dispatch) is reported: the
@@ -650,6 +650,10 @@ export function OverflowMenu({ filePath, content, onError, onRefresh, refreshDis
    *  header button so the action row stays within its two-control cap once the
    *  file-browser toggle is present. */
   diffSplit?: boolean; onToggleDiffSplit?: () => void
+  /** The diff toggle for a rich-type file (JSON, CSV, ...), which opens on its
+   *  viewer: a menu row for the same two-control cap, since its header holds
+   *  no diff button. */
+  diffView?: boolean; onToggleDiffView?: () => void
   /** Snapshot the file's artifact (saves first when dirty — parent owns that
    *  logic). Entry renders only when the file is already an artifact. */
   onSnapshot?: () => void; snapshotting?: boolean
@@ -744,8 +748,13 @@ export function OverflowMenu({ filePath, content, onError, onRefresh, refreshDis
           )}
           {/* View options are their own section: they change how the file is
               DISPLAYED, unlike refresh/full-screen above which act on it. */}
-          {(onToggleWordWrap || onToggleLineNums || onToggleCollapseUnchanged) && (
+          {(onToggleWordWrap || onToggleLineNums || onToggleCollapseUnchanged || onToggleDiffView) && (
             <div className="h-px bg-border my-1 mx-2" />
+          )}
+          {onToggleDiffView && (
+            <button role="menuitemcheckbox" aria-checked={!!diffView} data-option tabIndex={-1} className={menuRowCls} onClick={onToggleDiffView}>
+              <FileDiff size={14} className="lucide-inline" /> {i18nT('components.markdownPanel.show_changes')} {diffView && <Check size={14} className="lucide-inline" />}
+            </button>
           )}
           {onToggleWordWrap && (
             <button role="menuitemcheckbox" aria-checked={!!wordWrap} data-option tabIndex={-1} className={menuRowCls} onClick={onToggleWordWrap}>
@@ -1244,7 +1253,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
   //
   // Rich types are excluded, and that is a deliberate scope line rather than an
   // oversight. They have exactly ONE renderer by design — `isRichType` gates the
-  // source/preview toggle, the line-number and diff controls,
+  // source/preview toggle, the line-number controls,
   // and the Cmd+S handler — so forcing one into an editor creates a file that is in
   // source mode with none of the chrome that makes source mode usable, including no
   // way back to its own viewer and no visible Save for a buffer the user has
@@ -1397,7 +1406,13 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
   const fileType = detectFileType(filePath)
   const isMarkdown = MD_EXTS.has(ext)
   const isRichType = RICH_FILE_TYPES.includes(fileType)
-  useEffect(() => { if (isRichType) setDiffMode(false) }, [isRichType])
+  // A text diff needs the file as text. The content-backed rich types (json,
+  // csv, html, ...) are text with a viewer on top, so they diff like code; only
+  // the byte-backed ones have no text to diff. A wtdiff tab opens locked to
+  // diff mode, so a type that cannot diff must not reach it: it would render
+  // neither the diff nor its viewer.
+  const canTextDiff = !BYTE_BACKED_FILE_TYPES.has(fileType)
+  useEffect(() => { if (!canTextDiff) setDiffMode(false) }, [canTextDiff])
   // The verdict can arrive AFTER mount: a restored cold tab renders with
   // `binary` undefined and gets it from the hydration read, so the initializer
   // above is not the only entry point. Neither a source diff nor an edit buffer
@@ -1979,7 +1994,9 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
   const { data: diffData, isFetching: diffChecking, error: diffQueryError } = useQuery({
     queryKey: ['file-diff', filePath],
     queryFn: () => api.fileDiff(filePath),
-    enabled: !!filePath && !isRichType,
+    // A rich type opens on its viewer; only a tab opened in diff mode (the
+    // working-tree diff) needs its baseline, and only if it can text-diff.
+    enabled: !!filePath && (!isRichType || (diffMode && canTextDiff)),
     staleTime: 10_000,
   })
   const originalContent = diffData?.original ?? ''
@@ -2062,17 +2079,19 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
   // so returning to a session restores preview/source instead of re-enabling
   // diff after the user turned it off.
   useEffect(() => {
-    if (!diffData || diffInitFileRef.current === filePath) return
+    if (!canTextDiff || !diffData || diffInitFileRef.current === filePath) return
     diffInitFileRef.current = filePath
     if (initialDiffMode !== undefined) {
       setDiffMode(initialDiffMode)
       return
     }
-    if (diffData.diff && diffData.status === 'modified') {
+    // A rich type opens on its viewer: only an explicit diff request (the
+    // working-tree diff tab) shows its text diff.
+    if (!isRichType && diffData.diff && diffData.status === 'modified') {
       setDiffMode(true)
       onDiffModeChange?.(true)
     }
-  }, [diffData, filePath, initialDiffMode, onDiffModeChange])
+  }, [canTextDiff, isRichType, diffData, filePath, initialDiffMode, onDiffModeChange])
 
   const handleRefresh = useCallback(async () => {
     if (refreshing || dirty) return
@@ -2872,6 +2891,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
               lineNums={lineNums} onToggleLineNums={() => setLineNums(!lineNums)}
               collapseUnchanged={collapseUnchanged} onToggleCollapseUnchanged={() => setCollapseUnchanged(!collapseUnchanged)}
               diffSplit={diffSplit} onToggleDiffSplit={diffMode ? () => setDiffSplit(!diffSplit) : undefined}
+              diffView={diffMode} onToggleDiffView={isRichType && canTextDiff && !showBinaryCard && !readOnly ? toggleDiffMode : undefined}
             />
           </div>
         </div>
@@ -2917,7 +2937,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
               <div className="p-3"><ErrorNotice message={diffErrorText} askAgent={!dirty} testId="markdown-panel-diff-compute-error" /></div>
             )}
             {!showBinaryCard && diffNoBaselineText && !editing && <ZeroDiffNotice message={diffNoBaselineText} onExitDiff={readOnly ? undefined : toggleDiffMode} />}
-            {!showBinaryCard && !zeroDiff && !diffUnavailable && !diffChecking && !isRichType && (
+            {!showBinaryCard && !zeroDiff && !diffUnavailable && !diffChecking && canTextDiff && (
               <DiffViewBlock flush sideBySide={diffSplit} diffMode={diffMode && !editing} fileName={fileName} originalContent={originalContent} content={content} gitPatch={gitPatch} lineNums={lineNums} wordWrap={wordWrap} collapseUnchanged={collapseUnchanged} />
             )}
             {!showBinaryCard && !zeroDiff && (!diffUnavailable || editing) && (!diffMode || editing) && <ContentRenderer flush isRichType={isRichType} fileType={fileType} filePath={filePath} content={content} editing={editing} lang={lang} lineNums={lineNums} wordWrap={wordWrap} onChange={handleChange} onSave={handleSave}
@@ -2984,7 +3004,8 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
               return <KnowledgeToggleIconButton state={knowledge} />
             })()}
             {editorToolbarButtons}
-            <OverflowMenu filePath={filePath} content={content} onError={reportActionError} onDownload={lastCopy ? downloadLastCopy : undefined} />
+            <OverflowMenu filePath={filePath} content={content} onError={reportActionError} onDownload={lastCopy ? downloadLastCopy : undefined}
+              diffView={diffMode} onToggleDiffView={isRichType && canTextDiff && !showBinaryCard && !readOnly ? toggleDiffMode : undefined} />
             <button className="p-1.5 rounded-md border border-border text-muted hover:text-text hover:border-border-strong cursor-pointer transition-all" onClick={() => { void guardDraft(() => setFullscreen(false)) }} title={i18nT('components.markdownPanel.exit_full_screen_esc')} aria-label={i18nT('components.markdownPanel.exit_full_screen')}><Minimize2 size={14} /></button>
           </div>
         </div>
@@ -3001,7 +3022,7 @@ export default memo(forwardRef<MarkdownPanelHandle, Props>(function MarkdownPane
               <div className="p-3"><ErrorNotice message={diffErrorText} askAgent={!dirty} testId="markdown-panel-diff-compute-error-fullscreen" /></div>
             )}
             {!showBinaryCard && diffNoBaselineText && !editing && <ZeroDiffNotice message={diffNoBaselineText} onExitDiff={readOnly ? undefined : toggleDiffMode} />}
-            {!showBinaryCard && !zeroDiff && !diffUnavailable && !isRichType && <DiffViewBlock sideBySide={diffSplit} diffMode={diffMode && !editing} fileName={fileName} originalContent={originalContent} content={content} gitPatch={gitPatch} lineNums={lineNums} wordWrap={wordWrap} collapseUnchanged={collapseUnchanged} />}
+            {!showBinaryCard && !zeroDiff && !diffUnavailable && canTextDiff && <DiffViewBlock sideBySide={diffSplit} diffMode={diffMode && !editing} fileName={fileName} originalContent={originalContent} content={content} gitPatch={gitPatch} lineNums={lineNums} wordWrap={wordWrap} collapseUnchanged={collapseUnchanged} />}
             {!showBinaryCard && !zeroDiff && (!diffUnavailable || editing) && (!diffMode || editing) && <ContentRenderer isRichType={isRichType} fileType={fileType} filePath={filePath} content={content} editing={editing} lang={lang} lineNums={lineNums} wordWrap={wordWrap} onChange={handleChange} onSave={handleSave}
               diffBase={diffMode && editing ? (originalContent || null) : undefined} diffSplit={diffSplit} diffExpandUnchanged={!collapseUnchanged}
               previewRef={fullscreenPreviewRef} displayContent={displayContent} isMarkdown={isMarkdown} previewStyle={mdPreviewStyle} editorRef={setRevealEditor} />}

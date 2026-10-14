@@ -7548,6 +7548,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "এই ফাইলটি আর্টিফ্যাক্ট হিসেবে সংরক্ষণ করুন (ভার্সনযুক্ত, স্থায়ী, মন্তব্য করার যোগ্য)",
       "saving": "সেভ হচ্ছে…",
       "select_any_text_to_add_inline_comments_then_subm": "ইনলাইন মন্তব্য যোগ করতে যেকোনো টেক্সট নির্বাচন করুন, তারপর সেগুলো সবই চ্যাটে পাঠান।",
+      "show_changes": "পরিবর্তনগুলি দেখান",
       "show_full_file": "সম্পূর্ণ ফাইল দেখান",
       "show_in_file_manager": "ফাইল ম্যানেজারে দেখাও",
       "snapshot_version": "সংস্করণ স্ন্যাপশট করো",

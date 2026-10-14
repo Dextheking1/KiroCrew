@@ -7426,6 +7426,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "将此文件保存为产物（带版本、持久化、可评论）",
       "saving": "保存中…",
       "select_any_text_to_add_inline_comments_then_subm": "选中任意文本添加行内评论，然后一并提交到聊天。",
+      "show_changes": "显示更改",
       "show_full_file": "显示完整文件",
       "show_in_file_manager": "在文件管理器中显示",
       "snapshot_version": "快照版本",

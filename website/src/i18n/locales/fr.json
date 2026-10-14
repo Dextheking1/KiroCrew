@@ -7670,6 +7670,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "Enregistrer ce fichier comme artefact (versionné, persistant, commentable)",
       "saving": "Enregistrement…",
       "select_any_text_to_add_inline_comments_then_subm": "Sélectionnez n'importe quel texte pour ajouter des commentaires en ligne, puis envoyez-les tous dans la conversation.",
+      "show_changes": "Afficher les modifications",
       "show_full_file": "Afficher le fichier complet",
       "show_in_file_manager": "Afficher dans le gestionnaire de fichiers",
       "snapshot_version": "Créer un instantané",

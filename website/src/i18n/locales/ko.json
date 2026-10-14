@@ -7426,6 +7426,7 @@
       "save_this_file_as_an_artifact_versioned_persiste": "이 파일을 아티팩트로 저장합니다 (버전 관리·영구 보존·댓글 가능)",
       "saving": "저장하는 중…",
       "select_any_text_to_add_inline_comments_then_subm": "텍스트를 선택해 인라인 댓글을 추가한 뒤 한 번에 채팅으로 보내세요.",
+      "show_changes": "변경 사항 표시",
       "show_full_file": "전체 파일 보기",
       "show_in_file_manager": "파일 관리자에서 보기",
       "snapshot_version": "스냅샷 버전",

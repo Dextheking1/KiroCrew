@@ -4800,6 +4800,7 @@
       "refresh_file": "Refresh file",
       "save_this_file_as_an_artifact_versioned_persiste": "Save this file as an artifact (versioned, persistent, comment-able)",
       "select_any_text_to_add_inline_comments_then_subm": "Select any text to add inline comments, then submit them all to the chat.",
+      "show_changes": "Show changes",
       "tip": "Tip:",
       "toggle_diff_view": "Toggle diff view",
       "toggle_line_numbers": "Toggle line numbers",
