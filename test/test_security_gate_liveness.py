@@ -317,7 +317,11 @@ def _url_payload_command(n: int) -> str:
 #: which now say the match is on the statement's text anywhere on the command line
 #: (heredoc bodies included) and name the file-editing tool for prose that mentions
 #: one. Six lines of catalog text: no pattern, matcher or floor change.
-_PACKAGE_LINE_BUDGET = 29_181
+#: The optional native pre-filter adds a loader that accepts ``kc_native`` only
+#: when its fingerprint matches the Python gate, the fingerprint itself, a debug
+#: line for a mismatch, and a dispatcher that falls back to the Python gate on a
+#: missing, stale, disabled or failing module. No pattern or pass changes.
+_PACKAGE_LINE_BUDGET = 29_246
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
