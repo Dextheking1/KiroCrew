@@ -636,7 +636,7 @@ async function forceStopPort(
       // A service-managed gateway is respawned by launchd/systemd the moment we
       // kill it, so evicting it cannot free the port — it only makes the retry
       // race the respawn. Leave it alone and tell the caller why.
-      if (await isServiceManaged(pid, getPpid)) {
+      if (await isServiceManaged(pid, getPpid, getCommand)) {
         serviceHolder = true;
         log(`force-stop: SKIP pid=${pid} — service-managed KiroCrew gateway (${cmd.slice(0, 80)})`);
         continue;
@@ -801,7 +801,7 @@ async function classifyPortOwner(
     const cmd = (await getCommand(pid)).trim();
     const ours = isKirocrew(cmd);
     if (ours) {
-      if (await isServiceManaged(pid, getPpid)) {
+      if (await isServiceManaged(pid, getPpid, getCommand)) {
         log(`port-owner: :${port} held by SERVICE-MANAGED KiroCrew pid=${pid} (${cmd.slice(0, 80)}) — reuse, never evict`);
         return "service";
       }
@@ -820,16 +820,53 @@ async function classifyPortOwner(
  * determined: mistaking a service for a wedge kills a gateway the OS instantly
  * respawns, while mistaking a wedge for a service only costs an eviction we can
  * still explain to the user.
+ *
+ * The OS service manager is not always the direct parent. When `kirocrew service
+ * install` writes the platform's launch descriptor (a launchd plist or a systemd
+ * unit) it may point at a managed launcher script — `bin/kirocrew gateway …` —
+ * instead of the Python entry point directly. That launcher forks the real
+ * gateway, so the gateway's PPID is the launcher, not PID 1. This function
+ * recognises both topologies:
+ *
+ *   direct:   service_manager (1) → gateway   (PPID=1)
+ *   via shim: service_manager (1) → launcher  (PPID=1, isKirocrewGatewayCommand)
+ *                                 → gateway   (PPID=launcher)
+ *
+ * The shim must pass `isKirocrewGatewayCommand` so that ordinary GUI
+ * applications whose parent is launchd (Electron, IDEs, …) do not trigger the
+ * second-hop rule. On macOS, every app launched from Finder or the Dock has
+ * launchd (PID 1) as its direct parent, so depth alone would misclassify the
+ * app's own spawned gateway as service-managed.
+ *
+ * If `getCommand` is omitted the second-hop check is skipped (only the direct
+ * parent is examined), preserving backward compatibility with callers that do
+ * not supply a command reader.
  */
-async function isServiceManaged(pid, getPpid) {
+async function isServiceManaged(pid, getPpid, getCommand) {
   if (!getPpid) return false; // caller opted out of the probe (e.g. Windows)
   try {
     const ppid = parseInt(String(await getPpid(pid)).trim(), 10);
-    if (!Number.isInteger(ppid)) return true;
-    return ppid === INIT_PPID;
+    if (!Number.isInteger(ppid)) return true; // fail closed
+    if (ppid === INIT_PPID) return true; // direct service child
+
+    // Second-hop check: the intermediate process (launcher / shim) must itself
+    // be a Kiro Crew gateway command AND be a direct child of the service manager.
+    if (getCommand) {
+      let shimPpid;
+      try {
+        shimPpid = parseInt(String(await getPpid(ppid)).trim(), 10);
+      } catch {
+        shimPpid = NaN;
+      }
+      if (shimPpid === INIT_PPID) {
+        const shimCmd = await getCommand(ppid).catch(() => "");
+        if (isKirocrewGatewayCommand(shimCmd)) return true;
+      }
+    }
   } catch {
-    return true;
+    return true; // fail closed
   }
+  return false;
 }
 
 module.exports = {

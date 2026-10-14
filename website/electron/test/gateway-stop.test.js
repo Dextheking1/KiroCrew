@@ -10,6 +10,7 @@ const {
   stopGatewayGracefully,
   forceStopPort,
   classifyPortOwner,
+  isServiceManaged,
   isKirocrewCommand,
 } = require("../gateway-stop");
 const { listenerSecretPath } = require("../local-token");
@@ -758,6 +759,61 @@ test("classifyPortOwner: without a ppid probe the old classification stands", as
     getCommand: async () => "python -m kiro_crew gateway --port 5476",
   });
   assert.strictEqual(owner, "kirocrew");
+});
+
+test("classifyPortOwner: a gateway launched via a Kiro Crew gateway shim is 'service'", async () => {
+  // Regression: a launcher shim (direct child of the OS service manager) forks
+  // the real gateway. The single-hop check misses this; the shim-identity check
+  // (shim PPID=1 AND shim command passes isKirocrewGatewayCommand) must catch it.
+  // Real-world example: `bin/kirocrew gateway --no-open` written into a launchd
+  // plist by `kirocrew service install`.
+  const ppids = { 4242: "1087", 1087: "1" };
+  const cmds = {
+    4242: "python -m kiro_crew gateway --no-open",   // the real gateway
+    1087: "/app/backend-dist/kirocrew-backend/bin/kirocrew gateway --no-open",  // the shim
+  };
+  const owner = await classifyPortOwner(5476, {
+    getListenPids: async () => [4242],
+    getCommand: async (pid) => cmds[pid] ?? "",
+    getPpid: async (pid) => ppids[pid] ?? "99",
+  });
+  assert.strictEqual(owner, "service");
+});
+
+test("classifyPortOwner: a gateway whose parent is a non-KiroCrew process stays 'kirocrew'", async () => {
+  // On macOS every app launched from Finder/Dock has launchd (PID 1) as its
+  // direct parent. The Electron app's own spawned gateway must NOT be treated
+  // as service-managed: Electron is the parent, Electron does not pass
+  // isKirocrewGatewayCommand, so the gateway is 'kirocrew' — evictable.
+  const ppids = { 4242: "500", 500: "1" };
+  const cmds = {
+    4242: "python -m kiro_crew gateway --no-open",
+    500: "/Applications/KiroCrew.app/Contents/MacOS/KiroCrew",  // Electron, not a gateway shim
+  };
+  const owner = await classifyPortOwner(5476, {
+    getListenPids: async () => [4242],
+    getCommand: async (pid) => cmds[pid] ?? "",
+    getPpid: async (pid) => ppids[pid] ?? "99",
+  });
+  assert.strictEqual(owner, "kirocrew");
+});
+
+test("isServiceManaged: second-hop shim ppid unreadable does not block eviction", async () => {
+  // The first hop returns a valid ppid (the shim); the second hop (the shim's
+  // own ppid) throws. We cannot confirm the shim is a direct child of init, so
+  // we do not block eviction — this keeps the pre-fix behaviour (the gateway
+  // was already classified as 'kirocrew' before this change).
+  let calls = 0;
+  const shimCmd = "/app/backend-dist/kirocrew-backend/bin/kirocrew gateway --no-open";
+  const result = await isServiceManaged(4242,
+    async () => {
+      calls += 1;
+      if (calls === 1) return "1087";
+      throw new Error("ps denied");
+    },
+    async () => shimCmd,
+  );
+  assert.strictEqual(result, false, "unconfirmed shim does not block eviction");
 });
 
 test("forceStopPort: never SIGKILLs a service-managed gateway", async () => {
