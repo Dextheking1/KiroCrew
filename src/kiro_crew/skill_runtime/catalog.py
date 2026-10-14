@@ -932,7 +932,81 @@ def _scoped_entries(
                     f"mapped/{digest}/{path.parent.name}", path, None, admitted_root
                 )
             )
+    selected.extend(_shadowed_copies(loader, entries, selected, globs, real_roots))
     return selected
+
+
+def _shadowed_copies(
+    loader: SkillsLoader,
+    entries: list[_ScopedSkillEntry],
+    selected: list[_ScopedSkillEntry],
+    globs: list[str],
+    real_roots: list[str],
+) -> list[_ScopedSkillEntry]:
+    """The copies a mapping names that the catalog dropped for a same-named one.
+
+    The catalog keeps one row per name, from the first loader root that holds
+    it, so a mapping is otherwise checked against that copy only. A mapping
+    naming a later root's copy (a package manager's tree ahead of
+    ``~/.kiro/skills``) would then hide the skill. The mapping decides: when
+    the first copy is out of scope, the first later copy the globs match is
+    served instead, admitted the way an external mapping is. A name the agent already has keeps its copy, and
+    a name the catalog filtered out (a disabled app) stays out. The project root
+    is not a loader root, so its consent is untouched.
+    """
+    from kiro_crew import skills as sk  # circular import: the facade imports this module
+
+    taken = {entry.key for entry in selected}
+    names = [entry for entry in entries if entry.project_root is None and entry.key not in taken]
+    roots = [Path(root) for root in (loader._dir, *loader._extra_paths)]
+    # Only roots a glob can reach: its literal prefix lies inside the root, or
+    # the root inside it. Saves a stat per name for every other root.
+    prefixes = []
+    for glob in globs:
+        prefix = Path(glob)
+        while any(char in str(prefix) for char in _GLOB_CHARS):
+            prefix = prefix.parent
+        prefixes.append(os.path.abspath(prefix))
+    reachable = [
+        root
+        for root in roots
+        if any(
+            sk._within_any(prefix, (os.path.abspath(root),))
+            or sk._within_any(os.path.abspath(root), (prefix,))
+            for prefix in prefixes
+        )
+    ]
+    if not names or not reachable:
+        return []
+    disabled_apps = loader._get_disabled_app_names()
+    admitted_roots = (*real_roots, *sk._trusted_skill_roots())
+    out: list[_ScopedSkillEntry] = []
+    for entry in names:
+        winner = os.path.normcase(os.path.abspath(entry.path))
+        for root in reachable:
+            candidate = root / entry.key / sk._SKILL_FILE
+            identity = os.path.normcase(os.path.abspath(candidate))
+            # Plain fnmatch first: it is free, and a miss needs no stat.
+            if identity == winner or not any(fnmatch.fnmatch(str(candidate), g) for g in globs):
+                continue
+            if not candidate.is_file() or sk.validate_file_path(str(candidate)) is None:
+                continue
+            if disabled_apps and loader._owning_app(entry.key, candidate) in disabled_apps:
+                continue
+            target = os.path.realpath(candidate)
+            admitted_root = next(
+                (root for root in admitted_roots if sk._within_any(target, (root,))), None
+            )
+            if admitted_root is None:
+                continue
+            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+            out.append(
+                sk._ScopedSkillEntry(
+                    f"mapped/{digest}/{candidate.parent.name}", candidate, None, admitted_root
+                )
+            )
+            break
+    return out
 
 
 def _iter_uncached(

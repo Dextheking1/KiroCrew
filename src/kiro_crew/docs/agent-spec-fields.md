@@ -520,6 +520,13 @@ prompt — and only with no project supplied does it fall back to three levels a
 the spec file (`<project>/.kiro/agents/foo.json` → `<project>`).
 `agent_skill_globs` is what the rest of the product asks.
 
+A glob is matched against every copy of a skill name. The catalog keeps one row
+per name, from the first skill root holding it, so when two roots hold the same
+name (a package manager's tree and `~/.kiro/skills`), a mapping naming the later
+root's copy still gets that copy (`_shadowed_copies` in
+`src/kiro_crew/skill_runtime/catalog.py`). When the mapping covers the first copy,
+that copy is the one served.
+
 When a builtin skill moves (`_RELOCATED_SKILLS` in `skills.py`), its old
 `SKILL.md` is set aside, so a mapping of the old path would load nothing.
 `agent.migrate_relocated_skill_uris` runs on every agent-config rebuild and
