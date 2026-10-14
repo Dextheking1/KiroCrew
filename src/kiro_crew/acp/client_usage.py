@@ -222,6 +222,12 @@ def _claude_compaction_event(self: AcpClient, chunk: str) -> AcpEvent | None:
         return None
     logger.info("Compaction status (claude): %s", status_type)
     self._claude_compaction_pending = status_type == "started"
+    if status_type == "started":
+        # An automatic claude compaction sends no terminal, and only a turn
+        # that ends naturally settles it as completed. Forget the pictures
+        # now, so one that is then cut off or never settled costs one more
+        # copy of a picture, never a lost one.
+        self._forget_sent_images()
     if status_type == "completed":
         self._compaction_failed_at = None
         self.last_prompt_stats.reset_after_compaction()
