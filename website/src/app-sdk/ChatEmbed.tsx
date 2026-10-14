@@ -22,12 +22,14 @@
  */
 import { useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { ArrowUp, Loader2, Paperclip } from 'lucide-react'
+import { Loader2, Paperclip } from 'lucide-react'
 import ChatMessageList, { type VirtualTranscriptHandle } from './ChatMessageList'
 import ErrorNotice from '../components/ErrorNotice'
 import { FilePreviewStrip } from '../components/chat-input/FilePreviewStrip'
 import { buildOutgoingTurn } from '../chat-core/composer/outgoingTurn'
 import { useEmbedAttachments } from './useEmbedAttachments'
+import { Composer } from '../chat-core/composer/Composer'
+import { ComposerEditor, ComposerSend } from '../chat-core/composer/atoms'
 import { JumpToBottomButton } from './ChatScrollChrome'
 import FollowUpBar from '../components/FollowUpBar'
 import ChatFooter from '../pages/chat/ChatFooter'
@@ -740,6 +742,7 @@ function ChatEmbed({
         </div>
       )}
 
+      <Composer slotKey={slotKey} value={draft} onChange={setDraft} capabilities={{ voice: false }}>
       <div
         className={`flex items-end gap-2 px-3 py-2 shrink-0 ${frameless ? '' : `${attachments.notice || attachments.files.length ? '' : 'border-t'} border-border bg-bg-accent`}`}
       >
@@ -773,14 +776,12 @@ function ChatEmbed({
             </button>
           </>
         )}
-        <textarea
+        <ComposerEditor
           ref={textareaRef}
           rows={1}
           {...composition}
           aria-label={i18nT('appSdk.chatEmbed.chat_message')}
           className="flex-1 min-w-0 min-h-[38px] resize-none overflow-y-auto px-3 py-2 mc-message-font-text bg-bg-elevated border border-border rounded-md text-text outline-hidden focus-visible:border-accent transition-colors"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
           onKeyDown={e => submitOnEnter(e, () => send())}
           onPaste={attachments.onPaste}
           onDragOver={attachments.onDragOver}
@@ -788,16 +789,18 @@ function ChatEmbed({
           placeholder={running ? i18nT('appSdk.chatEmbed.agent_is_working') : (placeholder || i18nT('appSdk.chatEmbed.message'))}
           disabled={sendMutation.isPending}
         />
-        <button
-          className="p-2 rounded-md bg-accent text-accent-fg disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-80 transition-opacity"
-          onClick={() => send()}
-          disabled={sendMutation.isPending || attachments.uploading || (!draft.trim() && !attachments.files.length)}
-          title={i18nT('appSdk.chatEmbed.send')}
-          aria-label={i18nT('appSdk.chatEmbed.send_message')}
-        >
-          {sendMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
-        </button>
+        <ComposerSend
+          className="p-2 min-h-0 rounded-md disabled:opacity-40"
+          onSend={() => send()}
+          running={running}
+          pending={sendMutation.isPending}
+          hasAttachments={attachments.files.length > 0}
+          uploadPending={attachments.uploading}
+          sendLabel={i18nT('appSdk.chatEmbed.send_message')}
+          sendTitle={i18nT('appSdk.chatEmbed.send')}
+        />
       </div>
+      </Composer>
     </div>
   )
 }

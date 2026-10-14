@@ -114,7 +114,8 @@ import { ChatEmbed } from '@kirocrew/app-sdk'
 The composer accepts multiple lines. `Enter` sends the draft, `Shift+Enter`
 inserts a line break, and an Enter used to commit an input method editor (IME)
 candidate does not send. The box grows with the draft up to 240 pixels, then
-keeps its height and scrolls vertically.
+keeps its height and scrolls vertically. The embed's composer has no voice input:
+dictation reads its settings outside the app's granted API paths.
 
 A host that boxes the embed at a fixed height passes `composerMaxHeight` (in
 pixels) to lower that cap, so a long draft cannot take most of the box from the
@@ -127,7 +128,9 @@ moves. Omitted, the 240-pixel default applies.
 </div>
 ```
 
-A message sent while the session is busy waits in the session's queue. The embed
+A message sent while the session is busy waits in the session's queue. While a
+turn runs, typing a message turns the Send button into a **Queue** button, so
+the button says the message will wait for the current work to finish. The embed
 shows each waiting message as a card above the composer, the same card the
 dashboard's chat shows, and the card leaves when the message is delivered. This
 covers sends from the embed itself and from any other surface (another tab, a
