@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         Optional,
         Path,
         PurePosixPath,
+        RUST_STUB_BIN_NAME,
         _agents_slice_cgroup_dir,
         logger,
         math,
@@ -124,7 +125,9 @@ def _proc_subtree_sample(pid: Optional[int], *, pss: bool = False) -> platform_c
     it belongs on an executor thread, never on the event loop (see
     ``_reaper_loop`` -> ``_sample_live_costs``).
     """
-    return platform_compat.proc_subtree_sample(pid, counts=True, needles=(STUB_MODULE,), pss=pss)
+    return platform_compat.proc_subtree_sample(
+        pid, counts=True, needles=(STUB_MODULE, RUST_STUB_BIN_NAME), pss=pss
+    )
 
 
 def _subtree_cpu_jiffies(pid: int, *, pids: Optional[list[int]] = None) -> int:

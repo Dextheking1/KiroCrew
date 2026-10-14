@@ -58,6 +58,7 @@ from kiro_crew.mcp_gateway.rewriter_launch import (
 )
 from kiro_crew.mcp_gateway.rewriter_overlay import env_sidecar_dir_for_stubs, env_sidecar_name
 from kiro_crew.mcp_gateway.secret_uri import routed_for_secret_reference, secret_reference_keys
+from kiro_crew.mcp_gateway.stub_impl import install_context_b64, rust_stub_binary
 from kiro_crew.mcp_provenance import WITHHELD_KEY, is_withheld_mute
 from kiro_crew.mcp_utils import mcp_server_alias
 
@@ -310,12 +311,21 @@ def _build_stub_entry(
     # library. The rewrite fingerprint's ``python_isolation_flags`` records the
     # same option prefix, so an overlay written without it is regenerated on
     # upgrade instead of served from cache.
-    stub_argv = platform_compat.isolated_python_argv(
-        "-P",
-        "-m",
-        _STUB_MODULE,
-        f"{STUB_FLAGS_FLAG}={encode_target_args(stub_args)}",
-    )
+    rust_stub = rust_stub_binary()
+    if rust_stub is not None:
+        # EXPERIMENTAL opt-in (``stub_impl``): the Rust port takes the same
+        # envelope plus the install facts a Python stub reads off its own
+        # interpreter. Only this branch adds the flag, because the Python
+        # stub's argparse would refuse it.
+        stub_args.extend(["--install-context-b64", install_context_b64()])
+        stub_argv = [rust_stub, f"{STUB_FLAGS_FLAG}={encode_target_args(stub_args)}"]
+    else:
+        stub_argv = platform_compat.isolated_python_argv(
+            "-P",
+            "-m",
+            _STUB_MODULE,
+            f"{STUB_FLAGS_FLAG}={encode_target_args(stub_args)}",
+        )
     wrapped.update(
         {
             _WRAPPER_MARKER: True,

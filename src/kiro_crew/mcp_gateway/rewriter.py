@@ -67,6 +67,7 @@ from kiro_crew.mcp_gateway.rewriter_overlay import (
     env_sidecar_dir_for_stubs,
 )
 from kiro_crew.mcp_gateway.rewriter_spec import _injectable_settings_servers, _rewrite_single_spec
+from kiro_crew.mcp_gateway.stub_impl import rust_stub_binary
 from kiro_crew.user_json import loads_user_json
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,9 @@ def _rewrite_inputs_fingerprint(
         # ``package`` catches the version bump, this catches a same-version
         # relocation (a reinstall to another prefix, a payload moved) as well.
         "managed_control_plane": _managed_control_plane_signature(stub_set),
+        # Which stub implementation the overlays launch
+        # (``stub_impl``): flipping it must regenerate them.
+        "stub_impl": rust_stub_binary() or "python",
         "sources": sources,
         "settings": _stat_sig(settings_path),
     }
