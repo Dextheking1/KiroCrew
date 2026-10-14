@@ -31,6 +31,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from kiro_crew.acp.client import AcpClient
+from kiro_crew.testing.wait import await_until
 
 
 def _client_with_real_reader(tmp_path):
@@ -88,7 +89,7 @@ async def test_turn_releases_on_normal_completion(tmp_path):
 
     await drive(1)
     # If L1 held the lock past turn 1, this second turn would hang; bound it.
-    await asyncio.wait_for(drive(2), timeout=5.0)
+    await await_until(asyncio.ensure_future(drive(2)), what="the second turn finishing")
 
 
 @pytest.mark.asyncio
@@ -129,4 +130,4 @@ async def test_aclosing_releases_lock_deterministically(tmp_path):
         async for _a, _m in client._prompt_loop(req_id, timeout=0.3):
             pass
 
-    await asyncio.wait_for(drive(2), timeout=5.0)
+    await await_until(asyncio.ensure_future(drive(2)), what="the subsequent turn finishing")

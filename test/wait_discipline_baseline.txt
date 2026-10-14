@@ -42,8 +42,6 @@
  4 test_acp_set_mode_projection_race.py
  8 test_acp_spawn_offload.py
  4 test_acp_stale_recovery.py
- 2 test_acp_turn_lock.py
- 1 test_acp_turn_state_parity.py
  1 test_acp_watchdog_working_bound.py
  7 test_active_turn_session_key.py
  5 test_adaptive_startup_memory.py
