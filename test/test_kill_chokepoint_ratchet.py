@@ -120,6 +120,27 @@ def _parse(path: Path) -> ast.Module | None:
         return None
 
 
+#: Guest-script kill sites: stdlib-only files run inside a REMOTE session workspace,
+#: never in the gateway, so the gate cannot be consulted there; each pinned call kills
+#: only a process group the script itself started. Pinned by module, function and
+#: primitive with an exact count; the two guest tests below keep the pin honest.
+GUEST_KILL_SITES: dict[tuple[str, str, str], int] = {
+    ("remote_session/workspace_tools.py", "_kill_group", _KILL + "pg"): 1,
+}
+GUEST_SCRIPTS = frozenset(module for module, _, _ in GUEST_KILL_SITES)
+
+
+def _pinned_lines(path: Path, tree: ast.AST) -> set[tuple[int, str]]:
+    """The primitive calls in *tree* that :data:`GUEST_KILL_SITES` pins."""
+    module = path.relative_to(SRC).as_posix()
+    pinned: set[tuple[int, str]] = set()
+    for (site_module, function, primitive), _count in GUEST_KILL_SITES.items():
+        target = _function_named(tree, function) if site_module == module else None
+        if target is not None:
+            pinned |= {c for c in _primitive_calls(target) if c[1] == primitive}
+    return pinned
+
+
 def _bypass_sites() -> dict[str, list[tuple[int, str]]]:
     sites: dict[str, list[tuple[int, str]]] = {}
     for path in sorted(SRC.rglob("*.py")):
@@ -128,7 +149,8 @@ def _bypass_sites() -> dict[str, list[tuple[int, str]]]:
         tree = _parse(path)
         if tree is None:
             continue
-        found = _primitive_calls(tree)
+        pinned = _pinned_lines(path, tree)
+        found = [call for call in _primitive_calls(tree) if call not in pinned]
         if found:
             sites[str(path.relative_to(SRC))] = found
     return sites
@@ -170,6 +192,41 @@ def test_bypass_baseline_is_not_stale() -> None:
         f"the real count is {total} but BYPASS_BASELINE says {BYPASS_BASELINE}. "
         f"Lower the baseline to {total} in this change -- that is the ratchet clicking."
     )
+
+
+@pytest.mark.parametrize(("module", "function", "primitive"), sorted(GUEST_KILL_SITES))
+def test_guest_kill_sites_are_exactly_the_pinned_ones(
+    module: str, function: str, primitive: str
+) -> None:
+    """A pinned guest site holds exactly its pinned number of calls, no more."""
+    tree = _parse(SRC / module)
+    assert tree is not None, f"{module} must exist and parse"
+    target = _function_named(tree, function)
+    assert target is not None, f"{module} must define {function}"
+    calls = [c for c in _primitive_calls(target) if c[1] == primitive]
+    assert len(calls) == GUEST_KILL_SITES[(module, function, primitive)], (
+        f"{module}::{function} makes {len(calls)} {primitive} call(s); the pin allows "
+        f"{GUEST_KILL_SITES[(module, function, primitive)]}"
+    )
+
+
+@pytest.mark.parametrize("module", sorted(GUEST_SCRIPTS))
+def test_guest_scripts_never_import_the_gateway(module: str) -> None:
+    """An exempt guest script must really be one: present and gateway-free.
+
+    A module that imports ``kiro_crew`` runs inside the gateway, so a kill there
+    could reach a session runtime and has to be counted like any other.
+    """
+    tree = _parse(SRC / module)
+    assert tree is not None, f"{module} must exist and parse"
+    imported = [
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    ] + [node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+    gateway = [name for name in imported if name.split(".")[0] == "kiro_crew"]
+    assert not gateway, f"{module} imports {gateway}, so it is not a guest script"
 
 
 def test_the_needles_match_a_known_call_site() -> None:

@@ -67,6 +67,7 @@ from kiro_crew.platform.tool_paths import (  # noqa: F401 - re-export
     target_paths,
 )
 from kiro_crew.sel import sel
+from kiro_crew.session_environment import WORKSPACE_SERVER_NAME
 
 # isort: split
 from kiro_crew import _facade_mirror
@@ -113,6 +114,17 @@ BUILTIN_TOOL_SCOPES: Dict[str, Tuple[str, ...]] = {
     "web_fetch": ("network.egress",),
     "web_search": ("network.egress",),
 }
+
+WORKSPACE_TOOL_KINDS: Dict[str, str] = {
+    "read_file": "read",
+    "list_directory": "read",
+    "glob": "read",
+    "grep": "read",
+    "write_file": "edit",
+    "edit_file": "edit",
+    "run_command": "execute",
+}
+
 
 #: Builtin -> the ``capabilities.*`` gate that also governs it. A capability is
 #: not a ``tools`` rule, so the name check below cannot see it: a policy that
@@ -268,6 +280,10 @@ def may_skip_gate(ref: str, ceiling: Optional[GovernanceCeiling]) -> bool:
     # Network-only builtins (web_fetch/web_search) carry no such floor, and
     # read-only file tools still auto-approve via hooks AFTER the floor runs — so
     # this only closes the bypass, it does not add prompts.
+    # Workspace tools are replacements for floor-gated builtins, including
+    # whole-server and wildcard grants that would bypass those same checks.
+    if ref.split("/", 1)[0] == f"@{WORKSPACE_SERVER_NAME}":
+        return False
     if not ref.startswith("@") and _FLOOR_GATE_SCOPES.intersection(
         BUILTIN_TOOL_SCOPES.get(ref, ())
     ):
