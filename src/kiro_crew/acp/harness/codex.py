@@ -346,7 +346,10 @@ class CodexHarness(MembershipHarness):
         # override that disables every configured MCP server.  Stored in
         # self._bg_codex_config and consumed by apply_spawn_env after the full env
         # (including agent.env) is assembled, so it can check whether CODEX_CONFIG
-        # is already set by the operator.
+        #
+        # Known residual: names are read once from CODEX_HOME/config.toml at
+        # spawn.  Project-level .codex/config.toml overrides are not covered;
+        # servers they add would still start a fleet per background session.
         self._bg_codex_config = ""
         if is_background:
             _codex_home = Path(ctx.environ.get(_CODEX_HOME_ENV) or str(ctx.home / ".codex"))
