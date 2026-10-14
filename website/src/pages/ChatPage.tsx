@@ -1,5 +1,6 @@
 import { Fragment, Suspense, lazy, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import { OverlayPortal } from '../components/overlayRoot'
 import { useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -6715,7 +6716,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
               </Composer>
             </div>
             {/* Agent dropdown portal — triggered from input bar */}
-            {agentDropdown && agentBtnRect && createPortal(
+            {agentDropdown && agentBtnRect && <OverlayPortal>{
               // The keydown handler routes arrow/Enter navigation to the inner
               // role="listbox"; the dialog is a focus container (tabIndex={-1}),
               // not an interactive widget itself, so this delegation is intentional.
@@ -6734,11 +6735,10 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                 {/* The default for new sessions is a template; a crewmate's chat offers no such write. */}
                 {!embedded && !isCrewmateChat(currentSlot?.agent_kind, activeAgentName, installedAgents) && <DefaultAgentRow agentName={activeAgentName} isDefault={activeAgentName === defaultAgent} onSetDefault={() => toggleDefaultAgent(activeAgentName, defaultWriteKind(currentSlot?.agent_kind))} />}
                 {!embedded && <ManageAgentsFooter error={defaultAgentFailed} onManage={() => { setAgentDropdown(false); navigate('/capabilities?tab=crews') }} />}
-              </div>,
-              document.body
-            )}
+              </div>
+            }</OverlayPortal>}
             {/* Model dropdown portal — triggered from input bar */}
-            {modelDropdown && modelBtnRect && createPortal(
+            {modelDropdown && modelBtnRect && <OverlayPortal>
               <ModelEffortDropdown
                 anchorRect={modelBtnRect}
                 dropdownRef={modelDropdownRef}
@@ -6783,9 +6783,8 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
                     model: _modelPinActive === 'auto' ? '' : _modelPinActive,
                   })
                 }}
-              />,
-              document.body
-            )}
+              />
+            </OverlayPortal>}
             {/* Project picker — triggered from input bar */}
             <ProjectPicker
               open={projectPickerOpen}

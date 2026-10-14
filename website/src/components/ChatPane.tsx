@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, type ComponentType } from 'react'
-import { createPortal } from 'react-dom'
+import { OverlayPortal } from './overlayRoot'
 import { useNavigate } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { SplitGlyph } from './SplitGlyph'
@@ -1757,7 +1757,7 @@ export default function ChatPane({
         /* Focus capture keeps the grid's focused-pane state true under
            KEYBOARD navigation: tabbing into a pane (or into its portaled
            pickers, whose React events propagate through this component tree
-           even though their DOM lives under document.body) claims grid focus
+           even though their DOM lives in the body-level overlay root) claims grid focus
            exactly like a click. Without it only mousedown moved the marker,
            and a keyboard user could type into one pane while another stayed
            marked focused. */
@@ -1766,7 +1766,7 @@ export default function ChatPane({
            the composer inside the pane that owns `document.activeElement` via
            this attribute, and falls back to the value "focused" — the grid's
            focused pane — when the active element has no pane ancestor (the
-           pane's pickers portal to document.body). A data hook, not a class
+           pane's pickers portal to the body-level overlay root). A data hook, not a class
            name: classes here are styling and can churn without anyone
            auditing focus behaviour. */
         data-chat-pane={focused ? 'focused' : ''}
@@ -2414,7 +2414,7 @@ export default function ChatPane({
         </div>
 
         {/* Agent picker portal — anchored to the input-bar agent button. */}
-        {agentDD.open && agentBtnRect && createPortal(
+        {agentDD.open && agentBtnRect && <OverlayPortal>{
           /* The labeled dialog owns roving-focus key handling for its descendants. */
           // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
           <div
@@ -2447,12 +2447,11 @@ export default function ChatPane({
             {/* The default for new sessions is a template; a crewmate's chat offers no such write. */}
             {!isCrewmateChat(paneSlot?.agent_kind, paneAgentName, installedAgents) && <DefaultAgentRow agentName={paneAgentName} isDefault={paneAgentName === defaultAgent} onSetDefault={() => toggleDefaultAgent(paneAgentName, defaultWriteKind(paneSlot?.agent_kind))} />}
             <ManageAgentsFooter error={defaultAgentFailed} onManage={() => { agentDD.setOpen(false); navigate('/capabilities?tab=crews') }} />
-          </div>,
-          document.body,
-        )}
+          </div>
+        }</OverlayPortal>}
 
         {/* Model picker portal — anchored to the input-bar model button. */}
-        {modelDD.open && modelBtnRect && createPortal(
+        {modelDD.open && modelBtnRect && <OverlayPortal>{
           /* The labeled dialog owns roving-focus key handling for its descendants. */
           // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
           <div
@@ -2530,9 +2529,8 @@ export default function ChatPane({
               </div>
             )}
            </div>
-          </div>,
-          document.body,
-        )}
+          </div>
+        }</OverlayPortal>}
 
       </div>
     </SlotProvider>

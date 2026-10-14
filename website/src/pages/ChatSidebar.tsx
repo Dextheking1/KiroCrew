@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, memo, useMemo, useCallback, useId, Fragment } from 'react'
 import { createPortal } from 'react-dom'
+import { OverlayPortal } from '../components/overlayRoot'
 import { LayoutGroup, AnimatePresence, motion } from 'framer-motion'
 import { Plus, X, Monitor, ArrowUpDown, Eye, EyeOff, VenetianMask, FolderPlus, FolderX, CornerUpRight, MessageSquare, MessageSquarePlus, Folder, ChevronRight, ChevronDown, Clock, Pencil, BrushCleaning, Link2, MoreVertical, Tag as TagIcon, Columns3, GripVertical, Check, List, ListTree, Loader2, Settings, RotateCcw, Cpu, Users, Server, Pause, Play } from 'lucide-react'
 import { FolderBody } from '../components/FolderBody'
@@ -2538,7 +2539,7 @@ function ChatSidebar({
       : <SessionDragGhost slot={localSlots.find(x => x.key === activeDrag.id)} fallbackLabel={activeDrag.id} />
     : null
   /**
-   * The drag preview is PORTALED to `document.body`.
+   * The drag preview is PORTALED to the body-level overlay root.
    *
    * dnd-kit positions the overlay `fixed`, which normally escapes ancestor
    * overflow — but the sidebar rides inside OverlayDrawer's morph `clip-path`,
@@ -2548,10 +2549,9 @@ function ChatSidebar({
    * one gesture that aims there. Portaling keeps it visible until release; it
    * stays inside the DndContext because React portals preserve context.
    */
-  const dragOverlay = createPortal(
-    <DragOverlay dropAnimation={null} modifiers={activeDrag?.type === 'session' ? SESSION_DRAG_GHOST_MODIFIERS : undefined}>{dragGhost}</DragOverlay>,
-    document.body,
-  )
+  const dragOverlay = <OverlayPortal>
+    <DragOverlay dropAnimation={null} modifiers={activeDrag?.type === 'session' ? SESSION_DRAG_GHOST_MODIFIERS : undefined}>{dragGhost}</DragOverlay>
+  </OverlayPortal>
 
   // Narrow-sidebar header responsiveness: below ~256px the full "New chat"
   // label no longer fits next to the label + kebab, so collapse the create
@@ -2680,7 +2680,7 @@ function ChatSidebar({
           {/* Split create-button: main segment = one-click New chat; caret
            *  opens a menu grouping New folder + New chat in folder (flat
            *  folder flyout). Replaces the old standalone New-folder + New-chat
-           *  header buttons. Menu is portaled to <body> so the right-side
+           *  header buttons. Menu is portaled to the body-level overlay root so the right-side
            *  folder flyout escapes the sidebar's overflow clip. */}
           <div className="relative flex items-center rounded-md bg-accent text-accent-fg overflow-hidden [@media(pointer:coarse)]:overflow-visible shrink-0" data-create-menu>
             <button
@@ -4724,10 +4724,10 @@ function ChatSidebar({
                       </span>
                     )}
                   </div>
-                  {/* Column filter popover — portaled to <body> so the column's
+                  {/* Column filter popover — portaled to the body-level overlay root so the column's
                       overflow-hidden ancestor cannot clip it; viewport-anchored
                       to the edit button via popoverPos. */}
-                  {columnEditId === col.id && popoverPos && createPortal(
+                  {columnEditId === col.id && popoverPos && <OverlayPortal>{
                     /* Non-modal disclosure: role=dialog + a Tab-trap contains keyboard
                        focus, but we deliberately omit aria-modal — the popover has no
                        backdrop and is outside-click-dismissible, so claiming the rest of
@@ -4796,9 +4796,8 @@ function ChatSidebar({
                       <div className="mt-2 flex justify-end">
                         <button className="text-[11px] text-muted hover:text-text bg-transparent border-none cursor-pointer" onClick={() => { updateColumnMutation.mutate({ id: col.id, body: { tag_ids: [] } }) }}>{i18nT('pages.chatSidebar.clear_filter')}</button>
                       </div>
-                    </div>,
-                    document.body
-                  )}
+                    </div>
+                  }</OverlayPortal>}
                   <SessionRowWindowScroller className="flex-1 overflow-y-auto scrollbar-none p-1.5 flex flex-col" style={{ scrollbarWidth: 'none' }}>
                     {/* No onDrop here: folder assignment only changes via folder-header drop
                         (into a folder) and the unfile strip below this scroller (out of one).
@@ -4859,18 +4858,17 @@ function ChatSidebar({
                              *  same visual as the list-view overlay. DragOverlay renders
                              *  null unless THIS column's DndContext has an active drag,
                              *  so per-column overlays never stack. Portaled to
-                             *  document.body: the sidebar rides inside OverlayDrawer's
+                             *  the body-level overlay root: the sidebar rides inside OverlayDrawer's
                              *  morph clip-path, and a clip-path clips fixed-position
                              *  descendants too, so an in-place overlay is erased the
                              *  moment the ghost strays past the drawer edge. React
                              *  portals preserve context, so the overlay still reads
                              *  THIS column's active drag. */}
-                            {createPortal(
+                            <OverlayPortal>
                               <DragOverlay dropAnimation={null}>
                                 {activeDrag?.type === 'folder' ? <FolderDragGhost folder={folders.find(x => x.id === activeDrag.id)} /> : null}
-                              </DragOverlay>,
-                              document.body,
-                            )}
+                              </DragOverlay>
+                            </OverlayPortal>
                           </DndContext>
                           )}
                           {ungrouped.map((s, i) => {

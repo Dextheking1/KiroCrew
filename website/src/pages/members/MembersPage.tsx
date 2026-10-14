@@ -131,6 +131,7 @@ import CrewGoalsPane, { useMemberGoals } from './CrewGoals'
 import { sendTurn } from '../../chat-core/transport/sendTurn'
 import CrewComposer from './CrewComposer'
 import { createPortal } from 'react-dom'
+import { OverlayPortal } from '../../components/overlayRoot'
 import { useCrewmateThreadsFlag } from '../../hooks/useCrewmateThreadsFlag'
 import CrewDashboardTab from './CrewDashboardTab'
 import { DASHBOARD_PREVIEW_PARAM, DASHBOARD_PREVIEW_VALUE, isDashboardPreview, withoutDashboardPreview } from './dashboardPreview'
@@ -413,7 +414,7 @@ const PANEL_OPEN_KEY = 'mc-members-panel-open'
  *  rounded `overflow-hidden` shell, its scrolling body and the width-revealing
  *  aside until it is already inside them, and the pill's face is painted under
  *  the thread and the closing card, both later siblings of the header (#18236).
- *  So the flight is its own copy, portaled to `document.body` above every
+ *  So the flight is its own copy, portaled to the body-level overlay root above every
  *  surface, while both real faces hold their place unpainted. `from` is the
  *  departing face measured before it went; `to` is read live each frame because
  *  the landing face moves while the card's column reveals or folds. */
@@ -469,7 +470,7 @@ function CrewFaceFlight({ flight, onDone }: { flight: FaceFlight; onDone: () => 
     })
     return () => ctrl.stop()
   }, [flight, onDone])
-  return createPortal(
+  return <OverlayPortal>
     <div
       ref={ref}
       className="fixed left-0 top-0 z-[60] pointer-events-none origin-top-left will-change-transform"
@@ -477,9 +478,8 @@ function CrewFaceFlight({ flight, onDone }: { flight: FaceFlight; onDone: () => 
       data-testid="crew-face-flight"
     >
       <CrewStateAvatar seed={flight.seed} avatar={flight.avatar} slotKey={flight.slotKey} running={flight.running} size={PROFILE_FACE_PX} working="full" />
-    </div>,
-    document.body,
-  )
+    </div>
+  </OverlayPortal>
 }
 
 /** The Assistant's docked panel choice, hidden until the user opens it. The

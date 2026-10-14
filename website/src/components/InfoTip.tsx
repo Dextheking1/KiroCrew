@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useId, type CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
+import { OverlayPortal, useLocalCrewHidden } from './overlayRoot'
 import { Info } from 'lucide-react'
 
 import { i18nT } from '../i18n/t'
@@ -117,8 +117,11 @@ export default function InfoTip({ text, placement = 'auto' }: {
   // into the bubble to copy text, which blurs the glyph), so the same
   // window capture listener covers it once the glyph is no longer focused,
   // claiming Escape before Radix's document capture listener can dismiss a dialog.
+  // Not while its Crew is hidden behind a remote one (components/overlayRoot): the
+  // Escape belongs to the Crew in front.
+  const crewHidden = useLocalCrewHidden()
   useEffect(() => {
-    if (!open) return
+    if (!open || crewHidden) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       // Claim the key before closing: an enclosing Modal's window Escape
@@ -131,7 +134,7 @@ export default function InfoTip({ text, placement = 'auto' }: {
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [open])
+  }, [open, crewHidden])
 
   // The pointer and focus dismissals are for a PINNED tip only: a pointer
   // down outside it, or focus moving outside it (Tab onward). A hover- or
@@ -278,7 +281,7 @@ export default function InfoTip({ text, placement = 'auto' }: {
       >
         <Info size={14} aria-hidden="true" />
       </button>
-      {open && createPortal(
+      {open && <OverlayPortal>{
         // Swallow clicks inside the bubble so they never reach the owning row
         // through React's portal ancestry (SettingsToggle). Selecting and
         // copying text must not close the tip, and the bubble asserts that
@@ -309,9 +312,8 @@ export default function InfoTip({ text, placement = 'auto' }: {
           style={{ ...pos(), backgroundColor: 'var(--card)', boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}
         >
           {text}
-        </div>,
-        document.body
-      )}
+        </div>
+      }</OverlayPortal>}
     </>
   )
 }
