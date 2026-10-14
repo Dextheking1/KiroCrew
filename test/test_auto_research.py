@@ -41,6 +41,7 @@ from kiro_crew.apps.builtins.auto_research.handlers import (
     write_guidance,
     write_status,
 )
+from kiro_crew.testing.wait import await_until
 
 
 @pytest.fixture(autouse=True)
@@ -2476,7 +2477,7 @@ class TestWatchdogStopTombstone:
         task.cancel()
         release_status_write.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=5)
+            await await_until(task, what="the cancelled settlement task")
 
         # A non-terminal campaign keeps its loop so restart can retry settling.
         assert svc.get_by_slot(f"research-{cid}") is loop
@@ -2530,7 +2531,7 @@ class TestWatchdogStopTombstone:
             release_status_write.set()
             with caplog.at_level(logging.ERROR, logger=h.__name__):
                 with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(task, timeout=5)
+                    await await_until(task, what="the cancelled settlement task")
 
             failure_records = [
                 r

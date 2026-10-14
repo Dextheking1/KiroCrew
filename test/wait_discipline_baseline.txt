@@ -68,7 +68,6 @@
  2 test_apps_worker_slots.py
  1 test_artifacts_refactor_store_contract.py
 12 test_auto_improvement_members.py
- 2 test_auto_research.py
  5 test_auto_research_campaign_contract.py
  3 test_auto_research_handlers_coverage.py
  1 test_auto_research_onloop_db.py
