@@ -88,7 +88,6 @@
  4 test_channel_boot_hot_reload.py
  3 test_channel_env_write_off_loop.py
  6 test_channel_prompt_busy.py
- 2 test_channel_subscribe_timeout.py
  5 test_chat_close_interrupts_turn.py
  3 test_chat_fork_member_memory.py
  3 test_chat_mode_security.py
