@@ -1898,6 +1898,9 @@ class _CronLoopHarness:
         monkeypatch.setattr(mcp_shared, "respond", self._record)
         resolved = policy or mcp_shared.ToolPolicy(frozenset(), "")
         monkeypatch.setattr(mcp_shared, "_resolve_tool_policy", lambda *a, **k: resolved)
+        # The handlers here are defined in this test file, which stands in for the
+        # cron server's own code; the policy applies to it as it does in production.
+        monkeypatch.setattr(mcp_shared, "serves_managed_tools", lambda _fn: True)
         monkeypatch.setattr(mcp_shared, "sel", lambda: MagicMock())
         self._thread = threading.Thread(
             target=mcp_shared.run_mcp_stdio_loop,

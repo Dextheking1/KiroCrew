@@ -1507,6 +1507,19 @@ The third layer is defense in depth for hosts that ignore `disabledTools`. When 
 policy cannot be read, what it does depends on WHY, because the reasons differ in
 kind and its two consumers carry different risk.
 
+It runs only in Kiro Crew's own servers. `mcp_shared.serves_managed_tools` checks
+where the loop's `tools/call` handler is defined: under the `kiro_crew` package (the
+control plane and the builtin apps) the policy applies; anywhere else -- a
+user-installed app that serves its own tools through `run_mcp_stdio_loop` -- the
+loop answers "nothing excluded" without a read. The policy names managed tools,
+so it has nothing to say about an app's own, and on the shared ACP runtime such a
+server is never handed a session token (identity rides only the
+control plane), so the read could only refuse every call. The app's tools stay gated
+by its spec's `tools` / `allowedTools` and kiro-cli's `disabledTools`. The check runs
+inside the server's own process and is not a boundary against the app; what it must
+not do is let a Kiro Crew server out, so a handler whose code location cannot be read
+keeps the policy.
+
 `tools/call` fails **closed** on the four reasons in `_UNRESOLVED_REFUSES_CALL`
 (`mcp_shared.py`): `policy_unreadable`, `identity_unattested`, `identity_unattestable`
 and `resolution_failed`. Each means "an operator exclusion may exist and this process

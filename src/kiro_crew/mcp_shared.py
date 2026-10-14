@@ -1472,6 +1472,45 @@ _UNRESOLVED_REFUSES_CALL = frozenset(
     {"policy_unreadable", "identity_unattested", "identity_unattestable", "resolution_failed"}
 )
 
+#: The directory this package's own code lives in. A tool handler whose code is
+#: under it belongs to a server Kiro Crew ships: its own control plane, and the
+#: builtin apps under ``apps/builtins``.
+_PACKAGE_DIR = os.path.dirname(os.path.realpath(__file__))
+
+
+def serves_managed_tools(call_tool_fn: Callable[..., Any]) -> bool:
+    """True when *call_tool_fn* is Kiro Crew's own code, so the tool policy applies.
+
+    ``managedToolPolicy`` names the tools of Kiro Crew's managed servers that a
+    session may not reach (``src/kiro_crew/docs/agent-spec-fields.md``). A user-installed app that serves its own tools through
+    :func:`run_mcp_stdio_loop` is not one of those servers, and on the shared ACP
+    runtime it is never handed a session token -- identity rides only the control
+    plane -- so reading the policy for it could only ever fail closed and refuse
+    every call it serves. Its tools are already gated where the session is: the
+    agent spec's ``tools`` / ``allowedTools`` and kiro-cli's ``disabledTools``.
+
+    The check runs inside the app's own process, so it is not a boundary an app
+    could be held to: an app that wanted to skip it could skip this loop. What it
+    must NOT do is let Kiro Crew's own servers out, so every answer it cannot
+    establish is True: a handler with no readable code location, or one outside
+    every known shape, keeps the policy.
+    """
+    target: Any = call_tool_fn
+    while isinstance(target, functools.partial):
+        target = target.func
+    target = getattr(target, "__func__", target)
+    code = getattr(target, "__code__", None)
+    if code is None:
+        code = getattr(getattr(type(target), "__call__", None), "__code__", None)
+    filename = getattr(code, "co_filename", "") if code is not None else ""
+    if not filename or filename.startswith("<"):
+        return True
+    try:
+        real = os.path.realpath(filename)
+        return os.path.commonpath([real, _PACKAGE_DIR]) == _PACKAGE_DIR
+    except (OSError, ValueError):
+        return True
+
 
 def respond(req_id: Any, result: Any, error: dict | None = None) -> None:
     """Write a validated JSON-RPC response to stdout."""
@@ -2230,6 +2269,8 @@ def _run_stdio_dispatch_loop(
                 error={"code": JSONRPC_INTERNAL_ERROR, "message": "Internal error"},
             )
 
+    _applies_tool_policy = serves_managed_tools(call_tool_fn)
+
     def _caller_tool_policy(caller: "CallerContext | None") -> ToolPolicy:
         """This request's exclusion set AND whether the policy was readable.
 
@@ -2240,7 +2281,13 @@ def _run_stdio_dispatch_loop(
         The caller block's token rides along explicitly. This runs on the read
         loop before the worker installs the caller ContextVar, so the resolver
         cannot find the token there; a pooled backend has it nowhere else.
+
+        A server that is not Kiro Crew's own (:func:`serves_managed_tools`) has
+        no managed tools for the policy to name, so it is answered "nothing
+        excluded" without a read.
         """
+        if not _applies_tool_policy:
+            return ToolPolicy(frozenset(), "")
         return _resolve_tool_policy(
             caller.session_key if caller else "",
             caller_token=caller.session_token if caller else "",
