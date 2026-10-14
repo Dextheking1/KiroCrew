@@ -9,14 +9,13 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from kiro_crew.dashboard.slot_queue_repository import RESTORED_QUEUE_KEY
-
 if TYPE_CHECKING:
     from kiro_crew.dashboard.chat_handlers import (
         _MANUAL_CONTINUE_MSG,
         _MANUAL_RESUME_MSG,
         _SESSION_START_REPEAT_REFUSAL_AT,
         _TURN_OPENING_INJECT_KINDS,
+        RESTORED_QUEUE_KEY,
         SESSION_START_FAILED_KIND,
         SYNTHETIC_RECOVERY_KIND,
         DashboardState,

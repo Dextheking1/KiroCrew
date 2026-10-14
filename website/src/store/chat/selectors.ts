@@ -205,7 +205,17 @@ export const selectContinuable = (state: RootState, slot?: string | null): boole
     // the interrupted turn below. selectTurnInterrupted reads the same
     // messages and ignores queued rows (they are in CONTINUE_SCAN_SKIP
     // for that scan), so the two functions stay in sync.
-    if (m.role === 'queued') { if (selectTurnInterrupted(state)) continue; return false }
+    if (m.role === 'queued') {
+      // Only a restored queue entry (loaded from disk, meta.restored===true) is
+      // safe to skip — the runner never auto-drains restored entries on boot, so
+      // Resume would not double-fire. A live entry (no restored flag, including a
+      // synthetic recovery entry inserted by the first Resume press) returns false
+      // here, matching the backend's case 1b refusal in continue_slot_turn.
+      // selectTurnInterrupted guards the non-interrupted case: a restored entry
+      // on a settled (user→assistant) slot must not expose Resume either.
+      if ((m.meta as { restored?: boolean } | undefined)?.restored && selectTurnInterrupted(state, key)) continue
+      return false
+    }
     if (CONTINUE_SCAN_SKIP.has(m.role)) continue
     if ((m.role === 'user' || m.role === 'assistant') && m.content) {
       // System notices (compaction, session reload) are assistant-role status

@@ -65,7 +65,7 @@ const scenes = [
     suffix: 'with-queue',
     slot: 'chat-resume-with-queue',
     queue: [
-      { id: 'q-1', content: 'Also add a test for the reload path', kind: '' },
+      { id: 'q-1', content: 'Also add a test for the reload path', meta: { restored: true } },
     ],
     interrupted: true,
     totalMessages: 2,
