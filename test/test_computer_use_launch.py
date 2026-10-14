@@ -1100,6 +1100,32 @@ class TestMacOSCatalogAndResolution:
         with pytest.raises(ComputerUseError, match="this user can write"):
             launch_macos.resolve_target("Paintbrush")
 
+    def test_an_admin_writable_root_parent_yields_the_honest_message(self, monkeypatch, tmp_path):
+        """When the bundle sits directly under an admin-writable root (e.g. /Applications),
+        the old "Move it under /Applications" advice is unsatisfiable — the bundle is already
+        there. The refusal must still happen, but the message must name the real reason
+        (admin users can write that folder) and omit the move hint.
+        """
+        from kiro_crew.computer_use import launch_macos
+
+        # Build a synthetic /Applications stand-in and register it as both a catalog root
+        # and an admin-writable root so the message branch is exercised on any platform.
+        root = tmp_path / "Applications"
+        root.mkdir()
+        self._bundle(root, "WeChat")
+        monkeypatch.setattr(launch_macos, "_APP_ROOTS", (str(root),))
+        monkeypatch.setattr(launch_macos, "_ADMIN_WRITABLE_ROOTS", frozenset({str(root)}))
+        # The parent-probe fires: the bundle is in the admin-writable root.
+        monkeypatch.setattr(launch_macos, "_writable_component", lambda _app: True)
+        with pytest.raises(ComputerUseError) as exc_info:
+            launch_macos.resolve_target("WeChat")
+        msg = str(exc_info.value)
+        # Still refused — the refusal is unchanged.
+        assert "WeChat" in msg
+        # Honest message: names the admin access, not the move hint.
+        assert "admin" in msg.lower()
+        assert "move" not in msg.lower()
+
     def test_the_write_probe_is_removed_and_reports_writable(self, tmp_path):
         # A leftover probe in a system directory would be litter with our name on it.
         from kiro_crew.computer_use import launch_macos
