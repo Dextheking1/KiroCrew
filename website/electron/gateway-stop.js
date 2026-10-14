@@ -816,31 +816,39 @@ async function classifyPortOwner(
 /**
  * Is `pid` owned by the OS service manager rather than by us? See INIT_PPID.
  *
- * Fails CLOSED (returns true, i.e. "do not touch") when the parent cannot be
- * determined: mistaking a service for a wedge kills a gateway the OS instantly
+ * Hop 1 fails CLOSED (returns true, i.e. "do not touch") when the parent cannot
+ * be read: mistaking a service for a wedge kills a gateway the OS instantly
  * respawns, while mistaking a wedge for a service only costs an eviction we can
  * still explain to the user.
  *
- * The OS service manager is not always the direct parent. When `kirocrew service
- * install` writes the platform's launch descriptor (a launchd plist or a systemd
- * unit) it may point at a managed launcher script — `bin/kirocrew gateway …` —
- * instead of the Python entry point directly. That launcher forks the real
- * gateway, so the gateway's PPID is the launcher, not PID 1. This function
- * recognises both topologies:
+ * The OS service manager is not always the direct parent. Some platform service
+ * configurations write a launch descriptor that names a managed entry-point
+ * launcher (`bin/kirocrew gateway …`) rather than the Python entry point
+ * directly. That launcher may run as an intermediate process that itself starts
+ * the gateway as a child, so the gateway's PPID is the launcher rather than PID 1.
+ * This function recognises both topologies:
  *
  *   direct:   service_manager (1) → gateway   (PPID=1)
  *   via shim: service_manager (1) → launcher  (PPID=1, isKirocrewGatewayCommand)
  *                                 → gateway   (PPID=launcher)
  *
- * The shim must pass `isKirocrewGatewayCommand` so that ordinary GUI
- * applications whose parent is launchd (Electron, IDEs, …) do not trigger the
- * second-hop rule. On macOS, every app launched from Finder or the Dock has
- * launchd (PID 1) as its direct parent, so depth alone would misclassify the
- * app's own spawned gateway as service-managed.
+ * The shim must pass `isKirocrewGatewayCommand` so that ordinary GUI applications
+ * whose parent is launchd (Electron, IDEs, …) do not trigger the second-hop rule.
+ * On macOS, every app launched from Finder or the Dock has launchd (PID 1) as its
+ * direct parent, so depth alone would misclassify the app's own spawned gateway.
+ *
+ * Hop 2 error direction: if the shim's own PPID cannot be read, we fall through
+ * to return false (gateway is evictable). This is intentionally the opposite of
+ * hop 1's fail-closed: hop 1 cannot determine ownership at all, so failing open
+ * risks killing an unrecognised service; hop 2 already confirmed the gateway
+ * belongs to Kiro Crew (hop 1 did not throw), and a shim whose PPID is unreadable
+ * is likely already exiting — the service manager will respawn it, and the retry
+ * cycle recovers cleanly. Silently blocking eviction on an unreadable shim PPID
+ * would hide wedges that look like a shim-hop away from init.
  *
  * If `getCommand` is omitted the second-hop check is skipped (only the direct
- * parent is examined), preserving backward compatibility with callers that do
- * not supply a command reader.
+ * parent is examined), preserving backward compatibility with callers that do not
+ * supply a command reader.
  */
 async function isServiceManaged(pid, getPpid, getCommand) {
   if (!getPpid) return false; // caller opted out of the probe (e.g. Windows)
