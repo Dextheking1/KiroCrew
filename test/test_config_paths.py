@@ -728,6 +728,7 @@ class TestLeafPurity:
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
             env=env,
         )
