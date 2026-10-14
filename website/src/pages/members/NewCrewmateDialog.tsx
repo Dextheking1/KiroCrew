@@ -57,6 +57,13 @@ import {
   WorkspaceField,
   WorkspaceModal,
 } from '../KiroCrewAgentsPage'
+import { seedIconPose } from '../../lib/avatarPoses'
+import { BRAND_PURPLE, TILES } from '../../lib/kiroGhostAvatar'
+
+/** The icon background palette the avatar builder offers (brand purple + the
+ *  tile colours), so a random create-time colour is always one the user could
+ *  have picked by hand and re-pick on the detail page. */
+const ICON_BG_PALETTE = [BRAND_PURPLE, ...TILES]
 
 /** The built-in kiro agent every install ships; the list's default entry. */
 const BUILTIN_AGENT = 'kirocrew'
@@ -99,6 +106,7 @@ interface CreateBody {
   triggers: string
   session_color: string
   model?: string
+  avatar?: { kind: 'icon'; pose: string; bg: string }
 }
 
 export default function NewCrewmateDialog({ open, onClose, onCreated, existingNames }: {
@@ -529,6 +537,16 @@ export default function NewCrewmateDialog({ open, onClose, onCreated, existingNa
       description: job.trim(),
       triggers,
       session_color: sessionColor,
+      // Default new mates to an ICON avatar (a shipped pose over a solid
+      // background), not the name-derived ghost fallback a missing avatar
+      // renders. Pose is seeded from the name like the builder's default; the
+      // colour is a random pick from the builder's own palette, so each new
+      // mate reads distinct. Both are re-pickable on the detail page.
+      avatar: {
+        kind: 'icon',
+        pose: seedIconPose(n),
+        bg: ICON_BG_PALETTE[Math.floor(Math.random() * ICON_BG_PALETTE.length)],
+      },
       ...(model !== INHERIT_MODEL ? { model } : {}),
     })
   }
