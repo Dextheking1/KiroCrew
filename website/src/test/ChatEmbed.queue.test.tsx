@@ -97,7 +97,8 @@ describe('ChatEmbed queued messages', () => {
     mockPost.mockResolvedValue({ ok: true, queued: true, queue_id: 'q9' })
     mockGet.mockResolvedValue(busy([{ id: 'q9', content: 'second thought' }]))
     fireEvent.change(screen.getByRole('textbox', { name: /chat message/i }), { target: { value: 'second thought' } })
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /send message/i })) })
+    // While the turn runs, Send is the Send atom's queue state.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /queue message/i })) })
     await act(async () => { vi.advanceTimersByTime(100) })
     expect(screen.getByTestId('queue-card')).toHaveTextContent('second thought')
   })

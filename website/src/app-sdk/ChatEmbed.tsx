@@ -19,10 +19,13 @@
  * Sending goes through the chat-core transport (`sendTurn`) over the app-sdk
  * wire, so the receipt contract is the shared one and the host app's
  * `allowedApiPaths` grant for `/api/chat` still gates the POST.
+ *
+ * The composer is the chat-core `Composer` root with its Editor and Send atoms
+ * (`chat-core/composer/atoms.tsx`), both store-free; Send queues while a turn
+ * runs. The root's Voice atom is off for this surface (`EMBED_CAPABILITIES`).
  */
 import { useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { ArrowUp, Loader2 } from 'lucide-react'
 import ChatMessageList, { type VirtualTranscriptHandle } from './ChatMessageList'
 import ErrorNotice from '../components/ErrorNotice'
 import { JumpToBottomButton } from './ChatScrollChrome'
@@ -33,6 +36,8 @@ import { useComposerDraft } from './useComposerDraft'
 import { useAppApi, useAppInfo } from './index'
 import { appApiSendWire } from './appSendWire'
 import { sendTurn, mintSendId } from '../chat-core/transport/sendTurn'
+import { Composer, type ComposerCapabilities } from '../chat-core/composer/Composer'
+import { ComposerEditor, ComposerSend } from '../chat-core/composer/atoms'
 import { sendFailureCopy, deliveryUnconfirmedCopy } from '../chat-core/transport/receiptCopy'
 import { mergeRecoveredDraft } from '../utils/chatDrafts'
 import { drainEmbedRecovery, stashEmbedRecovery, subscribeEmbedRecovery, type PendingEmbedRecovery } from './embedSendRecovery'
@@ -98,6 +103,11 @@ export interface ChatEmbedProps {
  *  render, so `deriveFollowUpOptions` below would re-run (and hand FollowUpBar a new
  *  options array) on every render of an embed whose poll has not answered yet. */
 const EMPTY_MESSAGES: ChatMessage[] = []
+
+/** The embed's composer preset. Voice is off: its STT config read uses the
+ *  dashboard api client, not this app's scoped api, so it would sidestep the
+ *  host's `allowedApiPaths`, and its setup modal needs the dashboard router. */
+const EMBED_CAPABILITIES: ComposerCapabilities = { voice: false }
 
 /** Each send's transcript-tail record is `SendTail` (embedSendTails.ts): the
  *  row to show and `sendId`, the client-minted id stamped on the wire
@@ -684,29 +694,28 @@ function ChatEmbed({
         </div>
       )}
 
-      <div className={`flex items-end gap-2 px-3 py-2 shrink-0 ${frameless ? '' : 'border-t border-border bg-bg-accent'}`}>
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          {...composition}
-          aria-label={i18nT('appSdk.chatEmbed.chat_message')}
-          className="flex-1 min-w-0 min-h-[38px] resize-none overflow-y-auto px-3 py-2 mc-message-font-text bg-bg-elevated border border-border rounded-md text-text outline-hidden focus-visible:border-accent transition-colors"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => submitOnEnter(e, () => send())}
-          placeholder={running ? i18nT('appSdk.chatEmbed.agent_is_working') : (placeholder || i18nT('appSdk.chatEmbed.message'))}
-          disabled={sendMutation.isPending}
-        />
-        <button
-          className="p-2 rounded-md bg-accent text-accent-fg disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-80 transition-opacity"
-          onClick={() => send()}
-          disabled={sendMutation.isPending || !draft.trim()}
-          title={i18nT('appSdk.chatEmbed.send')}
-          aria-label={i18nT('appSdk.chatEmbed.send_message')}
-        >
-          {sendMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
-        </button>
-      </div>
+      <Composer slotKey={slotKey} value={draft} onChange={setDraft} capabilities={EMBED_CAPABILITIES}>
+        <div className={`flex items-end gap-2 px-3 py-2 shrink-0 ${frameless ? '' : 'border-t border-border bg-bg-accent'}`}>
+          <ComposerEditor
+            ref={textareaRef}
+            rows={1}
+            {...composition}
+            aria-label={i18nT('appSdk.chatEmbed.chat_message')}
+            className="flex-1 min-w-0 min-h-[38px] resize-none overflow-y-auto px-3 py-2 mc-message-font-text bg-bg-elevated border border-border rounded-md text-text outline-hidden focus-visible:border-accent transition-colors"
+            onKeyDown={e => submitOnEnter(e, () => send())}
+            placeholder={running ? i18nT('appSdk.chatEmbed.agent_is_working') : (placeholder || i18nT('appSdk.chatEmbed.message'))}
+            disabled={sendMutation.isPending}
+          />
+          <ComposerSend
+            className="p-2 min-h-0 rounded-md disabled:opacity-40"
+            onSend={() => send()}
+            running={running}
+            pending={sendMutation.isPending}
+            sendLabel={i18nT('appSdk.chatEmbed.send_message')}
+            sendTitle={i18nT('appSdk.chatEmbed.send')}
+          />
+        </div>
+      </Composer>
     </div>
   )
 }
