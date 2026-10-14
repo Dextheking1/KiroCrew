@@ -1,0 +1,243 @@
+{
+  "id": "project-city",
+  "version": 1,
+  "title": "Project city",
+  "description": "The project report drawn as a 3D city: the same record as project-report, for a reader who wants to see a crewmate's whole body of work at a glance and still read every number. It binds the same seven fields from the same places: items, omitted, series and last_entry_at from the slot's workstreams fold, and three the crewmate writes. Each workstream is a district around a central plaza, each round of it a street, each task a tower, and each subtask (an item on a board that task's own worker runs) an annex behind its task. A tower's height is the credits its worker spent; a tower nobody measured is a hollow dashed frame, because absent is not zero. Colour is state: asks you, blocked, working, gone quiet (20 minutes without a report), awaiting review, accepted, closed (rejected or abandoned), or no report yet. A task that needs the person carries a beam and a ring, a working one a light that climbs it, and each worker with open work is a diamond at the task it last reported on. The rings over the plaza are the spend: each workstream's share inside, each round's outside, every worker counted once. Under the city the page draws the same record as text: the verdict, three counts, the red CI lanes, the Needs-you cards whose buttons put a reply in the person's chat box, who is working, the work tree with done/total and credits on every row, credits per hour, and one task's own record in a drawer. for_you is the lead's action cards for the person: each item is {text, ask, context, why, how, options, workstream}, where ask is decide, approve or do. verdict is {state, headline, blocker} with state on_track, needs_you, blocked or no_word; the page reads it as no_word on its own once the fold has advanced since it was written. ci is the lane board a babysitting worker reads: per-task check counts and the red lanes by name, each owned by yours or maintainer, and a lane that never started is its own state rather than a red one. The page's own words follow the reader's UI language, English or Simplified Chinese. verdict.words is the desk's labels in the language the lead speaks with this person, with project-report's keys; any key left out shows in the reader's language. Write every for_you item, and its options, in that same language. The city needs WebGL; without it the text half stands on its own.",
+  "source": "builtin",
+  "fields": {
+    "items": {
+      "type": "array",
+      "source": {
+        "fold": "workstreams",
+        "path": "items"
+      }
+    },
+    "omitted": {
+      "type": "number",
+      "source": {
+        "fold": "workstreams",
+        "path": "omitted"
+      }
+    },
+    "series": {
+      "type": "array",
+      "source": {
+        "fold": "workstreams",
+        "path": "series"
+      }
+    },
+    "last_entry_at": {
+      "type": "string",
+      "source": {
+        "fold": "workstreams",
+        "path": "last_entry_at"
+      }
+    },
+    "for_you": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "ask": {
+            "type": "string",
+            "enum": [
+              "decide",
+              "approve",
+              "do"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          },
+          "how": {
+            "type": "string"
+          },
+          "workstream": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "source": {
+        "agentic": true
+      },
+      "upkeep": {
+        "means": "the action cards for the person: each {text, ask, context, why, how, options, workstream}",
+        "when": "in the same turn something starts or stops needing the person",
+        "how": "keep one item per open ask and drop it once they act; write it with dashboard_write; call dashboard_fields first for its shape"
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "on_track",
+            "needs_you",
+            "blocked",
+            "no_word"
+          ]
+        },
+        "headline": {
+          "type": "string"
+        },
+        "blocker": {
+          "type": "string"
+        },
+        "words": {
+          "type": "object",
+          "properties": {
+            "blocked": {
+              "type": "string"
+            },
+            "asks": {
+              "type": "string"
+            },
+            "pick": {
+              "type": "string"
+            },
+            "approve": {
+              "type": "string"
+            },
+            "only_you": {
+              "type": "string"
+            },
+            "go": {
+              "type": "string"
+            },
+            "not_now": {
+              "type": "string"
+            },
+            "done": {
+              "type": "string"
+            },
+            "cant": {
+              "type": "string"
+            },
+            "redispatch": {
+              "type": "string"
+            },
+            "drop": {
+              "type": "string"
+            },
+            "own": {
+              "type": "string"
+            },
+            "yes": {
+              "type": "string"
+            },
+            "no": {
+              "type": "string"
+            },
+            "earlier": {
+              "type": "string"
+            },
+            "answered": {
+              "type": "string"
+            },
+            "undo": {
+              "type": "string"
+            },
+            "context": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            },
+            "how": {
+              "type": "string"
+            },
+            "words": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "source": {
+        "agentic": true
+      },
+      "upkeep": {
+        "means": "one line over the city: on_track, needs_you, blocked or no_word, the headline, and the one thing most in the way",
+        "when": "on every change to whether the work is on track, blocked or needs the person",
+        "how": "set {state, headline, blocker} in the language you speak with the person; write it with dashboard_write; call dashboard_fields first for its shape"
+      }
+    },
+    "ci": {
+      "type": "object",
+      "properties": {
+        "pr": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "object",
+          "values": {
+            "type": "object",
+            "properties": {
+              "pass": {
+                "type": "number"
+              },
+              "fail": {
+                "type": "number"
+              },
+              "running": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "lanes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          }
+        }
+      },
+      "source": {
+        "agentic": true
+      },
+      "upkeep": {
+        "means": "the CI board of the PR you watch: PR, head, per-task check counts, and the red or never-ran lanes",
+        "when": "after every CI run you watch finishes or changes state",
+        "how": "read the PR's checks, count pass, fail and running under the task's item id, list each failed or never-ran lane with owner yours or maintainer, and write the value"
+      }
+    }
+  }
+}

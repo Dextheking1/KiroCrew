@@ -87,6 +87,7 @@ jobs:
       only_frontend: ${{ steps.decide.outputs.only_frontend }}
       linux_packaging: ${{ steps.filter.outputs.linux_packaging }}
       wheel_closure: ${{ steps.filter.outputs.wheel_closure }}
+      project_city_three: ${{ steps.filter.outputs.project_city_three }}
       leaf_tests: ${{ steps.leaf.outputs.leaf_tests }}
       leaf_targets: ${{ steps.leaf.outputs.leaf_targets }}
       leaf_gates: ${{ steps.leaf.outputs.leaf_gates }}
@@ -191,6 +192,14 @@ jobs:
               - 'setup.cfg'
               - 'pyproject.toml'
               - 'scripts/ci/install_requires_closure.py'
+            # Independent of the buckets above, like wheel_closure: the page
+            # that inlines the cut-down three.js block, the script that makes
+            # it, and the notice that records its license and edits.
+            project_city_three:
+              - 'src/kiro_crew/dashboard_templates/builtin/project-city/template.html'
+              - 'scripts/build-project-city-three.mjs'
+              - 'THIRD-PARTY-NOTICES'
+              - 'website/package-lock.json'
 
       - name: Decide surface
         id: decide
@@ -388,6 +397,39 @@ jobs:
             --platform "manylinux2014_$MACHINE" --platform "manylinux_2_17_$MACHINE" \
             --python-version 3.12 --implementation cp --abi cp312 --abi abi3 --abi none \
             -d "$RUNNER_TEMP/closure" -r "$RUNNER_TEMP/install_requires.txt"
+
+  # The project-city dashboard page inlines three.js r134, cut down and patched by
+  # scripts/build-project-city-three.mjs from the three@0.134.0 tarball. The test
+  # suite pins the block's sha256, which catches a hand edit but not one made
+  # together with a new pin; this job rebuilds the block from the registry and
+  # fails unless the committed copy is byte for byte that rebuild. It runs only
+  # when the page, the script or the notice changes, because it downloads the
+  # 6.5 MB tarball. Advisory, like wheel-closure: not a required check.
+  project-city-three:
+    name: Project City three.js Rebuild
+    needs: [changes, await-fast-gate]
+    if: ${{ needs.changes.outputs.project_city_three == 'true' }}
+    # Hosted, not the fleet: one lockfile install and one tarball from npm.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      # The script loads the esbuild website/package-lock.json pins; no package
+      # script runs during the install.
+      - name: Install the pinned bundler
+        run: npm --prefix website ci --ignore-scripts --no-audit --no-fund
+
+      - name: Rebuild the inlined three.js block and compare
+        run: node scripts/build-project-city-three.mjs
 
   # ── Fast gate barrier (see .github/workflows/fast-gate.yml) ──────────
   # The eleven cheap gates live in their own workflow so the fork reviewers can

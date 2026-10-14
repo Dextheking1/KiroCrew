@@ -10758,3 +10758,44 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
+
+---
+
+## three.js r134
+
+- License: MIT
+- Homepage: https://threejs.org
+- Source: the `three@0.134.0` npm package
+- Inlined in: `src/kiro_crew/dashboard_templates/builtin/project-city/template.html`, the
+  classes that page draws its 3D city with, bundled from the package's `src/` into one
+  minified script by `scripts/build-project-city-three.mjs`, which also checks the
+  committed copy against a rebuild. It is not an npm dependency of the frontend.
+- Modified: two places, both made by that script. `MathUtils.generateUUID`, where
+  `crypto.randomUUID` is missing, draws its four 32-bit numbers from
+  `crypto.getRandomValues` instead of `Math.random()`. Three links inside its shader
+  comments name the linked repository's default branch as `HEAD` instead of by branch
+  name. No other code is changed.
+
+```
+The MIT License
+
+Copyright © 2010-2021 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```

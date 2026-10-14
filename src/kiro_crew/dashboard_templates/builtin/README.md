@@ -6,9 +6,10 @@ the registry's only gate. A page that renders on a crewmate's Dashboard tab runs
 own script against that crewmate's task titles and summaries inside a frame that can
 navigate itself, so it comes from one of two places a person put it: this directory,
 which went through review, or the operator's own folder (see "An operator's own page"
-below). Thirteen ship: the first four are below, five more are in "The round-7 set"
+below). Fourteen ship: the first four are below, five more are in "The round-7 set"
 further down, then `office` in "A desk that ships decks and mail", two in
-"The two views", and `kirocrew-conductor` in "A page named for its crewmate".
+"The two views", `kirocrew-conductor` in "A page named for its crewmate", and
+`project-city` in "The report as a city".
 
 | id | folds it reads | what it answers |
 |---|---|---|
@@ -60,8 +61,9 @@ app ships, and `en` for anything else. Each page keeps one `I18N` table per lang
 (`en` and `zh-CN` today) and picks its own words by it: static words carry
 `data-i18n="<key>"` with the English text in the markup, script-written words go through
 `i18n(key, vars)`, and a key a language lacks falls back to English. Values from
-`fields` are never translated. In `project-report` a crewmate's `verdict.words` still
-wins over the table. zh-CN strings are `\u` escapes so the sources stay ASCII.
+`fields` are never translated. In `project-report` and `project-city` a crewmate's
+`verdict.words` still wins over the table. zh-CN strings are `\u` escapes so the
+sources stay ASCII.
 
 No page fetches anything: the frame's CSP blocks the network, so a chart drawn from a CDN
 renders as a hole. The charts are plain elements sized in the page's own JS.
@@ -331,3 +333,55 @@ list of lines the person must act on; tasks whose worker asked or is stuck join 
 the record. `note` is the conductor's last `panel_publish`, read from its own record in
 the `panel` fold, and its `next` line is drawn under a tag that says
 the crewmate wrote it.
+
+## The report as a city
+
+| id | folds it reads | the question it answers | agentic |
+|---|---|---|---|
+| `project-city` | `workstreams` | `project-report`'s four questions, with the whole body of work in one picture | `for_you`, `verdict`, `ci` |
+
+`project-city` is `project-report` drawn as an animated 3D city. It binds the same seven
+fields from the same places (everything but the `published` panel block), so a crewmate
+can switch between the two without rewriting a value, and it keeps that page's rules:
+an unreported cost is a dash and never a zero, a cut list says how much it dropped, a
+worker that served two tasks is billed once in every roll-up, and a verdict written
+before the fold last advanced reads as no word. It speaks the reader's language the way
+the other pages do, with English the default, and a crewmate's `verdict.words` wins
+over its own desk words.
+
+Each board's goal is a district around a central plaza, each round a street, each task
+a tower whose height is its worker's credits, and each item on a board that task's
+worker runs an annex behind it. A tower nobody measured is a hollow dashed frame. The
+rings over the plaza are the spend shares. Everything the city draws is also in the
+HTML under it -- the verdict, the counts, the red lanes, the Needs-you cards, who is
+working, the work tree, credits per hour and a task drawer -- so a reader without WebGL,
+or with a screen reader, loses the picture and nothing else.
+
+Two places where it differs from the other pages on purpose:
+
+- **Always dark.** The city is a night scene lit by emissive colour, which only reads
+  on a dark ground, and every panel sits over or beside it, so the page ignores the
+  light theme. Its state colours are fixed values shared by the scene and the HTML.
+- **It moves continuously.** The city turns and its lights run while it is on screen;
+  it stops when the frame is hidden, draws one still frame under
+  `prefers-reduced-motion`, and has its own pause button. Its CSS loops are only the
+  live dot and a working worker's dot.
+
+The first of its two scripts is three.js r134 (MIT, recorded in `THIRD-PARTY-NOTICES`),
+cut down to the classes the city uses and bundled from the npm package's own `src/`:
+no loader is in it, so it carries no network code. `scripts/build-project-city-three.mjs`
+makes that block from the pinned `three@0.134.0` tarball; run it to check the committed
+copy against a rebuild, or with `--write` to replace it when upgrading. It changes one
+function as it bundles: `generateUUID`, where `crypto.randomUUID` is missing, draws from
+`crypto.getRandomValues` rather than `Math.random()`, so no object's id comes from an
+insecure source. It pins the
+block's sha256, and `test/test_dashboard_template_project-city.py` holds the page to the
+same pin, so a hand edit to the library fails the suite. The `project-city-three` CI job
+runs the rebuild check whenever the page, the script or `THIRD-PARTY-NOTICES` changes. A rebuild of the scene happens
+only when what the city draws changes, so a push that moves nothing in it keeps the
+camera where the reader left it.
+
+The four rules live in this page's script as well as in `project-report`'s.
+`website/src/test/projectCityParity.test.ts` mounts both pages on the same sample record
+and holds the city to the report's figures: the header sentence, the three counts, the
+spend line, every row of the work tree, each cut count and the verdict's state.

@@ -49,6 +49,10 @@ const PROBES: Record<string, { en: string; zh: string }> = {
     en: 'No workstream yet. Nothing needs you, and nothing has been spent.',
     zh: '\u6682\u65e0\u5de5\u4f5c\u6d41\u3002\u6ca1\u6709\u5f85\u4f60\u5904\u7406\u7684\u4e8b\uff0c\u4e5f\u6ca1\u6709\u4efb\u4f55\u82b1\u8d39\u3002',
   },
+  'project-city': {
+    en: 'Nothing needs you, and nothing has been spent.',
+    zh: '\u6ca1\u6709\u5f85\u4f60\u5904\u7406\u7684\u4e8b\uff0c\u4e5f\u6ca1\u6709\u4efb\u4f55\u82b1\u8d39\u3002',
+  },
   office: {
     en: 'The record carries no board for this crewmate yet, so there is nothing to review.',
     zh: '\u8fd9\u4f4d\u961f\u53cb\u7684\u8bb0\u5f55\u4e2d\u8fd8\u6ca1\u6709\u770b\u677f\uff0c\u56e0\u6b64\u6ca1\u6709\u53ef\u5ba1\u6838\u7684\u5185\u5bb9\u3002',
@@ -110,8 +114,8 @@ function mount(id: string, locale: string | undefined) {
 }
 
 describe('built-in dashboard templates pick their words by the reader locale', () => {
-  it('finds all thirteen built-ins, so the cases below are not over an empty list', () => {
-    expect(IDS).toHaveLength(13)
+  it('finds all fourteen built-ins, so the cases below are not over an empty list', () => {
+    expect(IDS).toHaveLength(14)
   })
 
   it('labels the project-report All pill in the reader language', () => {
