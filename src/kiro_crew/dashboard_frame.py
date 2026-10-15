@@ -61,12 +61,15 @@ logger = logging.getLogger(__name__)
 
 #: The size ceiling for one template page, in bytes of UTF-8.
 #:
-#: dsh-visualize's own ``maxFragmentBytes`` default, taken rather than invented:
-#: the brief asks for its default and the number is a considered one -- a page with
-#: an inlined chart library's worth of markup fits, while a runaway generation does
-#: not. Measured in BYTES, not characters, so a multi-byte page cannot pass at
-#: several times the ceiling the document is assembled under.
-MAX_PAGE_BYTES: Final[int] = 1_000_000
+#: 3 MiB. :func:`validate_page` measures the RAW page -- the inline body an author
+#: or agent wrote, before :func:`compose` wraps it in the host head, the stale band,
+#: the data island and the fixed bootstrap scripts -- so this ceiling is read
+#: against the same string the package store's ``MAX_VIEW_HTML_BYTES`` (3 MiB)
+#: bounds. Equal to that cap: a page the store will save is exactly a page this
+#: frame will compose, and nothing measures the composed document, so no headroom
+#: above the page is needed. Measured in BYTES, not characters, so a multi-byte
+#: page cannot pass at several times the ceiling.
+MAX_PAGE_BYTES: Final[int] = 3 * 1024 * 1024
 
 #: Origins a page may load static resources from.
 #:

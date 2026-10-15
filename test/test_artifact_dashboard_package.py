@@ -885,6 +885,13 @@ class TestRejectInvalid:
         # on the bytes a write actually puts on disk, because an oversized
         # package is one this module's own reader refuses: the page would come
         # back blank with nothing refused at write time.
+        #
+        # The straddle needs structural density: json.dumps(indent=2) adds
+        # whitespace around every structural token, so a package of many small
+        # nested objects gains far more from indentation than one long string.
+        # The model is bounded (MAX_MODEL_FIELDS full fields), and a view.html
+        # page carries the bulk up to just under the cap, so the compact submit
+        # fits and the indented stored form crosses it.
         types = {
             f"f{i:05d}": {
                 "type": "enum",
@@ -895,12 +902,27 @@ class TestRejectInvalid:
             }
             for i in range(dp.MAX_MODEL_FIELDS)
         }
-        blocks = [
-            {"id": f"b{i:05d}", "type": "table", "fields": [f"f{i:05d}"]}
-            for i in range(dp.MAX_VIEW_BLOCKS)
-        ]
-        submitted = json.dumps(package(types=types, blocks=blocks), separators=(",", ":"))
-        # Every per-part cap is satisfied and the submitted text is under the
+        head = '<p data-dashboard-field="f00000"></p>'
+
+        def pkg(html: str) -> dict[str, Any]:
+            return {
+                "kind": "dashboard",
+                "bound_to": BOUND,
+                "model": {"types": types},
+                "view": {"html": html},
+                "theme": {"tokens": {"--panel-bg": "oklch(21% 0 0)"}},
+            }
+
+        def compact_len(html: str) -> int:
+            return len(json.dumps(pkg(html), separators=(",", ":")).encode("utf-8"))
+
+        # Grow the page until the compact submit is exactly at the cap.
+        empty = compact_len(head)
+        filler = dp.MAX_PACKAGE_BYTES - empty
+        html = head + "x" * filler
+        assert len(html.encode("utf-8")) <= dp.MAX_VIEW_HTML_BYTES
+        submitted = json.dumps(pkg(html), separators=(",", ":"))
+        # Every per-part cap is satisfied and the submitted text is at the
         # package cap, so nothing upstream of the serializer can refuse this.
         assert len(submitted.encode("utf-8")) <= dp.MAX_PACKAGE_BYTES
         with pytest.raises(ArtifactValidationError, match="bytes once stored"):

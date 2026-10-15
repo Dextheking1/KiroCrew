@@ -5003,8 +5003,10 @@ DASHBOARD_PREVIEW_SCHEMA = ToolSchema(
         # ``instance.AUTHORED_PAGE_REFUSAL`` -- and dropping these two specs would make
         # that refusal read "unknown field", which tells a caller to try a different
         # spelling rather than that the whole capability is a later change. The caps
-        # bound what reaches the refusal; ``html`` matches the store's own
-        # ``MAX_INSTANCE_HTML_BYTES`` ceiling spelled in characters.
+        # only bound what reaches that always-fires refusal, so ``html`` is NOT the
+        # page ceiling (that is ``instance.MAX_INSTANCE_HTML_BYTES`` on the real
+        # preview/apply path) and deliberately stays small: a field this layer always
+        # refuses needs no room to grow.
         FieldSpec("manifest", dict),
         FieldSpec("html", str, max_len=64 * 1024),
     ],

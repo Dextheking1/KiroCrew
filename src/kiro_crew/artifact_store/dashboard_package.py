@@ -55,22 +55,31 @@ if TYPE_CHECKING:  # pragma: no cover - a type-only import, so no cycle at run t
 #: of a prose document to this kind would store content no reader can parse.
 DASHBOARD_KIND = "dashboard"
 
-#: Hard cap on a stored package, well under the artifact content cap. A package
-#: is layout: a figure this size is already a sign that values leaked into it.
-MAX_PACKAGE_BYTES = 256 * 1024
+#: Cap on an agent-written ``view.html`` page, in bytes of UTF-8.
+#:
+#: 3 MiB. A hand-written page that inlines a client-side library -- a 3D renderer,
+#: a charting bundle -- together with its own scene or layout code is several
+#: hundred KB to a few MB with no data baked into it, and such a page is a common
+#: thing to build. The old 128 KiB cap turned size into a baked-values heuristic;
+#: it is a weak signal for that (an inlined library is large by design) and it put
+#: a legitimate page out of reach, so this is now a plain RESOURCE bound. Equal to
+#: :data:`kiro_crew.dashboard_frame.MAX_PAGE_BYTES`, which bounds what the
+#: FRAME will compose from this page, so a page that saves is always one the frame
+#: will draw. The per-field model caps (:data:`MAX_MODEL_FIELDS`,
+#: :data:`MAX_LABEL_LEN`) are what keep the DATA an island on the page small; this
+#: cap bounds the LAYOUT alone.
+MAX_VIEW_HTML_BYTES = 3 * 1024 * 1024
+
+#: Hard cap on a stored package, well under the artifact content cap. It is the
+#: page cap plus the room the rest of the package has always had (128 KiB -- the
+#: model, the view wrapper, the theme and the indentation the stored form adds),
+#: so a page that saves at :data:`MAX_VIEW_HTML_BYTES` still leaves that room for
+#: everything around it. Like the page cap it is a RESOURCE bound on what the
+#: store writes, not a baked-values heuristic.
+MAX_PACKAGE_BYTES = MAX_VIEW_HTML_BYTES + 128 * 1024
 
 MAX_MODEL_FIELDS = 64
 MAX_VIEW_BLOCKS = 48
-#: Cap on an agent-written ``view.html`` page, in bytes of UTF-8.
-#:
-#: Half the package cap, so the page cannot be the whole package and leave no room for
-#: the model that says what may be pushed into it. Well under
-#: :data:`kiro_crew.dashboard_frame.MAX_PAGE_BYTES`, which bounds what the FRAME will
-#: compose: a page can arrive at that host from a shipped template directory, where a
-#: megabyte of inlined markup is somebody's reviewed work, while a page this size
-#: inside a stored package is the signal the whole kind exists to avoid -- values
-#: baked into layout.
-MAX_VIEW_HTML_BYTES = 128 * 1024
 MAX_THEME_TOKENS = 64
 MAX_THEME_CSS_BYTES = 32 * 1024
 #: Cap on a human-readable string inside the package (a label, a title, a unit).
@@ -696,8 +705,8 @@ def _validate_view_html(raw: Any, declared_fields: Mapping[str, Any]) -> str:
         raise _refuse(
             "view.html",
             f"is {size} bytes, over the {MAX_VIEW_HTML_BYTES}-byte limit for a page -- "
-            "a page this large usually has values baked into it, which belong in the "
-            "crew log and reach the page through the fold / bus / controller path",
+            "inline a smaller library, or move data off the layout: a value belongs in "
+            "the crew log and reaches the page through the fold / bus / controller path",
         )
     # The frame's own refusals, asked here so the author meets them at save time rather
     # than seeing a page that renders wrong. Imported lazily: this module is imported by

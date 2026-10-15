@@ -40,8 +40,15 @@ class TestThePageContract:
             dashboard_frame.validate_page(page)
         assert caught.value.code == "page_too_large"
 
-    def test_the_cap_is_dsh_visualizes_own_default(self) -> None:
-        assert dashboard_frame.MAX_PAGE_BYTES == 1_000_000
+    def test_the_cap_equals_the_save_side_page_cap(self) -> None:
+        # The frame measures the RAW page, the same string the package store caps at
+        # MAX_VIEW_HTML_BYTES. The frame ceiling equals it, so a page the store will
+        # save is exactly one the frame will compose -- and nothing measures the
+        # composed document, so no headroom above the page is needed.
+        from kiro_crew.artifact_store import dashboard_package as dp
+
+        assert dashboard_frame.MAX_PAGE_BYTES == 3 * 1024 * 1024
+        assert dashboard_frame.MAX_PAGE_BYTES == dp.MAX_VIEW_HTML_BYTES
 
 
 class TestTheFramesSecurityPolicy:

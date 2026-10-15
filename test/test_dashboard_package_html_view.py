@@ -15,7 +15,7 @@ that catch an author's mistake while the author is still present:
 * a page that ships its own ``<html>`` would nest documents inside the host's;
 * a binding naming a field the model does not declare is a cell that stays blank forever,
   and the model is also the push allowlist, so the typo is silent twice;
-* a page over the view cap is a package with a value baked into it.
+* a page over the view cap is refused: the cap is a resource bound on the layout.
 """
 
 from __future__ import annotations
@@ -115,10 +115,46 @@ class TestThePageItself:
         assert "view.html" in refusal(package(view={"html": 42}))
 
     def test_a_page_over_the_view_cap_is_refused(self) -> None:
-        """A page this large is a package with values baked into it. The message says so
-        rather than naming a number the author has no model for."""
+        """The page cap is a resource bound on the layout. The message names the limit
+        rather than a number the author has no model for."""
         said = refusal(package(view={"html": "<p>" + "x" * dp.MAX_VIEW_HTML_BYTES + "</p>"}))
         assert str(dp.MAX_VIEW_HTML_BYTES) in said
+
+    def test_a_page_exactly_at_the_view_cap_saves(self) -> None:
+        """The boundary the issue names: a page whose UTF-8 is exactly the cap is
+        accepted, and one byte more is refused with the new limit named. A hand-written
+        page that inlines a client-side library is MB-scale by design, so the cap is set
+        where such a page fits."""
+        head = '<p data-dashboard-field="boards"></p>'
+        at_cap = head + "x" * (dp.MAX_VIEW_HTML_BYTES - len(head.encode("utf-8")))
+        assert len(at_cap.encode("utf-8")) == dp.MAX_VIEW_HTML_BYTES
+        out = dp.validate_package(package(view={"html": at_cap}))
+        assert out["view"]["html"] == at_cap
+
+        one_over = at_cap + "x"
+        said = refusal(package(view={"html": one_over}))
+        assert str(dp.MAX_VIEW_HTML_BYTES) in said
+        assert f"is {len(one_over.encode('utf-8'))} bytes" in said
+
+    def test_the_package_cap_leaves_room_for_a_page_at_the_view_cap(self) -> None:
+        """The package cap is the page cap plus the room the rest of the package has
+        always had, so a page saved at MAX_VIEW_HTML_BYTES never pushes the whole
+        package over MAX_PACKAGE_BYTES on its own."""
+        assert dp.MAX_VIEW_HTML_BYTES < dp.MAX_PACKAGE_BYTES
+        assert dp.MAX_PACKAGE_BYTES == dp.MAX_VIEW_HTML_BYTES + 128 * 1024
+
+    def test_a_page_at_the_view_cap_is_composed_by_the_frame(self) -> None:
+        """A page the store will save is always one the frame will draw: validate_page
+        measures the raw page the view cap bounds, and MAX_PAGE_BYTES equals that cap,
+        so a page accepted by the store is accepted by the frame. Nothing measures the
+        composed document, so the frame cap needs no headroom above the page."""
+        from kiro_crew import dashboard_frame as df
+
+        head = '<p data-dashboard-field="boards"></p>'
+        at_cap = head + "x" * (dp.MAX_VIEW_HTML_BYTES - len(head.encode("utf-8")))
+        assert df.MAX_PAGE_BYTES == dp.MAX_VIEW_HTML_BYTES
+        # The raw page the store accepts passes the frame's own cap too.
+        assert df.validate_page(at_cap) == dp.MAX_VIEW_HTML_BYTES
 
     def test_a_page_may_run_its_own_script(self) -> None:
         """JS is the contract, not a loophole. A page that could only print text cannot

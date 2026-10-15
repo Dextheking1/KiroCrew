@@ -1232,9 +1232,11 @@ the page's shape in the canonicaliser:
   policy, so a document tag in the field is refused — by
   `dashboard_frame.validate_page`, called here so the author meets the frame's
   own refusals at save time rather than seeing a page that renders wrong.
-  Non-empty, and at most `MAX_VIEW_HTML_BYTES` (128 KiB) of UTF-8 — a page past
-  that usually has values baked in, which belong in the crew log and reach the
-  page through the fold / bus / controller path. Every field the page binds with
+  Non-empty, and at most `MAX_VIEW_HTML_BYTES` (3 MiB) of UTF-8 — a resource
+  bound on the layout, raised from 128 KiB so a page that inlines a client-side
+  library (a 3D renderer, a charting bundle) fits; data still belongs in the crew
+  log and reaches the page through the fold / bus / controller path, kept small by
+  the per-field model caps rather than by the page size. Every field the page binds with
   a `data-dashboard-field` attribute must be declared in `model.types`, because
   the model is also the list of fields the controller will push: a name only the
   page knows is a cell nothing ever fills. A name read only through
