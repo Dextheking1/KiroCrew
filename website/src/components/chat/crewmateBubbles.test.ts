@@ -80,7 +80,7 @@ describe('filterCrewmateChat', () => {
     }
     const seedDeclined: ChatMessage = {
       role: 'notice', cls: 'msg msg-info', ts: at('2026-09-22T06:00:09Z'),
-      content: 'ℹ A sibling session governs this folder's tool settings with different settings.',
+      content: "ℹ A sibling session governs this folder's tool settings with different settings.",
       meta: { kind: 'seed_declined' },
     }
     const untaggedNotice: ChatMessage = { role: 'notice', content: 'note', cls: '', ts: at('2026-09-22T06:00:08Z') }
