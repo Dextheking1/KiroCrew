@@ -69,7 +69,7 @@ export function LaunchLines({ launches }: { launches: { argv: string[]; env: str
               <code
                 key={argumentIndex}
                 role="listitem"
-                className="break-words rounded border border-[var(--border)] bg-[var(--surface-2,transparent)] px-1.5 py-1 font-mono text-[11px] text-[var(--text)]"
+                className="min-w-0 break-words rounded border border-[var(--border)] bg-[var(--surface-2,transparent)] px-1.5 py-1 font-mono text-[11px] text-[var(--text)] [overflow-wrap:anywhere]"
               >
                 {visibleLaunchText(argument)}
               </code>
@@ -91,7 +91,7 @@ export function LaunchLines({ launches }: { launches: { argv: string[]; env: str
                   <code
                     key={entryIndex}
                     role="listitem"
-                    className="block break-words rounded border border-[var(--border)] bg-[var(--surface-2,transparent)] px-1.5 py-1 font-mono text-[11px] text-[var(--text)]"
+                    className="block min-w-0 break-words rounded border border-[var(--border)] bg-[var(--surface-2,transparent)] px-1.5 py-1 font-mono text-[11px] text-[var(--text)] [overflow-wrap:anywhere]"
                   >
                     {visibleLaunchText(entry)}
                   </code>
@@ -269,7 +269,7 @@ export function RefusalPanel({
       {/* Where the command comes from, so the operator can check the launch
           against its source before trusting it. */}
       {server.agents.length > 0 && (
-        <p className="text-[12.5px] leading-snug text-[var(--muted)]">
+        <p className="text-[12.5px] leading-snug text-[var(--muted)] [overflow-wrap:anywhere]">
           {i18nT('pages.mcpManagement.reapproval_declared_by', {
             agents: server.agents.join(', '),
           })}
