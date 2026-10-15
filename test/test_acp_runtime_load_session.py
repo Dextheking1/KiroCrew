@@ -487,6 +487,7 @@ class TestAcpRuntimeLoadSession:
 
         monkeypatch.setattr(rt, "_send_and_await", _fake_send)
         monkeypatch.setattr(rt, "_kas_custom_agents", _fake_agents)
+        monkeypatch.setattr(rt, "_unpooled_control_planes", AsyncMock(return_value=[]))
         rt._acp_backend = ACP_BACKEND_KAS
 
         await rt.load_session("", "sid-kas", cwd="/work", agent="kirocrew")
@@ -548,6 +549,7 @@ class TestAcpRuntimeLoadSession:
             "_guard_unresolved_mcp_refs",
             lambda handle, spec, agent, wire: reported.append(wire),
         )
+        monkeypatch.setattr(rt, "_unpooled_control_planes", AsyncMock(return_value=[]))
         rt._acp_backend = ACP_BACKEND_KAS
 
         await rt.load_session("", "sid-hoist", cwd="/work", agent="kirocrew")
@@ -658,6 +660,7 @@ class TestAcpRuntimeLoadSession:
 
         monkeypatch.setattr(rt, "_send_and_await", _fake_send)
         monkeypatch.setattr(rt, "_kas_custom_agents", _fake_agents)
+        monkeypatch.setattr(rt, "_unpooled_control_planes", AsyncMock(return_value=[]))
         rt._acp_backend = ACP_BACKEND_KAS
 
         await rt.load_session("/t.json", "sid-both", cwd="/work", agent="kirocrew")

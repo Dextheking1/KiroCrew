@@ -69,6 +69,15 @@ def _fast_no_report_ceiling(monkeypatch):
     module asserts on the ceiling itself.
     """
     monkeypatch.setattr(sh, "_MCP_DRAIN_NO_REPORT_CEILING", 0.05)
+    # KAS sessions now call kiro_control_plane_servers in _unpooled_control_planes;
+    # the stub-based tests here do not launch managed MCP servers.
+    from kiro_crew.acp import session_mcp as _smc
+
+    monkeypatch.setattr(
+        _smc,
+        "kiro_control_plane_servers",
+        lambda *_a, **_k: _smc.NativeControlPlaneMount([], {}),
+    )
 
 
 class TestArgv:

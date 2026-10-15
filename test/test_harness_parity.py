@@ -1020,9 +1020,10 @@ _DECLARED_IDENTITY_TESTS: dict[tuple[str, str], str] = {
     (
         "src/kiro_crew/acp/runtime.py",
         "_unpooled_control_planes",
-    ): "Kiro alone loads its native agent spec without a mirror or wire agent. "
-    "Its unpooled managed stdio declarations need a per-session token override; "
-    "other harnesses already carry identity through their own projections.",
+    ): "Kiro and KAS need a per-session token on their managed stdio declarations. "
+    "Kiro loads its native spec; KAS needs the token when mcp_gateway.stub_servers "
+    "is empty and no stub entry carries the token.  Other harnesses carry identity "
+    "through their own projections.",
     (
         "src/kiro_crew/acp/runtime.py",
         "load_session",

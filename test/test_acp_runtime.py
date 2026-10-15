@@ -82,6 +82,18 @@ def kas_readiness_wire(monkeypatch, tmp_path):
     rt._acp_backend = ACP_BACKEND_KAS
     rt._can_load_session = True
     rt._work_dir = tmp_path
+    # KAS sessions now call kiro_control_plane_servers in _unpooled_control_planes;
+    # this fake-transport harness has no managed MCP server subprocess to wait for.
+    # Mock the inner function rather than the whole method to preserve pass-through
+    # of the existing ``entries`` list (session-level injections like
+    # ``kirocrew-dashboard`` that the fixture supplies via pooled_session_servers).
+    import kiro_crew.acp.session_mcp as _smc
+
+    monkeypatch.setattr(
+        _smc,
+        "kiro_control_plane_servers",
+        lambda *_a, **_k: _smc.NativeControlPlaneMount([], {}),
+    )
     clock = [0.0]
     monkeypatch.setattr(sh, "time", SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
     monkeypatch.setattr(rt, "_session_start_budget", AsyncMock(return_value=30.0))

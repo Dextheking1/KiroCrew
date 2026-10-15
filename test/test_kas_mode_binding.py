@@ -36,6 +36,16 @@ def _fast_no_report_ceiling(monkeypatch):
     module asserts on the ceiling itself.
     """
     monkeypatch.setattr(sh, "_MCP_DRAIN_NO_REPORT_CEILING", 0.05)
+    # The mode-binding stub is a minimal kiro-cli shim that does not launch
+    # managed MCP server subprocesses.  Keep control-plane elements out of
+    # session/new so the runtime does not wait 90 s for servers that never start.
+    from kiro_crew.acp import session_mcp as _smc
+
+    monkeypatch.setattr(
+        _smc,
+        "kiro_control_plane_servers",
+        lambda *_a, **_k: _smc.NativeControlPlaneMount([], {}),
+    )
 
 
 #: Records what the client injected so a test can read it back, and gates

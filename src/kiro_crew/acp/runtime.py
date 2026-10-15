@@ -7085,6 +7085,29 @@ class AcpRuntime:
     ) -> list[dict[str, Any]]:
         # A shared Kiro process has no session-valued environment. Its native
         # managed servers need per-element identity even with the broker off.
+        if self.acp_backend == ACP_BACKEND_KAS:
+            # kiro-cli (the KAS runtime) is session-unbound on AcpRuntime: one
+            # process serves many sessions and carries no per-session token in its
+            # environment.  The stub entry is the identity channel when the server is
+            # routed through the gateway (``mcp_gateway.stub_servers``).  When
+            # ``stub_servers`` is empty (the default), no stub entry is injected and
+            # kirocrew-core runs directly with no token, refusing every call as
+            # ``identity_unattested`` on every dashboard session.
+            #
+            # The control-plane element carries the session's own token (attached by
+            # ``_own_stub_session``), so kirocrew-core starts with the token in its
+            # environment and :func:`session_key_from_env_token` resolves the session.
+            # ``existing_names`` prevents a duplicate when the server is already in
+            # the stub set (``mcp_gateway.stub_servers``).
+            from kiro_crew.acp.session_mcp import kiro_control_plane_servers
+
+            kas_mount = await asyncio.to_thread(
+                kiro_control_plane_servers,
+                agent,
+                work_dir=work_dir,
+                existing_names={str(entry.get("name")) for entry in entries},
+            )
+            return [*entries, *kas_mount.elements]
         if self.acp_backend == ACP_BACKEND_KIRO:
             from kiro_crew.acp.session_mcp import kiro_control_plane_servers
 
