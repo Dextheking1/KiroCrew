@@ -46,6 +46,7 @@ from kiro_crew.acp.types import (
     ACP_BACKENDS_KNOWN,
     ACP_BACKENDS_SESSION_SHARING,
     ACP_BACKENDS_STEER,
+    ACP_BACKENDS_STEER_CONCURRENT_PROMPT,
     ACP_BACKENDS_STEERING_REQUEST,
     ACP_BACKENDS_STRUCTURED_REFUSAL,
     ACP_CLIENT_CAPABILITIES,
@@ -99,13 +100,13 @@ def _field_enum(name: str) -> object:
 
 
 # ---------------------------------------------------------------------------
-# Group A: Kiro is the default and the floor
+# Group A: KAS is the default; Kiro is the floor
 # ---------------------------------------------------------------------------
 
 
-def test_kiro_is_the_default_backend() -> None:
-    """H1: configuring nothing yields the Kiro harness."""
-    assert _field_default("acp_backend") == ACP_BACKEND_KIRO
+def test_kas_is_the_default_backend() -> None:
+    """H1: configuring nothing yields the KAS harness."""
+    assert _field_default("acp_backend") == ACP_BACKEND_KAS
 
 
 def test_kiro_is_always_selectable() -> None:
@@ -134,22 +135,18 @@ def test_provider_enum_is_acp_only() -> None:
 
 
 @pytest.mark.parametrize("persisted", ["", "kas", "byo-harness", "claude", None, 7])
-def test_unselectable_backend_degrades_to_kiro(persisted: object) -> None:
-    """H3: an unusable persisted value degrades to Kiro and never raises.
+def test_unselectable_backend_degrades_to_default(persisted: object) -> None:
+    """H3: an unusable persisted value degrades safely and never raises.
 
-    Includes the non-string shapes a hand-edited config.json can hold: a gate
-    that raises here turns a typo into a gateway that will not boot.
-
-    ``claude`` is in the list on purpose, and now for the opposite reason: it ships in
-    the public baseline, so it must SURVIVE rather than degrade. The assertion below is
-    conditional on membership precisely so this row proves the gate reads the registry
-    instead of hardcoding a verdict. ``byo-harness`` covers the unknown-id case, and a
-    known id that policy has denied is covered in
-    ``test_agent_backend_governance.py``.
+    Only an absent value (``None``) earns the KAS default. A malformed, denied
+    or host-unservable explicit value takes the unconditional Kiro floor, so the
+    resolved value always belongs to the live selectable set.
     """
     resolved = _normalize_acp_backend(persisted)
     assert resolved in selectable_backends()
-    if persisted not in selectable_backends():
+    if persisted is None:
+        assert resolved == ACP_BACKEND_KAS
+    elif persisted not in selectable_backends():
         assert resolved == ACP_BACKEND_KIRO
 
 
@@ -285,9 +282,11 @@ def test_member_capabilities_are_opt_in() -> None:
 def test_steer_is_opt_in() -> None:
     """H6: the ``_session/steer`` extension is claimed by membership."""
     source = inspect.getsource(acp_client.AcpClient.supports_steer.fget)
-    assert "ACP_BACKENDS_STEER" in source
+    assert "in ACP_BACKENDS_STEER\n" in source
+    assert "in ACP_BACKENDS_STEER_CONCURRENT_PROMPT" in source
     assert ACP_BACKEND_KIRO in ACP_BACKENDS_STEER
     assert ACP_BACKEND_CLAUDE not in ACP_BACKENDS_STEER
+    assert ACP_BACKEND_CLAUDE not in ACP_BACKENDS_STEER_CONCURRENT_PROMPT
 
 
 def test_mcp_config_hot_reload_is_opt_in() -> None:
@@ -419,6 +418,7 @@ def test_capability_sets_are_subsets_of_known_backends() -> None:
         ("ACP_BACKENDS_MEMBER_TOOL_LIMITS", ACP_BACKENDS_MEMBER_TOOL_LIMITS),
         ("ACP_BACKENDS_SESSION_SHARING", ACP_BACKENDS_SESSION_SHARING),
         ("ACP_BACKENDS_STEER", ACP_BACKENDS_STEER),
+        ("ACP_BACKENDS_STEER_CONCURRENT_PROMPT", ACP_BACKENDS_STEER_CONCURRENT_PROMPT),
         ("ACP_BACKENDS_INTERNAL_SANDBOX", ACP_BACKENDS_INTERNAL_SANDBOX),
         ("ACP_BACKENDS_ACP_RUNTIME", ACP_BACKENDS_ACP_RUNTIME),
         ("ACP_BACKENDS_COMPACT", ACP_BACKENDS_COMPACT),

@@ -443,6 +443,27 @@ describe('LibraryPage trust gate', () => {
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: `${K}.cancel` })).toBeTruthy()
   })
 
+  it('labels the enable retry after a landed grant without asking for trust again', async () => {
+    // Trust is already saved in this state, so the retry is its own label and
+    // not the not-saved state's "trust and try again".
+    enableApp.mockRejectedValue(TRUST_DENIED())
+    getApp.mockRejectedValue(apiError(500, { error: 'gateway exploded' }, 'gateway exploded'))
+    renderPage()
+    await clickEnable()
+    await waitFor(() => expect(modalTitle()).toBeTruthy())
+
+    fireEvent.click(confirmBtn())
+
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent)
+      .toContain(`${K}.failed LaunchDarkly`))
+    const dialog = within(screen.getByRole('dialog'))
+    const retry = dialog.getByRole('button', { name: `${K}.confirm_retry_granted` })
+    // No new trust is asked, so the retry does not carry the trust (shield) icon.
+    expect(retry.querySelector('svg.lucide-rotate-ccw')).not.toBeNull()
+    expect(retry.querySelector('svg[class*="shield"]')).toBeNull()
+    expect(dialog.queryByRole('button', { name: `${K}.confirm_after_failure` })).toBeNull()
+  })
+
   it('does NOT open the modal for a non-trust enable failure', async () => {
     enableApp.mockRejectedValue(apiError(500, { error: 'gateway exploded' }, 'gateway exploded'))
     renderPage()
@@ -656,6 +677,85 @@ describe('registry install trust gate', () => {
     } finally {
       __resetGatewayConnectedForTests()
     }
+  })
+
+  it('turns the not-saved retry off while the gateway is unreachable, and back on when it returns', async () => {
+    // The offline next step says the retry stays off until the reconnect; the
+    // button does what the sentence says. Cancel stays usable throughout.
+    try {
+      await openUpdateConsent()
+      trustApp.mockRejectedValue(apiError(500, { error: 'trust store unavailable' }, 'trust store unavailable'))
+      fireEvent.click(confirmBtn())
+
+      const dialog = () => within(screen.getByRole('dialog'))
+      const retry = () => dialog().getByRole('button', { name: `${K}.confirm_after_failure` }) as HTMLButtonElement
+      await waitFor(() => expect(retry().disabled).toBe(false))
+
+      act(() => setGatewayConnected(false))
+      await waitFor(() => expect(retry().disabled).toBe(true))
+      expect((dialog().getByRole('button', { name: `${K}.cancel` }) as HTMLButtonElement).disabled).toBe(false)
+      fireEvent.click(retry())
+      expect(trustApp).toHaveBeenCalledTimes(1)
+
+      act(() => setGatewayConnected(true))
+      await waitFor(() => expect(retry().disabled).toBe(false))
+    } finally {
+      __resetGatewayConnectedForTests()
+    }
+  })
+
+  it('keeps the landed-grant retry on while the gateway is unreachable', async () => {
+    // Only the not-saved state's copy names the wait, so only its retry waits.
+    try {
+      await openUpdateConsent()
+      installFromRegistryStream.mockResolvedValue({ ok: false, error: 'clone failed' })
+      fireEvent.click(confirmBtn())
+      await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent)
+        .toContain(`${K}.update_failed LaunchDarkly`))
+
+      act(() => setGatewayConnected(false))
+      const retry = within(screen.getByRole('dialog'))
+        .getByRole('button', { name: `${K}.confirm_retry_granted` }) as HTMLButtonElement
+      expect(retry.disabled).toBe(false)
+    } finally {
+      __resetGatewayConnectedForTests()
+    }
+  })
+
+  it.each([
+    ['install', 'install_failed'],
+    ['update', 'update_failed'],
+  ] as const)('labels the %s retry after a landed grant without asking for trust again', async (path, headline) => {
+    // Trust is already saved in this state, so the retry is its own label and
+    // not the not-saved state's "trust and try again".
+    if (path === 'install') {
+      installFromRegistryStream.mockResolvedValue(INSTALL_DENIED())
+      renderDetailFromGet()
+      await waitFor(() => expect(modalTitle()).toBeTruthy())
+      getApp.mockRejectedValue(apiError(500, { error: 'gateway exploded' }, 'gateway exploded'))
+    } else {
+      await openUpdateConsent()
+      installFromRegistryStream.mockResolvedValue({ ok: false, error: 'clone failed' })
+    }
+    fireEvent.click(confirmBtn())
+
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent)
+      .toContain(`${K}.${headline} LaunchDarkly`))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('button', { name: `${K}.confirm_retry_granted` })).toBeTruthy()
+    expect(dialog.queryByRole('button', { name: `${K}.confirm_after_failure` })).toBeNull()
+  })
+
+  it('keeps the trust-and-retry label on the not-saved failure', async () => {
+    await openUpdateConsent()
+    trustApp.mockRejectedValue(apiError(500, { error: 'trust store unavailable' }, 'trust store unavailable'))
+    fireEvent.click(confirmBtn())
+
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent)
+      .toContain(`${K}.update_failed_generic LaunchDarkly`))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('button', { name: `${K}.confirm_after_failure` })).toBeTruthy()
+    expect(dialog.queryByRole('button', { name: `${K}.confirm_retry_granted` })).toBeNull()
   })
 
   it('keeps the not-saved next step out of the landed-grant failure', async () => {

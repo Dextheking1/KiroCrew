@@ -370,6 +370,7 @@ from kiro_crew.dashboard.chat_utils import (  # noqa: F401
     _BLOCKED_SLASH_COMMANDS,
     _KIRO_ONLY_BLOCKED_SLASH_COMMANDS,
     _MAX_TOOL_PURPOSE,
+    STEER_INTENT_META,
     STEER_POSSIBLY_DELIVERED_META,
     STEER_POSSIBLY_DELIVERED_NOTE,
     TURN_END_WIRE_CLS,
@@ -5264,6 +5265,8 @@ async def _start_next_queued_turn(
             _drained_meta.pop(_address_key, None)
     # Model input only: the row keeps the user's text as typed.
     _possibly_delivered_steer = bool(_drained_meta.pop(STEER_POSSIBLY_DELIVERED_META, False))
+    # Queue plumbing for the sub-agent hold only; says nothing about the row.
+    _drained_meta.pop(STEER_INTENT_META, None)
     # Queue plumbing like the steer mark above, read the way the channel origin is:
     # ANY consumed entry a channel hand-off stamped keeps the merged text content,
     # so a batch cannot smuggle a channel's "/clear" into a command by sitting
@@ -18015,7 +18018,7 @@ async def _run_chat(
                 "capability_harness_unsupported: This crew member has saved "
                 "capabilities, and the backend its chats run on "
                 "(agent.member_acp_backend, not agent.acp_backend) cannot load "
-                "them. Set agent.member_acp_backend to kas or kiro-cli, or reset "
+                "them. Set agent.member_acp_backend to kas or kiro, or reset "
                 "the member's Capabilities page, then start a new chat."
             )
             _err_meta = _terminal_error_meta(exc)
@@ -18029,7 +18032,7 @@ async def _run_chat(
                 "its chats run on (agent.member_acp_backend) cannot turn off single "
                 "tools, so they would be on. On the member's Capabilities page, turn "
                 "the whole server off or turn those tools back on, or set "
-                "agent.member_acp_backend to kiro-cli, then start a new chat."
+                "agent.member_acp_backend to kiro, then start a new chat."
             )
             _err_meta = _terminal_error_meta(exc)
         else:

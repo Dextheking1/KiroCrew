@@ -60,6 +60,8 @@ vi.mock('../../api/client', () => ({
     // the default is "feature on, nothing armed" so every other case renders
     // the page without a loop in the way.
     autonudgeList: vi.fn(() => Promise.resolve({ enabled: true, loops: [] })),
+    autonudgeForSlot: vi.fn(() => Promise.resolve({ enabled: true, loop: null })),
+    monitorForSlot: vi.fn(() => Promise.resolve({ enabled: true, monitor: null })),
     // The side panel's + menu gates its Summary row on this read; "disabled"
     // keeps the chat-style Summary row out of the menu, next to the Work log
     // chip it would be a second, unrelated summary of the same thread.
@@ -683,6 +685,18 @@ describe('MembersPage roster', () => {
     expect(await notices.findByTestId('member-main-teams-error', undefined, PANE_READY)).toBeInTheDocument()
     // No hand-off from above the thread: Profile may hold an unsaved schedule draft.
     expect(notices.queryByRole('button', { name: /ask the agent/i })).toBeNull()
+  })
+
+  it('shows a patrol error when a refetch fails after a good cached read', async () => {
+    const { queryClient } = await renderPage([row()], 'kirocrew', { route: '/members?member=oncall' })
+    await screen.findByTestId('chat-pane-stub', undefined, PANE_READY)
+    await waitFor(() => expect(api.autonudgeList).toHaveBeenCalled())
+
+    vi.mocked(api.autonudgeList).mockRejectedValue(new Error('patrol unavailable'))
+    await act(async () => { await queryClient.refetchQueries({ queryKey: ['autonudge-loops'] }) })
+
+    expect(await screen.findByTestId('member-main-patrol-error', undefined, PANE_READY)).toBeInTheDocument()
+    expect(screen.getByTestId('member-roster-patrol-error')).toBeInTheDocument()
   })
 
   it('the teams read notice dismisses for the outage, returns on a failure after a good read, and clears on a good read', async () => {

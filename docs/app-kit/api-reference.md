@@ -101,15 +101,67 @@ For the full hook list see [getting-started.md](getting-started.md#app-sdk-hooks
 ## Embedded Chat
 
 `ChatEmbed` mounts Kiro Crew's native transcript and compact composer for an
-existing session. The required `slotKey` selects the session. Existing props such
-as `agent`, `placeholder`, `frameless`, `startAtBottom`, `onSend`, and
-`aboveComposer` keep their current contracts.
+existing session. The required `slotKey` selects the session.
 
 ```tsx
 import { ChatEmbed } from '@kirocrew/app-sdk'
 
 <ChatEmbed slotKey="coder-abc123" />
 ```
+
+| Prop | Type | Default | What it does |
+|---|---|---|---|
+| `slotKey` | `string` | required | The chat slot (session) the embed reads and sends to. |
+| `agent` | `string` | unset (sent as `''`) | Agent name sent with each `POST /api/chat`, and shown in the title strip when set. Ignored by `onSend`. |
+| `placeholder` | `string` | localized "Message..." (`appSdk.chatEmbed.message`) | Composer placeholder while the session is idle. While a turn runs the composer shows its own "agent is working" text instead. |
+| `frameless` | `boolean` | `false` | Drops the outer border, rounding, background and title strip, and makes the input row transparent, so a host card can hold the chat flush. |
+| `startAtBottom` | `boolean` | `false` | Opens scrolled to the newest row and stays pinned there as rows arrive, until the user scrolls up; shows a jump-to-bottom button while unpinned. Without it the embed opens at the top and smooth-scrolls to each new message. |
+| `onSend` | `(message: string, meta?: ChatEmbedSendMeta) => Promise<unknown> \| void` | none | Replaces `POST /api/chat` as the send path. Use it when the app owns its slots: the generic endpoint creates a missing slot with no app ownership and no project. A send with non-image attachments passes `meta` (`{ files?: string[] }`); forward it as `meta` on your own chat POST (see [Attachments](#attachments)). |
+| `aboveComposer` | `ReactNode` | none | Content placed in normal flow directly above the composer, such as a docked quote bar. |
+| `composerMaxHeight` | `number` (px) | `240` | Cap for the composer's auto-grow (see below). |
+| `onFileOpen` | `(path: string, opts?: { line?: number; endLine?: number }) => void` | none | Opens a file the transcript names; without it the tool-row file chip is hidden and path links stay plain (see below). |
+| `onArtifactOpen` | `(slug: string) => void` | none | Opens a saved artifact from a link in a reply; without it artifact links follow their href. |
+
+### Required permissions and limitations
+
+The embed calls the Gateway through the host's scoped `useAppApi()` client, so
+the app must grant `/api/chat` in its `permissions.api` (a builtin host passes it
+in `AppApiProvider`'s `allowedApiPaths`). This entry satisfies the scoped client's
+API-path check for each of these calls:
+
+- `GET /api/chat/slots/{slot}?limit=N` — the transcript poll.
+- `POST /api/chat` — sending, unless `onSend` is supplied.
+- `POST /api/chat/slots/{slot}/approve` — Approve, Reject and Trust on a tool approval.
+
+File attachments upload to `POST /api/upload/file`, which `/api/chat` does not
+cover: it is a separate, optional grant (see [Attachments](#attachments)).
+
+Without the API-path grant the scoped client throws before any request is sent:
+the transcript shows its load error, and sending and approving fail. Supplying
+`onSend` removes only the send call; the poll and approvals still need the grant.
+
+For app-token callers, approvals also require `permissions.sessionApproval`.
+Without that permission, the Gateway returns 403 `session_approval_not_granted`,
+even for the app's own slots. The API-path grant alone does not authorize an
+approval; the session ownership rules still apply. See **Ownership for app
+callers** under [Approvals](#approvals).
+
+What the embed does not do today, one line each:
+
+- No live stream. It polls the slot every 1 s while a turn runs and every 5 s
+  when idle, reading the newest 200 rows; "load earlier" widens that by 200 rows
+  a press, up to 500. Replies are displayed from the transcript poll, not from
+  the send response. After 10 s of failed polls it backs off, up to 30 s
+  between attempts.
+- No Stop control. A running turn cannot be cancelled from the embed.
+- No reasoning display. Model thinking is sent only as the `chat_thinking`
+  WebSocket event, which the poll never sees.
+- Trust is a lasting grant, not a one-shot approval. Choosing Trust on an
+  approval card approves the call and sets the session's approval policy to
+  auto-approve, so later tool calls in that session run without asking until
+  the policy is changed.
+
+### Composer
 
 The composer accepts multiple lines. `Enter` sends the draft, `Shift+Enter`
 inserts a line break, and an Enter used to commit an input method editor (IME)
@@ -134,6 +186,29 @@ A host that boxes the embed at a fixed height passes `composerMaxHeight` (in
 pixels) to lower that cap, so a long draft cannot take most of the box from the
 transcript. The resting (empty) size of the composer is unchanged; only the cap
 moves. Omitted, the 240-pixel default applies.
+
+While the agent is working and the draft is empty, a Stop button takes the send
+button's place. It is the dashboard composer's own Stop control. The first press
+asks the agent to stop, and the header then reads "Stopping…". A
+second press made while that stop is still pending forces the stop: it ends the
+turn at once and drops any queued messages, and a hint above the composer says
+so before the press. If the forced stop itself stalls, the button comes back
+after 15 seconds and the hint says to press it again. The hint shows only while
+the Stop button does: typing a draft brings Send back, and Send queues the
+draft. A failed stop shows an error above the composer. While the session is
+compacting its context, a first press stops nothing: the header does not change
+to "Stopping…", and for the next 60 seconds the hint warns that Stop will
+restart the session: the chat history stays, but work in progress and queued
+messages are dropped. A stop belongs to the turn it was pressed in: when the
+next queued turn starts, the embed shows an unpressed Stop again. The embed's Stop is not
+the dashboard guide's `composer.stop` target, which stays on the chat page. Stop calls
+`POST /api/chat/slots/{slot}/stop` (`?force=true` for the second press), which
+the `/api/chat` entry the embed already needs in `allowedApiPaths` covers. The
+embed reads the stop phase from the `stop_state` field of
+`GET /api/chat/slots/{slot}` (`idle`, `soft_pending` or `killing`), and from
+its `stop_declined` field whether the next press restarts the session, so an
+embed opened during that window warns before the first press. Its `turn` and
+`turn_gen` fields tell it when a new turn has started.
 
 ```tsx
 <div style={{ height: 420 }}>
@@ -433,6 +508,7 @@ Import `defaultMessageRenderers` if you need to read what the built-ins do, and 
 | `onFileOpen` | open a path, when the host supports it |
 | `autoDeniedIds` | tool calls a policy or hook blocked |
 | `renderTool` | the host's tool row, if it passed one |
+| `handOff` | whether a row's error notice may offer "Ask the agent"; absent means yes |
 
 Two rules the registry relies on:
 
@@ -447,6 +523,15 @@ Two rules the registry relies on:
   says "no row by design"; no entry at all says "nothing handles this". Both look identical on
   screen, so `website/src/test/messageRenderers.test.ts` pins which is which.
 
+### Error hand-off inside the list
+
+A failed approval decision and a refused tool-output copy render an `ErrorNotice` with the "Ask the
+agent" hand-off, which navigates to the main chat. A host holding unsaved local state that the
+navigation would drop passes `handOff={false}` to `ChatMessageList`: those notices then render
+without the button, and renderers see `ctx.handOff === false`. `ChatEmbed` does this because its
+composer draft lives only in the embed. `ToolCallPill` takes the same switch as `askAgent`.
+Default is `true`, so a host with nothing to lose keeps the hand-off.
+
 ### Exports
 
 | Export | Kind | Purpose |
@@ -455,7 +540,7 @@ Two rules the registry relies on:
 | `defaultMessageRenderers` | value | the built-in registry, in resolution order |
 | `mergeRenderers(extra)` | function | shape-matched defaults, then host entries, then the rest |
 | `resolveRenderer(message, renderers)` | function | first entry that claims the message |
-| `ToolCallPill` | component | the store-free tool row the default registry uses |
+| `ToolCallPill` | component | the store-free tool row the default registry uses; expanded, it shows the persisted `meta.input` / `meta.output` in the main chat's Input/Output panel, and falls back to the row's `content` only when both are empty |
 | `GROUPED_ROLES` | value | frozen array of the roles grouped before per-row resolution (see the limitation above) |
 | `MessageRenderer` | type | `{ id, roles, match?, render }` |
 | `MessageRenderContext` | type | what `render` is handed |

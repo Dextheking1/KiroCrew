@@ -34,6 +34,9 @@ FOLDER_SOURCE_TYPES = {"local_folder", "obsidian_vault"}
 # signature change invalidated the whole corpus, and the ensuing full re-embed
 # can run for a long time on a big knowledge base.
 _LARGE_REBUILD_WARN_THRESHOLD = 1000
+# Sweeps the stale-embedding count waits for its covering index before falling
+# back to a full-table count (the post-bind build normally makes it at boot).
+_EMBED_INDEX_GRACE_SWEEPS = 3
 
 
 class KnowledgeWatcher:
@@ -52,6 +55,9 @@ class KnowledgeWatcher:
         # False until a scheduled dedup pass has actually applied deletes; the
         # first scheduled pass previews instead.
         self._dedup_applied_once = False
+        # Self-heal sweeps that found the stale-count index missing.
+        self._embed_index_missing_sweeps = 0
+        self._embed_index_missing_warned = False
 
     async def start(self):
         logger.info("Source watcher started: interval=%ds", self.interval)
@@ -537,6 +543,21 @@ class KnowledgeWatcher:
         # embedder it can stall for tens of seconds, and an inline call would
         # block the event loop past the loop-watchdog threshold and crash-loop
         # the gateway (observed on a ~1.3GB KB after an embedder-sig change).
+        # Only from the covering index. Until the post-bind build has made it
+        # (the first boot after an upgrade) the count would read every item row,
+        # the read that slowed memory preparation at boot; a later sweep has it.
+        # If the build failed, the index never comes: after a few sweeps, warn
+        # once and count from the table so stale vectors still get re-embedded.
+        if not await asyncio.to_thread(self.store.has_embed_state_index):
+            self._embed_index_missing_sweeps += 1
+            if self._embed_index_missing_sweeps <= _EMBED_INDEX_GRACE_SWEEPS:
+                return
+            if not self._embed_index_missing_warned:
+                self._embed_index_missing_warned = True
+                logger.warning(
+                    "Watcher self-heal: knowledge index idx_items_embed_state is "
+                    "missing; counting stale embeddings from the full table"
+                )
         stale = await asyncio.to_thread(count_stale_items, self.store, sig)
         if not stale:
             return

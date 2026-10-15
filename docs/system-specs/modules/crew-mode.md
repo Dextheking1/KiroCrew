@@ -1851,6 +1851,24 @@ they sit at the box's bottom edge in both shapes. The glass rim is sized from
 the two-row height in both shapes (`rimSize`), so the lit edge keeps one width
 as the box changes height. The ordinary chat composer is unchanged.
 
+A turn that ends on an error (a Bedrock throttle, a dropped connection) or never
+answered gets the ordinary chat's Resume in two places: the composer's Resume
+pill, which takes the send slot while the draft is empty (the placeholder then
+reads "Last turn was interrupted -- press Resume, or just type"), and the Resume
+button on the newest error row. The DM is never the store's active slot, so
+`ChatPane` asks about its own slot (`useChatPaneContinue`):
+`selectContinuable(state, slot)` and `selectTurnInterrupted(state, slot)` read
+that slot's rows, its stream state and the slots frame's `running` / `stopping`,
+not the active mirror. Either press is `POST /api/chat/slots/{slot}/continue`,
+sent by `useContinuePress`, the same hook ChatPage uses. The gateway re-checks
+under the slot lock, and a refusal shows above the composer as "Couldn't
+continue" with the gateway's reason; a turn starting retires it. An error card
+with a remedy of its own (a context overflow, a repeated session start, a
+refused feature request, a refused app agent) withholds Resume from the composer
+too, through the one predicate `newestErrorOwnsRecovery` that ChatPage reads. A
+split-view pane of an ordinary chat is the same `ChatPane` and offers the same
+Resume.
+
 Placement is decided when the card opens, and two things revisit it. A window
 that crosses below `md` while the card holds its column re-places it as the
 floating card — kept open, not dropped — so no fixed-width aside stands on a
@@ -1878,7 +1896,8 @@ exist yet.
 description (two lines with a pushed full-text page); when the registry read fails,
 the About section shows the shared actionable `ErrorNotice` above any retained
 description, and only omits the no-description claim when no cached description
-exists. Memory and
+exists. The read-only Monitor section follows About. Every avatar and Profile surface shares the normalized record and strict `isAutomationActive` visual predicate through `CrewMonitoredAvatar`; that predicate extends `isAutomationRunning`, the broader lifecycle truth that keeps unsupported active records inside chat-sidebar close safety and its running filters. The Members page uses the strict predicate for its roster mark, header label, face flight, and **Patrolling** filter: a non-actionable record is lifecycle-busy but cannot truthfully make a visual on-watch claim. Live Redux frames remain the first source for roster and header visuals, while Profile's existing `session-automation` slot query supplies retained stopped state and full owner-gated details. A failed owner-gated Profile read deliberately hides its local avatar mark and detail rows even when Redux still has a reduced live record; the roster and header keep their live mark, but Profile never turns a failed authorization or refresh into a detailed claim. A failed roster refresh likewise discards its last-good legacy fallback, because stale active state cannot support a current visual claim. Missing cold reads cannot invent an active mark. It shows state, subject type, subject, cadence, current/maximum checks, runtime-clock start, next check, used/maximum runtime, and a retained stop reason; an absent check cap says **No limit**, while unavailable legacy runtime says **Unknown** rather than looking empty. A failed read shows only its State error with no recovery promise; loading says it is checking, never that it failed; a ready slot with no monitor says **Not watching anything** on one line. Structured targets and full state come only from the existing owner-gated `/api/monitors/slot/{slot_key}` read. The ungated compatibility read contributes legacy cadence and counters, but Profile never renders its prompt, banner, sentinel path, or session data. The section contains no control or action handler.
+Memory and
 Workspace sit side by side, but Memory is a flat readout — a solid `border-border`
 hairline, transparent background, no hover and no pointer; never dashed, which is
 this card's empty language (Sessions empty) and would make a

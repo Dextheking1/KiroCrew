@@ -685,10 +685,12 @@ html:lang(ko) {
    it, so the text stays as coloured as the floor allows. Danger keeps 55%
    (`bg-danger/25` on hover: 4.82:1 in tokyonight-light; 60% would be
    4.35:1). Ok keeps 60% (`bg-ok/20`: 4.56:1 in amoled-light; 61% would be
-   4.45:1). statusTextContrast.test.ts reads both shares from this rule and
-   measures every paired tint in every light palette. */
-:root{--ok-text:var(--ok);--danger-text:var(--danger);}
-[data-mode="light"]{--ok-text:color-mix(in srgb, var(--ok) 60%, #000);--danger-text:color-mix(in srgb, var(--danger) 55%, #000);}
+   4.45:1). Info (`text-info-text` on `bg-info-subtle`, `bg-info/N`) reads
+   1.69:1 plain in amoled-light and keeps 58% (`bg-info/15`: 4.53:1 in
+   amoled-light; 59% would be 4.41:1). statusTextContrast.test.ts reads every
+   share from this rule and measures every paired tint in every light palette. */
+:root{--ok-text:var(--ok);--danger-text:var(--danger);--info-text:var(--info);}
+[data-mode="light"]{--ok-text:color-mix(in srgb, var(--ok) 60%, #000);--danger-text:color-mix(in srgb, var(--danger) 55%, #000);--info-text:color-mix(in srgb, var(--info) 58%, #000);}
 :root,[data-theme="dark"],[data-theme="amber-dark"]{
   --search-highlight:rgba(255,167,38,.45);--search-highlight-current:rgba(255,120,0,.85);--search-highlight-current-border:rgba(255,255,255,.9);
   --bg:#12141a;--bg-accent:#14161d;--bg-elevated:#1a1d25;--bg-hover:#262a35;
@@ -3341,15 +3343,22 @@ body.mc-focus-mode.mc-focus-rail .focus-chrome-rail{
 .mc-cmt-bubble.unread { background-color: var(--warn); color: var(--warn-fg, #1a1a1a); }
 .mc-cmt-bubble.active { background-color: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 
-/* Artifact toolbar: every control (version select + buttons) the same height.
-   Icon-only buttons become squares; labeled buttons keep their padding-driven
-   width. ArtifactDetailPage already carries the `mc-art-toolbar` class. */
+/* Artifact toolbar: every button the same height. Icon-only buttons become
+   squares (the min-width matches the height); labeled buttons keep their
+   padding-driven width. The version select is a Radix trigger inside a
+   wrapper div, so this selector cannot reach it -- it takes the same 32px
+   through its own className (TOOLBAR_SELECT_CLASS in ArtifactDetailPage). A
+   button wrapped in HoverTip (`[data-hover-tip]`) is one level deeper and is
+   matched explicitly. */
 .mc-art-toolbar > button,
+.mc-art-toolbar > [data-hover-tip] > button,
 .mc-art-toolbar > select {
   height: 32px;
+  min-width: 32px;
   box-sizing: border-box;
 }
-.mc-art-toolbar > button {
+.mc-art-toolbar > button,
+.mc-art-toolbar > [data-hover-tip] > button {
   display: inline-flex;
   align-items: center;
   justify-content: center;

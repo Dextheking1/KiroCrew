@@ -3405,7 +3405,10 @@ def cleanup_orphaned_session_roots() -> int:
     recorded. The recorded start token only ever SUBTRACTS: a live value that differs
     prunes without a signal, an unreadable one retains the entry, and a value that
     matches settles identity well enough to skip the weaker PPid reparent test. A
-    token-less entry is judged by the argv gate plus that PPid test.
+    token-less entry is judged by the argv gate plus that PPid test. An entry whose
+    owning pid is the exec supervisor of this process
+    (:func:`platform_compat.is_exec_supervisor_of_this_process`) was filed by this
+    gateway's own previous image and is judged as a dead owner's.
 
     Called periodically from ``session.py``'s ``_cleanup_loop``. Returns the
     number of exact-handle trees completed plus orphaned processes killed.
@@ -3431,6 +3434,7 @@ def cleanup_orphaned_session_roots() -> int:
 
     my_gw_pid = os.getpid()
     entries_to_remove: set[str] = set()
+    supervisor_verdicts: dict[int, bool] = {}
 
     for line in lines:
         stripped = line.strip()
@@ -3468,16 +3472,31 @@ def cleanup_orphaned_session_roots() -> int:
         # platform_compat: os.kill(pid, 0) would *terminate* the process on
         # Windows, so use the three-way liveness probe instead.
         gw_liveness = platform_compat.pid_liveness(gw_pid)
-        if gw_liveness == platform_compat.PID_ALIVE:
-            continue  # gateway alive — its responsibility
         if gw_liveness == platform_compat.PID_UNSIGNALABLE:
             continue  # can't determine — skip
-        # gw_liveness == PID_DEAD — orphan candidate
+        if gw_liveness == platform_compat.PID_ALIVE:
+            # One live owner is NOT a gateway: the supervisor an in-app restart
+            # through a supervising launcher (``toolbox-exec``) leaves as this
+            # process's ancestor. Its rows were filed by this gateway's own
+            # previous image, and the startup sweep does not settle all of them:
+            # a child still in the spawn grace at boot, or one whose token could
+            # not be read then, is retained, and this is the only sweep that runs
+            # again before the next start. Such a row goes through every identity
+            # test below exactly as a dead owner's does. A live gateway ancestor
+            # still runs Python
+            # (:func:`platform_compat.is_exec_supervisor_of_this_process`) and
+            # keeps its rows. One ancestry walk per owner, not per row.
+            if gw_pid not in supervisor_verdicts:
+                is_supervisor = platform_compat.is_exec_supervisor_of_this_process(gw_pid)
+                supervisor_verdicts[gw_pid] = is_supervisor
+            if not supervisor_verdicts[gw_pid]:
+                continue  # gateway alive — its responsibility
+        # Owner dead, or this gateway's own exec supervisor — orphan candidate
 
-        # Gateway is dead. A process-local pending tree still owns its tracking.
+        # A process-local pending tree still owns its tracking.
         if platform_compat.windows_tree_cleanup_pending(child_pid, recorded_token):
             continue
-        # Gateway is dead. Check if the child PID is still alive.
+        # Check if the child PID is still alive.
         child_liveness = platform_compat.pid_liveness(child_pid)
         if child_liveness == platform_compat.PID_DEAD:
             # Already dead — just prune the entry

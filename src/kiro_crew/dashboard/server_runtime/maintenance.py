@@ -311,6 +311,17 @@ def _kick_knowledge_orphan_reclaim(state: DashboardState) -> None:
         store = state._knowledge_store
         if store is None:
             return
+        # The one-time rebuilds below read the whole library through SQLite's
+        # B-tree, a random read per page on a cold cache. When one is pending
+        # (the first start after an upgrade), read the file in order first so
+        # they and the first search run from memory. A no-op afterwards.
+        try:
+            if store.has_pending_one_time_work():
+                from kiro_crew.page_cache import read_now
+
+                read_now((getattr(store, "_db_path", None),))
+        except Exception:  # noqa: BLE001 -- a hint only
+            logger.debug("Knowledge page prefetch skipped", exc_info=True)
         with store.maintenance_window() as quiescent:
             # The one-time builds first. Both take SQLite's writer lock for an
             # O(data) pass (the mentions index alone measured 9.2 s on a cold

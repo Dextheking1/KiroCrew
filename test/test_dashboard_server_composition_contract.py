@@ -488,6 +488,7 @@ _LAZY_IMPORTS = {
     "kiro_crew.hooks": "set_builtin_app_agents set_builtin_app_mcp_servers set_builtin_app_names",
     "kiro_crew.memory": "MemoryStore",
     "kiro_crew.metrics": "_gauges",
+    "kiro_crew.page_cache": "read_now",
     "kiro_crew.security": "redact_credentials redact_exfiltration_urls",
     "kiro_crew.sel": "sel",
     "kiro_crew.stt": "engine stt_models",
@@ -513,7 +514,7 @@ def test_the_lazy_imports_stay_inside_the_functions_that_need_them() -> None:
                     for alias in node.names:
                         local.setdefault(alias.asname or alias.name, set()).add(alias.name)
     assert local == {name: {module} for name, module in expected.items()}
-    assert len(expected) == 83
+    assert len(expected) == 84
 
 
 def test_a_star_import_carries_the_moved_public_names(tmp_path: Path) -> None:

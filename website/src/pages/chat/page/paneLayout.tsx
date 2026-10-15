@@ -16,6 +16,8 @@ import { resolveFolderAgent, resolveFolderProjectDir, isStaleProjectDirError } f
 import { PanelLeftLight, PanelLeftSolid } from '../../../components/icons/panels'
 import { sidePanelDockMotion } from '../sidePanelMount'
 import { errMessage } from '../../../utils/thunkError'
+import { memorySwitchTimeoutMs } from '../../../utils/memorySwitchTimeout'
+import type { MemorySwitchContext } from '../memoryModeSwitch'
 import { crewWindowShown } from '../crew-window/crewWindowStore'
 import { i18nT } from '../../../i18n/t'
 import { uiLocation } from '../../../uiLocations/uiLocation'
@@ -176,6 +178,11 @@ interface PanelLayoutOptions {
   previewExpanded: boolean
   sidebarOpen: boolean
   flyout: HoverIntent
+  /** The composer state a memory-mode switch carries into the replacement session. */
+  memorySwitch: Omit<MemorySwitchContext, 'dispatch' | 'slot' | 'mode' | 'showActionError'> & {
+    /** Held true for the whole switch; the upload paths read it synchronously. */
+    lockRef: MutableRefObject<boolean>
+  }
 }
 
 /**
@@ -188,7 +195,7 @@ interface PanelLayoutOptions {
 export function usePanelLayout({
   mode, dispatch, isMobile, filteredSlots, activeSlot, isWelcomeState, showActionError, currentSlot, chatFolders, chatFoldersError, chatFoldersLoaded, mobileNewSessionBusy,
   mobileNewSessionInFlightRef, setMobileNewSessionBusy, setSidebarPinned, sidebarPinned, railWidth, winW, effectiveSidebarWidth, mobileSessions, openSidebar, closeSidebar, previewExpanded,
-  sidebarOpen, flyout,
+  sidebarOpen, flyout, memorySwitch,
 }: PanelLayoutOptions) {
   const flyoutNew = useCallback(() => {
     flyout.close()
@@ -332,37 +339,72 @@ export function usePanelLayout({
     onSelect: () => { void mobileNewSessionHere() },
   }
 
+  // A memory-mode switch in flight. The composer is disabled meanwhile so the
+  // draft and uploads it carries cannot change under it; the ref is the
+  // synchronous read for upload paths and a second click on the chip.
+  const [memorySwitching, setMemorySwitching] = useState(false)
+  const memorySwitchingRef = memorySwitch.lockRef
+  // An optimize in flight on the session on screen. A switch started now
+  // would carry the pre-optimize text and deliver the rewrite to the session
+  // it deletes, so the chip waits for the optimize to settle.
+  const [composerOptimizing, setComposerOptimizing] = useState(false)
+  const composerOptimizingRef = useRef(false)
+  const handleOptimizingChange = useCallback((optimizing: boolean) => {
+    composerOptimizingRef.current = optimizing
+    setComposerOptimizing(optimizing)
+  }, [])
+
   // Unchanged from the inline WelcomeView handler; shared with the composer memory chip.
   const switchMemoryMode = async (newMode: MemoryMode) => {
-    if (!activeSlot) return
-    // Create-first-then-delete: deleting the active slot first
-    // would make deleteSlot jump focus to a sibling. Creating
-    // first keeps the new slot active, so the delete skips the
-    // sibling navigation. Carry agent/project/folder/color so
-    // the recreated slot keeps its identity and placement.
-    const old = currentSlot
-    const opts = {
-      agent: old?.agent || undefined,
-      agent_kind: old?.agent ? old?.agent_kind || undefined : undefined,
-      model: old?.model || undefined,
-      mode,
-      memory_mode: newMode,
-      folder_id: old?.folder_id ?? null,
-      color_index: old?.color_index ?? null,
-      color_hex: old?.color_hex ?? null,
-      project: old?.project ?? null,
+    if (!activeSlot || memorySwitchingRef.current || composerOptimizingRef.current) return
+    const { lockRef: _lockRef, ...composer } = memorySwitch
+    const { composerMountedRef } = composer
+    // The composer is locked for the whole switch (see `memorySwitching`):
+    // nothing can be typed, pasted or attached in either session until it
+    // settles, so the draft and uploads are moved exactly once below.
+    memorySwitchingRef.current = true
+    setMemorySwitching(true)
+    const unlock = () => {
+      memorySwitchingRef.current = false
+      if (composerMountedRef.current) setMemorySwitching(false)
     }
-    try { await dispatch(createSlot(opts)).unwrap() } catch (error) {
-      showActionError(errMessage(error) || i18nT('pages.chatPage.unknown_error'))
-      return
+    // Bounded: a create or switch that never settles must not leave every
+    // composer locked. On timeout the lock lifts and the switch, whenever it
+    // settles, keeps both sessions and carries nothing.
+    const attempt = { timedOut: false }
+    const timer = setTimeout(() => {
+      attempt.timedOut = true
+      unlock()
+      showActionError(i18nT('components.welcomeView.memory_switch_timed_out'))
+    }, memorySwitchTimeoutMs())
+    let handedOver = false
+    try {
+      const { runMemorySwitch } = await import('../memoryModeSwitch')
+      handedOver = await runMemorySwitch({
+        ...composer, dispatch, slot: currentSlot, mode,
+        showActionError: message => showActionError(message),
+      }, activeSlot, newMode, attempt)
+    } catch (error) {
+      // The module failed to load (an offline reload of a stale tab).
+      if (!attempt.timedOut) showActionError(errMessage(error) || i18nT('pages.chatPage.unknown_error'))
+    } finally {
+      clearTimeout(timer)
+      // A timed-out attempt already unlocked; a newer switch may hold the lock now.
+      if (!attempt.timedOut) unlock()
     }
-    try { await dispatch(deleteSlot(activeSlot)).unwrap() } catch (error) {
-      showActionError(errMessage(error) || i18nT('pages.chatPage.unknown_error'))
+    // Deleted after the unlock: the user is already in the replacement.
+    if (handedOver) {
+      try { await dispatch(deleteSlot(activeSlot)).unwrap() } catch (error) {
+        // A rejected delete leaves the moved uploads with the replacement,
+        // where the user is, and the old slot keeps its own later work.
+        showActionError(errMessage(error) || i18nT('pages.chatPage.unknown_error'))
+      }
     }
   }
   // The welcome screen puts its memory chip directly above the composer.
   const showComposerMemoryChip = isWelcomeState
   return {
     flyoutNew, panelReserve, panelMaximized, panelFillWidth, mobileSessionsToggle, topbarSessionsToggle, mobileNewSessionItem, switchMemoryMode, showComposerMemoryChip,
+    memorySwitching, composerOptimizing, handleOptimizingChange,
   }
 }

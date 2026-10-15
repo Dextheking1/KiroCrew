@@ -44,7 +44,8 @@
 // browser chose as its anchor, which resets anchoring and jumps the viewport, so
 // the top visible row's offset is captured before the commit and `scrollTop` is
 // compensated after it. The CSS is retained — reliance on it is reduced, not
-// replaced.
+// replaced. While follow is armed the scroller's inline `overflow-anchor` is
+// `none` instead: the bottom pin owns the position (see followAnchorMode).
 //
 // Render contract for callers:
 //   - Wrap the scroll container with `scrollerRef`

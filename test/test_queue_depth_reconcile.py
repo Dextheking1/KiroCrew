@@ -51,6 +51,7 @@ from kiro_crew.taskq.reconcile import reconcile_on_boot
 from kiro_crew.taskq.store import TaskStore, TaskStoreUnavailable
 from kiro_crew.taskq.waits import WaitRecord
 from kiro_crew.testing.wait import async_wait_until, await_until
+from kiro_crew.testing.wait import finished as _finished
 
 #: Where each warning these tests count is logged; a count filters on it, so a
 #: record another thread in the worker logs cannot move it.
@@ -172,22 +173,6 @@ async def _settle(mgr: SubagentManager) -> None:
 async def _until(check: Any, what: str, timeout: float = _SETTLE_SECS) -> None:
     """Wait for *check* to hold (a delayed re-read lands on a timer), or fail by name."""
     await async_wait_until(check, timeout=timeout, describe=lambda: f"never happened: {what}")
-
-
-async def _finished(coro: Any, what: str) -> Any:
-    """Run *coro* to its end under the lost-run bound, failing by name (D8).
-
-    ``await_until`` takes a future the test already holds; a coroutine the test
-    itself calls is wrapped in a task here so a hang is a named failure instead
-    of the runner's kill. The task is cancelled on every early exit -- the bound
-    expiring, or an enclosing wait cancelling this one -- as ``wait_for`` did.
-    """
-    task = asyncio.ensure_future(coro)
-    try:
-        return await await_until(task, what=what)
-    finally:
-        if not task.done():
-            task.cancel()
 
 
 def _close(mgr: SubagentManager) -> None:

@@ -11,6 +11,7 @@ import { useAppDispatch, useAppSelector } from '../../store'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from '../../components/ui/dropdown-menu'
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent } from '../../components/ui/context-menu'
 import { offlineProps } from '../../utils/offline'
+import { crewOf } from '../../hooks/useInstanceSessions'
 import { switchSlot, selectSidebarWorkflowActive, selectAutomationForSlot } from '../../store/chatSlice'
 import { slotIsRemoteBound } from '../../store/dashboardSlice'
 import { api } from '../../api/client'
@@ -230,10 +231,42 @@ export const SessionRow = memo(function SessionRow({ view, actions }: SessionRow
     opensElsewhere, peerId, peerName,
   } = view
   const conductor = view.conductor
+  // An ADOPTED remote-crew row (a local slot that mirrors a peer session) has a ✕
+  // that removes only this machine's copy — the session stays live on its peer,
+  // and this hub cannot close it across the link. Relabel the ✕ "Remove from this
+  // machine" and name the crew it keeps running on, instead of promising a durable
+  // "Close" the row never performs, which is what made the removed row reappear on
+  // the next refresh (#19958).
+  // `!s.peer_id && crewOf(s)` is the repo's existing spelling of "adopted here": a
+  // peer row is owned elsewhere (no ✕ to relabel), and crewOf returns the crew a
+  // local slot's turns run on (executor === 'remote' with an instance_id).
+  const releaseLocally = !s.peer_id && !!crewOf(s)
+  // The crew's display name for the hint, resolved from the SAME shared
+  // ['instances'] cache the row's "On <name>" chip reads, so the hint names the
+  // crew the chip already shows. Gated on `releaseLocally` so an ordinary row
+  // registers no observer (the per-row cost ExecutorCrewChip was split out to
+  // avoid). Resolves to the crew's display NAME only; a raw instance id is not a
+  // name a reader recognises, so when the lookup misses (cache not loaded, or no
+  // match) the hint falls back to the generic line rather than showing the id.
+  const { data: instancesForHint } = useQuery({
+    queryKey: ['instances'],
+    queryFn: () => api.listInstances(),
+    enabled: releaseLocally,
+  })
+  const releaseCrewName = releaseLocally
+    ? (instancesForHint?.instances?.find(i => i.id === s.instance_id)?.name || '')
+    : ''
   // A card with sessions under it says how far its ✕ reaches: this one session,
-  // never the ones it opened, which stay open and keep running.
-  const closeReachLabel = conductor && conductor.childCount > 0 ? i18nT('pages.chatSidebar.close_this_session_only') : undefined
-  const closeReachHint = conductor && conductor.childCount > 0 ? i18nT('pages.chatSidebar.close_keeps_children_hint') : undefined
+  // never the ones it opened, which stay open and keep running. The release label
+  // wins when both apply: a reappearing-after-close surprise is the sharper one.
+  const closeReachLabel = releaseLocally
+    ? i18nT('pages.chatSidebar.release_locally')
+    : conductor && conductor.childCount > 0 ? i18nT('pages.chatSidebar.close_this_session_only') : undefined
+  const closeReachHint = releaseLocally
+    ? (releaseCrewName
+      ? i18nT('pages.chatSidebar.release_locally_hint', { peer: releaseCrewName })
+      : i18nT('pages.chatSidebar.release_locally_hint_generic'))
+    : conductor && conductor.childCount > 0 ? i18nT('pages.chatSidebar.close_keeps_children_hint') : undefined
   const {
     connected, mode, isMobile, colorMode, defaultAgent, installedAgents, tagById, paletteColors, boost, boostFor,
     recentTintCount, dragInFlight, activeDraggedKey, activeDraggedPinnedIndex, guideOnRowControl,
@@ -957,9 +990,14 @@ export const SessionRow = memo(function SessionRow({ view, actions }: SessionRow
       // (when there is one) sits over the tree -- the menu need not repeat it.
       sidebarOnScreen: true,
       // On a card with sessions under it, the menu's Close says it reaches this
-      // one session only, as visible text: a phone has no hover tooltip.
+      // one session only, as visible text: a phone has no hover tooltip. On an
+      // adopted remote-crew row the same slot carries the "Release locally" label.
       closeHint: closeReachHint,
-    }), [rowKey, mode, onRenameStart, onAutoTitle, scope, rowTitle, onOpenSlotInNewTab, closeReachHint])
+      closeLabel: releaseLocally ? closeReachLabel : undefined,
+      // Removing an adopted remote-crew copy is reversible (the session stays on
+      // its peer), so its menu item renders neutral, not destructive-red.
+      closeNeutral: releaseLocally,
+    }), [rowKey, mode, onRenameStart, onAutoTitle, scope, rowTitle, onOpenSlotInNewTab, closeReachHint, releaseLocally, closeReachLabel])
     const rowActions = useMemo(() => (void langGen, !renamingHere && !foreignRow ? (isMobile ? (
       <div className="absolute top-1/2 -translate-y-1/2 right-1.5 flex items-center gap-0.5">
         <DropdownMenu>
@@ -984,11 +1022,19 @@ export const SessionRow = memo(function SessionRow({ view, actions }: SessionRow
           </DropdownMenuContent>
         </DropdownMenu>
         <IconButton variant="accent" title={i18nT('pages.chatSidebar.duplicate')} aria-label={i18nT('pages.chatSidebar.duplicate')} {...uiLocation('sessions.row-duplicate')} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDuplicate(rowKey) }}><GitFork size={12} /></IconButton>
-        <IconButton variant="danger" title={closeReachLabel ?? i18nT('pages.chatSidebar.close')} aria-label={closeReachLabel !== undefined ? i18nT('pages.chatSidebar.close_this_session_only') : i18nT('pages.chatSidebar.close_session')} {...uiLocation('sessions.row-close')} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCloseSession(rowKey) }}><X size={12} /></IconButton>
+        {/* No hover close control on an ADOPTED remote-crew row (#19958, ruling 4):
+            a bare icon with no visible label read as a destructive "cut the chat
+            off" and the reader would not click it (UX). Removal for an adopted row
+            is only through the labelled row-menu item "Remove from this machine",
+            where the plain label and the hint are always visible. Ordinary local
+            rows keep their red ✕ close. */}
+        {!releaseLocally && (
+          <IconButton variant="danger" title={closeReachLabel ?? i18nT('pages.chatSidebar.close')} aria-label={closeReachLabel !== undefined ? i18nT('pages.chatSidebar.close_this_session_only') : i18nT('pages.chatSidebar.close_session')} {...uiLocation('sessions.row-close')} onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onCloseSession(rowKey) }}><X size={12} /></IconButton>
+        )}
       </IconButtonGroup>
     )) : null
     // `langGen` (read with `void` above) because the labels are i18nT strings, which re-translate on a catalog load.
-    ), [renamingHere, foreignRow, isMobile, isActive, guideOnRowControl, rowMenuProps, onMenuCloseAutoFocus, onDuplicate, onCloseSession, closeReachLabel, rowKey, langGen])
+    ), [renamingHere, foreignRow, isMobile, isActive, guideOnRowControl, rowMenuProps, onMenuCloseAutoFocus, onDuplicate, onCloseSession, closeReachLabel, releaseLocally, rowKey, langGen])
     const rowContextMenuContent = useMemo(() => (void langGen, !foreignRow ? (
       <ContextMenuContent className="min-w-[160px]" onClick={e => e.stopPropagation()} onCloseAutoFocus={onMenuCloseAutoFocus}>
         <SessionActionsMenu variant="context" {...rowMenuProps} />
@@ -1339,7 +1385,7 @@ export const SessionRow = memo(function SessionRow({ view, actions }: SessionRow
                 *  crew's participants and read as "people are in it" on a cold read. */}
               {!peerId && onOpenElsewhere && (
                 <span
-                  className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 rounded bg-info-subtle text-info border border-info/40"
+                  className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 rounded bg-info-subtle text-info-text border border-info/40"
                   data-testid="members-page-chip">
                   <ExternalLink size={9} className="shrink-0" aria-hidden="true" />
                   {i18nT('pages.chatSidebar.members_page_chip')}

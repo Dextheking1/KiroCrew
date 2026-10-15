@@ -20,7 +20,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Code2, GitBranch, Loader2, Server, ShieldAlert, Terminal } from 'lucide-react'
+import { Code2, GitBranch, Loader2, RotateCcw, Server, ShieldAlert, Terminal } from 'lucide-react'
 
 import { api } from '../../api/client'
 import { isNotFoundError } from '../../api/apiError'
@@ -565,16 +565,23 @@ export default function TrustAppModal({
   const freshInstall = path === 'install'
   const copy = terminalCopy(state, name, path)
   const permanentRefusal = state === 'permanent'
-  // The not-saved state's next step, shared by every path. It names the
-  // notice's Ask the agent hand-off only while that button can render: the
-  // button reads the same gateway-connection store and hides while the gateway
-  // is unreachable, and a sentence pointing at a hidden control is a dead end.
+  // The not-saved state's next step, shared by every path. It names the retry
+  // and the notice's Ask the agent hand-off only while both can be used: the
+  // hand-off reads the same gateway-connection store and hides while the
+  // gateway is unreachable, the retry is off then (below), and a sentence
+  // pointing at a control the reader cannot use is a dead end. So the
+  // headline above it names no control.
   const gatewayConnected = useSyncExternalStore(subscribeGatewayConnected, isGatewayConnected)
   const nextStep = state !== 'failed_generic'
     ? null
     : gatewayConnected
       ? i18nT('components.appstore.trustAppModal.failed_generic_next_ask')
       : i18nT('components.appstore.trustAppModal.failed_generic_next_offline')
+  // That offline next step says the retry stays off until the gateway is back,
+  // so the button is off for exactly that long: a retry while unreachable can
+  // only fail the same way. Cancel stays on. Only the not-saved state: it is the
+  // one whose copy names the wait.
+  const retryWaitsForGateway = state === 'failed_generic' && !gatewayConnected
   // When the refusal turns permanent the footer swaps Cancel + confirm for Close.
   // The user's focus was on the confirm button they just pressed; unmounting it
   // drops focus to the document, so a keyboard user's next Tab starts from
@@ -605,10 +612,12 @@ export default function TrustAppModal({
             <Btn onClick={onCancel} disabled={pending}>
               {i18nT('components.appstore.trustAppModal.cancel')}
             </Btn>
-            <Btn primary onClick={onConfirm} disabled={pending}>
+            <Btn primary onClick={onConfirm} disabled={pending || retryWaitsForGateway}>
               {/* Each path names what confirming runs. A first install only
                   installs (the app lands switched off), so its labels name the
-                  trust alone, never "and enable"; an Update names the update. */}
+                  trust alone, never "and enable"; an Update names the update.
+                  After a failure the retry label follows the state: with trust
+                  already saved it just tries again, so it does not say "Trust". */}
               {pending
                 ? <><Loader2 size={14} className="animate-spin" /> {path === 'update'
                     ? i18nT('components.appstore.trustAppModal.working_update')
@@ -616,7 +625,10 @@ export default function TrustAppModal({
                       ? i18nT('components.appstore.trustAppModal.working_install')
                       : i18nT('components.appstore.trustAppModal.working')}</>
                 : failed
-                  ? <><ShieldAlert size={14} /> {i18nT('components.appstore.trustAppModal.confirm_after_failure')}</>
+                  ? state === 'granted'
+                    // No new trust is asked here, so no trust (shield) icon either.
+                    ? <><RotateCcw size={14} /> {i18nT('components.appstore.trustAppModal.confirm_retry_granted')}</>
+                    : <><ShieldAlert size={14} /> {i18nT('components.appstore.trustAppModal.confirm_after_failure')}</>
                   : <><ShieldAlert size={14} /> {path === 'update'
                       ? i18nT('components.appstore.trustAppModal.confirm_update')
                       : path === 'install'

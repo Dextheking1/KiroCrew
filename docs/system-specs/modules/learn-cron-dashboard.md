@@ -4303,9 +4303,10 @@ refused because the conversation does not fit in one request (kiro-cli's
 kinds. The overflow is in the native history the backend re-sends, so Resume,
 a retry and every model in the fallback chain fail the same way. On the NEWEST
 such row `transcriptRenderers` withholds `onContinue` and passes
-`ErrorCard.onFreshSession`, and ChatPage withholds the composer's Resume while
-`contextOverflowIsNewest` holds. The press (`turnRecovery.handleFreshSession`)
-calls `POST /api/chat/slots/{slot}/reset-conversation` with `replay: true`: the
+`ErrorCard.onFreshSession`, and ChatPage, like every `ChatPane`, withholds the
+composer's Resume while `contextOverflowIsNewest` holds. The press
+(`turnRecovery.handleFreshSession`) calls
+`POST /api/chat/slots/{slot}/reset-conversation` with `replay: true`: the
 native conversation is dropped, the transcript stays, and the next turn is a
 fresh session seeded from the replay, which keeps only text rows and strips
 image references (`context_assembly.replay._quota_tail`), so the screenshots

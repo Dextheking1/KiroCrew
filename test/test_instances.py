@@ -4954,6 +4954,34 @@ class TestTokenMintGeneric:
         assert proc.communicate_calls == 2
         assert proc.wait_calls == 0
 
+    @pytest.mark.parametrize("budget, names_setting", [(30.0, True), (120.0, False)])
+    def test_mint_timeout_names_the_mint_budget_setting(self, monkeypatch, budget, names_setting):
+        """An SSH mint timeout names ``instances.mint_timeout_secs`` as the next step.
+
+        At the ceiling the setting cannot go higher, so the message points at the
+        host's reachability instead of telling the user to raise it.
+        """
+        from kiro_crew.instances import token_mint as tm
+
+        proc = self._HangProc()
+
+        async def fake_exec(*a, **k):
+            return proc
+
+        async def _tree(pid, sig):
+            return True
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(platform_compat, "kill_process_tree_async", _tree)
+        with pytest.raises(tm.TokenMintError) as excinfo:
+            asyncio.run(tm.mint_remote_token("cd-1", ttl="20h", timeout_secs=budget))
+        msg = str(excinfo.value)
+        assert msg.startswith(f"timed out minting token on cd-1 after {budget}s")
+        assert "jump host or proxy" in msg
+        assert ("instances.mint_timeout_secs" in msg) is names_setting
+        assert ("applies to SSH and SSM mints alike" in msg) is names_setting
+        assert ("already at its maximum" in msg) is not names_setting
+
     def test_run_remote_kirocrew_timeout_reaps_child_via_communicate_not_wait(self, monkeypatch):
         from kiro_crew.instances import token_mint as tm
 
@@ -8239,6 +8267,31 @@ class TestSsmMintOutputRedaction:
         assert secret not in sm._redacted_tail(
             text
         ), f"{vector_name}: SSM tail is weaker than the SSH tail it mirrors"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("budget, names_setting", [(90.0, True), (120.0, False)])
+    async def test_ssm_mint_timeout_names_the_mint_budget_setting(
+        self, monkeypatch, budget, names_setting
+    ):
+        """An SSM mint timeout names ``instances.mint_timeout_secs`` and the SSM agent.
+
+        At the ceiling the setting cannot go higher, so the message points at the
+        target's reachability instead of telling the user to raise it.
+        """
+        from kiro_crew.instances import ssm_token_mint as sm
+
+        async def _times_out(*a, **k):
+            raise asyncio.TimeoutError
+
+        monkeypatch.setattr(sm, "_send_over_ssm", _times_out)
+        with pytest.raises(sm.TokenMintError) as excinfo:
+            await sm.mint_remote_token_ssm("i-0123456789abcdef0", ttl="20h", timeout_secs=budget)
+        msg = str(excinfo.value)
+        assert msg.startswith("timed out minting token on i-0123456789abcdef0 over SSM")
+        assert f"polling budget {budget}s" in msg
+        assert "SSM agent is online" in msg
+        assert ("instances.mint_timeout_secs" in msg) is names_setting
+        assert ("already at its maximum" in msg) is not names_setting
 
 
 class TestSsmDiagnostics:

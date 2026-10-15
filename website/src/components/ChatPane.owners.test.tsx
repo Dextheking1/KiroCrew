@@ -45,6 +45,7 @@ describe('ChatPane module boundary', () => {
       'ChatPanePickerMenus.tsx',
       'ChatPaneProps.ts',
       'ChatPaneTranscript.tsx',
+      'useChatPaneContinue.ts',
       'useChatPaneDraft.ts',
       'useChatPanePickers.ts',
       'useChatPaneSend.ts',

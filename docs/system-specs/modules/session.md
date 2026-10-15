@@ -3336,6 +3336,19 @@ so absence clears it.
   rejected before a command outcome, including validation and idle-dispatch
   race refusals, are recorded by the generic mutating-API audit instead.
 
+- **A steer that missed its turn is not held behind sub-agents.** The sub-agent
+  hold (`_dequeue_next_system_message`) drains system injections and keeps plain
+  user prompts parked until the wave ends. A composer steer reaches the queue
+  only when the running turn could not take it: the steer was unavailable
+  (`api_chat`'s fall-through to `queue_for_next_turn(steer_intent=True)`), or
+  the turn ended before consuming it (`_requeue_unconsumed_steers`, from the
+  slot's `_steer_act_now` set). Either entry carries `meta.steer_intent`, and
+  `releases_past_subagent_hold` lets it drain at that turn's end like an
+  injection: its sender chose Steer, not Queue. Only the session's own human
+  typing in the composer gets the mark. A peer's `session_send` steer, a
+  channel steer, an app send and an `auto` send Jev decided to queue all wait
+  for the wave. The mark decides ordering only, never authority, and the drain
+  pops it so it never reaches the row's meta.
 - **Only a plain user prompt is durable.** An entry carrying a `kind` is an
   injection whose producer is gone (a cron notification names an event, and a
   restart is not that event happening again); an entry carrying a `payload` is a
@@ -4621,12 +4634,14 @@ allow and a committed teardown barrier before it is signalled (see
 [Orphan Sweep Active Set](#orphan-sweep-active-set)). `cleanup_orphaned_session_roots` and
 `cleanup_orphaned_sessions` do not ask the ownership gate: they reclaim entries whose
 owning gateway is dead, and the identity test and arm conditions here are the whole of
-their authority. `cleanup_orphaned_sessions` also reclaims entries whose owning pid is
+their authority. Both also reclaim entries whose owning pid is
 the supervisor an in-app restart through a supervising launcher left as this process's
-ancestor (`platform_compat.is_exec_supervisor_of_this_process`): those rows were filed
-by this gateway's own previous image, and the same identity test and arm conditions
-decide each of them. `cleanup_orphaned_session_roots` still skips them while the
-supervisor lives.
+ancestor (`platform_compat.is_exec_supervisor_of_this_process`, asked once per owner
+pid): those rows were filed by this gateway's own previous image, and the same identity
+test and arm conditions decide each of them. `cleanup_orphaned_session_roots` needs the
+rule as well as the startup sweep, because the startup sweep retains a row whose child
+is still in the spawn grace at boot or whose start token cannot be read then, and the
+periodic sweep is the only one that runs again before the next start.
 
 That gate is per-TOKEN and exact wherever a command line can be read (Linux `/proc`,
 macOS `ps`), never a substring of the whole line: the projected names include

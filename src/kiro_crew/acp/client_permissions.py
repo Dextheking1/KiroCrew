@@ -9,7 +9,8 @@ class binds it by name, so it reads and writes the session's own state on the in
 and a patch of the method on the class or on an instance reaches every caller.
 
 Instance fields written: ``_permission_gate_events``, ``_permission_options``,
-``_pi_gate_asked_ids``, ``_pi_gate_denied_ids``, ``_pi_gate_request_tool``.
+``_pi_gate_asked_ids``, ``_pi_gate_denied_ids``, ``_pi_gate_request_tool``,
+``_turn_permission_denied``.
 
 Instance fields read: ``_acp_config_options``, ``_agent``, ``_deepseek_gate_nonce``,
 ``_pi_gate_nonce``, ``_session_id``, ``_session_key``, ``_side_read_only``,
@@ -374,6 +375,9 @@ async def reject_tool(self: AcpClient, request_id: str | int) -> None:
     recorded = self._permission_options.pop(request_id, None)
     getattr(self, "_permission_gate_events", {}).pop(request_id, None)
     self._note_pi_gate_denied(request_id)
+    # Read by the concurrent-prompt steer settle: this denial may end the turn
+    # before a steer sent into it is read.
+    self._turn_permission_denied = True
     reject_id = recorded.get("reject") if recorded else None
     if reject_id:
         await self._send_response(

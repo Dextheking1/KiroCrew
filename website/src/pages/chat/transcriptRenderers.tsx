@@ -133,9 +133,9 @@ export interface TranscriptRendererOptions {
   onOpenNudgeLoop?: () => void
   /** Turn-recovery state for the error row's Continue button. Omitted → the
    *  row renders without one, which is correct for a surface that cannot
-   *  continue a turn. A pane cannot supply these until `selectContinuable` /
-   *  `selectTurnInterrupted` become slot-aware — both read the active slot
-   *  today, so a pane cannot ask whether ITS turn was interrupted. */
+   *  continue a turn. ChatPage hands over the active slot's; a pane hands over
+   *  its own slot's (`useChatPaneContinue`), since `selectContinuable` /
+   *  `selectTurnInterrupted` take the slot to ask about. */
   continuable?: boolean
   interrupted?: boolean
   continuing?: boolean
@@ -219,10 +219,10 @@ export function isFeatureRequestRefusal(messages: readonly ChatMessage[], index:
 /** True when the composer's Resume would replay the feature-request refusal:
  *  the newest error row is a `usage_limit` row that `isFeatureRequestRefusal`
  *  claims, and neither an assistant row nor a turn opener (`opensTurn`) follows
- *  it (a later turn is the composer's business, not this row's). ChatPage reads
- *  it to suppress the composer's Resume and its "press Resume" hint beside a
- *  card that has just withheld Resume for the same reason -- the two must not
- *  argue. */
+ *  it (a later turn is the composer's business, not this row's).
+ *  `newestErrorOwnsRecovery` reads it to suppress the composer's Resume and its
+ *  "press Resume" hint beside a card that has just withheld Resume for the same
+ *  reason -- the two must not argue. */
 export function featureRequestRefusalIsNewest(messages: readonly ChatMessage[]): boolean {
   const idx = lastErrorIndex(messages)
   if (idx < 0) return false
@@ -237,10 +237,10 @@ export function featureRequestRefusalIsNewest(messages: readonly ChatMessage[]):
  *  `SESSION_START_REPEAT_REFUSAL_AT` times in a row: the newest error row is a
  *  `session_start_failed` row, nothing after it opens a new turn, and the
  *  streak scan reaches the threshold. The same predicate the error row uses
- *  to withhold its Resume; ChatPage reads it to suppress the composer's Resume
- *  and its "press Resume" hint beneath that card, because a composer urging
- *  the press the card just withheld (and the server refuses with
- *  `session_start_repeat`) would argue with it. Typing still works. */
+ *  to withhold its Resume; `newestErrorOwnsRecovery` reads it to suppress the
+ *  composer's Resume and its "press Resume" hint beneath that card, because a
+ *  composer urging the press the card just withheld (and the server refuses
+ *  with `session_start_repeat`) would argue with it. Typing still works. */
 export function sessionStartRepeatIsNewest(messages: readonly ChatMessage[]): boolean {
   const idx = lastErrorIndex(messages)
   if (idx < 0) return false
@@ -254,7 +254,8 @@ export function sessionStartRepeatIsNewest(messages: readonly ChatMessage[]): bo
 /** True when the transcript's newest state is a context overflow: the newest
  *  error row is a `context_overflow` row and nothing after it opens a new
  *  turn. The card withholds Resume there (it re-sends the history that
- *  overflowed); ChatPage reads this to withhold the composer's Resume too. */
+ *  overflowed); `newestErrorOwnsRecovery` reads this to withhold the
+ *  composer's Resume too. */
 export function contextOverflowIsNewest(messages: readonly ChatMessage[]): boolean {
   const idx = lastErrorIndex(messages)
   if (idx < 0) return false
@@ -267,9 +268,9 @@ export function contextOverflowIsNewest(messages: readonly ChatMessage[]): boole
 
 /** True when the newest error row is a refused app-owned agent turn
  *  (`isAppAgentRefused`) and nothing after it opens a new turn. The row
- *  withholds Resume (a retry re-runs the same refusal); ChatPage reads this to
- *  drop the composer's Resume and "press Resume" hint beneath it. Typing still
- *  works. */
+ *  withholds Resume (a retry re-runs the same refusal); `newestErrorOwnsRecovery`
+ *  reads this to drop the composer's Resume and "press Resume" hint beneath it.
+ *  Typing still works. */
 export function appAgentRefusalIsNewest(messages: readonly ChatMessage[]): boolean {
   const idx = lastErrorIndex(messages)
   if (idx < 0) return false
@@ -278,6 +279,17 @@ export function appAgentRefusalIsNewest(messages: readonly ChatMessage[]): boole
     if (row.role === 'assistant' || opensTurn(row)) return false
   }
   return isAppAgentRefused(messages[idx])
+}
+
+/** True when the newest error row is one of the four above: its card has
+ *  withheld Resume (a retry replays the rejection) and names a remedy of its
+ *  own, so the composer must not urge the press beneath it either. The one
+ *  place that spells the set for the composer: ChatPage's and every pane's
+ *  (`useChatPaneContinue`) both read this, so a fifth remedy card joins the
+ *  composer's gate by joining it here. Typing still works. */
+export function newestErrorOwnsRecovery(messages: readonly ChatMessage[]): boolean {
+  return featureRequestRefusalIsNewest(messages) || sessionStartRepeatIsNewest(messages)
+    || contextOverflowIsNewest(messages) || appAgentRefusalIsNewest(messages)
 }
 
 /** Index of the last `error` row, so only that one offers Continue. Derived

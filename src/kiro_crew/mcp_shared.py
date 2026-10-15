@@ -851,6 +851,13 @@ def _policy_session_key() -> str | None:
     stops short of naming a co-tenant on a shared runtime: a misresolved key
     applies one session's operator tool exclusions to another, so this lookup
     refuses there rather than guessing.
+
+    This reads the ``KIROCREW_SESSION_KEY`` rung that is skipped when
+    ``host_pid_is_shared`` is true. On a shared pid the rung resolves no key,
+    ``identity.failed`` is set, ``None`` is returned, and
+    ``_resolve_tool_policy`` raises into the ``resolution_failed`` path —
+    which is in ``_UNRESOLVED_REFUSES_CALL``, so ``tools/call`` is refused
+    rather than proceeding under a co-tenant's exclusion set.
     """
     identity = resolve_own_identity()
     return None if identity.failed else identity.session_key

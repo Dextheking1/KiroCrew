@@ -700,7 +700,7 @@ def _resolve_session_key_strict() -> str:
        once per runtime and inherited by every MCP child of it, so on a shared
        runtime it names one tenant and cannot say which one is calling — the same
        ground on which source 3 refuses such a pid
-       (:func:`_host_pid_hosts_several_sessions`).
+       (:func:`kiro_crew.mcp_caller.host_pid_is_shared`).
     3. The direct ``KIROCREW_HOST_PID`` -> ``session_pid_<pid>.txt``
        lookup, but ONLY when the HMAC sidecar written by the gateway
        verifies (:func:`kiro_crew.session_pid_sig.verify_session_pid`).
@@ -758,7 +758,7 @@ def _resolve_session_key_strict() -> str:
     # which one is calling — the same reason source 3 below refuses such a pid.
     # Answering would attribute this caller to a co-tenant and a state-mutating
     # tool would write another session's state.
-    if sk and not _host_pid_hosts_several_sessions(host_pid):
+    if sk and not host_pid_is_shared(host_pid):
         return sk
     try:
         if host_pid.isdigit():
@@ -768,30 +768,6 @@ def _resolve_session_key_strict() -> str:
     except Exception:
         pass
     return ""
-
-
-def _host_pid_hosts_several_sessions(host_pid: str) -> bool:
-    """True only when the mapping POSITIVELY records several sessions on *host_pid*.
-
-    Delegates to :func:`kiro_crew.mcp_caller.host_pid_is_shared`, the one answer
-    both resolvers share, so the strict path and the client-side ladder cannot
-    disagree about how many sessions a pid serves, nor about which mapping read
-    decides it.
-
-    That shared answer takes the UNSIGNED read on purpose, because it only ever
-    DENIES an identity. A same-uid agent that forges a tenant section costs its
-    target a refusal that names the reason, while the MAC-verified read would
-    make the guard silently inert wherever the SEL trust root is missing, which
-    is exactly where identity is already weakest. Source 3 below still demands
-    the MAC, because source 3 GRANTS a key.
-
-    Absence is NOT evidence: a missing or malformed mapping answers False and
-    leaves the env var exactly as authoritative as it was, so the single-session
-    topology the var was written for is unaffected and only a pid recorded as
-    shared loses it. Never raises -- an identity source that can raise would turn
-    a resolvable session into a crashed tool call.
-    """
-    return host_pid_is_shared(host_pid)
 
 
 def strict_identity_diagnosis(server: str = "kirocrew-core") -> str:

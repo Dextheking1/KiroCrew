@@ -35,11 +35,16 @@ import ErrorNotice from '../components/ErrorNotice'
 import { FilePreviewStrip } from '../components/chat-input/FilePreviewStrip'
 import { buildOutgoingTurn } from '../chat-core/composer/outgoingTurn'
 import { useEmbedAttachments } from './useEmbedAttachments'
+import { ComposerAttach } from '../chat-core/composer/Attach'
 import { JumpToBottomButton } from './ChatScrollChrome'
 import FollowUpBar from '../components/FollowUpBar'
 import ChatFooter from '../pages/chat/ChatFooter'
 import { deriveFollowUpOptions } from './protocol'
 import { useComposerDraft } from './useComposerDraft'
+import { useStopPress, type StopPhase } from '../chat-core/stop/useStopPress'
+import { sendEmbedStop } from './embedStopTransport'
+import { StopControls } from '../components/chat-input/StopControls'
+import { useStopEscapeHatch } from '../hooks/useStopEscapeHatch'
 import { useAppApi, useAppInfo } from './index'
 import { appApiSendWire } from './appSendWire'
 import { sendTurn, mintSendId } from '../chat-core/transport/sendTurn'
@@ -170,6 +175,16 @@ function isOwnUserRow(m: ChatMessage, sendId: string): boolean {
 interface ChatSlotData {
   messages?: ChatMessage[]
   running?: boolean
+  /** A stop is in flight (the slot's `_stopping`). */
+  stopping?: boolean
+  /** The stop machine's phase; drives Stop's escalation. */
+  stop_state?: StopPhase
+  /** A Stop was declined for a compaction moments ago: the next press resets the session. */
+  stop_declined?: boolean
+  /** The running (or last ended) turn's number; absent before a turn is numbered. */
+  turn?: number
+  /** The gateway process's generation; with `turn`, names one turn across restarts. */
+  turn_gen?: string
   title?: string
   /** Older rows exist beyond the bounded page. */
   has_more?: boolean
@@ -807,6 +822,62 @@ function ChatEmbed({
     ? i18nT('appSdk.chatEmbed.uploading_files')
     : i18nT('components.chatInput.attach_files')
 
+  // Stop sits where Send does while a turn runs and the draft is empty (a
+  // draft mid-turn still sends, which queues it), as in the main composer.
+  const refetchNow = useCallback(() => { void refetch() }, [refetch])
+  const serverTurn = typeof shown?.turn === 'number' ? `${shown.turn_gen ?? ''}:${shown.turn}` : undefined
+  // The main chat's press protocol (chat-core/stop/useStopPress) over the
+  // embed's scoped API. The embed learns turns from a poll, so it scopes the
+  // press state to the turn, and it reads the backend's compaction decline.
+  const sendStop = useCallback(
+    (force: boolean) => sendEmbedStop(api, slotKey, force).finally(refetchNow),
+    [api, slotKey, refetchNow],
+  )
+  const { stopState, onStop, stopError, stopDeclined } = useStopPress({
+    slotKey, busy: running, serverStopState: shown?.stop_state, sendStop,
+    turnScoped: true, turnKey: serverTurn, serverStopDeclined: shown?.stop_declined === true,
+  })
+  // Staged files count as a draft, as in the main composer's
+  // `composerHasDraft`: Stop must not take the place of sending them.
+  const showStop = running && !draft.trim() && attachments.files.length === 0
+  // Says what Stop does now, not "again": the warning also shows to a reader
+  // who opened or returned to the embed after someone else's press.
+  const stopResetHint = (
+    <span className="text-[13px] leading-4 text-muted" data-testid="chat-embed-stop-hint">
+      {i18nT('appSdk.chatEmbed.stop_restarts_session')}
+    </span>
+  )
+  const { escaped: killingEscaped } = useStopEscapeHatch(stopState)
+  // What the next press does, shown only while the Stop button is on screen
+  // (a draft swaps it for Send, which queues). It shows beside a failure
+  // notice too: a press that never got an answer keeps `soft_pending`, so the
+  // next press is a force stop, and its cost must be said before it is made.
+  const pressHint = !showStop ? null
+    : stopDeclined ? stopResetHint
+    : stopState === 'killing' && killingEscaped ? (
+      // An instruction, not a status line: the same press re-sends the force stop.
+      <span className="text-[13px] leading-4 text-muted" data-testid="chat-embed-stop-hint">
+        <span className="text-text">{i18nT('components.chatInput.click_again_to_force_stop')}</span>
+        {' · '}
+        {i18nT('components.chatInput.taking_longer_than_expected')}
+      </span>
+    ) : stopState === 'soft_pending' ? (
+      // The cost sits beside the instruction, where the user decides,
+      // not only in the button's tooltip: force stop drops queued work.
+      <span className="text-[13px] leading-4 text-muted" data-testid="chat-embed-stop-hint">
+        <span className="text-text">{i18nT('components.chatInput.click_again_to_force_stop')}</span>
+        {' · '}
+        {i18nT('components.chatInput.force_kill_discards_in_progress_work_and_queued')}
+      </span>
+    ) : null
+  // One status while a stop is under way: the header says "Stopping" with the
+  // footer, instead of "streaming". The placeholder stays neutral, so a narrow
+  // embed does not say it three times.
+  const stopUnderWay = running && (stopState !== 'idle' || !!shown?.stopping)
+  // The footer says "Killing…" once the force stop runs; the header and the
+  // placeholder follow it rather than keep saying "Stopping…".
+  const stopLabel = stopState === 'killing' ? i18nT('components.chatInput.killing') : i18nT('components.chatInput.stopping')
+
   // Resolve a pending tool approval from inside the embed.
   //
   // Without this the group header rendered a dead "Approval needed" label with
@@ -879,7 +950,7 @@ function ChatEmbed({
           <span className={`w-2 h-2 rounded-full shrink-0 ${stalled ? 'bg-muted' : running ? 'bg-ok animate-pulse' : 'bg-accent'}`} />
           <span className="text-[13px] font-semibold text-text-strong truncate flex-1">{title || slotKey}</span>
           {agent && <span className="text-[10px] font-mono text-muted">{agent}</span>}
-          {running && <span className="text-[10px] text-ok font-mono">{i18nT('appSdk.chatEmbed.streaming')}</span>}
+          {running && <span className={`text-[10px] font-mono ${stopUnderWay ? 'text-danger' : 'text-ok'}`}>{stopUnderWay ? stopLabel : i18nT('appSdk.chatEmbed.streaming')}</span>}
         </div>
       )}
 
@@ -895,6 +966,9 @@ function ChatEmbed({
         canTrust
         onFileOpen={onFileOpen}
         onArtifactOpen={onArtifactOpen}
+        // No hand-off: the embed's composer draft is unsaved local state that
+        // the hand-off's navigation to the main chat would discard.
+        handOff={false}
         transcript={{
           sessionId: `embed:${slotKey}`,
           followOutput: !!startAtBottom,
@@ -920,12 +994,13 @@ function ChatEmbed({
           ) : undefined,
           // The main chat's working indicator (ChatFooter, shared with ChatPage
           // and ChatPane), after the last row, so a running turn reads as "the
-          // reply is coming" where the reply will land. The poll carries no
-          // stop or compaction state, so only the plain running branch applies.
+          // reply is coming" where the reply will land. The poll carries the
+          // stop phase but no compaction state, so the compaction branch never applies.
           belowRows: (
             <ChatFooter
               running={running}
-              stopping={false}
+              stopping={shown?.stopping ?? false}
+              stopState={stopState}
               state={running ? 'streaming' : ''}
               lastRole={tail?.role ?? ''}
               streamTick={tail?.role === 'streaming' ? (tail.content?.length ?? 0) : 0}
@@ -1019,25 +1094,39 @@ function ChatEmbed({
         </div>
       )}
 
+      {/* The press hints describe the Stop button, so they show only while it
+          is on screen; typing a draft swaps it for Send, which queues. */}
+      {(stopError || pressHint) && (
+        <div className={`shrink-0 px-3 pt-2 ${frameless ? '' : 'bg-bg-accent'}`}>
+          {stopError && (
+            // A failed press that leaves a next press with a cost (the reset
+            // hatch, or a force stop that drops queued messages) is said
+            // without its own "press Stop again": the hint below names what
+            // the next press does, so one instruction remains (GPT round 6).
+            // No hand-off: the embed's composer draft is unsaved local state that the hand-off's navigation to the main chat would discard.
+            <ErrorNotice
+              testId="chat-embed-stop-error"
+              message={pressHint ? i18nT('appSdk.chatEmbed.stop_did_not_go_through') : stopError}
+            />
+          )}
+          {pressHint && <div className={stopError ? 'pt-1' : ''}>{pressHint}</div>}
+        </div>
+      )}
+
       <Composer slotKey={slotKey} value={draft} onChange={setDraft} capabilities={EMBED_CAPABILITIES}>
         <div
           className={`flex items-end gap-2 px-3 py-2 shrink-0 ${frameless ? '' : `${attachments.notice || attachments.files.length || attachments.uploadingNames.length ? '' : 'border-t'} border-border bg-bg-accent`}`}
         >
           {attachments.granted && (
             <>
-              <input
+              <ComposerAttach
                 ref={fileInputRef}
-                type="file"
                 multiple
                 hidden
                 tabIndex={-1}
                 aria-hidden="true"
                 data-testid="chat-embed-file-input"
-                onChange={e => {
-                  attachments.addFiles(Array.from(e.target.files ?? []))
-                  // Reset so picking the same file again still fires a change.
-                  e.target.value = ''
-                }}
+                onFiles={attachments.addFiles}
               />
               <button
                 type="button"
@@ -1068,16 +1157,23 @@ function ChatEmbed({
             placeholder={running ? i18nT('appSdk.chatEmbed.agent_is_working') : (placeholder || i18nT('appSdk.chatEmbed.message'))}
             disabled={sendMutation.isPending}
           />
-          <ComposerSend
-            className="p-2 min-h-0 rounded-md disabled:opacity-40"
-            onSend={() => send()}
-            running={running}
-            pending={sendMutation.isPending}
-            hasAttachments={attachments.files.length > 0}
-            uploading={attachments.uploading}
-            sendLabel={i18nT('appSdk.chatEmbed.send_message')}
-            sendTitle={i18nT('appSdk.chatEmbed.send')}
-          />
+          {showStop ? (
+            // The main composer's own Stop control; its hints are drawn above the
+            // composer instead of beside the button, where a narrow embed has no
+            // room for them.
+            <StopControls stopState={stopState} killingEscaped={killingEscaped} stopWithTap={onStop} inlineHints={false} guideTarget={false} />
+          ) : (
+            <ComposerSend
+              className="p-2 min-h-0 rounded-md disabled:opacity-40"
+              onSend={() => send()}
+              running={running}
+              pending={sendMutation.isPending}
+              hasAttachments={attachments.files.length > 0}
+              uploading={attachments.uploading}
+              sendLabel={i18nT('appSdk.chatEmbed.send_message')}
+              sendTitle={i18nT('appSdk.chatEmbed.send')}
+            />
+          )}
         </div>
       </Composer>
     </div>

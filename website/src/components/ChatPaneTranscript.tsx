@@ -19,7 +19,7 @@ import type { ChatPaneProps } from './ChatPaneProps'
 
 type Messages = Parameters<typeof foldEarlierConversation>[0]
 
-export function useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, sessions, activeSession, messages, foldBefore }: {
+export function useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, sessions, activeSession, messages, foldBefore, resume: { continuable, interrupted, continuing, onContinue } }: {
   slotKey: string
   busyMode: ComposerBusyMode
   onFileOpen?: ChatPaneProps['onFileOpen']
@@ -30,6 +30,8 @@ export function useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, 
   activeSession?: string
   messages: Messages
   foldBefore?: string
+  /** The Resume press for this slot (`useChatPaneContinue`), for the newest error row. */
+  resume: { continuable: boolean; interrupted: boolean; continuing: boolean; onContinue: () => void }
 }) {
   // Split-view panes draw the SAME transcript rows as the single-chat surface,
   // through the SDK's row registry: the live ToolCallLine (purpose / input /
@@ -73,8 +75,14 @@ export function useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, 
       onSessionOpen,
       sessions,
       activeSession,
+      // The newest error row's Resume, with the row set's own per-row remedies
+      // (a sign-in, a fresh session) still withholding it where a retry cannot help.
+      continuable,
+      interrupted,
+      continuing,
+      onContinue,
     }),
-    [slotKey, toolDisclosure, setToolDisclosureFor, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, sessions, activeSession],
+    [slotKey, toolDisclosure, setToolDisclosureFor, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, sessions, activeSession, continuable, interrupted, continuing, onContinue],
   )
   const renderers = useMemo(
     () => (foldBefore

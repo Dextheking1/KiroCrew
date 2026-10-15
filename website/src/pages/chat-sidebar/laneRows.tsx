@@ -103,7 +103,7 @@ export function createLaneRows(shell: SidebarScope) {
     return (
       <Fragment key={`stale-${containerId}`}>
         {/* aria-labelledby composes the visible sentence + a visually-hidden
-            container name, so AT announces "1 dormant session hidden <folder>"
+            container name, so AT announces "Show 1 sleeping session <folder>"
             — an aria-label would override the button contents and re-composing
             it per locale is exactly the concatenation trap the i18n rules ban. */}
         <button type="button"

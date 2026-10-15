@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, screen, fireEvent, waitFor } from '@testing-library/react'
 import { renderWithProviders } from './helpers'
 import { releaseComposerForKeyboardSwitch } from '../pages/chat/composerFocus'
 import { safeSetItem } from '../utils/safeStorage'
@@ -63,6 +63,14 @@ describe('ChatInput', () => {
     it('shows Stopping placeholder when disabled', () => {
       renderWithProviders(<ChatInput {...defaultProps} disabled />)
       expect(screen.getByPlaceholderText('Stopping…')).toBeInTheDocument()
+    })
+
+    it('keeps Stopping over a caller placeholder, and shows lockedPlaceholder instead when given', () => {
+      const { unmount } = renderWithProviders(<ChatInput {...defaultProps} disabled placeholder="Type here…" />)
+      expect(screen.getByPlaceholderText('Stopping…')).toBeInTheDocument()
+      unmount()
+      renderWithProviders(<ChatInput {...defaultProps} disabled placeholder="Type here…" lockedPlaceholder="Locked for now" />)
+      expect(screen.getByPlaceholderText('Locked for now')).toBeInTheDocument()
     })
 
     it('shows offline placeholder when connected=false', () => {
@@ -1255,6 +1263,37 @@ describe('ChatInput', () => {
           <ChatInput {...defaultProps} {...props} />
         </SlotProvider>,
       )
+
+    it('starts no optimize while the composer is locked, from the button or the chord', async () => {
+      // A memory-mode switch locks the composer (disabled) while it moves the
+      // draft; an optimize started then would write into the deleted slot.
+      const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise<Response>(() => {}))
+      const optimizeCalls = () => fetchSpy.mock.calls.filter(c => String(c[0]).includes('optimize'))
+      // The same settle step for both halves: the unlocked half proves an
+      // optimize reaches fetch within it, so the locked half's empty list is
+      // an absence and not a request that had not got there yet.
+      const settle = async () => { for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve() }) }
+      const chord = () => fireEvent.keyDown(screen.getByLabelText('Message input'), { key: 'Enter', metaKey: true, shiftKey: true })
+      try {
+        const onChange = vi.fn()
+        const { rerender } = renderInSlot('slot-A', { value: 'fix bug', onChange, disabled: true })
+        const btn = screen.getByRole('button', { name: 'Optimize prompt' })
+        expect(btn).toBeDisabled()
+        await act(async () => {
+          fireEvent.click(btn)
+          chord()
+        })
+        await settle()
+        expect(optimizeCalls()).toEqual([])
+
+        rerenderInSlot(rerender, 'slot-A', { value: 'fix bug', onChange, disabled: false })
+        await act(async () => { chord() })
+        await settle()
+        expect(optimizeCalls()).toHaveLength(1)
+      } finally {
+        fetchSpy.mockRestore()
+      }
+    })
 
     it('routes optimize result to the originating session when the user switched away', async () => {
       // The originating session (slot A) starts an optimize, then the user

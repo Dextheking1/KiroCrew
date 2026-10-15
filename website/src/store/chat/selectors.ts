@@ -165,11 +165,23 @@ export const selectActiveSlotProject = (state: RootState): string | undefined =>
  *
  * An empty transcript returns false, which keeps a brand-new chat's send button
  * disabled exactly as it is today.
+ *
+ * `slot` names the session to ask about and defaults to the active one, so
+ * `useAppSelector(selectContinuable)` reads the page's own session. A pane
+ * showing any other slot (a split pane, a crewmate's chat on the Members page)
+ * passes its key: that slot has no mirror fields, so its run state, rows and
+ * sub-agent flag are read from its own entries, plus the slots frame's
+ * `running` / `stopping` -- a background slot's stream state only hears about a
+ * turn from frames this tab was connected for.
  */
-export const selectContinuable = (state: RootState): boolean => {
+export const selectContinuable = (state: RootState, slot?: string | null): boolean => {
   const c = state.chat
-  if (c.slotRunning || c.slotStopping || c.pendingTurnSlot) return false
-  const dashSlot = state.dashboard.slots.find((sl) => sl.key === c.activeSlot)
+  const key = slot ?? c.activeSlot
+  const other = key && key !== c.activeSlot ? key : null
+  const dashSlot = state.dashboard.slots.find((sl) => sl.key === key)
+  if (other) {
+    if (selectSlotStreamState(state, other) !== 'idle' || c.pendingTurnSlot === other || dashSlot?.running || dashSlot?.stopping) return false
+  } else if (c.slotRunning || c.slotStopping || c.pendingTurnSlot) return false
   if (dashSlot?.subagents_running) return false
   // A relay archive has NO continue: `relay_archive_refusal` rejects
   // `executor === 'remote'` with 409 `relay_archive_read_only`, so offering
@@ -177,7 +189,7 @@ export const selectContinuable = (state: RootState): boolean => {
   // Keyed on `executor`, not `instance_id`: a half-open binding (marker set,
   // triple incomplete) is refused server-side too, so it must not offer here.
   if (slotIsRemoteBound(dashSlot)) return false
-  const msgs = c.messages
+  const msgs = other ? selectSlotMessages(state, other) : c.messages
   if (!msgs.length) return false
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i]
@@ -250,8 +262,11 @@ export const isQuietEndRow = (m: ChatMessage): boolean => {
   return meta?.ends_turn === true && absentOr(meta.tool_name, QUIET_END_TOOL) && absentOr(meta.mcp_server, QUIET_END_SERVER)
 }
 
-export const selectTurnInterrupted = (state: RootState): boolean => {
-  const msgs = state.chat.messages
+export const selectTurnInterrupted = (state: RootState, slot?: string | null): boolean => {
+  // `slot` is the session to ask about, the active one when omitted (see
+  // `selectContinuable`); `selectSlotMessages` reads the active mirror for it.
+  const key = slot ?? state.chat.activeSlot
+  const msgs = key ? selectSlotMessages(state, key) : state.chat.messages
   let sawTrailingError = false
   let sawCompactionResult = false
   let sawLaterTool = false

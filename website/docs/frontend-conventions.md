@@ -258,6 +258,7 @@ so the panel's effects keep one order.
 | `useChatPanePickers.ts`, `ChatPanePickerMenus.tsx` | the agent and model pickers' data and actions, and their two portaled menus |
 | `useChatPaneSend.ts` | send, steer, the slash commands the pane intercepts, the message quote, the question card's one-click answer (its 404 fallback, `onFallbackSend`, stays in `ChatPane.tsx`) |
 | `useChatPaneTurnControl.ts` | the Stop press protocol and the run-state reconciliation |
+| `useChatPaneContinue.ts` | the pane's side of Resume: the composer's and the newest error row's offer for the pane's own slot, and the notice when the gateway refuses it. The press and its spinner are `hooks/useContinuePress.ts`, the one ChatPage's `useTurnRecovery` uses too |
 | `ChatPaneTranscript.tsx` | the transcript row set and the rows above the first message |
 | `WebPreviewPanel.tsx` | the panel: address bar, frame, device presets, liveness probe, launcher, the CLI browser view |
 | `webPreviewPanelUrl.ts` | what a target may be: URL coercion, the loopback and embed rules, the self-origin check, the session feed (`setSessionPreviewUrl`, `setSessionPreviewPending`) |

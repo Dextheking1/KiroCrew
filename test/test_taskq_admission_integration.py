@@ -28,6 +28,7 @@ from kiro_crew.subagent_manager.admission import (
 from kiro_crew.taskq import model
 from kiro_crew.taskq.store import TaskStore, TaskStoreUnavailable
 from kiro_crew.testing.wait import async_wait_until, await_until
+from kiro_crew.testing.wait import finished as _finished
 
 pytestmark = pytest.mark.usefixtures("healthy_host_memory")
 
@@ -58,22 +59,6 @@ async def _manager(max_concurrent: int = 2, **kw) -> SubagentManager:
     mgr._spawn_stagger_secs = 0.0
     mgr._last_spawn_ts = 0.0
     return mgr
-
-
-async def _finished(coro: Any, what: str) -> Any:
-    """Run *coro* to its end under the lost-run bound, failing by name (D8).
-
-    ``await_until`` takes a future the test already holds; a coroutine the test
-    itself calls is wrapped in a task here so a hang is a named failure instead
-    of the runner's kill. The task is cancelled on every early exit -- the bound
-    expiring, or an enclosing wait cancelling this one -- as ``wait_for`` did.
-    """
-    task = asyncio.ensure_future(coro)
-    try:
-        return await await_until(task, what=what)
-    finally:
-        if not task.done():
-            task.cancel()
 
 
 def _store_path() -> Path:

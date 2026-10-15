@@ -35,7 +35,7 @@ from kiro_crew import model_registry
 # The one gate stays inside ``_normalize_acp_backend`` on the way out of
 # config.json. Only what it reads changed: the registry, instead of a frozen
 # literal.
-from kiro_crew.acp_backends import resolve_selected_backend
+from kiro_crew.acp_backends import DEFAULT_ACP_BACKEND, resolve_selected_backend
 from kiro_crew.appearance_packs import safe_pack_id as _safe_pack_id
 from kiro_crew.config.fields import (  # noqa: F401
     _COLOR_HEX_RE,
@@ -139,6 +139,30 @@ logger = logging.getLogger("kiro_crew.config.loader")
 
 _T = TypeVar("_T")
 _ABSENT = object()
+
+#: Where ``kirocrew kas install`` looks by default. The bucket the Kiro Crew
+#: project publishes its pinned KAS engine builds to; a mirror goes in
+#: ``agent.kas_bundle_url``. The manifest's sha256 pins are the trust anchor,
+#: not this host.
+KAS_BUNDLE_DEFAULT_URL = "https://kas.crew.kiro.dev"
+
+
+def coerce_kas_bundle_url(value: object) -> str:
+    """``agent.kas_bundle_url`` as a usable https base, else the default.
+
+    The installer refuses anything but https itself; coercing here keeps a
+    hand-edited plaintext or empty value from reaching it as "the url", so the
+    refusal it would produce names a url the operator never typed.
+    """
+    if isinstance(value, str):
+        candidate = value.strip().rstrip("/")
+        if candidate.lower().startswith("https://") and len(candidate) > len("https://"):
+            return candidate
+        if candidate:
+            logger.warning(
+                "agent.kas_bundle_url %r is not an https:// url; using the default", value
+            )
+    return KAS_BUNDLE_DEFAULT_URL
 
 
 class SectionReader:
@@ -1569,12 +1593,12 @@ class AgentConfig:
         ),
     )
     acp_backend: str = field(
-        default="",
+        default=DEFAULT_ACP_BACKEND,
         metadata=_meta(
             "ACP Backend",
-            "Which ACP agent to drive: '' = kiro-cli (default), or any other "
-            "registered selectable backend id (e.g. 'kas' = kiro-agent). The live "
-            "list of values is served by GET /api/config/schema.",
+            "Which ACP agent to drive. Omitted or '' means no choice: KAS is the "
+            "default. 'kiro' selects kiro-cli; any other value must be a registered "
+            "selectable backend id. The live list is served by GET /api/config/schema.",
             # Deliberately NO ``enum``. A literal here was frozen at import and fed
             # two import-time structures (``JSON_SCHEMA`` and ``SCHEMA_REGISTRY``),
             # both strictly earlier than an edition registering a backend at boot.
@@ -1591,8 +1615,9 @@ class AgentConfig:
         default="kas",
         metadata=_meta(
             "Crew member ACP backend",
-            "Backend for crew-member DM sessions: 'kas' (default) or another "
-            "dispatch-capable backend (claude, codex, opencode, goose). "
+            "Backend for crew-member DM sessions: 'kas' (default when omitted or '') "
+            "or another dispatch-capable backend (claude, codex, opencode, goose); "
+            "'kiro' selects kiro-cli. "
             "Members dispatch work into worker sessions through session-control "
             "tools mounted per session over the wire, which the kiro-cli v2 "
             "backend cannot carry — a value resolving to kiro leaves member "
@@ -1600,6 +1625,33 @@ class AgentConfig:
             # Same no-enum reasoning as acp_backend above: the live selectable
             # set comes from the registry via resolve_selected_backend, never a
             # frozen literal.
+        ),
+    )
+    kas_bundle: bool = field(
+        default=False,
+        metadata=_meta(
+            "KAS: run Kiro Crew's own engine bundle",
+            "When true, the 'kas' backend spawns the @kiro/agent build that "
+            "'kirocrew kas install' laid down under the data home (engines/kas/) "
+            "with its own Node runtime, instead of reaching the engine through "
+            "kiro-cli's ACP relay. kiro-cli is not needed on this route, and the "
+            "engine always takes its credential from Kiro Crew's own sign-in "
+            "(the dashboard's Sign in), never from kiro-cli's store. A true value "
+            "with nothing installed refuses the spawn and names the install command.",
+            # The running KAS runtime keeps its process across the switch, so
+            # sessions move routes only once that process is replaced.
+            restart=True,
+        ),
+    )
+    kas_bundle_url: str = field(
+        default=KAS_BUNDLE_DEFAULT_URL,
+        metadata=_meta(
+            "KAS bundle base URL",
+            "https:// base the KAS engine manifest is fetched from "
+            "(<base>/kas/<version>/manifest.json). Every artifact is sha256-pinned by "
+            "that manifest and the manifest by this release, so the url chooses WHERE "
+            "the pinned build is fetched from and never what is trusted. Only an https:// url is "
+            "accepted; redirects that leave the host are refused.",
         ),
     )
     default_agent: str = field(

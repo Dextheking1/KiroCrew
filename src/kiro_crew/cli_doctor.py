@@ -1604,8 +1604,9 @@ def _kas_relay_help(binary: str) -> str | None:
 def _doctor_kas(issues: list[str]) -> None:
     """Report KAS backend readiness, but only when KAS is the selected backend.
 
-    KAS is opt-in (``agent.acp_backend = "kas"``); when it is not selected this
-    is silent so a kiro-cli / Claude Code install sees no KAS noise. When it IS
+    KAS is the default harness (an absent or ``""`` ``agent.acp_backend``);
+    when another harness is selected this is silent so a kiro-cli / Claude Code
+    install sees no KAS noise. When it IS
     selected, KAS is served by kiro-cli's own ACP relay (see
     :mod:`kiro_crew.acp.kas_transport`), so the thing that makes a selected KAS
     backend fail at session-create time is a kiro-cli whose ``acp`` subcommand
@@ -1621,6 +1622,49 @@ def _doctor_kas(issues: list[str]) -> None:
         _report_kas_backend(issues)
 
 
+def _report_kas_bundle(issues: list[str]) -> None:
+    """The bundle route: Crew's own installed engine, no kiro-cli row at all.
+
+    kiro-cli is not consulted here because the route never runs it -- a missing
+    kiro-cli is not a problem on this route, and reporting one would send the
+    operator to install a binary nothing will use. Crew is the auth owner
+    unconditionally, so the vault row is the only credential row.
+    """
+    from kiro_crew.agent_sdk import kas_bundle
+
+    installed = kas_bundle.installed_bundle()
+    if installed is None:
+        print(f"  bundle:      ❌ nothing installed under {kas_bundle.kas_engines_root()}")
+        print("               Fix: kirocrew kas install   (or set agent.kas_bundle false)")
+        issues.append("agent.kas_bundle is on but no KAS engine bundle is installed")
+        return
+    print(f"  bundle:      ✅ KAS {installed.version}, Node {installed.node_version or '?'}")
+    print(f"  spawn:       {' '.join(kas_bundle.bundle_spawn_argv(installed))}")
+    print("  auth owner:  Kiro Crew vault (the only owner on this route)")
+    try:
+        from kiro_crew.auth.bridge import describe_vault_identity, vault_holds_identity
+
+        signed_in = vault_holds_identity()
+        identity_line = describe_vault_identity()
+    except Exception:
+        signed_in = False
+        identity_line = None
+    if identity_line:
+        print(f"  crew vault:  {identity_line}")
+    if not signed_in:
+        print("  crew vault:  ⚠  not signed in; the first prompt will ask for a sign-in")
+    # Not ``_report_kas_spec_permissions``: that row asks the installed kiro-cli's
+    # version, and a working bundle-only host has none to ask. The spec writer
+    # gates the ``permissions`` block on kiro-cli's version
+    # (``auto_approve._write_derived_permissions``), so the honest row here names
+    # that rule rather than reporting a kiro-cli fault on a route that never runs
+    # it; the printed row links the issue that moves the gate to the bundled engine.
+    print(
+        "  auto-approve: spec `permissions` block follows the installed kiro-cli's version"
+        " gate for now (kirodotdev/KiroCrew#20730); without kiro-cli it is withheld"
+    )
+
+
 def _report_kas_backend(issues: list[str]) -> None:
     """Print the KAS diagnostic block (relay binary + engine support).
 
@@ -1628,6 +1672,9 @@ def _report_kas_backend(issues: list[str]) -> None:
     positive ``== ACP_BACKEND_KAS`` rather than an early-return on inequality.
     """
     print("\nKAS backend")
+    if KiroCrewConfig.load().agent.kas_bundle:
+        _report_kas_bundle(issues)
+        return
     binary = resolve_kiro_cli()
     if not binary:
         print(f"  relay:       ❌ {KIRO_CLI_BIN} not found")

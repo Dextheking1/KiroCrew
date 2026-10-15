@@ -102,6 +102,9 @@ with no row here.
      - pre-session registry query (whether a user steer travels on an awaited
        request instead: the ``_session/steering`` request of codex-acp and
        claude-agent-acp, or goose's ``_goose/unstable/session/steer``)
+   * - ``ACP_BACKENDS_STEER_CONCURRENT_PROMPT``
+     - pre-session registry query (whether a user steer travels as a second
+       ``session/prompt`` that joins the running turn)
    * - ``ACP_BACKENDS_COMPACT``
      - pre-session registry query (whether manual ``/compact`` is offered at all)
    * - ``ACP_BACKENDS_INLINE_COMPACTION``
@@ -302,6 +305,18 @@ ACP_BACKEND_DEEPSEEK = "deepseek"
 # The kiro-cli backend is spelled as the empty string throughout, so name it
 # rather than leaving every call site to infer it from "not claude".
 ACP_BACKEND_KIRO = ""
+
+# How config.json spells a Kiro CLI choice. The runtime id stays ``""``; only the
+# config boundary (:func:`backend_from_stored` / :func:`backend_to_stored`)
+# translates, so ``agent.acp_backend`` absent or ``""`` can mean "no choice" while
+# a stored ``"kiro"`` means the user picked Kiro CLI. Same word as the governance
+# policy id (``POLICY_ID_KIRO``), so one name for Kiro CLI reaches every file a
+# person edits.
+STORED_BACKEND_KIRO = "kiro"
+
+# The harness an install runs when ``agent.acp_backend`` holds no choice (absent
+# or ``""``) and KAS is selectable.
+DEFAULT_ACP_BACKEND = ACP_BACKEND_KAS
 
 # Membership gate for the ``acp_backend`` kwarg. An unrecognized value would
 # otherwise fall through every ``_is_<backend>`` check and silently spawn
@@ -768,6 +783,36 @@ def selectable_backend_values() -> list[str]:
     return sorted(selectable_backends())
 
 
+def backend_from_stored(value: object) -> object:
+    """Translate a stored ``agent.acp_backend`` value into the gate's input.
+
+    The config-file vocabulary differs from the runtime one in exactly two ways:
+    absent (``None``) and ``""`` both mean "no choice" and become ``None``, which
+    :func:`resolve_selected_backend` answers with the default and no warning; and
+    :data:`STORED_BACKEND_KIRO` becomes :data:`ACP_BACKEND_KIRO`. Every other
+    value, including a non-string, passes through so the gate can judge it.
+    """
+    if value is None or value == "":
+        return None
+    if value == STORED_BACKEND_KIRO:
+        return ACP_BACKEND_KIRO
+    return value
+
+
+def backend_to_stored(backend: str) -> str:
+    """The config-file spelling of a runtime backend id (Kiro CLI is ``"kiro"``)."""
+    return STORED_BACKEND_KIRO if backend == ACP_BACKEND_KIRO else backend
+
+
+def selectable_stored_backend_values() -> list[str]:
+    """:func:`selectable_backend_values` in the config-file vocabulary, sorted.
+
+    What a config surface offers and accepts for ``agent.acp_backend``: the
+    dashboard PATCH allowlist and the schema endpoint's ``enumValues``.
+    """
+    return sorted(backend_to_stored(b) for b in selectable_backends())
+
+
 def resolve_selected_backend(value: object) -> str:
     """Coerce a persisted ``agent.acp_backend`` to a backend this build can serve.
 
@@ -786,30 +831,40 @@ def resolve_selected_backend(value: object) -> str:
     stack ends — and a broad ``except`` around it does not save you, it converts
     the crash into a silent wrong answer. Reading only the registry keeps it safe.
 
-    An unselectable or unrecognized value — a backend this build did not register, a
-    typo, or the non-string shapes a hand-edited ``config.json`` can hold — degrades
-    to the default with the reason in the log rather than propagating: ``AcpProvider``
-    rejects an unknown backend by raising, and startup refusing with a reason is the
-    contract (harness-parity H3).
+    Takes RUNTIME ids. A value read from a config file goes through
+    :func:`backend_from_stored` first, which turns "no choice" (absent or ``""``)
+    into ``None`` and the stored ``"kiro"`` into :data:`ACP_BACKEND_KIRO`.
+
+    Only ``None`` (no choice) selects :data:`DEFAULT_ACP_BACKEND`, and only
+    while it is selectable; otherwise it takes the floor, silently. An
+    explicit value that is unselectable or unrecognized — a backend this build did
+    not register, one policy denied, one this host cannot serve, a typo, or the
+    non-string shapes a hand-edited ``config.json`` can hold — degrades to
+    :data:`GOVERNANCE_FLOOR_BACKEND` with the reason in the log rather than
+    propagating: ``AcpProvider`` rejects an unknown backend by raising, and startup
+    refusing with a reason is the contract (harness-parity H3).
 
     An edition that registers a backend must do so before the first config load; the
     registry is read here, not cached, so ordering is the edition's to get right.
     """
     selectable = selectable_backends()
+    if value is None:
+        return (
+            DEFAULT_ACP_BACKEND if DEFAULT_ACP_BACKEND in selectable else GOVERNANCE_FLOOR_BACKEND
+        )
     if isinstance(value, str) and value in selectable:
         return value
     # A host mark was announced once by whoever placed it; repeating it on every
     # config load would bury that notice under copies of a vaguer one.
     if isinstance(value, str) and value in _host_unservable:
-        return ACP_BACKEND_KIRO
-    if value not in (None, ACP_BACKEND_KIRO):
-        logger.warning(
-            "Ignoring agent.acp_backend %r (not selectable in this build); using "
-            "the default backend. Selectable values: %s",
-            value,
-            ", ".join(repr(b) for b in sorted(selectable)),
-        )
-    return ACP_BACKEND_KIRO
+        return GOVERNANCE_FLOOR_BACKEND
+    logger.warning(
+        "Ignoring agent.acp_backend %r (not selectable in this build); using "
+        "the Kiro CLI floor. Selectable values: %s",
+        value,
+        ", ".join(repr(b) for b in selectable_stored_backend_values()),
+    )
+    return GOVERNANCE_FLOOR_BACKEND
 
 
 # ── Capability membership (harness-parity H6, H7) ──
@@ -1190,8 +1245,9 @@ ACP_BACKENDS_MEMBER_PANEL = frozenset(
 # and takes the refusal-recovery continuation (see
 # ``dashboard.state.should_queue_refusal_recovery``), which is the only channel
 # that reaches its model.
-# opencode is not a member either: its ``initialize`` result advertises
-# ``sessionCapabilities`` of close, fork, list and resume, and nothing else.
+# opencode is not a member either: it has no steer verb, and a deny it is handed
+# ends its turn. It takes a user's mid-turn message as a second ``session/prompt``
+# instead (``ACP_BACKENDS_STEER_CONCURRENT_PROMPT`` below).
 # pi is not a member: pi-acp's ``initialize`` result advertises ``loadSession`` and
 # ``sessionCapabilities`` of list and delete, and no steering extension.
 # deepseek is not a member: it advertises close, list and resume only, and permits
@@ -1281,6 +1337,32 @@ ACP_BACKENDS_STEER = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_KAS})
 ACP_BACKENDS_STEERING_REQUEST = frozenset(
     {ACP_BACKEND_CODEX, ACP_BACKEND_CLAUDE, ACP_BACKEND_GOOSE}
 )
+
+# Backends that take a USER's mid-turn message as a second ``session/prompt`` sent
+# while the first is still running. Spoken only by ``AcpClient``, the driver these
+# harnesses run on.
+#
+# Read from opencode 1.19.0's source and measured against it live. Its ACP
+# ``session/prompt`` hands the text to the server's own prompt call, which writes
+# the user message and then JOINS the session's running loop instead of starting
+# a second one. That loop re-reads the whole history before every step, and it
+# exits only once its last answer replies to the LATEST user message. A steer sent
+# while a bash tool ran was obeyed by that same turn's final answer, and both
+# requests were answered together at the same idle, with the same usage. A steer
+# sent after the turn ended ran a turn of its own and was answered seconds later.
+#
+# There is no consumption echo, so that timing is the delivery evidence: a steer
+# whose answer comes with the turn's own, with no output of its own before it, was
+# read inside the turn. ``AcpClient`` waits a short grace for it at the turn's
+# clean end; a steer that ran a loop of its own is cancelled and left pending, and
+# the composer queues it. A denied approval ends opencode's loop without reading
+# what came after it, so nothing is reported consumed in a turn with a denial.
+# That makes membership here mean ``steer_needs_loss_recovery`` as well, like
+# codex.
+#
+# Not ``ACP_BACKENDS_STEER``: a deny notice cannot ride this verb, because the
+# denial already ended the turn it was meant for.
+ACP_BACKENDS_STEER_CONCURRENT_PROMPT = frozenset({ACP_BACKEND_OPENCODE})
 
 # Backends that can serve a MANUAL ``/compact`` (the user-typed slash command).
 # Every member acts on the ``/compact`` prompt that ``AcpProvider.compact()``

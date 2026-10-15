@@ -39,6 +39,7 @@ import { ErrorCard } from '../pages/chat/ErrorCard'
 import { decisionStripFieldOf } from '../pages/chat/decisionRecord'
 import { resolveTransientNotice } from '../pages/chat/transientNotice'
 import StopEventCard from '../pages/chat/StopEventCard'
+import { ToolDetails } from '../pages/chat/ToolDetails'
 import { isSubagentCompletionMessage } from '../pages/chat/subagentCompletion'
 import { REASONING_ROLES, stripAppEnvelope } from '../pages/chat/groupDisplayItems'
 import MarkdownRenderer from '../components/MarkdownRenderer'
@@ -91,6 +92,10 @@ export interface MessageRenderContext {
   onQuoteMessage?: (role: 'user' | 'assistant', content: string, ts?: string, mid?: string) => void
   /** Drop mcp_oauth banners a Connections card already owns. */
   hideCardOwnedOAuth: boolean
+  /** Whether a row's error notice may offer the "Ask the agent" hand-off.
+   *  `false` when the host holds unsaved local state (a composer draft) that
+   *  the hand-off's navigation would drop. Absent = `true`. */
+  handOff?: boolean
   /** tool_call_ids whose call a policy or hook blocked. */
   autoDeniedIds: Set<string>
   /** Host-injected tool row, kept as a shorthand for replacing the tool entries. */
@@ -185,7 +190,7 @@ const TOOL_PANEL_COLLAPSED_CHARS = 800
 const TOOL_PANEL_EXPANDED_MAX_H = 'max-h-[500px]'
 
 /** Prop-driven tool row. The store-connected variant is a host entry. */
-export const ToolCallPill = memo(function ToolCallPill({ message, running, onFileOpen, autoDenied }: { message: ChatMessage; running: boolean; onFileOpen?: (path: string) => void; autoDenied?: boolean }) {
+export const ToolCallPill = memo(function ToolCallPill({ message, running, onFileOpen, autoDenied, askAgent = true }: { message: ChatMessage; running: boolean; onFileOpen?: (path: string) => void; autoDenied?: boolean; askAgent?: boolean }) {
   useLanguageGeneration() // memo() bails out of the provider-level repaint; subscribe directly
   const [expanded, setExpanded] = React.useState(false)
   // Second axis, deliberately separate from `expanded`: the pill toggles whether
@@ -266,9 +271,29 @@ export const ToolCallPill = memo(function ToolCallPill({ message, running, onFil
   // Hoisted out of the JSX so the panel and the copy button cannot drift: what
   // gets copied is exactly what the panel shows, not the portion the 160px box
   // happens to have scrolled into view.
-  const panelText = purpose && rawLabel && purpose !== rawLabel
-    ? rawLabel + '\n\n' + (message.content || '')
-    : (message.content || '')
+  // The backend persists the call's `input` and its `output` on the tool row's
+  // meta (`_tool_meta` / the tool-result handler in chat_runner.py), and the
+  // embed's transcript response carries them. `message.content` is only the
+  // "🔧 title" line, so when either payload is present the expanded row renders
+  // the main chat's own `ToolDetails` (Input/Output tabs) instead of repeating
+  // the title. The content panel below stays as the fallback for rows that
+  // predate the persisted payloads.
+  const metaInput = typeof message.meta?.input === 'string' ? message.meta.input : ''
+  const metaOutput = typeof message.meta?.output === 'string' ? message.meta.output : ''
+  const hasPayload = !!(metaInput || metaOutput)
+  // With a payload, Copy takes both halves (input, blank line, output) rather
+  // than whichever tab is showing: `ToolDetails` owns its tab state, and a copy
+  // that silently follows a hidden tab would be a guess about what was meant.
+  const panelText = hasPayload
+    ? [metaInput, metaOutput].filter(Boolean).join('\n\n')
+    : purpose && rawLabel && purpose !== rawLabel
+      ? rawLabel + '\n\n' + (message.content || '')
+      : (message.content || '')
+  const detailsId = React.useId()
+  // Rail colour mirrors the pill's status tone, at the main chat's 70% mix.
+  const detailsRail = {
+    color: `color-mix(in srgb, ${isRejected ? 'var(--danger)' : isAutoDenied ? 'var(--warn)' : isDone ? 'var(--ok)' : hasPendingPerm ? 'var(--warn)' : 'var(--accent)'} 70%, transparent)`,
+  }
   // The two budgets above are width-blind, so the collapsed box is also measured
   // once it is on screen: a real browser then detects the wrap case exactly,
   // while jsdom reports 0 for both heights and falls back to the budgets.
@@ -306,7 +331,9 @@ export const ToolCallPill = memo(function ToolCallPill({ message, running, onFil
     ? i18nT('appSdk.chatMessageList.copied')
     : copyOutcome === 'failed'
       ? i18nT('appSdk.chatMessageList.copy_failed')
-      : i18nT('appSdk.chatMessageList.copy')
+      : hasPayload
+        ? i18nT('appSdk.chatMessageList.copy_input_and_output')
+        : i18nT('appSdk.chatMessageList.copy')
 
   return (
     <div className="animate-scale-in flex items-center gap-2 flex-wrap">
@@ -329,17 +356,41 @@ export const ToolCallPill = memo(function ToolCallPill({ message, running, onFil
           <PanelRight size={11} />
         </button>
       )}
-      {expanded && message.content && (
-        <div className="w-full mt-1 ml-4">
-          <pre ref={panelRef} className={`w-full text-[11px] leading-4 font-mono text-muted bg-bg-elevated rounded-md p-2 ${showAll ? TOOL_PANEL_EXPANDED_MAX_H : 'max-h-40'} overflow-auto whitespace-pre-wrap break-all border border-border`}>
-            {panelText}
-          </pre>
+      {expanded && (hasPayload || message.content) && (
+        <div className="w-full mt-1 ml-4" data-testid={hasPayload ? 'tool-pill-details' : undefined}>
+          {/* Not `compact`: that form caps the payload at 160px, which is what
+              the main transcript reserves for the composer's approval mirror.
+              The full form scrolls at the main chat's own 400/500px caps, so
+              no Show-more toggle is needed on this branch. */}
+          {hasPayload ? (
+            <ToolDetails
+              purpose={purpose}
+              pillLabel={label}
+              toolName={rawLabel}
+              input={metaInput}
+              output={metaOutput}
+              auto={false}
+              pending={hasPendingPerm}
+              ts={0}
+              hasEntry
+              fmtTime={() => ''}
+              barColor={detailsRail.color}
+              layoutId={`embed-tool-detail-${detailsId}`}
+              flush
+            />
+          ) : (
+            <pre ref={panelRef} className={`w-full text-[11px] leading-4 font-mono text-muted bg-bg-elevated rounded-md p-2 ${showAll ? TOOL_PANEL_EXPANDED_MAX_H : 'max-h-40'} overflow-auto whitespace-pre-wrap break-all border border-border`}>
+              {panelText}
+            </pre>
+          )}
           {/* A row of its OWN, below the panel. `website/AUTOSDE.yaml`'s
               `max-two-buttons-per-row` caps a horizontal action group at two and
               does not count "controls in a genuinely different row or a
               separated region", so these two are not siblings of the pill's own
               toggle and file chip — and this row itself holds exactly two. */}
-          <div className="flex items-center gap-1 mt-1">
+          {/* On a payload row the controls start on the payload box's left edge:
+              the rail is a 2px border plus a pl-3 inset (`ROW_RAIL_CLASS`). */}
+          <div className={`flex items-center gap-1 mt-1 ${hasPayload ? 'pl-[14px]' : ''}`}>
             <button
               type="button"
               onClick={copyPanel}
@@ -350,7 +401,7 @@ export const ToolCallPill = memo(function ToolCallPill({ message, running, onFil
             >
               {copyOutcome === 'copied' ? <Check size={11} className="text-ok" /> : <Copy size={11} />}
             </button>
-            {panelOverflows && (
+            {!hasPayload && panelOverflows && (
               <button
                 type="button"
                 onClick={() => setShowAll(s => !s)}
@@ -367,18 +418,20 @@ export const ToolCallPill = memo(function ToolCallPill({ message, running, onFil
               `ErrorNotice` rather than an icon of our own. Its own row, below the
               controls: the hand-off is a button, and `max-two-buttons-per-row`
               counts per visual group, so putting it here keeps that group at two.
-              `askAgent` is ON deliberately — this panel is a log surface holding
-              no unsaved input, so the navigation destroys nothing, and the agent
-              has a real recovery to offer (re-emit the output the copy failed to
-              take). ErrorNotice is safe in this module: it reaches no store and no
+              `askAgent` follows the host: this panel is a log surface holding no
+              unsaved input, and the agent has a real recovery to offer (re-emit
+              the output the copy failed to take), so it is on by default.
+              No hand-off when the host passes `askAgent={false}`: the navigation
+              would drop the host's own unsaved composer draft (ChatEmbed).
+              ErrorNotice is safe in this module: it reaches no store and no
               router, only lucide, `AskAgentButton` and `i18nT`. */}
           {copyOutcome === 'failed' && (
             <ErrorNotice
               message={i18nT('appSdk.chatMessageList.copy_failed')}
               variant="inline"
-              askAgent
+              askAgent={askAgent}
               onDismiss={() => setCopyOutcome('idle')}
-              className="mt-1 ml-0.5"
+              className={`mt-1 ml-0.5 ${hasPayload ? 'pl-[14px]' : ''}`}
               testId="tool-panel-copy-error"
             />
           )}
@@ -392,7 +445,7 @@ function toolRow(m: ChatMessage, ctx: MessageRenderContext, autoDenied?: boolean
   return ctx.row(
     ctx.renderTool
       ? ctx.renderTool(m)
-      : <ToolCallPill message={m} running={ctx.running} onFileOpen={ctx.onFileOpen} autoDenied={autoDenied} />,
+      : <ToolCallPill message={m} running={ctx.running} onFileOpen={ctx.onFileOpen} autoDenied={autoDenied} askAgent={ctx.handOff !== false} />,
     true,
   )
 }

@@ -575,6 +575,55 @@ async def test_a_tokenless_stub_is_not_handed_to_a_co_tenant(
 
 
 @pytest.mark.asyncio
+async def test_a_cleared_stub_regains_identity_after_co_tenant_disconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cleared tokenless stub is re-attributed once the co-tenant leaves.
+
+    Two recovery paths exist for a cleared stub. This test pins the second one:
+    once the co-tenant's token-carrying connections have disconnected,
+    ``_pid_live_tenants`` drops below two, ``shared_pid`` becomes False, and a
+    tokened claim from the remaining session can retarget the tokenless stub.
+    The first path (a tokenless claim) is already covered by
+    ``test_claim_across_token_topologies``; this test covers the second so the
+    comment's two named routes are each backed by a test.
+
+    The test also pins item 2: ``identity_refused`` is reset when the connection
+    is retargeted, so the recaller is not permanently blocked after recovery.
+    """
+    a_backend, a_reader, a_task = await _live_conn(monkeypatch, "", TOKEN_A, "stub-a")
+    b_backend, b_reader, b_task = await _live_conn(monkeypatch, "", TOKEN_B, "stub-b")
+    plain_backend, plain_reader, plain_task = await _live_conn(monkeypatch, "", "", "stub-plain")
+
+    # One session so far — tokenless stub rides along as usual.
+    await gw._apply_claim(_claim_with_token(_PID, PARENT_KEY, TOKEN_A))
+    assert (await _next_caller(plain_backend, plain_reader)).session_key == PARENT_KEY
+
+    # Co-tenant joins: tokenless stub is cleared.
+    second = await gw._apply_claim(_claim_with_token(_PID, SUB_KEY, TOKEN_B))
+    assert second["skipped"] == 1
+    assert await _next_caller(plain_backend, plain_reader) is None
+
+    # Confirm identity_refused was set so we can prove it is cleared after recovery.
+    plain_conn = next(c for c in gw._CONN_INDEX[_PID] if c.stub_uuid == "stub-plain")
+    assert plain_conn.identity_refused, "should be refused while co-tenant is live"
+
+    # Co-tenant disconnects: _pid_live_tenants now sees only stub-a's session.
+    await _close(b_reader, b_task)
+
+    # First session re-claims: shared_pid is now False, tokenless stub is retargeted.
+    third = await gw._apply_claim(_claim_with_token(_PID, PARENT_KEY, TOKEN_A))
+    assert third["updated"] >= 1, "stub-plain should be retargeted"
+    assert (await _next_caller(plain_backend, plain_reader)).session_key == PARENT_KEY
+
+    # identity_refused is cleared by the retarget (item 2).
+    assert not plain_conn.identity_refused, "retarget should clear the refused flag"
+
+    await _close(a_reader, a_task)
+    await _close(plain_reader, plain_task)
+
+
+@pytest.mark.asyncio
 async def test_replacing_a_live_identity_on_a_shared_runtime_warns(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

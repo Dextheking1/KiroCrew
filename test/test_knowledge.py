@@ -3432,6 +3432,82 @@ class TestWatcherSelfHeal:
         ).fetchone()["c"]
         assert stale == 0
 
+    async def test_the_stale_count_reads_only_the_index(self, store):
+        # The count ran at every boot beside memory preparation and read every
+        # item row. With the covering index it never touches the table.
+        from kiro_crew.knowledge.ingestion import count_stale_items
+
+        assert store.has_embed_state_index()
+        plan = " ".join(
+            str(row[3])
+            for row in store.db.execute(
+                "EXPLAIN QUERY PLAN SELECT COUNT(*) AS c FROM items WHERE status = 'active' "
+                "AND (embedding_sig IS NULL OR embedding_sig != ?) "
+                "AND (embedded_at IS NULL OR embedded_at < ?)",
+                ("sig", "2000-01-01"),
+            ).fetchall()
+        )
+        assert "COVERING INDEX idx_items_embed_state" in plan
+        store.add_item("one", "body", "document")
+        assert count_stale_items(store, "sig") == 1
+
+    async def test_no_scan_until_the_covering_index_exists(self, store, monkeypatch):
+        # Before the post-bind build has made the index (first boot after an
+        # upgrade) the count would read the whole table, so it waits a sweep.
+        from kiro_crew.knowledge import watcher as watcher_mod
+
+        embedder = _FakeEmbedder()
+        for i in range(3):
+            store.add_item(f"Item {i}", "body", "document")
+        store.db.execute("DROP INDEX idx_items_embed_state")
+        store.db.commit()
+        counted: list[int] = []
+        real_count = watcher_mod.count_stale_items
+
+        def _count(*args, **kwargs):
+            counted.append(1)
+            return real_count(*args, **kwargs)
+
+        monkeypatch.setattr(watcher_mod, "count_stale_items", _count)
+        watcher = self._watcher(store, embedder)
+        await watcher._maybe_reembed_stale()
+        assert counted == []
+        assert watcher._reembed_task is None
+        store.ensure_search_indexes()
+        await watcher._maybe_reembed_stale()
+        assert counted == [1]
+        assert watcher._reembed_task is not None
+        await watcher._reembed_task
+
+    async def test_a_missing_index_falls_back_to_the_full_count(self, store, monkeypatch, caplog):
+        # A failed post-bind build leaves the index absent for the whole
+        # process; the self-heal must not stop for good.
+        from kiro_crew.knowledge import watcher as watcher_mod
+
+        embedder = _FakeEmbedder()
+        for i in range(3):
+            store.add_item(f"Item {i}", "body", "document")
+        store.db.execute("DROP INDEX idx_items_embed_state")
+        store.db.commit()
+        counted: list[int] = []
+        real_count = watcher_mod.count_stale_items
+
+        def _count(*args, **kwargs):
+            counted.append(1)
+            return real_count(*args, **kwargs)
+
+        monkeypatch.setattr(watcher_mod, "count_stale_items", _count)
+        watcher = self._watcher(store, embedder)
+        for _ in range(watcher_mod._EMBED_INDEX_GRACE_SWEEPS):
+            await watcher._maybe_reembed_stale()
+        assert counted == []
+        with caplog.at_level("WARNING", logger=watcher_mod.logger.name):
+            await watcher._maybe_reembed_stale()
+        assert counted == [1]
+        assert "idx_items_embed_state is missing" in caplog.text
+        assert watcher._reembed_task is not None
+        await watcher._reembed_task
+
     async def test_no_stale_items_is_noop(self, store):
         # Everything already current -> no job created.
         from kiro_crew.knowledge.embedder import embed_signature, floats_to_bytes

@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         remember_unknown_row_fields,
         slot_history_key,
         slot_not_found,
+        stop_declined_armed,
     )
 
 
@@ -1234,6 +1235,14 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
         else {"turn": slot._turn_generation, "turn_gen": chunk_generation()}
     )
     stopping = slot._stopping
+    # The stop machine's phase ('idle' | 'soft_pending' | 'killing'). A poll-only
+    # reader (the app SDK's ChatEmbed) has no WS frame to learn it from, and
+    # without it a pending soft cancel looks exactly like an unpressed Stop.
+    stop_state = slot._stop_state
+    # Whether a recent declined Stop (the session was compacting) makes the next
+    # press the session reset: the same read the slots frame and the stop route
+    # use, so a reader that opens or returns mid-window is warned as well.
+    stop_declined = stop_declined_armed(slot)
     display_title = slot.display_title
     # Shallow copies, so the off-loop render below reads a frozen entry while
     # the loop keeps editing the live one; the view helper does the redaction.
@@ -1297,6 +1306,8 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
                 "running": running,
                 **turn_identity,
                 "stopping": stopping,
+                "stop_state": stop_state,
+                "stop_declined": stop_declined,
             }
         )
         tail = json.dumps(

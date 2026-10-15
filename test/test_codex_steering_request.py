@@ -26,6 +26,7 @@ from kiro_crew.acp.types import (
 )
 from kiro_crew.dashboard.steer_settle import settle_consumed_steers
 from kiro_crew.testing.wait import async_wait_until, await_until
+from kiro_crew.testing.wait import finished as _finished
 
 
 class _Runtime:
@@ -68,22 +69,6 @@ def _handle(rt: _Runtime, *, active: bool = True) -> AcpSessionHandle:
 def _drain(handle: AcpSessionHandle, can_settle: bool = True) -> list[str]:
     """What the turn's dispatch loop would settle now (echo texts)."""
     return handle._take_injected_steers(can_settle=can_settle)
-
-
-async def _finished(coro, what: str):
-    """Run *coro* to its end under the lost-run bound, failing by name (D8).
-
-    ``await_until`` takes a future the test already holds; a ``steer()`` the test
-    itself calls is wrapped in a task here so a hang is a named failure instead
-    of the runner's kill. The task is cancelled on every early exit, as
-    ``wait_for`` did.
-    """
-    task = asyncio.ensure_future(coro)
-    try:
-        return await await_until(task, what=what)
-    finally:
-        if not task.done():
-            task.cancel()
 
 
 async def _until_routed(rt: AcpRuntime) -> None:

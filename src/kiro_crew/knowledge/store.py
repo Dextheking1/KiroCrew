@@ -1188,15 +1188,23 @@ class KnowledgeStore:
 
         """)
         self.db.commit()
-        # An empty library gets its search indexes now, for free. A populated
-        # one does not: building them is O(data) (seconds on a cold 59k-entity
-        # library) and this runs before the gateway listener binds. The gateway
-        # builds them post-bind via ensure_search_indexes(); until then a search
-        # returns the same rows, only slower. Both indexed tables must be empty:
-        # entities can outlive their mentions until the orphan sweep runs.
+
+    def _ensure_search_indexes_if_empty(self) -> None:
+        """Build the search indexes now when the library is empty (after ``_migrate``).
+
+        An empty library gets them for free. A populated one does not: building
+        them is O(data) (seconds on a cold 59k-entity library) and this runs
+        before the gateway listener binds. The gateway builds them post-bind via
+        ensure_search_indexes(); until then a search returns the same rows, only
+        slower. Every indexed table must be empty: entities can outlive their
+        mentions until the orphan sweep runs, and items exist before any entity
+        is extracted from them. Runs after ``_migrate`` because an index names
+        columns that ``_migrate`` adds to an older table.
+        """
         if (
             self.db.execute("SELECT 1 FROM mentions LIMIT 1").fetchone() is None
             and self.db.execute("SELECT 1 FROM entities LIMIT 1").fetchone() is None
+            and self.db.execute("SELECT 1 FROM items LIMIT 1").fetchone() is None
         ):
             self.ensure_search_indexes()
 
@@ -1209,7 +1217,38 @@ class KnowledgeStore:
         # The graph leg counts mentions by entity_id; the primary key leads with
         # item_id, so without this every search scans every mention.
         "CREATE INDEX IF NOT EXISTS idx_mentions_entity_item ON mentions(entity_id, item_id)",
+        # The watcher's stale-embedding count (ingestion.count_stale_items) reads
+        # only these columns, so with this index it never touches the item rows.
+        # Without it the count read the whole items table at every boot, beside
+        # memory preparation, and slowed both.
+        "CREATE INDEX IF NOT EXISTS idx_items_embed_state "
+        "ON items(status, embedding_sig, embedded_at)",
     )
+
+    def has_pending_one_time_work(self) -> bool:
+        """Whether a search index is missing or the FTS index predates the current format.
+
+        Both are one-time rebuilds that read the whole library; once done this is
+        two metadata reads.
+        """
+        names = {
+            row[0]
+            for row in self.db.execute("SELECT name FROM sqlite_schema WHERE type = 'index'")
+        }
+        wanted = {stmt.split(" IF NOT EXISTS ", 1)[1].split()[0] for stmt in self._SEARCH_INDEXES}
+        if not wanted <= names:
+            return True
+        version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        return int(version or 0) < FTS_INDEX_VERSION
+
+    def has_embed_state_index(self) -> bool:
+        """Whether the stale-embedding count can be answered from the index alone."""
+        return (
+            self.db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'idx_items_embed_state'"
+            ).fetchone()
+            is not None
+        )
 
     def ensure_search_indexes(self) -> None:
         """Create the search-only indexes if missing. O(data) the first time, then a no-op."""
@@ -1485,6 +1524,8 @@ class KnowledgeStore:
         # stalled boot long enough for runtime timeouts to kill the gateway.
         # `start_dashboard` kicks it from a worker thread once the listener is
         # up (`_kick_knowledge_orphan_reclaim`).
+        # Last, because a search index names columns added above.
+        self._ensure_search_indexes_if_empty()
 
     def ingestion_in_flight(self, *, admitted: bool = False):
         """Bracket one whole ingest so the deferred sweep never sees it half-written.

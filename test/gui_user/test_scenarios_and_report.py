@@ -386,11 +386,10 @@ class TestShippedScenarios:
         assert "no bubble from you" in expectations
 
     def test_scenarios_name_the_dormant_row_by_its_shipped_sentence(self) -> None:
-        """The dormant expander reads "1 dormant session hidden/shown".
+        """The sleeping-session expander row is named by its shipped sentence.
 
-        A step or expectation naming a "Dormant sessions" label sends the
-        tester looking for a row that is not drawn, so every quote of the row
-        must be the en.json sentence for a count of one.
+        A step or expectation naming the row must quote the exact en.json
+        sentence for a count of one so the tester looks for the right words.
         """
         en = json.loads(
             (Path(__file__).resolve().parents[2] / "website/src/i18n/locales/en.json").read_text(
@@ -401,13 +400,19 @@ class TestShippedScenarios:
             en[f"stale_collapse_row_{state}_one"].replace("{{count}}", "1")
             for state in ("hidden", "shown")
         }
+        # Derive the key adjective from the allowed set, e.g. "sleeping".
+        # Skip short words and generic ones shared across many labels.
+        generic = {"show", "hide", "count", "session", "sessions", "1"}
+        row_adj = {
+            w for label in allowed for w in label.lower().split() if w not in generic and len(w) > 3
+        }
         checked = 0
         for path in sorted(SCENARIOS_DIR.glob("*.yaml")):
             sc = scenarios.load_scenario(path)
             for text in [*sc.steps, *sc.expectations]:
                 assert "Dormant sessions" not in text, (path.name, text)
                 for quoted in text.split('"')[1::2]:
-                    if "dormant" in quoted.lower():
+                    if any(w in quoted.lower() for w in row_adj):
                         checked += 1
                         assert quoted in allowed, (path.name, quoted)
         assert checked >= 3

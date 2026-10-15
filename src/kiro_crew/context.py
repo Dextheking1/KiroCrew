@@ -572,12 +572,82 @@ def _shared_embed_fn() -> "Callable[[str], list[float] | None]":
     return make_sync_embed_fn()
 
 
+class _InflightStoreOpen:
+    """One shared open of a named store, the cache generation it opens under, and
+    the count of callers awaiting it."""
+
+    __slots__ = ("task", "generation", "waiters")
+
+    def __init__(self, task: "asyncio.Task[VectorMemoryStore | None]", generation: int) -> None:
+        self.task = task
+        self.generation = generation
+        self.waiters = 0
+
+
+#: In-flight opens by RESOLVED store name, touched only on the event-loop thread
+#: (``_build_store_vectors`` is a coroutine and never awaits between its check and
+#: its insert). One open per store at a time: a burst of first-touch requests on
+#: an uncached store -- the 65-fact seeding in ``member-memory.spec.ts`` sends five
+#: ``PUT /api/memory/semantic`` at once -- shares a single ``_prepare`` worker.
+#: Without the sharing each request runs its own: two ``KiroCrewConfig.load()``,
+#: an identity check with ``PRAGMA quick_check``, and a SQLite open plus
+#: migrations under the exclusive namespace lock, after which every worker but
+#: the first discards its store at publication.
+_inflight_store_opens: dict[str, _InflightStoreOpen] = {}
+
+
 async def _build_store_vectors(name: str) -> "VectorMemoryStore | None":
-    """Construct, init and wire a named store's own VectorMemoryStore.
+    """Construct, init and wire a named store's own VectorMemoryStore, once per burst.
+
+    Concurrent callers for the same uncached store share one open: the first
+    starts it, the rest await the same task. Each awaiter is shielded, so one
+    request's cancellation does not cancel the open under the others. The open
+    itself is cancelled only when its LAST awaiter is, which keeps the single
+    caller's contract: a cancelled open never publishes, and the worker closes
+    the store (and releases its lock FD) once ``init()`` returns.
+
+    An open is shared only within the cache generation it started under. A
+    release or reset that lands while it is in flight bumps the generation and
+    makes that open refuse at publication (``Memory cache changed during
+    preparation``); a caller arriving after the bump starts a fresh open under
+    the new generation instead of joining the one that is about to refuse.
+    """
+    with _stores_lock:
+        generation = _store_cache_generation
+    entry = _inflight_store_opens.get(name)
+    if entry is None or entry.generation != generation:
+        task = asyncio.get_running_loop().create_task(_open_store_vectors(name, generation))
+        entry = _InflightStoreOpen(task, generation)
+        _inflight_store_opens[name] = entry
+
+        def _forget(_task: "asyncio.Task[VectorMemoryStore | None]") -> None:
+            if _inflight_store_opens.get(name) is entry:
+                del _inflight_store_opens[name]
+
+        task.add_done_callback(_forget)
+    entry.waiters += 1
+    try:
+        return await asyncio.shield(entry.task)
+    except asyncio.CancelledError:
+        entry.waiters -= 1
+        if entry.waiters == 0 and not entry.task.done():
+            # Drop the entry BEFORE cancelling: the task finishes (and
+            # ``_forget`` runs) only on a later loop step, and a caller arriving
+            # in between must start a fresh open rather than join one whose
+            # shield is about to hand it a CancelledError nobody sent it.
+            if _inflight_store_opens.get(name) is entry:
+                del _inflight_store_opens[name]
+            entry.task.cancel()
+        raise
+
+
+async def _open_store_vectors(name: str, generation: int) -> "VectorMemoryStore | None":
+    """The one open behind :func:`_build_store_vectors`, under *generation*.
 
     Every blocking step is offloaded. ``_stores_lock`` is held only around the
     cache check-and-insert, never across ``init()``, so a slow first touch of one
-    store cannot serialize every embed worker.
+    store cannot serialize every embed worker. Publication refuses when the cache
+    generation differs from *generation*.
     """
     from kiro_crew.embeddings import (
         make_sync_embed_fn,
@@ -586,9 +656,6 @@ async def _build_store_vectors(name: str) -> "VectorMemoryStore | None":
     )
     from kiro_crew.memory_stores import UnknownMemoryStore, require_memory_store, resolve_store_path
     from kiro_crew.vector_memory import VectorMemoryStore, declared_store
-
-    with _stores_lock:
-        generation = _store_cache_generation
 
     cancelled = threading.Event()
 

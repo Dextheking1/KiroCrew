@@ -70,6 +70,7 @@ import { usePromptHistory, useUndoHistory } from './chat-input/draftHistory'
 import { usePromptOptimizer } from './chat-input/optimizer'
 import { usePasteTokens } from './chat-input/paste'
 import { FilePreviewStrip } from './chat-input/FilePreviewStrip'
+import { ComposerAttach } from '../chat-core/composer/Attach'
 
 /* The chat composer. This module is its only import path: the default export
    is the memoized component every host renders, and the named exports below
@@ -178,6 +179,7 @@ function ChatInput({
   busyMode = 'split',
   disabled: disabledProp = false,
   placeholder = '',
+  lockedPlaceholder,
   prefillHint,
   onScreenshot,
   onUploadFiles,
@@ -280,6 +282,7 @@ function ChatInput({
   collapsible = false,
   connected = true,
   onOptimizeResult,
+  onOptimizingChange,
 }: ChatInputProps) {
   // Under a `<Composer draft>` root the text arrives through the root's store,
   // subscribed HERE, so a keystroke re-renders this composer and not its host.
@@ -618,6 +621,11 @@ function ChatInput({
     slotId, chatStore, valueRef, pasteBlocks, onChange, onOptimizeResult, lexicalComposer, lexicalLoadFailed, composerControl, inputRef,
     valueFromUserRef, optimizingRef, appendUndoBoundary: appendBoundary, terminalCommands, optimizerMentionGuard,
   })
+  useEffect(() => { onOptimizingChange?.(optimizing) }, [optimizing, onOptimizingChange])
+  // A locked composer (a memory-mode switch is moving its draft) must not
+  // start an optimize: the rewrite would land in the slot being deleted.
+  // Every entry -- button, textarea chord, Lexical chord -- goes through here.
+  const optimizeUnlessLocked = useCallback(() => { if (!disabled) optimizePrompt() }, [disabled, optimizePrompt])
   // A file-tree row dropped here goes to the host's "Add to chat" handler;
   // OS file and text drags fall through to the host's handlers.
   const treeDrop = useComposerTreeDrop({
@@ -633,17 +641,17 @@ function ChatInput({
   })
   const {
     mirrorRef, hoverRef, pastePreviewPanelId, setPastePreviewPanelId, rawPasteRef, noteKeyDown,
-    handleTokenKey, handlePaste, handleTextareaClick, handleSelectSnap, handleCopy, handleCut, handleFileInputChange,
+    handleTokenKey, handlePaste, handleTextareaClick, handleSelectSnap, handleCopy, handleCut,
   } = usePasteTokens({ value, onChange, pasteBlocks, onPasteBlocksChange, showFullPastes, onUploadFiles, inputRef, valueRef, valueFromUserRef, recordCaret, ime })
   // The textarea's Cmd/Ctrl+Shift+Enter optimize chord, for the Lexical
   // composer. Unset when the host opted out of the optimizer, so the chord
   // falls through to the send rules there too.
   const lexicalOptimizeChord = useMemo(
-    () => (promptOptimizer ? () => { if (connected) optimizePrompt() } : undefined),
-    [promptOptimizer, connected, optimizePrompt],
+    () => (promptOptimizer ? () => { if (connected) optimizeUnlessLocked() } : undefined),
+    [promptOptimizer, connected, optimizeUnlessLocked],
   )
   const handleKeyDown = useComposerKeyDown({
-    rawPasteRef, handleUndoKey, endUndoBurst, handleTokenKey, onMentionKey, promptOptimizer: promptOptimizer && !terminal.active, connected, optimizePrompt, sendOnEnter, onChange, valueFromUserRef, optimizingRef,
+    rawPasteRef, handleUndoKey, endUndoBurst, handleTokenKey, onMentionKey, promptOptimizer: promptOptimizer && !terminal.active, connected, optimizePrompt: optimizeUnlessLocked, sendOnEnter, onChange, valueFromUserRef, optimizingRef,
     fireComposer, ime, sentMessages, onEditLastRequest, anyPickerOpenRef, promptHistory, valueRef, inputRef, pasteBlocksRef,
   })
   const { handleTextareaChange, handleLexicalChange } = useEditorInput({ onChange, valueFromUserRef, openPickersForText, recordCaret, lexicalControlRef, voiceCaretRef })
@@ -781,7 +789,7 @@ function ChatInput({
     return () => ro.disconnect()
   }, [inlineToolbarWhileFits, showGhost, composerCollapsed])
   const sizerPinned = inlineToolbarWhileFits && manualHeight === null && box !== null
-  const activePlaceholder = !connected ? i18nT('components.chatInput.gateway_offline_message_will_not_send') : disabledProp ? i18nT('components.chatInput.stopping') : voiceRecording ? i18nT('components.chatInput.recording_click_mic_to_stop') : transcribingIsHonest ? i18nT('components.chatInput.transcribing_please_wait') : continuePlaceholder || voiceModePlaceholder || resolvedPlaceholder
+  const activePlaceholder = !connected ? i18nT('components.chatInput.gateway_offline_message_will_not_send') : disabledProp ? (lockedPlaceholder || i18nT('components.chatInput.stopping')) : voiceRecording ? i18nT('components.chatInput.recording_click_mic_to_stop') : transcribingIsHonest ? i18nT('components.chatInput.transcribing_please_wait') : continuePlaceholder || voiceModePlaceholder || resolvedPlaceholder
   // The sigil hint is a label and may be cut to one line. Every other
   // placeholder here is a sentence the user needs whole, so it still wraps —
   // including a caller's own `placeholder`, which `resolvedPlaceholder` carries.
@@ -1089,7 +1097,7 @@ function ChatInput({
         </div>
       )}
 
-      <input id={fileInputId} ref={fileInputRef} type="file" aria-label={i18nT('components.chatInput.attach_files')} multiple accept={FILE_ACCEPT} className="sr-only" onChange={handleFileInputChange} />
+      <ComposerAttach id={fileInputId} ref={fileInputRef} aria-label={i18nT('components.chatInput.attach_files')} multiple accept={FILE_ACCEPT} className="sr-only" onFiles={onUploadFiles} />
       {onUploadFiles && (
         <SketchDialog open={sketchOpen} onOpenChange={setSketchOpen} onInsert={onUploadFiles} returnFocusRef={composerAnchorRef} />
       )}
@@ -1319,7 +1327,10 @@ function ChatInput({
           className={/* focus-cue-ok: maintainer decision -- the glass dock holding this textarea does not change on focus (no ring, no colour, no shadow step; index.css `.glass-shadow`), and a ring on the textarea itself is not wanted either; the caret is the composer's focus indicator. */ `relative block w-full [scrollbar-gutter:stable] bg-transparent border-none ${INPUT_TYPO} text-text outline-hidden min-h-[44px] max-h-[50vh] placeholder:text-muted resize-none ${placeholderIsHint ? 'placeholder:whitespace-nowrap placeholder:overflow-hidden placeholder:[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] placeholder:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]' : ''} ${manualHeight !== null ? 'flex-1' : ''} ${disabled ? 'opacity-40 pointer-events-none' : ''} ${optimizing ? 'opacity-30' : ''}`}
           style={manualHeight !== null ? { height: '100%' } : undefined}
           placeholder={activePlaceholder}
-          readOnly={optimizing}
+          // A disabled composer takes no keystrokes either: `pointer-events-none`
+          // alone still lets a focused textarea be typed into.
+          readOnly={optimizing || disabled}
+          aria-disabled={disabled || undefined}
           rows={1}
           value={value}
           onDragOver={e => { e.preventDefault(); treeDrop.onDragOver(e); e.stopPropagation() }}
@@ -1333,7 +1344,7 @@ function ChatInput({
             onFocus: prefetchSkills,
             onBlur: () => { if (hoverRef.current) hoverRef.current.handleMouseLeave() },
           })}
-          onPaste={handlePaste}
+          onPaste={disabled ? e => e.preventDefault() : handlePaste}
           onCopy={handleCopy}
           onCut={handleCut}
           onClick={handleTextareaClick}
@@ -1490,7 +1501,7 @@ function ChatInput({
             ) : !terminal.active && (<>
               {promptOptimizer && <button
                 className={`w-8 h-8 rounded-lg border-none flex items-center justify-center cursor-pointer transition-all disabled:cursor-not-allowed ${optimizing ? 'bg-accent/20 text-accent animate-pulse' : 'bg-transparent text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40 disabled:hover:text-muted disabled:hover:bg-transparent'}`}
-                onClick={(e) => { e.stopPropagation(); e.preventDefault(); optimizePrompt() }}
+                onClick={(e) => { e.stopPropagation(); e.preventDefault(); optimizeUnlessLocked() }}
                 // A single mutation backs this instance, so only one optimize can
                 // run at a time. Disable on the RAW pending flag (not the
                 // slot-scoped `optimizing`) so the button also reads as busy on a
@@ -1498,7 +1509,7 @@ function ChatInput({
                 // still in flight — matching the re-entrancy guard in
                 // optimizePrompt(). optimizing ⊂ optimizePending, so this stays
                 // disabled on the originating session too.
-                disabled={!value.trim() || optimizePending || !connected}
+                disabled={!value.trim() || optimizePending || !connected || disabled}
                 aria-label={optimizePending && !optimizing ? i18nT('components.chatInput.optimize_prompt_busy_optimizing_another_chat') : i18nT('components.chatInput.optimize_prompt')}
                 title={optimizePending && !optimizing ? i18nT('components.chatInput.optimizing_another_chat_please_wait') : i18nT('components.chatInput.optimize_prompt_2', { shortcut: platformShortcut('Cmd+Shift+Enter') })}
                 {...offlineProps(connected, i18nT('utils.offline.optimize'), i18nT('components.chatInput.optimize_prompt'))}

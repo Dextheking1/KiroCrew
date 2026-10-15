@@ -24,7 +24,7 @@ import { join } from 'node:path'
 import type { ReactElement } from 'react'
 import type { ChatMessage } from '../types'
 import { mergeRenderers, resolveRenderer, type MessageRenderContext } from '../app-sdk/messageRenderers'
-import { appAgentRefusalIsNewest, contextOverflowIsNewest, createTranscriptRenderers, featureRequestRefusalIsNewest, sessionStartRepeatIsNewest } from '../pages/chat/transcriptRenderers'
+import { appAgentRefusalIsNewest, contextOverflowIsNewest, createTranscriptRenderers, featureRequestRefusalIsNewest, newestErrorOwnsRecovery, sessionStartRepeatIsNewest } from '../pages/chat/transcriptRenderers'
 import { ErrorCard } from '../pages/chat/ErrorCard'
 import NoticeCard from '../pages/chat/NoticeCard'
 import { i18nT } from '../i18n/t'
@@ -709,5 +709,31 @@ describe('a turn that hit its time limit links to the setting', () => {
     const other = msg('error', { content: '⏱️ This turn hit the 4-hour limit.' })
     const el = render(other, opts, { index: 0, messages: [other] }) as ReactElement
     expect(el.props.onOpenTurnLimit).toBeUndefined()
+  })
+})
+
+describe('newestErrorOwnsRecovery -- one rule for the composer beneath the four remedy cards', () => {
+  const user = () => msg('user', { content: 'hi' })
+  const failed = () => msg('error', { content: 'Request session/new timed out after 90s', meta: { kind: 'session_start_failed' } })
+  const resumed = () => msg('inject', { content: '[Continue -- requested by the user]', meta: { injectKind: 'recovery' } })
+  const owners: Array<[string, ChatMessage[]]> = [
+    ['a refused feature request', [
+      msg('user', { content: 'I would like to request a feature!', meta: { sendId: 's-fr-seed', [FEATURE_REQUEST_ROW_META_KEY]: true } }),
+      msg('error', { content: 'The monthly usage limit has been reached.', meta: { kind: 'usage_limit' } }),
+    ]],
+    ['a session start that failed twice', [user(), failed(), resumed(), failed()]],
+    ['a context overflow', [user(), msg('error', { content: 'Input is too long.', meta: { kind: 'context_overflow' } })]],
+    ['a refused app agent', [user(), msg('error', { content: 'Release Notes cannot run.', meta: { kind: 'app_agent_refused' } })]],
+  ]
+
+  it.each(owners)('holds under %s, and lets go once a later turn opens', (_label, rows) => {
+    expect(newestErrorOwnsRecovery(rows)).toBe(true)
+    expect(newestErrorOwnsRecovery([...rows, msg('user', { content: 'again' })])).toBe(false)
+  })
+
+  it('does not hold for an error with no remedy of its own, such as a throttle, nor for no error', () => {
+    expect(newestErrorOwnsRecovery([user(), msg('error', { content: 'Bedrock is throttling requests.' })])).toBe(false)
+    expect(newestErrorOwnsRecovery([user(), failed()])).toBe(false)
+    expect(newestErrorOwnsRecovery([user(), msg('assistant', { content: 'ok' })])).toBe(false)
   })
 })

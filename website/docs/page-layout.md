@@ -245,9 +245,12 @@ per mounted row, the two sentinels at the list ends, and the `offsetBefore` /
 paging bar, a header band) needs nothing extra: the hook measures that leading
 offset itself and carries a bottom-parked reader through it. A host that steers
 toward a row that may not be mounted (the pinned-prompt glide) asks the hook
-through `mountIndex` and `estimateRowTop`. The page keeps `overflow-anchor: auto`
-on the scroller as the browser's own stabiliser. WebKit ships none, so the hook
-carries its own anchors as well.
+through `mountIndex` and `estimateRowTop`. The page declares `overflow-anchor: auto`
+on the scroller as the browser's own stabiliser for a scrolled-up reader; while
+follow is armed the hook sets it to `none` inline, because the bottom pin owns the
+position and Firefox's anchoring would drag the reader off the end
+(`followAnchorMode`). WebKit ships no anchoring, so the hook carries its own
+anchors as well.
 
 The pinned-prompt card is an overlay beside the scroller, not a row in it, and
 it paints above the composer dock, so nothing but geometry bounds it. Its

@@ -379,7 +379,7 @@ async def api_spawn_lost(request: web.Request) -> web.Response:
         return web.json_response({"error": "valid batch_id required"}, status=400)
     try:
         batch_total = max(0, min(int(body.get("batch_total", 0) or 0), 1000))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         batch_total = 0
     reason = str(body.get("reason", "") or "spawn submission failed")[:300]
     parent_session = str(body.get("parent_session", "") or "")

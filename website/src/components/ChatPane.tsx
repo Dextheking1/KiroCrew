@@ -60,6 +60,7 @@ import { useChatPanePickerModels, useChatPanePickerActions } from './useChatPane
 import { ChatPaneAgentMenu, ChatPaneModelMenu } from './ChatPanePickerMenus'
 import { useChatPaneSend } from './useChatPaneSend'
 import { useChatPaneStop, useChatPaneRunSync } from './useChatPaneTurnControl'
+import { useChatPaneContinue } from './useChatPaneContinue'
 import { useChatPaneRenderers, ChatPaneAboveRows } from './ChatPaneTranscript'
 
 export type { PaneLeading } from './ChatPaneProps'
@@ -429,7 +430,7 @@ export default function ChatPane({
   })
   const { recoverInto: recoverQuoteInto } = messageQuote
 
-  const { stopError, setStopError, paneStopState, onStop } = useChatPaneStop({ slotKey, busy, paneSlot, dispatch })
+  const { stopError, dismissStopError, paneStopState, onStop } = useChatPaneStop({ slotKey, busy, paneSlot, dispatch })
   // The endpointer auto-submit (handed to the Voice atom above) is an Enter
   // press: the composer's default busy decision with this pane's own composer
   // inputs (never the flipped chord), so it steers where Send would steer.
@@ -442,6 +443,13 @@ export default function ChatPane({
     else doSend()
   }
   useChatPaneRunSync({ slotKey, paneSlot, dispatch })
+  // Resume for a turn that ended on an error or never answered, as the main chat
+  // offers it: in the composer and on the newest error row. This pane's slot is
+  // rarely the active one (a crewmate's chat on the Members page never is), so
+  // the hook reads THIS slot's rows and run state. `paneSlot.running` joins the
+  // stream state because a background slot only hears about a turn from frames
+  // this tab was connected for.
+  const resume = useChatPaneContinue({ slotKey, messages, turnRunning: busy || !!paneSlot?.running })
   // The same queue-card recipe the single-chat surface runs (#5891), owned once
   // so the two cannot drift again the way #2240 found them drifted.
   //
@@ -473,7 +481,7 @@ export default function ChatPane({
     // picker inserts it, relative to that project.
     project: () => paneSlot?.project,
   })
-  const { listMessages, renderers } = useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, sessions, activeSession, messages, foldBefore })
+  const { listMessages, renderers } = useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, sessions, activeSession, messages, foldBefore, resume })
 
   // The composer dock floats over the bottom of the scroller (ChatPage's
   // layout, shared measurement): `dockH` is what the scroller pays below its
@@ -850,7 +858,18 @@ export default function ChatPane({
           className="mx-4 mt-2"
           testId="chat-pane-stop-error"
           message={stopError}
-          onDismiss={() => setStopError('')}
+          onDismiss={dismissStopError}
+        />
+        {/* No hand-off: the composer draft is untouched by a refused Resume.
+            The reason is the gateway's own (a turn already running, a stop in
+            progress, a pending approval); the turn starting retires it. */}
+        <ErrorNotice
+          variant="inline"
+          className="mx-4 mt-2"
+          testId="chat-pane-continue-error"
+          title={resume.continueError ? i18nT('pages.chatPage.could_not_continue') : undefined}
+          message={resume.continueError}
+          onDismiss={() => resume.setContinueError('')}
         />
         {/* No hand-off: the composer draft is untouched by a failed rename; the
             title in the bar is the one the store still holds, so the user can
@@ -888,6 +907,13 @@ export default function ChatPane({
           onStop={onStop}
           isQueued={streamState === 'stopping' || !!paneSlot?.stopping}
           stopState={paneStopState}
+          // Resume for an interrupted turn, as ChatPage composes it: safe to
+          // continue AND the transcript shows the turn ending badly, minus the
+          // cases the newest error card handles with a remedy of its own.
+          continuable={resume.composerResume}
+          continueIsRecovery={resume.interrupted}
+          onContinue={resume.onContinue}
+          continuing={resume.continuing}
           // Steer path on the pane too (it was queue-only before): busy panes
           // get the same mid-turn choice as the main chat, and a
           // `steer-only` host gets a plain send that steers.

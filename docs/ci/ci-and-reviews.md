@@ -758,9 +758,24 @@ The CI workflow requires this repository, a push, a merge-group event or an
 `contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id)`.
 A `merge_group` run's actor is the person who queued the pull request, so the
 same list admits it without a new entry.
-Other PR activities (including edits, reopens and labels) stay hosted even for
-an admitted actor: that actor did not supply the code being run. The same
-restriction applies to every inline PR route and both platform resolvers.
+Other PR activities (reopens, ready-for-review, labels and edits) stay hosted
+even for an admitted actor. The check reads `github.actor_id`, which names the
+account that triggered the event, never the accounts that pushed the commits
+on the head, so the gate does not prove who supplied the head code. On
+`synchronize` the actor is the account that pushed the newest commit, and on
+`opened` the account that opened the pull request. In both cases a
+same-repository branch can also carry commits pushed by a write-access account
+the list does not carry, such as a collaborator added after the list was last
+synced or an automation account: a listed account can open a pull request on
+an unlisted account's branch, and that head runs on the fleet. This residual
+exposure is accepted, on the reasoning that a listed account that pushes to a
+branch or opens a pull request on it is submitting that branch for CI. The
+admitted scope stops at those two events so that reopening, marking ready,
+labelling or editing, which a listed account can do on any same-repository
+pull request it never pushed or opened, does not also start that head on the
+fleet. The cost of the exclusion is that runs on those activities use
+GitHub-hosted runner minutes. Fork pull requests stay hosted either way. The
+same restriction applies to every inline PR route and both platform resolvers.
 The same actor check covers the existing inline routes, including every
 unconditional Fast Gate. Pages and the main ratchet audit also admit manual
 runs from listed actors. The four non-agentic code-review checks
@@ -771,7 +786,7 @@ Their permissions and triggers are unchanged. `sast` alone changed its steps:
 it dropped its job container and installs the pinned Semgrep on the runner.
 Sensitive Change Review uses the fleet on every PR and review event, not just
 `opened`/`synchronize`: it checks out only default-branch scripts and runs no
-PR code, so the "actor did not supply the code" reason does not apply.
+PR code, so the head-code exposure above does not apply.
 PR Readiness uses the same reasoning on its `pull_request_target` runs, about
 2,500 a day, with the fork check on `github.event.pull_request.head.repo.full_name`.
 Its `workflow_run` runs stay hosted: they carry the `in_progress` merge-guard

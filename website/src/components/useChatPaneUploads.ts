@@ -9,6 +9,7 @@ import {
   cancelComposerUploads,
   holdComposerSend,
   registerComposerUpload,
+  composerUploadSlot,
   finishComposerAttachment,
   unregisterComposerUpload,
   useComposerSendHeld,
@@ -121,8 +122,11 @@ export function useChatPaneUploads({ slotKey, dispatch, slotKeyRef, mountedRef, 
       reportUploadFailure(i18nT('pages.chatPage.upload_failed_error', { error: reason }), forSlot)
     },
     onSettled: (data, _err, { controller, forSlot }: UploadVars) => {
-      unregisterComposerUpload(forSlot, controller)
-      finishComposerAttachment(forSlot, data && !data.error ? data.paths ?? [] : [])
+      // Where the upload lives now: a memory-mode switch may have handed it,
+      // with its hold, to the replacement session while it ran.
+      const landing = composerUploadSlot(controller) ?? forSlot
+      unregisterComposerUpload(landing, controller)
+      finishComposerAttachment(landing, data && !data.error ? data.paths ?? [] : [])
     },
   })
   /** Abort every upload in flight for this pane's slot, whichever host started it. */

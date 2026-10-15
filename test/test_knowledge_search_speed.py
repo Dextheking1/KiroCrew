@@ -119,6 +119,21 @@ class TestSearchIndexesOffConstruction:
         reopened = KnowledgeStore(path)
         assert not {"idx_entities_name_lower", "idx_mentions_entity_item"} & _index_names(reopened)
 
+    def test_items_without_entities_defer_the_embed_state_index(self, tmp_path):
+        # idx_items_embed_state covers the whole items table (vector BLOBs and
+        # all); a library holding items but no entities yet must not build it
+        # before bind.
+        path = str(tmp_path / "kb.db")
+        s = KnowledgeStore(path)
+        s.add_item("doc", "c", "doc")
+        s.db.execute("DROP INDEX idx_items_embed_state")
+        s.db.commit()
+        s.close()
+        reopened = KnowledgeStore(path)
+        assert "idx_items_embed_state" not in _index_names(reopened)
+        reopened.ensure_search_indexes()
+        assert "idx_items_embed_state" in _index_names(reopened)
+
     def test_ensure_search_indexes_builds_them_and_is_idempotent(self, tmp_path):
         reopened = KnowledgeStore(self._populated_without_indexes(tmp_path))
         reopened.ensure_search_indexes()

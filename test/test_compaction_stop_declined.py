@@ -2588,8 +2588,7 @@ async def test_a_hard_stop_during_the_uncompactable_restart_wait_settles_cancell
     assert await mgr.stop_turn(KEY, force=True) == "hard"
     assert mgr._sessions.get(key) is not session
     await await_until(holds, what="the claimant holding the permit")
-    done, _ = await asyncio.wait({task}, timeout=5)
-    assert done, "the restart kept waiting for the sub-agent after the Stop"
+    await await_until(task, what="the restart finishing after the Stop")
     let_go.set()
 
     assert task.result() == "cancelled"
@@ -2618,8 +2617,7 @@ async def test_a_stop_recorded_during_the_uncompactable_restart_wait_releases_th
     claimant = asyncio.ensure_future(_claimant())
     await _parked_on(session)
     assert mgr.note_stop(KEY) is True
-    done, _ = await asyncio.wait({task}, timeout=5)
-    assert done, "the restart kept waiting for the sub-agent after the Stop"
+    await await_until(task, what="the restart finishing after the Stop")
 
     assert task.result() == "cancelled"
     assert not gate.is_set(), "the sub-agent was cancelled"
