@@ -49,6 +49,7 @@ from kiro_crew.mcp_cron import (
     _vet_script_file,
     _vet_shell_command,
 )
+from kiro_crew.security import argv_floor
 
 # ── Fix 1: command deny-list (pure function) ──────────────────────────────
 
@@ -614,6 +615,28 @@ def _cron_caller_is_named(named_cron_caller):
     """
 
 
+@pytest.fixture
+def _ssh_target_host_is_remote(monkeypatch):
+    """``host`` in ``ssh ... backup@host uptime`` is a remote machine on every runner.
+
+    The ssh-self floor judges a dotless target from runner state: the host name, the
+    hosts file, the resolver, and an address table that a background thread, started
+    by the first ssh check, publishes. A hosts-file parse that the publication
+    overtakes answers pending, which refuses the command. Pin each input on the
+    floor's own module: own names without ``host`` (no probe), no retry for the
+    thread (none starts), no hosts file, and a not-self DNS verdict. The own names
+    are pinned with their published and resolved flags, so teardown restores the
+    three together even if an earlier test's thread wrote them meanwhile. Loopback
+    targets are judged before any of these and stay refused.
+    """
+    monkeypatch.setattr(argv_floor, "_OWN_HOST_NAMES_CACHE", frozenset({"127.0.0.1"}))
+    monkeypatch.setattr(argv_floor, "_NETLINK_ADDRS_PUBLISHED", True)
+    monkeypatch.setattr(argv_floor, "_OWN_HOST_RESOLVE_DONE", True)
+    monkeypatch.setattr(argv_floor, "_OWN_HOST_RESOLVE_NEXT_TRY", float("inf"))
+    monkeypatch.setattr(argv_floor, "_hosts_file_paths", lambda: ())
+    monkeypatch.setattr(argv_floor, "_resolved_host_verdict", lambda host, **_kw: False)
+
+
 @pytest.mark.parametrize("cmd", MALICIOUS_COMMANDS)
 def test_vet_shell_command_blocks_malicious(cmd):
     err = _vet_shell_command(cmd)
@@ -725,6 +748,7 @@ def test_vet_shell_command_allows_benign(cmd):
     assert _vet_shell_command(cmd) is None, f"should allow: {cmd!r}"
 
 
+@pytest.mark.usefixtures("_ssh_target_host_is_remote")
 @pytest.mark.parametrize("cmd", BENIGN_LOOKALIKE_COMMANDS)
 def test_vet_shell_command_allows_smuggling_lookalikes(cmd):
     """The assignment expansion must follow sh semantics, not approximate them.
@@ -802,6 +826,7 @@ def test_a_variable_that_is_assigned_and_read_is_refused(cmd):
     assert err is not None and err.startswith("Error:"), f"should refuse: {cmd!r}"
 
 
+@pytest.mark.usefixtures("_ssh_target_host_is_remote")
 @pytest.mark.parametrize(
     "cmd",
     [
