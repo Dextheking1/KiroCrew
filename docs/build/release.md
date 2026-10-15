@@ -193,8 +193,14 @@ code.
    - *Bundled kiro-cli pin*: compare `packaging/kiro-cli-version` with the
      version the release manifest names today
      (`https://desktop-release.q.us-east-1.amazonaws.com/latest/manifest.json`)
-     and decide whether to bump it — after testing the app against the newer
-     release, never blind. A bump is two files in one commit: the version in
+     and bump to that version by default, on `main` by RC cut at the latest —
+     after testing the app against the newer release, never blind. Keep the
+     older pin only when an exception is recorded, with its reason, in the RC
+     notes or the pin-drift tracking issue (for example a regression found in
+     testing, testing not yet finished, a new major version, or an upstream
+     release still under review). An exception covers that release's RC only;
+     the update deadline below keeps running. A bump
+     is two files in one commit: the version in
      `packaging/kiro-cli-version`, and in `packaging/kiro-cli-sha256` the
      manifest's `sha256` for each staged artifact (`<version>/Kiro CLI.dmg`,
      `<version>/kirocli-x86_64-linux.zip`, `<version>/kirocli-aarch64-linux.zip`,
