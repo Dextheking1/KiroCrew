@@ -178,6 +178,12 @@ checkout's agent spec hooks no longer reach the turn loop, config-defined git
 hooks are disabled for host-side git, and the dashboard serves its fonts
 locally.
 
+**Updates and agents.** The dashboard's Update and `kirocrew update` no longer
+fail with "could not fetch latest-cli.json" when they download a new version. A
+crewmate whose template uses a name the KAS engine reserves, such as `default`,
+now runs on KAS instead of being refused, and a tool that waits no longer holds
+up the other tools of its session.
+
 ## [0.8.0] - 2026-10-08
 
 Kiro Crew spends less of your attention. A monitoring loop now screens what it
