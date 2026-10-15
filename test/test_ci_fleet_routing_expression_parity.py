@@ -430,6 +430,14 @@ def test_review_runner_template_names_the_routed_project_and_grants_nothing() ->
         "CloudWatchLogs": {"Status": "DISABLED"},
         "S3Logs": {"Status": "DISABLED"},
     }
+    # The build must outlive every routed lane's own job timeout, or CodeBuild
+    # kills the runner first and the lane reads as a lost runner, not a hang.
+    lane_timeouts = []
+    for workflow_name, job_id in _EXPECTED_REVIEW_RUNNER_JOBS:
+        workflow = yaml.safe_load((_WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8"))
+        lane_timeouts.append(int(workflow["jobs"][job_id]["timeout-minutes"]))
+    assert int(template["Parameters"]["BuildTimeoutMinutes"]["Default"]) > max(lane_timeouts)
+    assert project["TimeoutInMinutes"] == {"Ref": "BuildTimeoutMinutes"}
     role = resources["ReviewRunnerRole"]["Properties"]
     # Zero permissions: the lanes assume their Bedrock role through OIDC, so an
     # ambient grant would only arm a step a PR edited onto this label.

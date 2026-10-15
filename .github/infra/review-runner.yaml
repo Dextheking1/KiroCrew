@@ -52,9 +52,12 @@ Parameters:
       account-wide CodeBuild concurrency the CI fleet also draws on.
   BuildTimeoutMinutes:
     Type: Number
-    Default: 60
+    Default: 180
     MinValue: 5
     MaxValue: 480
+    Description: >-
+      Must exceed every routed lane's job timeout-minutes (the longest is
+      160), or CodeBuild kills the runner before the job's own backstop.
   PermissionsBoundaryArn:
     Type: String
     Default: ""
