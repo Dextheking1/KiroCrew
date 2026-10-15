@@ -280,3 +280,49 @@ def test_reusable_routes_keep_schedule_callers_hosted(filename):
         ), f"{caller} must exercise the reusable route"
     for job in workflow["jobs"].values():
         assert job["runs-on"] == parity._CANONICAL_PUSH_EXPR
+
+
+@pytest.mark.parametrize(
+    "event,repo,head,actor,author,actors,switch,eligible,rerunner",
+    [
+        # Trusted actor AND trusted author on a same-repo PR, switch on.
+        ("pull_request", _REPO, _REPO, "101", "202", _ACTORS, "enabled", True, None),
+        ("pull_request", _REPO, _REPO, "202", "202", _ACTORS, "enabled", True, None),
+        # Switch unset or any other value: hosted. Merging the route changes nothing.
+        ("pull_request", _REPO, _REPO, "101", "101", _ACTORS, "", False, None),
+        ("pull_request", _REPO, _REPO, "101", "101", _ACTORS, "true", False, None),
+        # Untrusted author, even when a trusted person pushed or edited.
+        ("pull_request", _REPO, _REPO, "101", "999", _ACTORS, "enabled", False, None),
+        # Untrusted actor on a trusted author's PR.
+        ("pull_request", _REPO, _REPO, "999", "101", _ACTORS, "enabled", False, None),
+        # Fork head, or another repository: always hosted.
+        ("pull_request", _REPO, _FORK, "101", "101", _ACTORS, "enabled", False, None),
+        ("pull_request", _FORK, _FORK, "101", "101", _ACTORS, "enabled", False, None),
+        # Missing or empty list.
+        ("pull_request", _REPO, _REPO, "101", "101", "", "enabled", False, None),
+        ("pull_request", _REPO, _REPO, "101", "101", "[]", "enabled", False, None),
+        # Not a pull_request event.
+        ("pull_request_target", _REPO, _REPO, "101", "101", _ACTORS, "enabled", False, None),
+        ("push", _REPO, "", "101", "", _ACTORS, "enabled", False, None),
+        # A re-run by someone other than the original actor stays hosted.
+        ("pull_request", _REPO, _REPO, "101", "101", _ACTORS, "enabled", False, "other-user"),
+    ],
+)
+def test_review_runner_route_truth_table(
+    event, repo, head, actor, author, actors, switch, eligible, rerunner
+):
+    context = {
+        "github.actor": "listed-user",
+        "github.triggering_actor": rerunner or "listed-user",
+        "github.repository": repo,
+        "github.event_name": event,
+        "github.event.pull_request.head.repo.full_name": head,
+        "github.event.pull_request.user.id": author,
+        "github.actor_id": actor,
+        "vars.CODEBUILD_ACTOR_IDS": actors,
+        "vars.REVIEW_CODEBUILD_RUNNER": switch,
+        "github.run_id": "456",
+        "github.run_attempt": "3",
+    }
+    expected = "codebuild-kirocrew-gha-reviews-456-3" if eligible else "ubuntu-latest"
+    assert _evaluate(parity._CANONICAL_REVIEW_RUNNER_EXPR, context) == expected

@@ -4715,7 +4715,10 @@ def _fleet_routed_workflow_files() -> set[str]:
     The watchdog's own workflow is absent because its job runs on a hosted runner and
     the fleet label appears there only in a comment.
     """
-    return {workflow for workflow, _ in parity._EXPECTED_ROUTED_JOBS}
+    return {
+        workflow
+        for workflow, _ in parity._EXPECTED_ROUTED_JOBS | parity._EXPECTED_REVIEW_RUNNER_JOBS
+    }
 
 
 def test_the_watched_set_is_exactly_the_fleet_routed_workflows() -> None:
@@ -4757,6 +4760,13 @@ def test_heal_safe_and_exempt_workflows_form_the_exact_partition() -> None:
             # Publishes the required commit status and the readiness label. The
             # sweep's hosted recompute republishes it, so no heal is needed.
             "pr-readiness.yml",
+            # AI review lanes on the review project: a re-run re-spends the
+            # model call and re-posts the review, so a human re-runs them.
+            "claude-review.yml",
+            "codex-review.yml",
+            "design-review.yml",
+            "ux-review.yml",
+            "first-principles-review.yml",
         }
     )
     assert wd.HEAL_SAFE_WORKFLOWS == heal_safe

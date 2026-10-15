@@ -64,7 +64,10 @@ jobs:
     # the guard is on every step, so a step added later cannot quietly run
     # against fork content.
     name: "${{ github.event.pull_request.head.repo.full_name == github.repository && 'GPT 6.1 Review' || 'GPT 6.1 Review (same-repo lane, not applicable to forks)' }}"
-    runs-on: ubuntu-latest
+    # Reads PR text, so never the CI fleet. Trusted same-repo PRs use the
+    # Bedrock-only review project (.github/infra/review-runner.yaml) once
+    # vars.REVIEW_CODEBUILD_RUNNER is 'enabled'; everything else is hosted.
+    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && vars.REVIEW_CODEBUILD_RUNNER == 'enabled' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id) && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), format('{0}', github.event.pull_request.user.id)) && github.triggering_actor == github.actor && format('codebuild-kirocrew-gha-reviews-{0}-{1}', github.run_id, github.run_attempt) || 'ubuntu-latest' }}
     # Runaway/hang backstop only, NOT a per-review budget: each pass carries its
     # own PASS_WALL and self-terminates first. This wall MUST therefore stay
     # above the sum of the pass walls plus setup -- otherwise it, not the named

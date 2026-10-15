@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: "2010-09-09"
+# Low-permission CodeBuild runner for the same-repository AI review lanes.
+#
+# The review lanes read pull-request text, which can carry hidden instructions
+# even from a trusted author. So they must never land on the CI fleet projects
+# (`kirocrew-gha-linux`, `kirocrew-gha-windows`) or see those projects' role.
+# This stack is a SEPARATE project with a SEPARATE build role that has NO
+# permissions at all. The lanes reach Bedrock the way they do on hosted
+# runners: each assumes its Bedrock-only role through GitHub OIDC in the one
+# step that needs it. An ambient Bedrock grant here would add nothing for the
+# lanes, but would hand a credential to every step of any job that lands on
+# this label, including one a PR edited onto it. Nothing here models,
+# references or changes the fleet projects.
+#
+# What the build role cannot do, by construction (it has no policy):
+#   - no Bedrock (the lanes' OIDC role carries that)
+#   - no S3 (no artifacts, no cache, S3 logs off)
+#   - no CloudWatch Logs (CloudWatch logs off; the job log lives in GitHub)
+#   - no Secrets Manager, SSM, KMS, STS AssumeRole or any other service
+#   - no CodeConnections: the webhook uses the account's GitHub source
+#     credential server-side, so the build never holds a GitHub token
+#   - no VPC attachment, so it reaches no private network; outbound internet
+#     only, which the runner needs for GitHub and the lanes need for npm
+#
+# Not deployed by the change that adds it. Deploy is an operator decision; see
+# docs/ci/ci-and-reviews.md#ai-review-codebuild-runner for parameters, the
+# deploy command and the repository variable that turns routing on.
+Description: Kiro Crew AI review lanes - CodeBuild GitHub Actions runner with a zero-permission build role
+
+Parameters:
+  GitHubRepositoryUrl:
+    Type: String
+    Default: https://github.com/kirodotdev/KiroCrew
+    AllowedPattern: "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: Repository whose workflow_job webhook this project serves.
+  TrustedActorIdPattern:
+    Type: String
+    AllowedPattern: "^\\^\\(\\d+(\\|\\d+)*\\)\\$$"
+    Description: >-
+      Webhook ACTOR_ACCOUNT_ID filter, e.g. ^(101|202)$. Must list the same
+      GitHub user IDs as the CODEBUILD_ACTOR_IDS repository variable.
+  ComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_MEDIUM
+    AllowedValues: [BUILD_GENERAL1_SMALL, BUILD_GENERAL1_MEDIUM, BUILD_GENERAL1_LARGE]
+  ConcurrentBuildLimit:
+    Type: Number
+    Default: 40
+    MinValue: 1
+    Description: >-
+      Cap on this project's running builds, so review traffic cannot take the
+      account-wide CodeBuild concurrency the CI fleet also draws on.
+  BuildTimeoutMinutes:
+    Type: Number
+    Default: 60
+    MinValue: 5
+    MaxValue: 480
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ""
+    Description: Optional IAM permissions boundary for the build role.
+
+Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+
+Resources:
+  ReviewRunnerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Kiro Crew AI review runner - no permissions; lanes use their own OIDC role
+      MaxSessionDuration: 3600
+      PermissionsBoundary: !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref AWS::NoValue]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+            # Only this project in this account may assume the role.
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/kirocrew-gha-reviews
+
+  ReviewRunnerProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      # Fixed, not a parameter: the review workflows hard-code the label
+      # `codebuild-kirocrew-gha-reviews-<run>-<attempt>`, and a test pins that
+      # no review lane names any other CodeBuild project.
+      Name: kirocrew-gha-reviews
+      Description: Ephemeral GitHub Actions runners for same-repo AI review lanes
+      ServiceRole: !GetAtt ReviewRunnerRole.Arn
+      Visibility: PRIVATE
+      ConcurrentBuildLimit: !Ref ConcurrentBuildLimit
+      TimeoutInMinutes: !Ref BuildTimeoutMinutes
+      QueuedTimeoutInMinutes: 30
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepositoryUrl
+        GitCloneDepth: 1
+        ReportBuildStatus: false
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Cache:
+        Type: NO_CACHE
+      LogsConfig:
+        CloudWatchLogs:
+          Status: DISABLED
+        S3Logs:
+          Status: DISABLED
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: !Ref ComputeType
+        Image: aws/codebuild/standard:7.0
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: false
+      Triggers:
+        Webhook: true
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: WORKFLOW_JOB_QUEUED
+            - Type: ACTOR_ACCOUNT_ID
+              Pattern: !Ref TrustedActorIdPattern
+
+Outputs:
+  ProjectName:
+    Value: !Ref ReviewRunnerProject
+  RunnerLabelPrefix:
+    Description: Workflow runs-on label prefix this project serves
+    Value: codebuild-kirocrew-gha-reviews-
+  BuildRoleArn:
+    Value: !GetAtt ReviewRunnerRole.Arn

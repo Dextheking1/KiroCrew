@@ -233,16 +233,23 @@ CODEBUILD_LABEL_PREFIX = "codebuild-"
 # pins this tuple to the set of workflows whose `runs-on` actually carries it.
 # `ci-runner-watchdog.yml` is deliberately absent: the label appears only in
 # its own explanatory comment, and a watchdog must never cancel or re-run
-# itself out from under a tick.
+# itself out from under a tick. The five AI review lanes route to the separate
+# review project (`codebuild-kirocrew-gha-reviews-…`), not the fleet; they are
+# watched so an orphan is reported, and heal-exempt because a re-run re-spends
+# the model call and re-posts the review comment.
 WATCHED_WORKFLOWS: tuple[str, ...] = (
     "build-wheel.yml",
     "build.yml",
     "ci.yml",
+    "claude-review.yml",
     "code-review.yml",
+    "codex-review.yml",
     "cross-platform.yml",
     "dependency-review.yml",
     "dependency-vulnerability.yml",
+    "design-review.yml",
     "fast-gate.yml",
+    "first-principles-review.yml",
     "macos-on-demand.yml",
     "main-ratchet-audit.yml",
     "pages.yml",
@@ -252,6 +259,7 @@ WATCHED_WORKFLOWS: tuple[str, ...] = (
     "release.yml",
     "screenshot-evidence.yml",
     "sensitive-change-review.yml",
+    "ux-review.yml",
 )
 # Put the workflows that carry routine pull-request traffic ahead of release
 # and audit workflows when looking for recent fleet starts.

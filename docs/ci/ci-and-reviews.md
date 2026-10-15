@@ -2534,7 +2534,29 @@ still in flight carries an `in_progress` check-run that readiness scores
   hang. The Opus lanes sit at 120, because both of their stages share one job and
   the wall therefore bounds their sum.
 
-### Advisory means advisory, with one exception
+### AI review CodeBuild runner
+
+The five same-repo review jobs (`claude-review`, `codex-review`, `design-review`, `ux-review`, `first-principles-review`) can run on a CodeBuild project of their own, `kirocrew-gha-reviews`, instead of `ubuntu-latest`. They read PR text, so they never take the CI fleet label: a prompt-injected reviewer must not reach the fleet role. `.github/infra/review-runner.yaml` defines the project and a build role with no permissions at all: no Bedrock, S3, CloudWatch Logs, Secrets Manager, CodeConnections or VPC access, and privileged mode is off. The lanes reach Bedrock as they do on hosted runners, by assuming their Bedrock-only role through OIDC in the one step that needs it. An ambient Bedrock grant would add nothing for them, but would arm every step of any job a PR edits onto this label.
+
+A job routes there only when all of these hold: the repository is `kirodotdev/KiroCrew`, `vars.REVIEW_CODEBUILD_RUNNER` is exactly `enabled`, the event is `pull_request`, the head is this repository, both the actor and the PR author are in `CODEBUILD_ACTOR_IDS`, and the run was not re-run by someone else (`github.triggering_actor == github.actor`). Anything else, forks included, stays on `ubuntu-latest`. With the variable unset, nothing moves. Check names do not change. `test_review_runner_route_is_exactly_the_review_lanes` pins the expression and the job set, and `test_review_runner_template_names_the_routed_project_and_grants_nothing` pins the empty role.
+
+`security-scope-review.yml` stays hosted: its `generate` fence hard-codes the hosted runner's action path (see that job's comment). The runner watchdog watches the five lanes and reports their orphans, but does not heal them, because a re-run re-spends the model call and re-posts the review.
+
+The stack is not deployed by the change that adds it. To deploy, pick the account and region with the AWS CLI profile, then:
+
+```bash
+aws cloudformation deploy \
+  --profile <admin-profile-for-the-target-account> --region us-west-2 \
+  --stack-name kirocrew-gha-reviews \
+  --template-file .github/infra/review-runner.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    TrustedActorIdPattern='^(<id1>|<id2>)$' \
+    ConcurrentBuildLimit=40
+```
+
+`<admin-profile-for-the-target-account>` is the AWS CLI profile for the account that should own the project; `<id1>|<id2>` are the same GitHub user IDs as `CODEBUILD_ACTOR_IDS`. The OIDC roles in `AWS_BEDROCK_ROLE_ARN` and `AWS_CODEX_BEDROCK_ROLE_ARN` need no change. The account needs a GitHub source credential for CodeBuild (token or GitHub App); do not give this role CodeConnections access, because `GetConnectionToken` would hand the build a GitHub token. After the stack exists, set `REVIEW_CODEBUILD_RUNNER=enabled` and watch one run of each lane; on that first run, also confirm no source token was left on disk in the build. The webhook filter checks the job sender only, so a same-repo pusher who edits a lane onto this label can run there, but holds nothing extra: the role is empty and the job token is the one a hosted runner gets. The GPT lane's read-only sandbox needs unprivileged user namespaces; if it fails on CodeBuild it fails closed. Rollback: unset the variable.
+
 
 Design Review and UX Review are advisory except on `BLOCK`: their suggestions must be
 proportionate ("never recommend extra layers, abstractions or future-proofing the

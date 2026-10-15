@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from yaml_helpers import load_with
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOWS_DIR = _REPO_ROOT / ".github" / "workflows"
@@ -92,6 +93,36 @@ _CANONICAL_DISPATCH_MERGE_GROUP_EXPR = (
     "|| 'ubuntu-latest' }}"
 )
 
+# The AI review lanes read pull-request text, so they never take the CI fleet
+# label. Trusted same-repository PRs (actor AND PR author listed, and not a
+# re-run by someone else) use a separate zero-permission project, and only once the repository variable
+# REVIEW_CODEBUILD_RUNNER is 'enabled'; everything else stays hosted.
+_REVIEW_RUNNER_LABEL_PREFIX = "codebuild-kirocrew-gha-reviews-"
+_CANONICAL_REVIEW_RUNNER_EXPR = (
+    "${{ github.repository == 'kirodotdev/KiroCrew' && "
+    "vars.REVIEW_CODEBUILD_RUNNER == 'enabled' && "
+    "github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name == github.repository && "
+    + _ACTOR_PREDICATE
+    + " && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), "
+    "format('{0}', github.event.pull_request.user.id)) && "
+    "github.triggering_actor == github.actor && "
+    "format('codebuild-kirocrew-gha-reviews-{0}-{1}', github.run_id, github.run_attempt) "
+    "|| 'ubuntu-latest' }}"
+)
+_EXPECTED_REVIEW_RUNNER_JOBS = {
+    ("claude-review.yml", "claude-review"),
+    ("codex-review.yml", "codex-review"),
+    ("design-review.yml", "design-review"),
+    ("ux-review.yml", "ux-review"),
+    ("first-principles-review.yml", "first-principles-review"),
+}
+
+
+def _is_review_runner_route(value: object) -> bool:
+    return _REVIEW_RUNNER_LABEL_PREFIX in str(value)
+
+
 # These lanes remain hosted: untrusted-content model execution, schedule/issue
 # triggers, or an isolation contract tied to hosted paths. The scope-review
 # generate job's action-code Write fence is one such path-sensitive contract.
@@ -111,9 +142,6 @@ _PERMANENT_EXCEPTIONS = {
     ("deferred-findings-audit.yml", "audit"),
     ("add-contributor.yml", "add"),
     ("ship-report.yml", "report"),
-    ("first-principles-review.yml", "first-principles-review"),
-    ("ux-review.yml", "ux-review"),
-    ("design-review.yml", "design-review"),
     ("ci-runner-watchdog.yml", "watchdog"),
 }
 
@@ -302,7 +330,7 @@ def test_every_copy_of_the_routing_expression_matches_the_canonical_one() -> Non
             # Parse the value, not a line regex: folded YAML and label arrays
             # must not hide a fleet route from this check. Anchor on the fleet
             # prefix, never on the predicate whose correctness we are checking.
-            if "codebuild-" not in str(value):
+            if "codebuild-" not in str(value) or _is_review_runner_route(value):
                 continue
             found_any = True
             if value != _expected_inline_expression(path.name):
@@ -320,7 +348,7 @@ def test_every_job_using_the_routing_expression_is_accounted_for() -> None:
         for job_id, spec in workflow["jobs"].items():
             key = (path.name, job_id)
             runs_on = spec.get("runs-on")
-            if "codebuild-" in str(runs_on):
+            if "codebuild-" in str(runs_on) and not _is_review_runner_route(runs_on):
                 routed.add(key)
             if key in _PERMANENT_EXCEPTIONS:
                 exception_runs_on[key] = runs_on
@@ -336,6 +364,82 @@ def test_every_job_using_the_routing_expression_is_accounted_for() -> None:
         key: value for key, value in exception_runs_on.items() if value != "ubuntu-latest"
     }
     assert not wrong_runner, f"hosted exception changed runner: {wrong_runner}"
+
+
+def test_review_runner_route_is_exactly_the_review_lanes() -> None:
+    """Only the AI review lanes use the review project, each with the canonical
+    expression, and no job anywhere names the review label beside another one.
+
+    A value carrying the review label is skipped by the fleet inventory, so a
+    review lane that also gained the fleet label is caught here: by the exact
+    expression and by the single `codebuild-` label count.
+    """
+    routed: dict[tuple[str, str], object] = {}
+    for path in _all_workflow_files():
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job_id, spec in workflow["jobs"].items():
+            runs_on = spec.get("runs-on")
+            if _is_review_runner_route(runs_on):
+                routed[(path.name, job_id)] = runs_on
+    assert set(routed) == _EXPECTED_REVIEW_RUNNER_JOBS
+    drifted = {k: v for k, v in routed.items() if v != _CANONICAL_REVIEW_RUNNER_EXPR}
+    assert not drifted, f"review runner expression drift: {drifted}"
+    # The one CodeBuild label in the expression is the review project's.
+    assert _CANONICAL_REVIEW_RUNNER_EXPR.count("codebuild-") == 1
+    assert "kirocrew-gha-linux" not in _CANONICAL_REVIEW_RUNNER_EXPR
+    assert "kirocrew-gha-windows" not in _CANONICAL_REVIEW_RUNNER_EXPR
+
+
+def test_review_runner_template_names_the_routed_project_and_grants_nothing() -> None:
+    """The stack the label points at is the low-permission one.
+
+    The project name is fixed in the template (not a parameter) so the label
+    cannot drift from it, and the build role grants nothing: no Bedrock,
+    logs, artifacts, cache, VPC, connection or privileged mode.
+    """
+
+    class _CfnLoader(yaml.SafeLoader):
+        pass
+
+    def _tag(loader, suffix, node):
+        if isinstance(node, yaml.ScalarNode):
+            return {suffix: loader.construct_scalar(node)}
+        if isinstance(node, yaml.SequenceNode):
+            return {suffix: loader.construct_sequence(node, deep=True)}
+        return {suffix: loader.construct_mapping(node, deep=True)}
+
+    _CfnLoader.add_multi_constructor("!", _tag)
+    template = load_with(
+        _CfnLoader,
+        (_REPO_ROOT / ".github" / "infra" / "review-runner.yaml").read_text(encoding="utf-8"),
+    )
+    resources = template["Resources"]
+    assert {r["Type"] for r in resources.values()} == {
+        "AWS::IAM::Role",
+        "AWS::CodeBuild::Project",
+    }
+    project = resources["ReviewRunnerProject"]["Properties"]
+    assert _REVIEW_RUNNER_LABEL_PREFIX == f"codebuild-{project['Name']}-"
+    assert project["Environment"]["PrivilegedMode"] is False
+    assert "EnvironmentVariables" not in project["Environment"]
+    assert "VpcConfig" not in project
+    assert "Auth" not in project["Source"]
+    assert project["Artifacts"] == {"Type": "NO_ARTIFACTS"}
+    assert project["Cache"] == {"Type": "NO_CACHE"}
+    assert project["LogsConfig"] == {
+        "CloudWatchLogs": {"Status": "DISABLED"},
+        "S3Logs": {"Status": "DISABLED"},
+    }
+    role = resources["ReviewRunnerRole"]["Properties"]
+    # Zero permissions: the lanes assume their Bedrock role through OIDC, so an
+    # ambient grant would only arm a step a PR edited onto this label.
+    assert "ManagedPolicyArns" not in role
+    assert "Policies" not in role
+    (trust,) = role["AssumeRolePolicyDocument"]["Statement"]
+    assert trust["Principal"] == {"Service": "codebuild.amazonaws.com"}
+    assert trust["Condition"]["ArnEquals"]["aws:SourceArn"]["Sub"].endswith(
+        f":project/{project['Name']}"
+    )
 
 
 def test_every_ci_yml_resolver_consumer_reads_the_resolver_not_a_literal() -> None:

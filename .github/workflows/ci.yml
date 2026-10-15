@@ -2664,7 +2664,7 @@ jobs:
         run: pip install "cfn-lint==1.22.3"
 
       - name: Lint deploy templates
-        run: cfn-lint src/kiro_crew/deploy/skills/artifact-deploy/templates/*.yaml
+        run: cfn-lint src/kiro_crew/deploy/skills/artifact-deploy/templates/*.yaml .github/infra/*.yaml
 
   # The Electron shell (website/electron) has its own 460+ test node:test suite,
   # and until now NOTHING ran it on a PR — its only runner was ota-test.yml,
