@@ -2,6 +2,185 @@
 
 All notable changes to KiroCrew are documented in this file.
 
+## [0.10.0] - 2026-10-15
+
+Crewmates start to plan with you: Mate greets a new user, goals carry milestones
+and check-ins, and a crewmate proposes changes you confirm as cards. Dashboards
+leave preview for everyone and a crewmate can write its own page, while chat,
+the sidebar and every backend get faster ways to move, steer and recover.
+
+### Crewmates that plan with you (Preview)
+
+- **Meet Mate**: with Settings → Developer → Feature Previews → Crewmates on,
+  your first visit to the Crewmates page opens Mate, a first crewmate that
+  explains what crewmates do and lets you give it a name, and New crewmate opens
+  as one card in a window over the chat.
+- **Goals with milestones**: a crewmate keeps its goals with linked milestones,
+  offers check-ins and reports as cards you confirm, and keeps your draft when
+  you edit, remove or undo a goal.
+- **Changes you confirm**: a crewmate proposes changes as cards you accept,
+  updates its own name and description from its chat, points you to the
+  control on your screen, and gets a workspace of its own when it is created.
+
+### Dashboards for everyone
+
+- **Out of preview**: the Dashboard tab no longer needs a Feature Preview, a
+  main session's side panel shows a dashboard of its own, and Automatic cards
+  for all sessions moves to its own card under Settings → Developer, still off
+  by default.
+- **Pages a crewmate writes**: a crewmate composes its own page with the
+  `dashboard` skill, starting from a gallery, and you keep or discard the staged
+  page from the Dashboard tab.
+- **Your own pages, better defaults**: pages you put in
+  `~/.kiro/crew/panel-templates/` are offered beside the shipped ones, a
+  conductor opens on its board, a crewmate's default page shows what it
+  published, and the built-in pages follow your UI language.
+
+### Agents that lead and hand off
+
+- **A team lead agent**: `kirocrew-team-lead` ships as a default agent that
+  splits a goal into work items, opens a session for each, and does the small
+  ones itself.
+- **Pick the backend per task**: `spawn_run` takes a backend for each task, and
+  the Subagents card lists every tool call a sub-agent makes.
+- **Questions that wait for you**: an agent's question card now waits for your
+  answers and hands them back to the agent, never as a message in your name.
+
+### A chat you move through faster
+
+- **Copy a reply your way**: a reply's right-click menu offers Copy as rich
+  text, which pastes into Outlook or Word with headings, lists and tables
+  intact, beside Copy as Markdown.
+- **Jump between prompts**: Alt+Up and Alt+Down step through the open chat's
+  prompts, and a file the agent names shows as an Open file chip under its
+  reply.
+- **Less to scroll**: a running turn shows only its last five activity rows,
+  Settings → Chat → Transcript → Tool calls start expanded opens tool rows when
+  you want them, and the session menu's Export as readable Markdown saves a
+  transcript a person can read.
+
+### Turns that finish
+
+- **Time limits you set**: Settings → Chat → Advanced → Turn Time Limit
+  (seconds) sets how long a turn may run, and the timeout card lets one session
+  run under its own limit.
+- **Ride out a dropped connection**: a short network drop to the model provider
+  is waited out instead of failing the turn.
+- **No endless retries**: a conversation too full to continue offers a fresh
+  session instead of retrying.
+
+### More from every backend
+
+- **Steer, effort and compaction**: a message sent while a Claude Code or goose
+  turn runs is steered into that turn, the reasoning effort control reaches
+  goose and opencode, and a manual `/compact` works on KAS and pi.
+- **KAS without kiro-cli**: Settings → Agent Harness → Use the built-in KAS
+  engine, off by default, installs and runs KAS from an engine build pinned to
+  this release, so kiro-cli no longer needs to be installed for it.
+- **Side Chat that can look**: Side Chat runs read-only tools on Claude Code,
+  goose and KAS, and pi sessions get Crew's MCP servers.
+
+### A sidebar that shows what is busy
+
+- **Filter by model**: the sidebar filter menu gains Filter by model, with a
+  session count per model and a Hide sessions on these models row.
+- **See what is working**: a pulsing dot leads the name of a working session,
+  and a crew's group header counts the chats waiting on an approval, an answer,
+  or still working.
+- **Crew folders and full titles**: a crew's own folders show inside its crew
+  group, and Settings → Chat → Sessions → Show Full Titles While Scrolling keeps
+  long titles readable.
+
+### Settings for proxies, profiles and trust
+
+- **Variables for every agent**: `agent.env` sets variables such as
+  `HTTPS_PROXY` or `NODE_EXTRA_CA_CERTS` for every agent process, and
+  `aws.project_profiles` starts a session with the AWS profile mapped to its
+  project folder.
+- **Trust that expires**: the chat approval prompt offers this command, or every
+  command of its kind, for an hour or for the rest of today, beside the grant for
+  the session.
+- **More hosts and secrets**: `dashboard.github_hosts` adds GitHub Enterprise
+  hosts, channel tokens accept `secret://` references and store new ones in the
+  vault, and `agent.model_context_tokens` declares the context window a model is
+  served with.
+
+### Memory you control
+
+- **Forget on purpose**: `kirocrew memory forget` removes a memory, and the
+  Memory page shows where each lesson came from.
+- **Switches for what is kept**: `memory.writes_enabled` and
+  `memory.lesson_extraction_enabled` turn off memory writes and lesson
+  extraction.
+- **Move only your memory**: Settings → Import / Export offers Export memory
+  only and Import memory only, and a crew config export can carry its agent
+  templates with their secrets replaced.
+
+### Remote crews
+
+- **A crew on a Lambda MicroVM**: a `microvm` block in `cloud.json` adds a lane
+  that runs a crew in an AWS Lambda MicroVM billed per second, with a one hour
+  default lifetime after which its home is gone.
+- **Keep crews in step**: the Remote Crew row and the crew window header show
+  when a crew runs an older build and offer to update it, and the owner can
+  disable one remote crew.
+
+### Usage, voice and sounds
+
+- **Spend over time**: the Usage tab's Overview gains a Spend over time
+  (credits) chart stacked by channel, agent, model or week, and Developer →
+  Telemetry gets one time window for every card.
+- **Voice**: `stt.transcribe_languages` lets Amazon Transcribe detect two to five
+  languages in one stream, a sound plays when dictation stops on its own, and a
+  bar above the composer offers Stop reading while a reply is read aloud.
+- **Your own sounds**: Settings → Notifications → Custom sounds adds named tones
+  you can test before you save them, and a crewmate's notifications show its
+  avatar.
+
+### Issue Radar
+
+- **CI failures on your pull requests**: Issue Radar can alert you when CI fails
+  on your own pull requests, with a CI runs tab and a per-repository switch.
+- **GitLab groups**: following a GitLab group now brings its review requests
+  from every subgroup, new projects included.
+
+### Lighter and faster
+
+- **Less memory**: the embedding model unloads after an hour idle
+  (`memory.embedding_idle_evict_secs`), and the gateway holds far less memory on
+  hosts with many cores.
+- **Faster reads**: Knowledge search returns in about a fifth of the time, and
+  long sessions render warm instead of re-checking every message.
+- **Faster tools**: Crew's own MCP servers start faster and answer a finished
+  tool at once.
+
+### Notable fixes
+
+**Chat and sessions.** A send made while a page is loading or a Stop is settling
+is kept, a scrolled-up reader stays in place while a reply streams (and Firefox
+stays pinned to the bottom when you are not scrolled up), and the
+composer goes idle when a turn ends without a closing signal. `/clear` works on
+KAS, codex, opencode, pi and deepseek, and editing a message on Claude Code forks
+its conversation.
+
+**Channels.** Slack, Telegram and Discord never post a reply twice after a
+disconnect, and they mark a reply part that could not be delivered. A Feishu
+group message is served only when it mentions the bot, and Slack follows a new
+default agent without a gateway restart.
+
+**Schedules.** A one-shot cron that fails, times out or is cancelled is kept and
+parked instead of lost, a spring-forward time runs once, and each agent cron run
+checks the Kiro sign-in first. Cron store writes survive a crash.
+
+**Windows.** Store writes retry a rename that Windows briefly holds, a host sleep
+is no longer read as a dead gateway, and MCP servers answer pings while a tool
+runs.
+
+**Security and access.** Git is no longer auto-approved as a read-only shell
+command, a trust grant for a program no longer covers a write redirect, and the
+desktop app keeps the dashboard token out of its logs. The gateway refuses to
+start on a truncated signing key, and webapp previews run without `unsafe-eval`.
+
 ## [0.8.0] - 2026-10-08
 
 Kiro Crew spends less of your attention. A monitoring loop now screens what it
