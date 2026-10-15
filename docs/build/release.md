@@ -209,6 +209,18 @@ code.
      version prefix, which is also why a hotfix rebuild of an older tag keeps
      working after upstream releases. See [desktop-app](desktop-app.md) "Bundled
      kiro-cli".
+
+     *Update deadline.* Whenever the pin is behind, it has a deadline, counted in
+     calendar days from the date the pin-drift tracking issue first sees the
+     new kiro-cli release. A routine release: the tested bump lands on `main`
+     within **14 days**. A release the tracking issue marks for prompt adoption
+     (the fast path): an insider build carrying the new pin ships within
+     **3 days**, and stable follows through the usual soak, which the deadline
+     never shortens. The tracking issue, opened and updated by the scheduled
+     pin-drift check, is both the trigger and the record: it names the pinned
+     and latest versions, the first-seen date and the `Due:` date, and it
+     closes once the pin catches up. Until that check runs on `main`, whoever
+     notices a newer release opens the issue by hand.
 2. **Cut the RC — verify content, not PR status.** On the target commit confirm:
    `github-release` has an `if:`; `CHANGELOG.md` line 5 is `## [X.Y.Z]` with zero
    non-bare-release `##` headings; no `### Contributors` (the GitHub Release
