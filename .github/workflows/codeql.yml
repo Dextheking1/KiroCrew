@@ -68,6 +68,7 @@ jobs:
       contents: read
       security-events: write
     strategy:
+      max-parallel: 4
       fail-fast: false
       matrix:
         language: [actions, javascript-typescript, python]
