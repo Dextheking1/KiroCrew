@@ -55,6 +55,7 @@ from kiro_crew.constants import (
 from kiro_crew.messaging.display_safety import redact_for_display
 from kiro_crew.messaging.tables import render_tables, render_tables_with_metadata
 from kiro_crew.messaging.transport import TransportCapabilities
+from kiro_crew.options_list import split_bulleted_options_trailer
 from kiro_crew.security import (
     CREDENTIAL_REDACTION_TAGS,
     EXFILTRATION_REDACTION_TAG_PREFIX,
@@ -715,6 +716,9 @@ def split_options_trailer(text: str, *, hide_partial: bool = False) -> tuple[str
     Stripping a genuine steering frame is ``TurnDriver``'s job and happens before
     a renderer sees the text.
     """
+    bulleted = split_bulleted_options_trailer(text)
+    if bulleted is not None:
+        return bulleted
     text = relocate_glued_tail_marker(text)
     match = OPTIONS_RE_TRAILER.search(text)
     if match:

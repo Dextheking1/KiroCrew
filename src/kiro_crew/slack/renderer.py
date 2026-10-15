@@ -1596,7 +1596,11 @@ class SlackRenderer(Renderer):
         # that will never come.
         if self._use_slack_stream:
             await self._flush_stream_buffer(final=True)
-        clean_text, options = extract_options(self._accumulated)
+        # A streamed reply already showed a list-form trailer as text (the stream
+        # hold only withholds ``[OPTIONS:``), so buttons for it would repeat it.
+        clean_text, options = extract_options(
+            self._accumulated, bulleted=not self._use_slack_stream
+        )
         # Trailing control-tag lines (``<!-- keep-visible -->`` and siblings)
         # are protocol: the stream's comment hold kept them off the appended
         # text, and the buffered renders below (no-stream fallback, direct

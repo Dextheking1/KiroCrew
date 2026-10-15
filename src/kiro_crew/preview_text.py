@@ -20,6 +20,7 @@ import unicodedata
 from typing import Callable
 
 from kiro_crew.constants import OPTIONS_RE_LINE, md_link_destination, strip_control_comments
+from kiro_crew.options_list import split_bulleted_options_trailer
 
 # Fenced code blocks — ```lang ... ``` (or unterminated, running to the end
 # of the message). Replaced with a short placeholder; the code body would
@@ -142,6 +143,9 @@ def strip_markdown_preview(text: str) -> str:
     cleans.
     """
     t = drop_format_chars(text)
+    listed = split_bulleted_options_trailer(t)
+    if listed is not None:
+        t = listed[0]
     t = _FENCE_RE.sub(_fence_placeholder, t)
     t = _MCWIDGET_RE.sub(" (widget) ", t)
     # Only RECOGNIZED control tags (keep-visible, heartbeat deliver

@@ -111,6 +111,7 @@ from kiro_crew.notifications.bus import (
 from kiro_crew.notifications.rate_limit import AppRateLimiter
 from kiro_crew.notifications.resource_pressure import ResourcePressureNotifier
 from kiro_crew.notifications.settings import ChannelSettings
+from kiro_crew.options_list import split_bulleted_options_trailer
 from kiro_crew.owner_only_files import mkdirs_owner_only, owner_only_opener
 from kiro_crew.preview_text import strip_markdown_preview
 from kiro_crew.release_channel import channel as _release_channel_of_build
@@ -2560,12 +2561,24 @@ def _redact(text: str) -> str:
 
 
 def _parse_options(text: str) -> list[str]:
-    """Extract pipe-separated choices from the LAST [OPTIONS: A | B | C] in text."""
+    """Choices from a final list-form ``[OPTIONS]`` trailer, else the LAST
+    ``[OPTIONS: A | B | C]`` marker. The trailer wins because it ends the reply."""
+    bulleted = split_bulleted_options_trailer(text)
+    if bulleted is not None:
+        return bulleted[1]
     matches = list(_OPTIONS_RE.finditer(text))
     if not matches:
         return []
     parts = [p.strip() for p in matches[-1].group("labels").split("|")]
     return [p for p in parts if p]
+
+
+def _strip_options_text(text: str) -> str:
+    """The text ``_parse_options`` read its choices from, with the markup removed."""
+    bulleted = split_bulleted_options_trailer(text)
+    if bulleted is not None:
+        return bulleted[0].strip()
+    return _OPTIONS_RE.sub("", text).strip()
 
 
 VALID_MEMORY_MODES = MEMORY_MODES
@@ -6096,7 +6109,7 @@ class _ChatSlot:
             transient_roles=_TRANSIENT_ROLES,
             redact=_redact,
             parse_options=_parse_options,
-            strip_options=lambda text: _OPTIONS_RE.sub("", text).strip(),
+            strip_options=_strip_options_text,
             parse_cls_meta=parse_cls_meta,
             is_turn_interrupted=is_turn_interrupted,
             is_system_notice=is_system_notice,

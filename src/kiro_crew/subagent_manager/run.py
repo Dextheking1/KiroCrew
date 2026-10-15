@@ -3012,7 +3012,7 @@ class RunEventCoordinator(ManagerComponent):
                     if (
                         post_activity_attempts >= 1
                         # A bare [OPTIONS: ...] tag is stripped later, leaving nothing.
-                        and extract_options(result_text)[0].strip()
+                        and extract_options(result_text, bulleted=False)[0].strip()
                         and "failed to generate a response" in str(exc).lower()
                     ):
                         nonlocal _kept_after_generate_failure
@@ -3423,8 +3423,11 @@ class RunEventCoordinator(ManagerComponent):
         # current prompt stats are still the authoritative billing record.
         usage.settle()
 
-        # Strip [OPTIONS: ...] tags and redact sensitive content
-        cleaned, _ = extract_options(result_text) if result_text else (result_text, [])
+        # Strip [OPTIONS: ...] tags and redact sensitive content. A list-form
+        # trailer stays: the parent reads the choices as text.
+        cleaned, _ = (
+            extract_options(result_text, bulleted=False) if result_text else (result_text, [])
+        )
         if cleaned:
             from kiro_crew.security import (
                 redact_credentials,

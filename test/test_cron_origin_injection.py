@@ -98,6 +98,24 @@ async def test_caller_session_resolves_and_injects(mock_sel):
     state.notify.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_a_list_form_options_trailer_reaches_the_origin_session(mock_sel):
+    """The injection renders no buttons, so a list-form trailer must arrive as text."""
+    slot = _live_running_slot()
+    state = _state_with_job(slot=slot)
+    async with TestClient(TestServer(_make_app(state))) as c:
+        await c.post(
+            "/api/send-message",
+            json={
+                "text": "Deploy?\n[OPTIONS]\n- Ship\n- Hold",
+                "session": "origin",
+                "caller_session": f"cron:{JOB_ID}",
+            },
+        )
+    queued = str(slot.queue_append.call_args)
+    assert "- Ship" in queued and "- Hold" in queued
+
+
 # ── slot lookup ──
 
 

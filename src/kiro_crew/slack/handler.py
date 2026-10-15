@@ -2720,7 +2720,13 @@ async def handle_message(
         # cron, subagent-completion and dashboard-mirror paths.
         # From the UNTRIMMED text, for the same reason as above: a tag line that sat
         # before the OPTIONS trailer is protocol only with its own indent in view.
-        _body_text, options = extract_options(_untrimmed) if answer.accumulated else ("", [])
+        # A streamed answer already showed a list-form trailer as text, so it gets
+        # no buttons there; only the canonical marker is withheld from a stream.
+        _body_text, options = (
+            extract_options(_untrimmed, bulleted=not actually_streamed)
+            if answer.accumulated
+            else ("", [])
+        )
         _body_text = strip_control_comments(_body_text).strip()
         _options_present = bool(options)
 

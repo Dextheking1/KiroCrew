@@ -19,6 +19,7 @@ from kiro_crew.messaging.display_safety import (
     strip_ansi,
 )
 from kiro_crew.messaging.renderer import cap_choices, format_overflow
+from kiro_crew.options_list import split_bulleted_options_trailer
 from kiro_crew.platform.context import redact_via_context
 
 logger = logging.getLogger(__name__)
@@ -72,13 +73,18 @@ LINK_DASHBOARD_ACTION = "mc_link_dashboard"
 SESSION_LINK_ACTION = "open_session_link"
 
 
-def extract_options(text: str) -> tuple[str, list[str]]:
+def extract_options(text: str, *, bulleted: bool = True) -> tuple[str, list[str]]:
     """Extract OPTIONS choices and remove the marker span from the response.
 
     Text before and after the marker is kept, matching the other readers of
     ``OPTIONS_RE_LINE``. Returns (cleaned_text, choices). If no OPTIONS is found,
-    choices is empty.
+    choices is empty. ``bulleted=False`` leaves a list-form trailer in the text,
+    for a reader that discards the choices and would otherwise lose them.
     """
+    if bulleted:
+        listed = split_bulleted_options_trailer(text)
+        if listed is not None:
+            return listed
     text = relocate_glued_tail_marker(text)
     m = _OPTIONS_RE.search(text)
     if not m:

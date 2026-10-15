@@ -194,6 +194,20 @@ class TestOptionsControlIsStamped:
 
         asyncio.run(scenario())
 
+    def test_a_streamed_list_trailer_is_not_repeated_as_buttons(self):
+        """A streamed reply already showed a list-form trailer as text."""
+
+        async def scenario(streamed: bool):
+            rec = _RecSlack()
+            renderer = SlackRenderer(rec, "C1", "t1", reactions_enabled=False)
+            renderer._use_slack_stream = streamed
+            renderer._accumulated = "pick one\n[OPTIONS]\n- alpha\n- beta"
+            await renderer.on_done()
+            return self._options_block(rec)
+
+        assert asyncio.run(scenario(True)) is None
+        assert asyncio.run(scenario(False)) is not None
+
     def test_what_gets_persisted_keeps_the_options_trailer(self):
         """The stamp replaces the dispatcher's persist, so it must write the same text.
 

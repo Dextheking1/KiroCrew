@@ -934,7 +934,9 @@ async def api_send_message(request: web.Request) -> web.Response:
     # after the message when options are present.
     options: list[str] = []
     if not blocks:
-        text, options = extract_options(text)
+        # The same text also feeds the origin-session injection, which renders
+        # no buttons, so a list-form trailer stays text rather than vanishing.
+        text, options = extract_options(text, bulleted=False)
 
     # --- Authorization gates (before any side effects) ---
     if target_channel and not is_tracked_channel(target_channel):
