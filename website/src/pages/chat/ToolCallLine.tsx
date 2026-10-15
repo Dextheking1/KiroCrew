@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { shallowEqual } from 'react-redux'
-import { useAppSelector, useAppDispatch } from '../../store'
+import { useAppSelector, useAppDispatch, type RootState } from '../../store'
 import { clearFocusToolCallId, mcpAppKey } from '../../store/chatSlice'
 import { useSimplifiedToolNames } from '../../hooks/useSimplifiedToolNames'
 import ToolRiskBadge from './ToolRiskBadge'
@@ -35,7 +35,8 @@ import { useLanguageGeneration } from '../../i18n/useLanguageGeneration'
 import { isRejectedDecision } from '../../utils/approvalDecision'
 import { selectToolRowIndex, lookupLogEntry, denySiblingContent, isNewestOccurrence } from './toolRowIndex'
 import type { ToolActivity } from '../../types'
-import { pathBasename } from '../../utils/pathBasename'
+import { pathBasename, decodePathForDisplay } from '../../utils/pathBasename'
+import { selectEditRuns } from './editRuns'
 import { useToolCallsStartExpanded } from '../../hooks/useToolCallsStartExpanded'
 import { InstantTip, useInstantTip } from '../../components/InstantTip'
 import { PILL_TIP_OPEN_CLASS, ToolCommandTip } from './ToolCommandTip'
@@ -165,15 +166,47 @@ function StatusRow({ show, snap = false, children }: { show: boolean; snap?: boo
   )
 }
 
-/** Inline tool call pill. Click toggles an expanded panel below the pill that
- *  shows purpose / input / output. */
-export default memo(function ToolCallLine({ message, running: _running, slot, onFileOpen, disclosure, disclosureKey, onDisclosureChange, appInPanel, onOpenApp, transcriptHot = false }: { message: ChatMessage; running: boolean; slot?: string; onFileOpen?: (path: string) => void; disclosure?: boolean; disclosureKey?: string; onDisclosureChange?: (key: string, expanded: boolean) => void; appInPanel?: boolean; onOpenApp?: (toolCallId: string) => void;
+type ToolCallLineProps = { message: ChatMessage; running: boolean; slot?: string; onFileOpen?: (path: string) => void; disclosure?: boolean; disclosureKey?: string; onDisclosureChange?: (key: string, expanded: boolean) => void; appInPanel?: boolean; onOpenApp?: (toolCallId: string) => void;
   /** True while the transcript is streaming at high frequency (host-derived
    *  from useStreamIdle). Gates the entrance/status height eases: a hot-stream
    *  mount lands at full height in one frame, a quiet-transcript mount keeps
    *  the ease. Defaults to false so hosts without a heat signal keep the
    *  animations unconditionally. */
-  transcriptHot?: boolean }) {
+  transcriptHot?: boolean }
+
+/** The slot's transcript, the same choice every selector in this file makes. */
+const slotMessagesOf = (s: RootState, slot: string | undefined): ChatMessage[] => {
+  const bg = slot && slot !== s.chat.activeSlot ? slot : null
+  return bg ? (s.chat.slotMessages[bg] ?? EMPTY_MESSAGES) : s.chat.messages
+}
+
+/** The slot's tool log, the same choice every selector in this file makes. */
+const slotToolLogOf = (s: RootState, slot: string | undefined): ToolActivity[] => {
+  const bg = slot && slot !== s.chat.activeSlot ? slot : null
+  return bg ? (s.chat.slotActivity[bg]?.toolLog ?? EMPTY_TOOL_LOG) : s.chat.toolLog
+}
+
+const slotEditRuns = (s: RootState, slot: string | undefined) =>
+  selectEditRuns(slotMessagesOf(s, slot), slotToolLogOf(s, slot))
+
+/** Same members, same order: the run index rebuilds on every transcript flush,
+ *  and a fresh array of the same rows must not repaint the row. */
+const sameRows = (a: readonly ChatMessage[], b: readonly ChatMessage[]): boolean =>
+  a.length === b.length && a.every((m, i) => m === b[i])
+
+const NO_RUN: readonly ChatMessage[] = []
+
+/** Inline tool call pill. Click toggles an expanded panel below the pill that
+ *  shows purpose / input / output. A row folded into an earlier edit run of
+ *  the same file (see editRuns.ts) draws nothing: the run's lead row shows it. */
+export default memo(function ToolCallLine(props: ToolCallLineProps) {
+  const follower = useAppSelector(s => slotEditRuns(s, props.slot).followers.has(props.message))
+  return follower ? null : <ToolCallLineBody {...props} />
+})
+
+// Not memo()ized: the wrapper above is the memo boundary, and every store
+// read below subscribes on its own.
+function ToolCallLineBody({ message, running: _running, slot, onFileOpen, disclosure, disclosureKey, onDisclosureChange, appInPanel, onOpenApp, transcriptHot = false }: ToolCallLineProps) {
   // memo() bails out of the provider-level repaint; subscribe directly. The
   // generation is also a dependency of the derived-title memo below, whose
   // `i18nT` output would otherwise stay in the previous locale after a switch.
@@ -376,10 +409,29 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
     }
   }, shallowEqual)
 
+  // Every call of the edit run this row leads (see editRuns.ts), lead first;
+  // empty unless this row leads a run of two or more.
+  const runMembers = useAppSelector(s => slotEditRuns(s, slot).membersByLead.get(message) ?? NO_RUN, sameRows)
+  const isRun = runMembers.length > 1
+  // A merged row is one row for several calls, so it reads as running until
+  // the last of them has returned. Followers draw nothing of their own.
+  const runMemberRunning = useAppSelector(s => {
+    if (!isRun) return false
+    const bg = slot && slot !== s.chat.activeSlot ? slot : null
+    const slotRunning = bg ? ((s.chat.slotRun[bg]?.state ?? 'idle') !== 'idle') : s.chat.slotRunning
+    if (!slotRunning) return false
+    const log = bg ? (s.chat.slotActivity[bg]?.toolLog ?? EMPTY_TOOL_LOG) : s.chat.toolLog
+    const index = selectToolRowIndex(slotMessagesOf(s, slot), log)
+    return runMembers.slice(1).some(m => {
+      const e = index.logById.get(m.meta?.tool_call_id as string)
+      return !!e && e.output == null && !e.rejected
+    })
+  })
+
   // The tool log is authoritative here: its output/rejection/turn-running
   // state survives the ACP initial-call → update handoff, while the parent
   // `running` prop is not present on every historical/live rendering path.
-  const isDone = logIsDone
+  const isDone = logIsDone && !runMemberRunning
   const turnRunning = !isDone
 
   // Check if this specific tool has a pending (unresolved) permission matching its tool_call_id.
@@ -685,9 +737,17 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
   // folded either. Density relief is per-card (the fold chip below) plus the
   // size caps in presentToolDiff.
   const denied = isRejected || isAutoDenied
+  // An edit run's diffs, one per call in order, read from each member's
+  // persisted input: editRuns admitted every member on exactly that input as a
+  // card-sized, untruncated diff. A run the lead's own log entry calls denied
+  // falls back to the lead alone.
+  const runCodes = useMemo(
+    () => (isRun && !denied ? runMembers.map(m => m.meta?.input as string) : null),
+    [isRun, denied, runMembers],
+  )
   const diffView = useMemo(
-    () => (denied ? null : presentToolDiff(toolKind, input, inputCut)),
-    [denied, toolKind, input, inputCut],
+    () => (denied ? null : runCodes ? { mode: 'card' as const, code: runCodes[0] } : presentToolDiff(toolKind, input, inputCut)),
+    [denied, runCodes, toolKind, input, inputCut],
   )
   // Blocking `ask_question`: the user's answers are this call's RESULT and
   // appear nowhere else in the transcript, so they render as a card below the
@@ -718,10 +778,14 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
       return next
     })
   }, [toolCallId])
-  const cardStats = useMemo(
-    () => (diffView?.mode === 'card' ? countDiffStats(diffView.code) : null),
-    [diffView],
-  )
+  const cardStats = useMemo(() => {
+    if (diffView?.mode !== 'card') return null
+    if (!runCodes) return countDiffStats(diffView.code)
+    return runCodes.reduce((sum, code) => {
+      const s = countDiffStats(code)
+      return { added: sum.added + s.added, removed: sum.removed + s.removed }
+    }, { added: 0, removed: 0 })
+  }, [diffView, runCodes])
   const showCard = diffView?.mode === 'card' && !cardFolded
   // The chip is the one-line handle for every diff presentation and it STAYS
   // MOUNTED while the card is open: the same chip that opened the patch is
@@ -850,7 +914,10 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
   // (label was nothing but the path).
   const displayLabel = useMemo(() => {
     if (!showFileOpen || !filePath) return toolLabel
-    for (const candidate of [filePath, relDisplayPath(filePath, projectDir)]) {
+    // The derived title spells the path decoded (decodePathForDisplay), so
+    // both spellings are candidates.
+    const rel = relDisplayPath(filePath, projectDir)
+    for (const candidate of [filePath, rel, decodePathForDisplay(filePath), decodePathForDisplay(rel)]) {
       if (candidate && toolLabel.includes(candidate)) {
         const stripped = toolLabel.split(candidate).join('').replace(/\s+/g, ' ').trim()
         if (stripped) return stripped
@@ -876,6 +943,28 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
   // Hover reveals the verbatim command / incoming title whenever the pill shows
   // a substitute for it — a derived title, a digest, or the purpose.
   const pillLabelTitle = pillLabelText === derived.rawTitle ? undefined : (derived.rawTitle || undefined)
+  // The label may be the transport's own title, which spells the path the
+  // way the transport received it (`Edit drafts/My%20Notes.md`). Only the
+  // path this row's input names is decoded, so a `%` anywhere else in a label
+  // (a shell command's printf format) is left alone.
+  const labelPath = chipView?.path ?? filePath
+  const shownLabel = useMemo(() => {
+    if (!labelPath) return pillLabelText
+    let out = pillLabelText
+    for (const raw of [labelPath, relDisplayPath(labelPath, projectDir)]) {
+      const decoded = decodePathForDisplay(raw)
+      if (decoded !== raw) out = out.split(raw).join(decoded)
+    }
+    return out
+  }, [pillLabelText, labelPath, projectDir])
+  // The diff chip names its file only when the row's label does not already:
+  // a derived `Edit drafts/notes.md` sits right above it, so a second copy of
+  // the name is noise, while a purpose label ("Tighten the intro") names no
+  // file and the chip is the only place it appears. Decoded for display like
+  // the title (decodePathForDisplay); the hidden name stays the button's
+  // accessible name.
+  const chipBaseName = chipView?.path ? decodePathForDisplay(pathBasename(chipView.path)) : ''
+  const chipName = chipBaseName && !shownLabel.includes(chipBaseName) ? chipBaseName : ''
   // A shell row the classifier left verbatim (`$VAR`, redirects, loops) sits
   // among prose titles; setting it in the code face says "this is the exact
   // command" instead of leaving the reader to guess why one row reads
@@ -1094,9 +1183,9 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
             }}
             animate={{ backgroundPosition: ['100% 0%', '-50% 0%'] }}
             transition={{ duration: 2.4, repeat: Infinity, ease: 'linear' }}
-          >{pillLabelText}</motion.span>
+          >{shownLabel}</motion.span>
         ) : (
-          <span data-testid="tool-pill-label" className={`${labelWrapClass} ${pillLabelFaceClass} min-w-0 leading-5 text-muted hover:text-text transition-colors`}>{pillLabelText}</span>
+          <span data-testid="tool-pill-label" className={`${labelWrapClass} ${pillLabelFaceClass} min-w-0 leading-5 text-muted hover:text-text transition-colors`}>{shownLabel}</span>
         )}
       </button>
       {pillTipText && (
@@ -1151,7 +1240,7 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
         <button
           type="button"
           className={`mt-1 ml-3 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[12px] leading-5 hover:text-text hover:border-border-strong cursor-pointer transition-colors focus-ring-accent ${chipView.opensCard && showCard ? 'text-text border-border-strong bg-bg-hover' : 'text-muted border-border bg-bg-elevated'}`}
-          title={chipView.path ?? undefined}
+          title={chipView.path ? decodePathForDisplay(chipView.path) : undefined}
           aria-expanded={chipView.opensCard ? showCard : effectivelyExpanded}
           data-diff-toggle={chipView.opensCard ? true : undefined}
           data-testid={chipView.opensCard ? 'tool-diff-chip' : 'tool-diff-summary-chip'}
@@ -1162,7 +1251,9 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
           }}
         >
           <FileDiff size={12} className="shrink-0" aria-hidden />
-          {chipView.path && <span className="font-mono max-w-[240px] truncate">{pathBasename(chipView.path)}</span>}
+          {chipName && <span className="font-mono max-w-[240px] truncate">{chipName}</span>}
+          {!chipName && chipBaseName && <span className="sr-only">{chipBaseName}</span>}
+          {runCodes && <span>{i18nT('pages.chat.toolCallLine.edit_count', { count: runCodes.length })}</span>}
           <span className="tabular-nums">
             {chipView.removed > 0 && <span className="text-danger">{chipView.truncated ? '≥' : ''}-{chipView.removed}</span>}
             {chipView.removed > 0 && chipView.added > 0 && ' '}
@@ -1187,8 +1278,13 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
           event fence (role="presentation"): clicks inside the card must never
           toggle a surrounding TurnBlock / collapsed-group wrapper. */}
       {showCard && diffView?.mode === 'card' && (
-        <div className="mt-1.5" role="presentation" onClick={e => e.stopPropagation()}>
-          <DiffBlock code={diffView.code} complete onFileOpen={onFileOpen} />
+        <div className="mt-1.5 flex flex-col gap-1.5" role="presentation" onClick={e => e.stopPropagation()}>
+          {/* One card per call, in order: consecutive edits are patches
+              against successive versions of the file, so their hunks cannot
+              be spliced into one diff without renumbering every line. */}
+          {(runCodes ?? [diffView.code]).map((code, i) => (
+            <DiffBlock key={i} code={code} complete onFileOpen={onFileOpen} />
+          ))}
         </div>
       )}
       {askAnswered && <Suspense fallback={null}><AskAnswersResult output={output} toolCallId={toolCallId} /></Suspense>}
@@ -1318,4 +1414,4 @@ export default memo(function ToolCallLine({ message, running: _running, slot, on
         )}
     </motion.div>
   )
-})
+}
