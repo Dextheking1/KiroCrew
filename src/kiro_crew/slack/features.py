@@ -1,24 +1,26 @@
-"""Slack Code: whether agent sessions and code channels run, and with what defaults.
+"""Slack Code: whether each Slack Code switch runs, and the code-channel defaults.
 
-Two layers decide whether a feature runs, and both are read here so every caller
-answers "is it on?" the same way:
+The switches are the ones registered in :data:`kiro_crew.slack_manifest.FEATURE_SCOPES`
+(today ``code_channels``); everything here is keyed by that name, so registering
+a switch there is all this module needs. Two layers decide whether one runs, and
+both are read here so every caller answers "is it on?" the same way:
 
-* the **toggle** -- ``slack.agent_sessions`` / ``slack.code_channels`` in
-  ``config.json`` (Settings → Slack). It also decides what the generated app
-  manifest asks Slack for (:func:`manifest_features`). Anything that is not a real
-  ``True`` is off. Read live, so a flip applies on the next event.
+* the **toggle** -- ``slack.<feature>`` in ``config.json`` (Settings → Slack). It
+  also decides what the generated app manifest asks Slack for
+  (:func:`manifest_features`). Anything that is not a real ``True`` is off. Read
+  live, so a flip applies on the next event.
 * the **capability** -- whether the installed Slack app can actually use the
   feature: its granted bot scopes (``auth.test``'s ``x-oauth-scopes``, read when
-  the Slack socket connects and on every reconnect) include the feature's scope
-  (``assistant:write`` / ``code_channels:manage``), and Slack has not answered a
-  call for it with ``feature_disabled``, ``missing_scope`` or
-  ``not_allowed_token_type``. Such an answer LATCHES the feature off for the
-  process (until the next reconnect re-probes): one dashboard notification, one
-  log line, and the runtime falls back silently to today's Slack behaviour.
+  the Slack socket connects and on every reconnect) include the feature's
+  registered scope, and Slack has not answered a call for it with
+  ``feature_disabled``, ``missing_scope`` or ``not_allowed_token_type``. Such an
+  answer LATCHES the feature off for the process (until the next reconnect
+  re-probes): one dashboard notification, one log line, and the runtime falls
+  back silently to today's Slack behaviour.
 
-:func:`agent_sessions_enabled` / :func:`code_channels_enabled` are toggle AND
-capability -- the runtimes call these. :func:`agent_sessions_available` /
-:func:`code_channels_available` are the capability alone, for the settings page.
+:func:`enabled` is toggle AND capability -- the runtimes call it (for code
+channels, through :func:`code_channels_enabled`). :func:`available` is the
+capability alone, for the settings page.
 
 ``code_channel_defaults`` is the folder / agent / model / effort a new
 code-channel session starts with; :func:`resolve_code_channel_session` applies
@@ -33,19 +35,17 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
+from kiro_crew import slack_manifest
 from kiro_crew.effort import is_valid_effort
 
 logger = logging.getLogger(__name__)
 
-#: Feature names, matching ``slack_manifest.AGENT_SESSIONS`` / ``CODE_CHANNELS``.
-AGENT_SESSIONS = "agent_sessions"
-CODE_CHANNELS = "code_channels"
+#: Feature name, the same string as ``slack_manifest.CODE_CHANNELS``.
+CODE_CHANNELS = slack_manifest.CODE_CHANNELS
 
-#: The bot scope each feature cannot run without.
-REQUIRED_SCOPE: dict[str, str] = {
-    AGENT_SESSIONS: "assistant:write",
-    CODE_CHANNELS: "code_channels:manage",
-}
+#: The bot scope each registered feature cannot run without: the manifest's own
+#: registry, so a switch registered there is known here with no second list.
+REQUIRED_SCOPE: Mapping[str, str] = slack_manifest.FEATURE_SCOPES
 
 #: Slack error codes that mean "this install cannot use the feature": they latch
 #: it off rather than being retried on every message.
@@ -57,6 +57,10 @@ REASON_SCOPES_UNKNOWN = "scopes_unknown"
 #: Sidebar folder ids are ``uuid4().hex[:12]`` (``chat_folders``); an id-shaped
 #: reference is matched by id only, never as a folder name.
 _FOLDER_ID_LEN = 12
+#: Separator of a sidebar folder PATH (``Parent/Child``), the spelling the folder
+#: tools and settings take. A display path of folder names, never a filesystem
+#: path, so it is the same on every platform.
+FOLDER_PATH_SEP = "/"
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -100,24 +104,30 @@ def _slack_section(cfg: Any) -> Any:
     return getattr(cfg, "slack", cfg)
 
 
-def agent_sessions_toggle(cfg: Any) -> bool:
-    """The Agent sessions toggle (``slack.agent_sessions``), capability aside."""
-    return getattr(_slack_section(cfg), "agent_sessions", False) is True
+def toggle(cfg: Any, feature: str) -> bool:
+    """A registered switch's toggle (``slack.<feature>``), capability aside.
+
+    An unregistered name, a config without the field, and anything but a real
+    ``True`` all read as off.
+    """
+    if feature not in REQUIRED_SCOPE:
+        return False
+    return getattr(_slack_section(cfg), feature, False) is True
+
+
+def enabled(cfg: Any, feature: str) -> bool:
+    """A registered switch runs: its toggle is on AND the installed app can."""
+    return toggle(cfg, feature) and available(feature)
 
 
 def code_channels_toggle(cfg: Any) -> bool:
     """The Code channels toggle (``slack.code_channels``), capability aside."""
-    return getattr(_slack_section(cfg), "code_channels", False) is True
-
-
-def agent_sessions_enabled(cfg: Any) -> bool:
-    """Run Slack threads as agent sessions: the toggle is on AND the app can."""
-    return agent_sessions_toggle(cfg) and agent_sessions_available()
+    return toggle(cfg, CODE_CHANNELS)
 
 
 def code_channels_enabled(cfg: Any) -> bool:
     """Let the agent open code channels: the toggle is on AND the app can."""
-    return code_channels_toggle(cfg) and code_channels_available()
+    return enabled(cfg, CODE_CHANNELS)
 
 
 # ── Capability: what the installed Slack app can actually use ──
@@ -238,14 +248,14 @@ def availability(feature: str) -> tuple[bool, str]:
     return True, ""
 
 
-def agent_sessions_available() -> bool:
-    """The installed app can run agent sessions (scope granted, not latched)."""
-    return availability(AGENT_SESSIONS)[0]
+def available(feature: str) -> bool:
+    """The installed app can use *feature* (scope granted, not latched)."""
+    return availability(feature)[0]
 
 
 def code_channels_available() -> bool:
     """The installed app can open code channels (scope granted, not latched)."""
-    return availability(CODE_CHANNELS)[0]
+    return available(CODE_CHANNELS)
 
 
 def manifest_features(cfg: Any) -> frozenset[str]:
@@ -255,16 +265,9 @@ def manifest_features(cfg: Any) -> frozenset[str]:
     (``kirocrew manifest``, ``GET /api/slack/manifest``, the settings page's
     update panel) passes this to ``slack_manifest.render``.
     """
-    from kiro_crew import slack_manifest
-
     # The TOGGLE, never the capability: the manifest is how an install gains the
     # capability, so it must ask for the scopes before they are granted.
-    on: set[str] = set()
-    if agent_sessions_toggle(cfg):
-        on.add(slack_manifest.AGENT_SESSIONS)
-    if code_channels_toggle(cfg):
-        on.add(slack_manifest.CODE_CHANNELS)
-    return frozenset(on)
+    return frozenset(f for f in slack_manifest.FEATURES if toggle(cfg, f))
 
 
 def _opt_str(value: object) -> str | None:
@@ -303,7 +306,7 @@ def folder_paths(folders: Iterable[Mapping[str, Any]]) -> dict[str, str]:
             seen.add(cur)
             segments.append(str(by_id[cur].get("name") or "?"))
             cur = str(by_id[cur].get("parent_id") or "")
-        paths[fid] = "/".join(reversed(segments))
+        paths[fid] = FOLDER_PATH_SEP.join(reversed(segments))
     return paths
 
 
@@ -322,7 +325,9 @@ def find_folder(folders: Iterable[Mapping[str, Any]], ref: str | None) -> Mappin
             return folder
     if looks_like_folder_id(ref):
         return None
-    wanted = "/".join(seg.strip().lower() for seg in ref.split("/") if seg.strip())
+    wanted = FOLDER_PATH_SEP.join(
+        seg.strip().lower() for seg in ref.split(FOLDER_PATH_SEP) if seg.strip()
+    )
     paths = folder_paths(listed)
     hits = [f for f in listed if paths.get(str(f.get("id")), "").lower() == wanted]
     return hits[0] if len(hits) == 1 else None

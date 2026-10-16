@@ -30,7 +30,7 @@ type Draft = {
   session_folder: string
   /** Open a Slack thread in the owner's bot DM for every new dashboard session on its first message. */
   auto_link_sessions: boolean
-  /** Slack Code: agent sessions, code channels and the code-channel defaults. */
+  /** Slack Code: the registered switches and the code-channel defaults. */
   code: SlackCodeDraft
 }
 
@@ -252,7 +252,10 @@ export function SlackPanel() {
       // The manifest renders for the saved Slack Code switches, so a save can
       // change it and what the installed app is compared against.
       qc.invalidateQueries({ queryKey: ['slack-manifest'] })
-      qc.invalidateQueries({ queryKey: ['slack-manifest-status'] })
+      // The status read records the install's scopes; the capability lines come
+      // from the config query, so read it once more after the status settles.
+      void qc.invalidateQueries({ queryKey: ['slack-manifest-status'] })
+        .then(() => qc.invalidateQueries({ queryKey: ['slack-config'] }))
     },
   })
 
@@ -494,7 +497,7 @@ export function SlackPanel() {
         </SettingsCard>
       </SettingsSection>
 
-      {/* ── Slack Code: agent sessions, code channels, manifest update ── */}
+      {/* ── Slack Code: switches, code-channel defaults, manifest update ── */}
       <SlackCodeSection
         data={data}
         draft={draft.code}

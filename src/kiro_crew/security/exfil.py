@@ -903,23 +903,28 @@ def _slack_manifest_payload_re() -> tuple[re.Pattern[str], ...] | None:
     to build the payload — so the accepted payloads cannot drift from the emitted
     ones. Every ``{{ALIAS}}`` after the first is a backreference, and
     ``{{COMMAND}}`` a group the caller pins to ``slash_command(alias)``, so neither
-    can vary. Returns None when the template cannot be read or any variant fails
-    to build (fails closed).
+    can vary. Fails closed PER VARIANT: one that cannot be read or built is left
+    out, so its payload is still refused, and the variants that did build (the
+    stock manifest among them) keep their exemption. Returns None only when none
+    built.
     """
     if _slack_manifest_re_slot:
         return _slack_manifest_re_slot[0]
-    compiled: tuple[re.Pattern[str], ...] | None = None
+    built: list[re.Pattern[str]] = []
     try:
         from kiro_crew import slack_manifest
 
-        built = [
-            _slack_manifest_variant_re(slack_manifest.stripped_template(combo))
-            for combo in slack_manifest.feature_sets()
-        ]
-        if built and all(p is not None for p in built):
-            compiled = tuple(p for p in built if p is not None)
+        combos = list(slack_manifest.feature_sets())
     except Exception:
-        compiled = None
+        combos = []
+    for combo in combos:
+        try:
+            pattern = _slack_manifest_variant_re(slack_manifest.stripped_template(combo))
+        except Exception:
+            pattern = None
+        if pattern is not None:
+            built.append(pattern)
+    compiled = tuple(built) or None
     _slack_manifest_re_slot.append(compiled)
     return compiled
 
