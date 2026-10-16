@@ -20,7 +20,7 @@ import { orderFoldersWithPaths } from '../../utils/folderTree'
 import { useFolderSortMode } from '../../hooks/useFolderSortMode'
 import { useAvailableModels } from '../../hooks/useAvailableModels'
 import { EFFORT_LEVELS, effortLabel } from '../../lib/effort'
-import { Field, INHERIT_MODEL, ModelField } from '../KiroCrewAgentsPageFields'
+import { Field, INHERIT_MODEL, ModelField } from '../KiroCrewAgentsPage'
 import { i18nT } from '../../i18n/t'
 import { compareText } from '../../i18n/format'
 import { SlackManifestUpdate } from './SlackManifestUpdate'
@@ -270,7 +270,7 @@ export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText
                   aria-label={i18nT('pages.settings.slackPanel.slackCode.agent')}
                 />
               </Field>
-              <ModelField options={modelOptions} value={draft.model} onChange={v => onChange({ model: v })} hint={i18nT('pages.settings.slackPanel.slackCode.model_hint')} />
+              <ModelField options={modelOptions} value={draft.model} onChange={v => onChange({ model: v })} disabled={readOnly} hint={i18nT('pages.settings.slackPanel.slackCode.model_hint')} />
               <Field label={i18nT('pages.kiroCrewAgentsPage.reasoning_effort')} hint={i18nT('pages.settings.slackPanel.slackCode.effort_hint')}>
                 <SimpleSelect
                   options={[...EFFORT_LEVELS]}
