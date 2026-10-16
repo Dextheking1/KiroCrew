@@ -235,6 +235,116 @@ intent. `membership_link` is an id from the closed `MEMBERSHIP_LINKS` set, never
 URL taken from config or a peer. Enterprise providers compose through the platform
 seams in `kiro_crew.platform` and stay disabled in the public build.
 
+### Aggregation
+
+`capabilities.register_capability_source(name, fields, source)` is how a behaviour
+module speaks for a field; the gateway wires the registrations at startup.
+`aggregate_capabilities` combines them conservatively:
+
+- A source answers only for the fields it declared. A name registers once.
+- A source that raises, or returns anything but a `CapabilityContribution`, makes
+  each declared field `unavailable` with reason `source_failed`.
+- Two sources on one field: the weaker state wins (`unavailable` < `disabled` <
+  `degraded` < `available`), and the weaker `containment_level` wins.
+- `containment_level` is `none` unless `containment` is `available` or `degraded`.
+- Two different membership links leave the link empty.
+
+A source answers from state it already holds; it does no I/O on the request path.
+
+`GET /api/shared-crew/capabilities` (`routes_capabilities`) answers
+`Capabilities.to_dict()` plus two additive keys: `reasons` (field to `no_source` or
+`source_failed`) and `enterprise` (each key in `enterprise.ENTERPRISE_CAPABILITY_KEYS`
+to `{state, reason}`). It carries states and reasons only, and is sent `no-store`.
+
+### Enterprise seams
+
+`PlatformContext.shared_crew_enterprise` (`platform.shared_crew_enterprise`) is the
+one slot an edition fills. The public default answers `enabled() -> False` and `None`
+for every provider. `enterprise.resolve_enterprise` checks each provider against its
+protocol before use and reports one capability per concern:
+
+| Key | Contract | Disabled behaviour |
+|---|---|---|
+| `human_credentials` | `CredentialVerifier`; `verify_credential` checks issuer, audience, key id, key rotation window, signature, lifetime, expiry and not-before with bounded skew | every credential rejected `unavailable` |
+| `individual_grants` | `GrantAuthority.lookup` per person per Crew; `GrantGate` decides new access | `not_configured`; Tailscale and dashboard auth govern alone |
+| `workload_identity` | `WorkloadIdentityProvider.bind` / `renew`; `WorkloadLease` binds, renews, disables | `unavailable`; no fallback credential exists |
+| `crew_identity` | `CrewBindingProvider`; `CrewBinding` pairs `CrewIdentity` with a synthetic `system` principal | none |
+| `heartbeat` | `HeartbeatTransport.send(payload, workload credential)`; `HeartbeatTracker` | never sent; needs `workload_identity` too |
+| `inference_budget` | `InferenceBudgetProvider.state`; `BudgetGate` | `not_enforced` |
+| `deployment_context` | opaque `deployment_ref`, `tenant_ref`, `resource_policy_ref` | empty |
+
+`available` means a checked provider is composed. It says the Crew is configured for
+the concern, not that the remote service answered. A provider, or anything it
+returns, that sets `TEST_ONLY = True` is refused with `test_provider_refused` unless
+the caller passes `allow_test_providers=True`, which only tests do.
+
+No production credential format is defined in core. A provider parses its own format
+into `PresentedCredential` and supplies the `KeySet`. A pass yields a `human`
+principal keyed by `(provider, issuer, subject)` with `enterprise` provenance.
+
+Grants are individual only: no group field, and `GrantGate.decide` reads only the
+principal and the authority. Session attribution, authorship, presence and heartbeat
+state are not inputs, so none of them grants access. Non-human principals are refused
+`not_individual`. Call it at every start of new work, queued work included.
+
+Cache and outage policy (`GrantCachePolicy`): a confirmed active grant is reused for
+`fresh_seconds` (default 60, max 300). After that the authority is asked; when it is
+unreachable the last confirmed active grant is honoured for `outage_grace_seconds`
+more (default 240, max 900), then access is refused `authority_unavailable`. A
+revocation is therefore noticed within `revocation_bound_seconds` (default 300). A
+pushed revocation applies at once, and an older revision never overrides a newer one.
+A missing or revoked grant is never extended by an outage. A clock that moves back
+forces a fresh check. The cache is bounded (LRU).
+
+Workload disablement is terminal for the lease: after it, no bind or renew is
+attempted. A failed renewal keeps the current credential until it expires and no
+longer. `WorkloadCredentialRef` is a handle, never material.
+
+The synthetic Crew principal is keyed under its own provider namespace
+(`crew-workload`), so no human credential can produce its id. `CrewBinding.inference_owner`
+is the Crew, so chargeable inference is never billed to the human who started it.
+
+Heartbeat: `never_connected -> online <-> offline`, moved only by an acknowledged,
+workload-authenticated send. The payload is the closed `HEARTBEAT_PAYLOAD_KEYS` set of
+ids, counts and capability states; anything else is refused before sending, so no
+transcript, prompt, title or principal can ride in it. Freshness is telemetry, never
+authorization.
+
+Budget: `CHARGEABLE_OPERATIONS` (new turn, steer, retry, spawn, automation run) stop
+with `inference_budget_exhausted` when spent and `inference_budget_unknown` when the
+budget cannot be read. Reads, listing, export and cancel always proceed.
+
+Caps compose by intersection: `effective_limit` takes the smallest of the tenant,
+Crew and principal caps and names the binding scope, so a tenant cap added later only
+tightens.
+
+Credential isolation: an edition keeps credentials under
+`enterprise.enterprise_state_dir(data_home)`, inside the secret vault directory. The
+sensitive-path gate refuses it to every file tool and every sandbox mode hides it. No
+enterprise setting is read from `config.json`.
+
+### Service prerequisites and open decisions
+
+Live enterprise verification needs, none of which exist in the public build:
+
+- an approved human credential contract and issuer key distribution;
+- an authoritative individual-assignment service with revocation push;
+- a workload identity provider on the target runtime;
+- a heartbeat and discovery endpoint that accepts workload-authenticated calls;
+- an inference budget and Profile service.
+
+Open, for the identity and security owners: the cache and outage bounds above; whether
+running work is stopped on revocation or only new work is refused; whether an unknown
+budget should refuse (current) or allow for a bounded window; how the Crew and a relay
+check each other through the authority.
+
+Acceptance probes once services exist: forged, expired, wrong-audience, wrong-issuer
+and retired-key credentials are refused; a revoked person cannot start work within the
+revocation bound; the authority down past the bound refuses; disabling the workload
+stops renewals and heartbeats; the Console shows `offline` after the threshold; a
+heartbeat capture holds only allowlisted keys; an exhausted budget refuses a new turn
+and still serves an existing result.
+
 ## 9. Records and migration
 
 Every record carries `schema_version` (`codec.SCHEMA_VERSION`). It is the Shared Crew
