@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from kiro_crew.slack.code_channels import settings as cc_settings
+from kiro_crew.slack import features
 from kiro_crew.slack.code_channels.client import CodeChannelsClient, parse_channel_info
 from kiro_crew.slack.code_channels.models import (
     CANVAS_ALREADY_EXISTS,
@@ -33,7 +33,7 @@ pytestmark = pytest.mark.asyncio
 def _fresh_capability():
     # A recorded feature_disabled below reaches the process-wide latch.
     yield
-    cc_settings.reset_capability()
+    features.reset_capabilities()
 
 
 class SlackApiErrorLike(Exception):
