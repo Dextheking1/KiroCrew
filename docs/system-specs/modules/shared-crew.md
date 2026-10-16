@@ -27,20 +27,37 @@ slice of `dashboard.routes`, after every existing slice. With
 single-operator Crew, plus attribution, presence and shared decisions.
 
 Admission coverage. `POST /api/chat`, subagent spawn, continue and retry, the task
-runner, workflow run, run-intent, saved-definition run and rerun, and cron admit at
-the handler. Every other chat turn passes `shared_crew.turn_gate.gate_turn`, which
-`chat_runner._run_chat`'s exit guard calls: the queue drain, continue, regenerate,
-edit-resend, rewind, thread replies, side chat, app agents, send-message, the OpenAI
-shim, task-runner hand-offs, nudges and linked channel threads. A turn already inside
-admitted work, or nested in one (`_prompt_depth`), is not admitted twice. Channel
-transports admit in `messaging.dispatch.ChannelTurns._run`, the Telegram dispatcher and
+runner (start, plan, retry, execute), workflow run, run-intent, saved-definition run
+and rerun, and cron admit at the handler. Every other chat turn passes
+`shared_crew.turn_gate.gate_turn`, which `chat_runner._run_chat`'s exit guard calls:
+the queue drain, continue, regenerate, edit-resend, rewind, app agents, send-message,
+the OpenAI shim, task-runner hand-offs, nudges and linked channel threads. Model work
+that starts its own runtime without `_run_chat` runs through
+`turn_gate.run_admitted` (or `run_admitted_or_raise`): thread replies and side chat
+(charged to the asker), the hooks agent, the heartbeat and the meetings,
+auto-improvement and code-review apps (Crew automation), a remote crew turn (the
+caller, after the route's own owner gate), each dashboard channel agent turn (Unknown
+for a person, automation between agents) and the issue-radar one-shot calls (the
+clicker). An app's background spawn (`apps.spawn_sdk`) is a child charged to the
+app's system principal. A turn already inside admitted work, or nested in one
+(`_prompt_depth`), is not admitted twice. Channel transports admit in
+`messaging.dispatch.ChannelTurns._run`, the Telegram dispatcher and
 `slack.handler.handle_message`. With admission on, the speculative eager spawn is
-skipped, so a runtime only starts inside an admitted turn. Not covered: background
-one-liners (titles, the optimizer, workflow authoring, decision and knowledge LLM
-calls), warm connections, lifecycle respawns and the CLI's own `kirocrew chat` and
-`kirocrew run`. They keep today's behaviour and the `hard_limits` backstop in
-`runtime_start`. A WebSocket never starts a turn, and resume starts no runtime: its
-`session/load` runs inside the next admitted turn.
+skipped, so a runtime only starts inside an admitted turn. A WebSocket never starts a
+turn, and resume starts no runtime: its `session/load` runs inside the next admitted
+turn.
+
+| Entry points (88 inventoried) | Count | Admission |
+|---|---|---|
+| Handler or turn-gate admission | 68 | fair admission, charged as below |
+| Reached through a recorded hop (cron manual run, `kirocrew cron trigger`) | 2 | assumed via the cron dispatch |
+| Starts no new model work (interrupt, resume, steer, timers; runtime restarts after compaction, lifecycle respawns, warm connections, provider re-attach) | 9 | none needed; the prompt they serve runs in an admitted turn, and `hard_limits` refuses the spawn |
+| Internal one-shot helpers (titles, the optimizer, task refine, workflow authoring, decision and knowledge calls) | 7 | `hard_limits` backstop only: a short tool-less call, not queued work |
+| The CLI's own `kirocrew chat` and `kirocrew run` | 2 | `hard_limits` backstop only: a separate process with no gateway, and a process-local service would reconcile the gateway's records |
+
+A turn that returned after its runtime failed (a fault stop reason, or no terminal
+event and an error row) settles `failed` with `runtime_error` and a bounded
+`extra.failure_detail` (`turn_gate.turn_failure`); a raise settles the same way.
 
 Charging. A turn is charged to its initiator: the request's actor at a handler, the
 server-stamped `author` of a queued entry at the drain (entries restored from disk or
@@ -172,8 +189,13 @@ The slot payload (`slot_projection`) and every session catalog row
 A message's author rides in the message `meta` under `MESSAGE_AUTHOR_META_KEY`
 (`author`), in the public principal shape, stamped by the server when it accepts
 the message (`attribution.stamp_message_author`). A client-supplied `author` key is
-discarded at ingress and overwritten at the stamp. A message written before
-authors reads as Unknown (`attribution.message_author`).
+discarded at ingress and overwritten at the stamp. Every other live user row an
+authorized request's handler appends (regenerate, rewind, task-runner hand-offs, the
+OpenAI shim) names that request's actor (`attribution.with_request_author`, bound by
+`identity.publish_actor` to the request's own task, so a turn the handler starts never
+inherits it). Channel rows name the bounded Unknown principal and automation rows the
+automation principal (`stamp_principal_author`). A message written before authors
+reads as Unknown (`attribution.message_author`).
 
 ### Session list query
 
@@ -376,7 +398,8 @@ delegated on the supported profile and is `unavailable`. Disk is `app_accounting
 
 `hard_limits` turns any missing prerequisite (`not_linux`, `systemd_run_untrusted`,
 `systemctl_untrusted`, `no_user_session`, `user_bus_unreachable`, `not_cgroup_v2`,
-`controllers_not_delegated`, `controllers_unreadable`) into `containment_unavailable`
+`controllers_not_delegated`, `controllers_unreadable`, or `containment_probe_failed`
+when the probe or the startup check raised) into `containment_unavailable`
 (503) at admission, and `runtime_start` refuses every runtime spawn and `session/new`
 with `ContainmentUnavailable` (the backstop for entry points that do not reach the
 gate). With it off the gate admits and the capacity answer says what holds.
@@ -398,7 +421,10 @@ test targets measured on one host, not product commitments.
 `GET /api/shared-crew/capacity` answers `CapacityResponse` plus `effective` (every
 resolved limit), `containment` (`ContainmentReport.to_dict`) and `fairness`.
 `GET /api/shared-crew/work?session_key=` lists public records (the viewer's own without
-`session_key`). `POST /api/shared-crew/work/{id}/cancel {expected_revision}` cancels a
+`session_key`). The key may be a dashboard tab's slot key: it is read as the session
+that tab's turns run on (`routes_admission.work_session_keys`), so the chat's work list
+sees its own queued and running work. Every accepted-work write is pushed as a
+`shared_crew.work` frame carrying `slot_key`, the tab that shows the session. `POST /api/shared-crew/work/{id}/cancel {expected_revision}` cancels a
 queued or admitted record at once and moves running work to `cancelling`; a stale
 revision or a terminal record is 409 with `current`. A chat send answers 202 with
 `admission` when queued (WS mode) or carries `X-Shared-Crew-Work` /
@@ -433,7 +459,10 @@ responder.
 decision, with the classification, the side effect that settles the waiting future,
 and the state write under one lock. A decision id is derived from what the card
 already shows (`approval:<len>:<slot>:<request id>`, `approval-state:<id>`,
-`question:<ask id>`), so every tab computes it without a lookup. The initiator is the
+`question:<ask id>`), so every tab computes it without a lookup. A decision opens
+the moment its card shows: a slot permission prompt in `chat_runner` (unless it was
+declined at its append), a background approval in `ApprovalCoordinator.request`, and
+a blocking or agent question in `QuestionCoordinator`. The initiator is the
 author of the turn that asked (the latest user message's `author` stamp) or, for a
 background approval, the `Principal.system` of its source; the responder is the
 request's verified actor. Every existing gate on the approve and answer routes runs
@@ -655,7 +684,8 @@ Supported profiles.
 
 Start, stop and configure. Start with `kirocrew gateway` (or the installed service)
 and stop with `kirocrew stop`. Limits live under `dashboard.shared_crew` (section 4)
-and are re-read within seconds, without a restart:
+and are re-read within seconds, without a restart (every turn gate call refreshes
+the gateway's service, so enabling admission applies to the next turn):
 
 ```bash
 kirocrew config set dashboard.shared_crew.admission_enabled true
@@ -706,5 +736,6 @@ Principal slices are runtime-only systemd units and disappear with the user sess
 Known limits. Containment is `best_effort`: runtimes share the gateway's uid. IO is not
 limited, and disk is accounting of accepted request bytes, not a filesystem quota. A
 shared session's runtime stays in its first initiator's slice. Channel senders are
-Unknown. The routes in the "Not covered" list above bypass fair admission. Enterprise
-grant and budget gates exist as contracts (section 8) and nothing calls them yet.
+Unknown. The internal one-shot helpers and the CLI's own processes in the table in
+section 1 bypass fair admission. Enterprise grant and budget gates exist as contracts
+(section 8) and nothing calls them yet.

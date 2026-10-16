@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import inspect
 import logging
 from typing import Any, Callable, Coroutine, Iterable, Iterator, Mapping, TypeVar
 
@@ -286,6 +287,93 @@ async def gate_turn(
     )
 
 
+async def run_admitted(
+    work: Coroutine[Any, Any, T],
+    *,
+    session_key: str,
+    text: str = "",
+    budget_key: str = "",
+    automation: bool = False,
+    operation: OperationKind = OperationKind.CHAT_TURN,
+    refused: Callable[[ReasonCode | None], Any] | None = None,
+) -> T | None:
+    """Run *work* (model work that starts a runtime of its own) as one admitted turn.
+
+    For the entry points that do not reach ``_run_chat``: side chat, thread
+    replies, the hooks agent, a remote crew turn, dashboard channel agents,
+    app background spawns. Charged to *budget_key*, else the initiator a
+    producer set with :func:`initiated_by`, else automation (*automation*) or
+    the bounded Unknown bucket. Inside admitted work, or with fair admission
+    off, *work* runs unchanged. A refused or unstarted turn never runs: *work*
+    is closed, *refused* (sync or async) is told why, and this returns None.
+    """
+    budget = budget_key or _INITIATOR.get()
+    if not budget:
+        budget = _gate.AUTOMATION_PRINCIPAL.id if automation else Principal.unknown().id
+    admission = await admit_turn(
+        budget_key=budget, session_key=session_key, text=text, operation=operation
+    )
+    if admission is None:
+        return await work
+
+    async def _tell(reason: ReasonCode | None) -> None:
+        if refused is None:
+            return
+        try:
+            result = refused(reason)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 -- the note is best effort
+            logger.debug("shared crew: refusal note failed", exc_info=True)
+
+    if admission.rejected:
+        work.close()
+        await _tell(admission.reason)
+        return None
+    try:
+        return await admission.run(work)
+    except _gate.AdmissionEnded as ended:
+        await _tell(ended.work.reason)
+        return None
+
+
+class TurnRefused(RuntimeError):
+    """Fair admission refused (or ended unstarted) a turn run by :func:`run_admitted_or_raise`."""
+
+    def __init__(self, reason: ReasonCode | None) -> None:
+        super().__init__(capacity_note(reason or ReasonCode.CREW_ACTIVE_LIMIT))
+        self.reason = reason
+
+
+async def run_admitted_or_raise(
+    work: Coroutine[Any, Any, T],
+    *,
+    session_key: str,
+    text: str = "",
+    budget_key: str = "",
+    automation: bool = False,
+    operation: OperationKind = OperationKind.CHAT_TURN,
+) -> T:
+    """:func:`run_admitted` for a caller whose failure path is an exception.
+
+    Raises :class:`TurnRefused` (a ``RuntimeError`` naming the limit) when the
+    turn was refused or ended before it ran; *work* never ran.
+    """
+    reasons: list[ReasonCode | None] = []
+    result = await run_admitted(
+        work,
+        session_key=session_key,
+        text=text,
+        budget_key=budget_key,
+        automation=automation,
+        operation=operation,
+        refused=reasons.append,
+    )
+    if reasons:
+        raise TurnRefused(reasons[0])
+    return result  # type: ignore[return-value]
+
+
 async def run_channel_turn(
     *,
     session_key: str,
@@ -364,6 +452,9 @@ __all__ = [
     "initiated_by",
     "mark_admitted",
     "queued_initiator",
+    "TurnRefused",
+    "run_admitted",
+    "run_admitted_or_raise",
     "run_channel_turn",
     "run_slack_message",
     "turn_budget",

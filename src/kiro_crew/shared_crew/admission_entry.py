@@ -215,6 +215,33 @@ async def admit_subagent(request: Any, state: Any, parent_session: str) -> _gate
     return admission
 
 
+async def admit_app_spawn(manager: Any, app: str) -> _gate.Admission:
+    """Admit an app's background spawn (``apps.spawn_sdk``) as a child.
+
+    An app spawns with no request and no parent turn, so the child is charged
+    to the app's bounded system principal, the one ``actor_budget`` names for
+    an app token. The caller attaches the started run or abandons the slot.
+    Outside a gateway (no installed service) this is a pass-through.
+    """
+    if _gate.installed_service() is None:
+        return _gate.Admission(None, "passthrough")
+    service = await _gate.current_service()
+    if not service.enabled:
+        return _gate.Admission(service, "passthrough")
+    if manager is not None:
+        service.set_child_probe(subagent_probe(manager))
+        service.set_child_cancel(subagent_cancel(manager, asyncio.get_running_loop()))
+    from kiro_crew.shared_crew.contracts import Principal
+
+    admission = await service.admit_child(
+        parent_session_key=f"app:{app}",
+        fallback_budget=Principal.system(f"app:{app}"[:64]).id,
+    )
+    if admission.admitted and admission.work is not None:
+        await service.prepare_principal_slice(admission.work.budget_key)
+    return admission
+
+
 # -- cron -------------------------------------------------------------------------
 
 
@@ -341,6 +368,7 @@ async def admit_background_run(
 
 
 __all__ = [
+    "admit_app_spawn",
     "admit_background_run",
     "admitted_chat_turn",
     "admitted_or_direct",
