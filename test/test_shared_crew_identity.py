@@ -67,6 +67,8 @@ def _isolated(tmp_path, monkeypatch):
         return {"Node": {"Name": hit[1]}, "UserProfile": {"LoginName": hit[0]}}, False
 
     monkeypatch.setattr(tailnet, "_run_json_detail", MagicMock(side_effect=whois))
+    # The loopback client stands in for the daemon behind ``tailscale serve``.
+    monkeypatch.setattr(tailnet, "loopback_client_is_daemon", lambda *_a: True)
     yield calls
     ta._state.clear_all()
     tailnet._whois_cache.clear()

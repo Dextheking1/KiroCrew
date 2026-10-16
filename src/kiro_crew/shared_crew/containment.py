@@ -60,6 +60,8 @@ REASON_CONTROLLERS = "controllers_not_delegated"
 REASON_CONTROLLERS_UNREADABLE = "controllers_unreadable"
 REASON_SLICE_FAILED = "principal_slice_failed"
 REASON_UNKNOWN = "containment_probe_failed"
+#: Hard-limit mode is on but fair admission, which applies the limits, is off.
+REASON_ADMISSION_OFF = "admission_disabled"
 
 _PROBE_REASON_PREFIXES: tuple[tuple[str, str], ...] = (
     ("not Linux", REASON_NOT_LINUX),
@@ -186,6 +188,24 @@ def failed_report(*, hard_limits: bool, detail: str) -> ContainmentReport:
     )
 
 
+def admission_off_report() -> ContainmentReport:
+    """Hard-limit mode with fair admission off: nothing applies the limits, so refuse.
+
+    Published so ``runtime_start``'s backstop refuses every runtime start until
+    ``admission_enabled`` is turned on or ``hard_limits`` off.
+    """
+    return ContainmentReport(
+        platform=sys.platform,
+        available=False,
+        reason=REASON_ADMISSION_OFF,
+        cpu=False,
+        memory=False,
+        pids=False,
+        hard_limits=True,
+        detail="hard_limits requires admission_enabled; no runtime starts until both are on",
+    )
+
+
 def probe_containment(*, hard_limits: bool, slices_enabled: bool) -> ContainmentReport:
     """Probe this host. Reads a handful of files and dials the user bus; call off-loop."""
     from kiro_crew import platform_compat, sandbox_cgroup
@@ -277,6 +297,77 @@ def unit_active_state(unit: str, *, runner: Runner = _run) -> str | None:
 
 _UNIT_NAME_RE = re.compile(r"\A[A-Za-z0-9_.:-]{1,200}\.(scope|slice)\Z")
 
+#: Prefix of the runtime scope units ``sandbox_slice`` mints.
+RUNTIME_SCOPE_PREFIX = "kirocrew-rt-"
+_CGROUP_ROOT = "/sys/fs/cgroup"
+
+
+def populated_scopes(
+    slice_name: str, *, runner: Runner = _run, cgroup_root: str = _CGROUP_ROOT
+) -> list[str] | None:
+    """The runtime scopes under *slice_name* that still hold a process, or None.
+
+    Reads the slice's control group from systemd and then each child scope's
+    ``cgroup.events``: a scope counts while it is ``populated 1``. A slice that
+    is not loaded holds nothing (``[]``). None means the question could not be
+    asked (no trusted systemctl, an unreadable tree), which proves nothing.
+    Shells out and reads files: call off-loop.
+    """
+    if not _UNIT_NAME_RE.match(slice_name or "") or not slice_name.endswith(".slice"):
+        return None
+    from kiro_crew import platform_compat
+
+    systemctl = platform_compat.trusted_system_bin("systemctl")
+    if systemctl is None:
+        return None
+    try:
+        proc = runner([systemctl, "--user", "show", "-p", "ControlGroup", "--value", slice_name])
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    group = (proc.stdout or "").strip()
+    if not group:
+        return []
+    import os
+
+    base = os.path.join(cgroup_root, group.lstrip("/"))
+    try:
+        names = sorted(os.listdir(base))
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return None
+    alive: list[str] = []
+    for name in names:
+        if not (name.startswith(RUNTIME_SCOPE_PREFIX) and name.endswith(".scope")):
+            continue
+        try:
+            with open(os.path.join(base, name, "cgroup.events"), encoding="utf-8") as fh:
+                events = fh.read()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        if "populated 1" in events:
+            alive.append(name)
+    return alive
+
+
+def stop_unit(unit: str, *, runner: Runner = _run) -> bool:
+    """``systemctl --user stop <unit>`` for a unit this module or ``sandbox_slice`` minted."""
+    if not _UNIT_NAME_RE.match(unit or ""):
+        return False
+    from kiro_crew import platform_compat
+
+    systemctl = platform_compat.trusted_system_bin("systemctl")
+    if systemctl is None:
+        return False
+    try:
+        return runner([systemctl, "--user", "stop", unit]).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
 
 class SliceManager:
     """Creates and sizes per-principal slices. Every method shells out: call off-loop.
@@ -340,6 +431,78 @@ class SliceManager:
     def forget(self, slice_name: str) -> None:
         with self._lock:
             self._applied.pop(slice_name, None)
+
+    def applied(self) -> tuple[str, ...]:
+        """The slices this process applied and has not released."""
+        with self._lock:
+            return tuple(self._applied)
+
+    def release(
+        self,
+        slice_name: str,
+        *,
+        busy: Callable[[str], "list[str] | None"],
+        owned_only: bool = True,
+    ) -> bool:
+        """Stop an idle *slice_name* and drop its runtime drop-ins; False when kept.
+
+        Kept when *busy* names a populated scope or cannot tell (None): stopping a
+        slice stops every scope in it. The slice is forgotten first, under the
+        lock :meth:`apply` takes, so a spawn racing the release lands in the
+        instance slice (which keeps every ceiling) and the next admission sizes
+        the slice again from scratch. *owned_only* False also releases a slice
+        an earlier process left behind (gateway start).
+        """
+        if not _UNIT_NAME_RE.match(slice_name or "") or not slice_name.endswith(".slice"):
+            return False
+        with self._lock:
+            if owned_only and slice_name not in self._applied:
+                return False
+            props = self._applied.pop(slice_name, None)
+            try:
+                scopes = busy(slice_name)
+            except Exception:  # noqa: BLE001 -- unknown is busy
+                scopes = None
+            if scopes is None or scopes:
+                if props is not None:
+                    self._applied[slice_name] = props
+                return False
+            systemctl = self._bin()
+            if systemctl is None:
+                return False
+            ok = True
+            for cmd in (
+                [systemctl, "--user", "stop", slice_name],
+                [systemctl, "--user", "revert", slice_name],
+            ):
+                try:
+                    ok = self._runner(cmd).returncode == 0 and ok
+                except (OSError, subprocess.TimeoutExpired):
+                    ok = False
+            return ok
+
+    def principal_slices(self) -> list[str] | None:
+        """Every loaded per-principal slice of this Crew's instance, or None."""
+        systemctl = self._bin()
+        if systemctl is None:
+            return None
+        stem = instance_slice_name()
+        stem = stem[: -len(".slice")] if stem.endswith(".slice") else stem
+        pattern = f"{stem}-p*.slice"
+        try:
+            proc = self._runner(
+                [systemctl, "--user", "list-units", "--all", "--plain", "--no-legend", pattern]
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode != 0:
+            return None
+        names = []
+        for line in (proc.stdout or "").splitlines():
+            name = line.split()[0] if line.split() else ""
+            if _UNIT_NAME_RE.match(name) and name.startswith(stem + "-p"):
+                names.append(name)
+        return names
 
     def stop(self, slice_name: str) -> bool:
         """Stop *slice_name* (tests and cleanup). Its scopes stop with it."""
@@ -456,8 +619,13 @@ def scope_parent_slice() -> str | None:
 __all__ = [
     "ContainmentReport",
     "ContainmentUnavailable",
+    "REASON_ADMISSION_OFF",
+    "admission_off_report",
     "hard_mode_refusal",
+    "populated_scopes",
     "publish_report",
+    "RUNTIME_SCOPE_PREFIX",
+    "stop_unit",
     "SliceLimits",
     "SliceManager",
     "classify_probe_reason",

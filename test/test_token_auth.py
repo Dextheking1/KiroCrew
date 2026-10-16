@@ -4003,6 +4003,8 @@ def _tailnet_env(monkeypatch):
     def set_whois(result):
         mock = MagicMock(return_value=(result, False))
         monkeypatch.setattr(tailnet, "_run_json_detail", mock)
+        # The loopback client stands in for the daemon behind ``tailscale serve``.
+        monkeypatch.setattr(tailnet, "loopback_client_is_daemon", lambda *_a: True)
         return mock
 
     yield set_whois

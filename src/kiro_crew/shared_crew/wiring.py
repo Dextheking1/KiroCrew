@@ -149,6 +149,9 @@ def install(state: Any = None) -> None:
         people.register_usage_source(admission_usage)
         if state is not None:
             work_store.set_change_listener(work_broadcaster(state))
+            from kiro_crew.shared_crew import host_hooks
+
+            host_hooks.install(state)
 
 
 def uninstall() -> None:
@@ -158,6 +161,9 @@ def uninstall() -> None:
             capabilities.unregister_capability_source(name)
         people.register_usage_source(None)
         work_store.set_change_listener(None)
+        from kiro_crew.shared_crew import host_hooks
+
+        host_hooks.uninstall()
 
 
 __all__ = [

@@ -36,7 +36,6 @@ replayed; work whose runtime is still alive keeps its slot in ``reconciling``.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import time
 from collections import OrderedDict
@@ -44,6 +43,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Coroutine, Mapping, TypeVar
 
 from kiro_crew.config.sections_shared_crew import EffectiveLimits
+from kiro_crew.shared_crew import admission_runtime as _runtime
 from kiro_crew.shared_crew import containment as _containment
 from kiro_crew.shared_crew.accounting import SessionCreateRate, StorageAccount
 from kiro_crew.shared_crew.admission import (
@@ -67,14 +67,21 @@ from kiro_crew.shared_crew.admission import (
     http_status,
     retry_after_header,
 )
-from kiro_crew.shared_crew.codec import ContractError
-from kiro_crew.shared_crew.contracts import (
-    ACTOR_REQUEST_KEY,
-    ActorContext,
-    EnforcementLevel,
-    Principal,
-    Transport,
+from kiro_crew.shared_crew.admission_http import (
+    IDEMPOTENCY_HEADER,
+    actor_of,
+    coded_json_response,
+    idempotency_key_of,
+    principal_of,
+    request_digest,
 )
+from kiro_crew.shared_crew.admission_runtime import (
+    SLICE_IDLE_SECONDS,
+)
+from kiro_crew.shared_crew.admission_runtime import systemd_reap as _systemd_reap
+from kiro_crew.shared_crew.admission_runtime import systemd_unit_liveness as _systemd_unit_liveness
+from kiro_crew.shared_crew.codec import ContractError
+from kiro_crew.shared_crew.contracts import EnforcementLevel, Principal, Transport
 from kiro_crew.shared_crew.scheduler import (
     Decision,
     FairScheduler,
@@ -92,9 +99,6 @@ S = OperationState
 #: The bounded owner of automation that records no initiator.
 AUTOMATION_PRINCIPAL = Principal.system("automation")
 
-#: Header a client sends per logical send, reused on retry.
-IDEMPOTENCY_HEADER = "Idempotency-Key"
-
 #: Refusal code when the durable store is unavailable (no ``ReasonCode`` names it).
 TASK_STORE_UNAVAILABLE_CODE = "task_store_unavailable"
 
@@ -104,6 +108,15 @@ RECONCILE_DETAIL_KEY = "reconcile_detail"
 FAILURE_DETAIL_KEY = "failure_detail"
 RECONCILE_RESTARTED_BEFORE_START = "host_restarted_before_start"
 RECONCILE_RAN_BEFORE_RESTART = "host_restarted_while_running"
+#: ``reconcile_detail`` of work the host's own stop ended.
+STOPPED_BEFORE_START = "host_stopped_before_start"
+STOPPED_WHILE_RUNNING = "host_stopped_while_running"
+#: ``extra`` key counting the pre-restart runtime scopes reconciliation stopped.
+ORPHANS_REAPED_KEY = "orphans_reaped"
+#: ``extra`` key naming the work a merged queued message ran inside.
+MERGED_INTO_KEY = "merged_into"
+#: ``extra`` key marking a message parked behind its session's running turn.
+PARKED_KEY = "parked"
 
 #: Operations whose work is a child of running work.
 CHILD_OPERATIONS = frozenset({OperationKind.SUBAGENT})
@@ -119,78 +132,9 @@ _RETRY_AFTER: Mapping[ReasonCode, int] = {
 }
 
 _SESSION_BINDINGS_MAX = 20000
+_QUEUE_IDS_MAX = 4096
 #: How long a containment probe answers before it is taken again.
 _REPORT_TTL_SECONDS = 60.0
-
-
-# -- the actor ----------------------------------------------------------------
-
-
-def actor_of(request: Any) -> ActorContext | None:
-    """The trusted actor the auth middleware published, or None.
-
-    Read only from ``request[ACTOR_REQUEST_KEY]``; never from a header, body
-    or query value.
-    """
-    getter = getattr(request, "get", None)
-    if getter is None:
-        return None
-    actor = getter(ACTOR_REQUEST_KEY)
-    return actor if isinstance(actor, ActorContext) else None
-
-
-def principal_of(request: Any) -> Principal:
-    """The initiator principal of *request*; Unknown when none was established."""
-    actor = actor_of(request)
-    return actor.principal if actor is not None else Principal.unknown()
-
-
-def idempotency_key_of(request: Any) -> str:
-    """The client's ``Idempotency-Key`` header, or a fresh server key when absent."""
-    headers = getattr(request, "headers", None)
-    raw = headers.get(IDEMPOTENCY_HEADER, "") if headers is not None else ""
-    return raw.strip() if isinstance(raw, str) and raw.strip() else "srv-" + new_work_id()
-
-
-def request_digest(*parts: object) -> str:
-    h = hashlib.sha256()
-    for part in parts:
-        h.update(repr(part).encode("utf-8", "replace"))
-        h.update(b"\x1f")
-    return h.hexdigest()
-
-
-# -- outcomes -------------------------------------------------------------------
-
-
-def coded_json_response(
-    body: Mapping[str, Any], *, status: int, headers: Mapping[str, str] | None = None
-) -> Any:
-    """An :func:`error_body` as an aiohttp JSON response, its ``code`` written out.
-
-    Every branch spells ``error`` and ``code`` in the literal, so the
-    repository's error-code contract can see the code at each response site.
-    """
-    from aiohttp import web
-
-    error, code = str(body["error"]), str(body["code"])
-    hdrs = dict(headers or {})
-    capacity, current = body.get("capacity"), body.get("current")
-    if capacity is not None and current is not None:
-        return web.json_response(
-            {"error": error, "code": code, "capacity": capacity, "current": current},
-            status=status,
-            headers=hdrs,
-        )
-    if capacity is not None:
-        return web.json_response(
-            {"error": error, "code": code, "capacity": capacity}, status=status, headers=hdrs
-        )
-    if current is not None:
-        return web.json_response(
-            {"error": error, "code": code, "current": current}, status=status, headers=hdrs
-        )
-    return web.json_response({"error": error, "code": code}, status=status, headers=hdrs)
 
 
 class AdmissionEnded(Exception):
@@ -218,6 +162,14 @@ class _Live:
     awaiting_proof: bool = False
     #: Set by :meth:`AdmissionService.note_failure`: the work returned, but failed.
     failure: str = ""
+    #: Queued messages a session drain merged into this work's turn.
+    followers: list[str] = field(default_factory=list)
+    #: This work is a queued message merged into another work's turn.
+    merged_into: str = ""
+    #: Reconciliation: pre-restart runtime scopes asked to stop.
+    reaped: int = 0
+    #: Reconciliation: the runtime scopes found alive under the work's slice.
+    orphan_scopes: tuple[str, ...] = ()
 
 
 @dataclass
@@ -298,6 +250,11 @@ class Admission:
         if self.work is None or self.rejected:
             coro.close()
             raise RuntimeError("refused work cannot run")
+        if self.replayed:
+            # A retry of accepted work answers the first result; it never runs twice.
+            coro.close()
+            current = await self.service.current_work(self.work.work_id)
+            raise AdmissionEnded(current or self.work)
         return await self.service.run(self.work.work_id, coro, revalidate=revalidate)
 
     async def attach_child(self, execution_id: str, *, session_key: str = "") -> None:
@@ -319,21 +276,8 @@ ChildProbe = Callable[[str], "OperationState | None"]
 CancelHook = Callable[[AcceptedWork], Any]
 
 
-def _systemd_unit_liveness(ref: RuntimeOwnershipRef) -> Liveness:
-    """ALIVE while the work's systemd scope unit is active; STOPPED otherwise."""
-    unit = ref.containment_unit
-    if not unit or not unit.endswith(".scope"):
-        # No unit of its own: an in-gateway execution, which cannot outlive the
-        # process that ran it.
-        return Liveness.STOPPED
-    state = _containment.unit_active_state(unit)
-    if state is None:
-        return Liveness.UNKNOWN
-    if state in ("active", "activating", "deactivating", "reloading"):
-        return Liveness.ALIVE
-    if state in ("inactive", "failed", "unknown", ""):
-        return Liveness.STOPPED
-    return Liveness.UNKNOWN
+ReconcileListener = Callable[[AcceptedWork], Any]
+Reaper = Callable[[RuntimeOwnershipRef], int]
 
 
 class AdmissionService:
@@ -348,8 +292,10 @@ class AdmissionService:
         containment_probe: Callable[[], _containment.ContainmentReport] | None = None,
         slices: _containment.SliceManager | None = None,
         liveness: LivenessProbe = _systemd_unit_liveness,
+        reaper: Reaper | None = None,
         child_probe: ChildProbe | None = None,
         storage: StorageAccount | None = None,
+        slice_busy: Callable[[str], "list[str] | None"] | None = None,
     ) -> None:
         self._store = store
         self._limits = limits
@@ -365,6 +311,21 @@ class AdmissionService:
         self._report_at = 0.0
         self._slices = slices
         self._liveness = liveness
+        # The real reaper only pairs with the real liveness probe: an injected
+        # probe (a test, a host without systemd) never stops a host unit.
+        self._reaper: Reaper = reaper or (
+            _systemd_reap if liveness is _systemd_unit_liveness else (lambda _ref: 0)
+        )
+        self._slice_busy = slice_busy or (
+            lambda name: _containment.populated_scopes(
+                name, runner=getattr(slices, "_runner", _containment._run)
+            )
+        )
+        self._slice_idle: dict[str, float] = {}
+        self._shutting_down: Callable[[], bool] = lambda: False
+        self._parked_present: Callable[[str], bool] | None = None
+        self._reconcile_listener: ReconcileListener | None = None
+        self._queue_ids: OrderedDict[str, str] = OrderedDict()
         self._child_probe = child_probe
         self._storage = storage or (StorageAccount(store.tasks, clock=clock) if store else None)
         self._create_rate = SessionCreateRate(limits.session_creates_per_minute)
@@ -401,6 +362,24 @@ class AdmissionService:
     def set_child_probe(self, probe: ChildProbe | None) -> None:
         self._child_probe = probe
 
+    def set_shutdown_probe(self, probe: Callable[[], bool] | None) -> None:
+        """Whether the host process is stopping; work it interrupts is not ``completed``."""
+        self._shutting_down = probe or (lambda: False)
+
+    def set_parked_probe(self, probe: Callable[[str], bool] | None) -> None:
+        """Whether a parked message's queue entry still exists (in memory, on-loop)."""
+        self._parked_present = probe
+
+    def set_reconcile_listener(self, listener: ReconcileListener | None) -> None:
+        """Told of each record reconciliation ended, so its session can say so."""
+        self._reconcile_listener = listener
+
+    def stopping(self) -> bool:
+        try:
+            return bool(self._shutting_down())
+        except Exception:  # noqa: BLE001 -- a broken probe never ends work
+            return False
+
     def register_probe(self, operation: OperationKind, probe: ChildProbe | None) -> None:
         """Answer the state of *operation*'s external runs by execution id (off-loop)."""
         if probe is None:
@@ -434,8 +413,16 @@ class AdmissionService:
                 )
             self._report_at = time.monotonic()
             if _SERVICE is self:
-                _containment.publish_report(self._report if self.enabled else None)
+                _containment.publish_report(self.published_report())
         return self._report
+
+    def published_report(self) -> _containment.ContainmentReport | None:
+        """The report ``runtime_start``'s backstop reads; None when it refuses nothing."""
+        if self.enabled:
+            return self._report
+        if self._limits.hard_limits:
+            return _containment.admission_off_report()
+        return None
 
     def cached_containment_report(self) -> _containment.ContainmentReport | None:
         return self._report
@@ -509,9 +496,23 @@ class AdmissionService:
         parent_execution_id: str = "",
         estimate: ResourceEstimate | None = None,
         allow_queue: bool = True,
+        park: bool = False,
     ) -> Admission:
-        """Admit, queue or refuse one root execution charged to *budget_key*."""
+        """Admit, queue or refuse one root execution charged to *budget_key*.
+
+        *park* accepts work that waits on its own session's running turn rather
+        than on capacity (a message sent to a busy session): it is bounded by
+        the same queue depths and request size and counts as queued, but it is
+        not dispatched until that session's drain calls :meth:`start_parked`.
+        """
         if not self.enabled:
+            if self._limits.hard_limits:
+                # Hard-limit mode without the admission that applies the limits.
+                return self._refusal(
+                    ReasonCode.CONTAINMENT_UNAVAILABLE,
+                    budget_key,
+                    detail="containment unavailable: " + _containment.REASON_ADMISSION_OFF,
+                )
             return Admission(self, "passthrough")
         await self.ensure_ready()
         work_class = WorkClass.CHILD if operation in CHILD_OPERATIONS else WorkClass.ROOT
@@ -564,7 +565,10 @@ class AdmissionService:
                 weight=request.estimate.weight,
                 expires_at=expires_at,
             )
-            result = self._scheduler.submit(ticket, allow_queue=allow_queue)
+            if park:
+                result = self._scheduler.park(ticket)
+            else:
+                result = self._scheduler.submit(ticket, allow_queue=allow_queue)
             if result.decision is Decision.REJECTED:
                 return self._refusal(
                     result.reason or ReasonCode.CREW_QUEUE_FULL,
@@ -573,6 +577,9 @@ class AdmissionService:
                 )
             state = S.ADMITTED if result.decision is Decision.ADMITTED else S.QUEUED
             root = self.root_for_session(session_key) if work_class is WorkClass.CHILD else ""
+            accept_extra: dict[str, Any] = {"root_work_id": root} if root else {}
+            if park:
+                accept_extra[PARKED_KEY] = True
             try:
                 work, inserted = await self._store.accept(
                     request,
@@ -582,7 +589,7 @@ class AdmissionService:
                     deadline_at=(
                         self._deadline_for(work_class, now) if state is S.ADMITTED else None
                     ),
-                    extra={"root_work_id": root} if root else None,
+                    extra=accept_extra or None,
                 )
             except IdempotencyConflict as exc:
                 self._undo(ticket)
@@ -656,22 +663,172 @@ class AdmissionService:
             await self._storage.charge(budget_key, nbytes)
 
     async def _existing(self, request: AdmissionRequest) -> Admission | None:
+        return await self._existing_scope(request.scope, request.request_digest, request.budget_key)
+
+    async def _existing_scope(self, scope: str, digest: str, budget_key: str) -> Admission | None:
         assert self._store is not None
-        rows = await self._store.tasks.run(self._store.tasks.work_by_scope, request.scope)
+        rows = await self._store.tasks.run(self._store.tasks.work_by_scope, scope)
         if rows is None:
             return None
         work = await self._store.get(rows)
         if work is None:
             return None
-        if work.request_digest != request.request_digest:
+        if work.request_digest != digest:
             return Admission(
                 self,
                 Decision.REJECTED.value,
                 work=work,
                 reason=ReasonCode.IDEMPOTENCY_CONFLICT,
-                capacity=self.capacity(request.budget_key, reason=ReasonCode.IDEMPOTENCY_CONFLICT),
+                capacity=self.capacity(budget_key, reason=ReasonCode.IDEMPOTENCY_CONFLICT),
             )
         return self._replay(work)
+
+    async def lookup(
+        self, *, budget_key: str, session_key: str, idempotency_key: str, digest: str
+    ) -> Admission | None:
+        """The replay (or conflict) a send under this key gets, or None when it is new.
+
+        Reads only; nothing is accepted. A send handler asks this before it
+        writes anything, so a retry of accepted work writes no second row.
+        """
+        if not self.enabled or self._store is None:
+            return None
+        await self.ensure_ready()
+        from kiro_crew.shared_crew.admission import idempotency_scope
+
+        try:
+            scope = idempotency_scope(budget_key, session_key, idempotency_key)
+        except ContractError:
+            return None
+        try:
+            return await self._existing_scope(scope, digest, budget_key)
+        except Exception:
+            logger.warning("shared crew: idempotency lookup failed", exc_info=True)
+            return None
+
+    def note_queue_id(self, work_id: str, queue_id: str) -> None:
+        """Remember which session-queue entry carries parked *work_id* (bounded, in memory)."""
+        if not work_id or not queue_id:
+            return
+        self._queue_ids[work_id] = queue_id
+        self._queue_ids.move_to_end(work_id)
+        while len(self._queue_ids) > _QUEUE_IDS_MAX:
+            self._queue_ids.popitem(last=False)
+
+    def queue_id_for(self, work_id: str) -> str:
+        return self._queue_ids.get(work_id, "")
+
+    async def start_parked(self, work_ids: list[str]) -> Admission | None:
+        """Hand a session drain's parked messages to the fair queue as one turn.
+
+        The first live parked id becomes the turn's work; the others, merged
+        into the same turn, end with its outcome. None when none of them is
+        still parked here (a restart, an expiry): the caller admits afresh.
+        """
+        if not self.enabled or self._store is None:
+            return None
+        primary: _Live | None = None
+        followers: list[_Live] = []
+        for work_id in work_ids:
+            live = self._live.get(work_id)
+            if live is None or live.work.state is not S.QUEUED:
+                continue
+            if not self._scheduler.is_parked(work_id):
+                continue
+            if primary is None:
+                primary = live
+            else:
+                followers.append(live)
+        if primary is None:
+            return await self._cancelled_parked(work_ids)
+        now = self._clock()
+        result = self._scheduler.submit_parked(
+            primary.work.work_id, expires_at=now + self._limits.queue_expiry_seconds
+        )
+        if result is None:
+            return None
+        for follower in followers:
+            self._scheduler.cancel_queued(follower.work.work_id)
+            follower.merged_into = primary.work.work_id
+            primary.followers.append(follower.work.work_id)
+        if result.decision is Decision.REJECTED:
+            await self._end(primary, S.CANCELLED, reason=result.reason)
+            return Admission(
+                self,
+                Decision.REJECTED.value,
+                work=primary.work,
+                reason=result.reason,
+                capacity=self.capacity(primary.work.budget_key, reason=result.reason),
+            )
+        if result.decision is Decision.ADMITTED:
+            self._schedule_promotions((result.ticket,) + tuple(result.also_admitted))
+        else:
+            self._schedule_promotions(result.also_admitted)
+        return Admission(
+            self,
+            result.decision.value,
+            work=primary.work,
+            reason=result.reason,
+            capacity=self.capacity(primary.work.budget_key, reason=result.reason),
+        )
+
+    async def _cancelled_parked(self, work_ids: list[str]) -> Admission | None:
+        """A refusal when a person cancelled every one of *work_ids*, else None."""
+        assert self._store is not None
+        cancelled: AcceptedWork | None = None
+        for work_id in work_ids:
+            try:
+                work = await self._store.get(work_id)
+            except Exception:
+                return None
+            if work is None or work.reason is not ReasonCode.CANCELLED_BY_USER:
+                return None
+            cancelled = cancelled or work
+        if cancelled is None:
+            return None
+        return Admission(
+            self,
+            Decision.REJECTED.value,
+            work=cancelled,
+            reason=ReasonCode.CANCELLED_BY_USER,
+            capacity=self.capacity(cancelled.budget_key),
+        )
+
+    async def _settle_followers(self, live: _Live) -> None:
+        """End every message merged into *live*'s turn with *live*'s own outcome."""
+        assert self._store is not None
+        target = live.work.state
+        for work_id in live.followers:
+            follower = self._live.get(work_id)
+            if follower is None or follower.work.state in TERMINAL:
+                continue
+            extra = {MERGED_INTO_KEY: live.work.work_id}
+            try:
+                if target in (S.COMPLETED, S.FAILED):
+                    for step in (S.ADMITTED, S.RUNNING):
+                        if follower.work.state is not step:
+                            follower.work = await self._store.advance(follower.work, step)
+                    follower.work = await self._store.advance(
+                        follower.work,
+                        target,
+                        reason=live.work.reason,
+                        runtime=self._stopped_ref(follower),
+                        extra=extra,
+                    )
+                else:
+                    end = S.EXPIRED if target is S.EXPIRED else S.CANCELLED
+                    follower.work = await self._store.advance(
+                        follower.work, end, reason=live.work.reason, extra=extra
+                    )
+            except (StaleRevision, InvalidTransition):
+                current = await self._store.get(work_id)
+                if current is not None:
+                    follower.work = current
+            except Exception:
+                logger.warning("shared crew: settling merged %s failed", work_id, exc_info=True)
+            follower.self_stopped = True
+            follower.ended.set()
+            self._live.pop(work_id, None)
 
     def _replay(self, work: AcceptedWork) -> Admission:
         live = self._live.get(work.work_id)
@@ -790,6 +947,13 @@ class AdmissionService:
         except BaseException:
             coro.close()
             raise
+        if self.stopping():
+            # The host is going away: work that never started is cancelled, not run.
+            coro.close()
+            await self._end(
+                live, S.CANCELLED, reason=None, extra={RECONCILE_DETAIL_KEY: STOPPED_BEFORE_START}
+            )
+            raise AdmissionEnded(live.work)
         refusal = await self._revalidate(live, revalidate)
         if refusal is not None:
             coro.close()
@@ -844,7 +1008,7 @@ class AdmissionService:
     ) -> ReasonCode | None:
         if live.cancel_reason is not None:
             return live.cancel_reason
-        if live.work.state is S.QUEUED and self._clock() >= live.work.expires_at:
+        if live.work.state is S.QUEUED and self._clock() >= live.ticket.expires_at:
             return ReasonCode.QUEUE_EXPIRED
         if live.request.policy_version != self.policy_version():
             return ReasonCode.POLICY_CHANGED
@@ -917,6 +1081,10 @@ class AdmissionService:
         if live.cancel_reason is not None:
             target = S.CANCELLED
             reason = live.cancel_reason
+        elif target is S.COMPLETED and state is S.RUNNING and self.stopping():
+            # The host's stop ended this turn: it was interrupted, not completed.
+            target = S.CANCELLED
+            extra = {RECONCILE_DETAIL_KEY: STOPPED_WHILE_RUNNING}
         try:
             if state is S.RUNNING and target is S.CANCELLED:
                 live.work = await self._store.advance(live.work, S.CANCELLING, reason=reason)
@@ -927,7 +1095,7 @@ class AdmissionService:
                     target,
                     reason=reason,
                     runtime=stopped,
-                    extra=extra if target is S.FAILED else None,
+                    extra=extra,
                 )
         except (StaleRevision, InvalidTransition):
             current = await self._store.get(live.work.work_id)
@@ -935,6 +1103,7 @@ class AdmissionService:
                 live.work = current
         except Exception:
             logger.warning("shared crew: settling %s failed", live.work.work_id, exc_info=True)
+        await self._settle_followers(live)
         live.ended.set()
         self._maybe_release(live)
 
@@ -962,7 +1131,14 @@ class AdmissionService:
             root.children.discard(work_id)
             self._maybe_release(root)
 
-    async def _end(self, live: _Live, state: OperationState, *, reason: ReasonCode | None) -> None:
+    async def _end(
+        self,
+        live: _Live,
+        state: OperationState,
+        *,
+        reason: ReasonCode | None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
         """Move unstarted or child work straight to a terminal *state*."""
         assert self._store is not None
         if live.work.state is S.QUEUED:
@@ -973,12 +1149,13 @@ class AdmissionService:
             if live.work.state not in TERMINAL:
                 stopped = self._stopped_ref(live) if live.work.runtime is not None else None
                 live.work = await self._store.advance(
-                    live.work, state, reason=reason, runtime=stopped
+                    live.work, state, reason=reason, runtime=stopped, extra=extra
                 )
         except (StaleRevision, InvalidTransition):
             current = await self._store.get(live.work.work_id)
             if current is not None:
                 live.work = current
+        await self._settle_followers(live)
         live.self_stopped = True
         live.ended.set()
         self._maybe_release(live)
@@ -1071,7 +1248,8 @@ class AdmissionService:
         if not self.enabled or self._store is None:
             return {}
         at = self._clock() if now is None else now
-        counts = {"expired": 0, "deadline": 0, "children": 0, "proven": 0}
+        counts = {"expired": 0, "deadline": 0, "children": 0, "proven": 0, "parked": 0}
+        counts["parked"] = await self._sweep_parked(at)
         for ticket in self._scheduler.expire(at):
             live = self._live.get(ticket.work_id)
             if live is not None:
@@ -1118,11 +1296,64 @@ class AdmissionService:
                 counts["children"] += 1
         for live in list(self._live.values()):
             if live.awaiting_proof and live.work.runtime is not None:
-                liveness = await asyncio.to_thread(self._liveness, live.work.runtime)
+                liveness = await asyncio.to_thread(self._proof, live)
                 if liveness is Liveness.STOPPED:
                     await self._finish_reconcile(live)
                     counts["proven"] += 1
+        counts["slices"] = await self.sweep_slices(at)
         return counts
+
+    async def _sweep_parked(self, at: float) -> int:
+        """End parked messages past their expiry whose queue entry is gone.
+
+        A parked message waits on its session's own turn, so its expiry is a
+        check-in, not a deadline: while its queue entry still exists it waits
+        on. With no way to ask (no probe) it expires like queued work.
+        """
+        ended = 0
+        for ticket in self._scheduler.parked_tickets():
+            if ticket.expires_at > at:
+                continue
+            live = self._live.get(ticket.work_id)
+            if live is None:
+                self._scheduler.cancel_queued(ticket.work_id)
+                continue
+            present: bool | None = None
+            if self._parked_present is not None:
+                try:
+                    present = bool(self._parked_present(ticket.work_id))
+                except Exception:  # noqa: BLE001 -- unknown keeps the default expiry
+                    present = None
+            if present:
+                ticket.expires_at = at + self._limits.queue_expiry_seconds
+                continue
+            if present is False:
+                await self._end(
+                    live, S.CANCELLED, reason=None, extra={RECONCILE_DETAIL_KEY: "queue_entry_gone"}
+                )
+            else:
+                await self._end(live, S.EXPIRED, reason=ReasonCode.QUEUE_EXPIRED)
+            ended += 1
+        return ended
+
+    async def sweep_slices(self, at: float | None = None, *, force: bool = False) -> int:
+        """Release per-principal slices with no live work; see ``admission_runtime``."""
+        if self._slices is None:
+            return 0
+        return await _runtime.sweep_idle_slices(
+            self._slices,
+            budgets={live.work.budget_key for live in self._live.values()},
+            idle=self._slice_idle,
+            now=self._clock() if at is None else at,
+            busy=self._slice_busy,
+            force=force,
+        )
+
+    async def release_stale_slices(self) -> int:
+        """Release per-principal slices an earlier gateway process left behind."""
+        if self._slices is None or not self._limits.containment_enabled:
+            return 0
+        return await _runtime.release_stale_slices(self._slices, busy=self._slice_busy)
 
     async def _settle_child(self, live: _Live, state: OperationState) -> None:
         assert self._store is not None
@@ -1200,11 +1431,12 @@ class AdmissionService:
                 self._relaunches.add(task)
                 task.add_done_callback(self._relaunches.discard)
                 return
-            await self._store.advance(
+            ended = await self._store.advance(
                 work,
                 S.CANCELLED,
                 extra={RECONCILE_DETAIL_KEY: RECONCILE_RESTARTED_BEFORE_START},
             )
+            self._tell_reconciled(ended)
             return
         if work.state in (S.RUNNING, S.CANCELLING):
             work = await self._store.advance(work, S.RECONCILING, extra=detail_started)
@@ -1224,6 +1456,47 @@ class AdmissionService:
         liveness = await asyncio.to_thread(self._liveness, runtime)
         if liveness is Liveness.STOPPED:
             await self._finish_reconcile(live)
+            return
+        if liveness is Liveness.ALIVE:
+            # The previous process's runtime outlived it and has no reader: stop
+            # it. The slot stays held until the stop is proven (``tick``), and
+            # the proof watches only the scopes found now, so a later runtime of
+            # the same person in the same slice does not hold this record open.
+            unit = runtime.containment_unit
+            if unit.endswith(".slice"):
+                found = await asyncio.to_thread(self._slice_busy, unit)
+                live.orphan_scopes = tuple(found or ())
+            live.reaped = await asyncio.to_thread(self._reaper, runtime)
+            logger.warning(
+                "shared crew: %s's runtime outlived the restart; stopped %d scope(s)",
+                work.work_id,
+                live.reaped,
+            )
+            if await asyncio.to_thread(self._proof, live) is Liveness.STOPPED:
+                await self._finish_reconcile(live)
+
+    def _proof(self, live: _Live) -> Liveness:
+        """Liveness of a reconciling record's runtime. Blocking: call off-loop."""
+        runtime = live.work.runtime or RuntimeOwnershipRef(execution_id=live.work.work_id)
+        if not live.orphan_scopes:
+            return self._liveness(runtime)
+        answers = [
+            self._liveness(replace(runtime, containment_unit=scope)) for scope in live.orphan_scopes
+        ]
+        if any(a is Liveness.ALIVE for a in answers):
+            return Liveness.ALIVE
+        if any(a is Liveness.UNKNOWN for a in answers):
+            return Liveness.UNKNOWN
+        return Liveness.STOPPED
+
+    def _tell_reconciled(self, work: AcceptedWork) -> None:
+        listener = self._reconcile_listener
+        if listener is None:
+            return
+        try:
+            listener(work)
+        except Exception:  # noqa: BLE001 -- the note is best effort
+            logger.debug("shared crew: reconcile listener failed", exc_info=True)
 
     async def _finish_reconcile(self, live: _Live) -> None:
         """A reconciling root whose runtime is proven stopped: it may have run; never replay."""
@@ -1232,8 +1505,12 @@ class AdmissionService:
         target = S.CANCELLED if prior_cancel else S.UNKNOWN_OUTCOME
         try:
             live.work = await self._store.advance(
-                live.work, target, runtime=self._stopped_ref(live)
+                live.work,
+                target,
+                runtime=self._stopped_ref(live),
+                extra={ORPHANS_REAPED_KEY: live.reaped} if live.reaped else None,
             )
+            self._tell_reconciled(live.work)
         except (StaleRevision, InvalidTransition):
             pass
         live.awaiting_proof = False
@@ -1320,17 +1597,45 @@ def install_service(service: AdmissionService | None) -> None:
     _last_config_at = time.monotonic()
     from kiro_crew.taskq import lanes
 
+    if service is not None and _HOOKS != HostHooks():
+        _apply_hooks(service)
     if service is None:
         _SERVICE_LOOP = None
         lanes.set_lane_resolver(None)
         _containment.install_slice_manager(None)
         _containment.publish_report(None)
         return
-    _containment.publish_report(service._report if service.enabled else None)
+    _containment.publish_report(service.published_report())
     lanes.set_lane_resolver(service.budget_for_session if service.enabled else None)
     _containment.install_slice_manager(
         service._slices if service.enabled and service.limits.containment_enabled else None
     )
+
+
+@dataclass
+class HostHooks:
+    """What the hosting gateway tells every admission service it builds."""
+
+    shutting_down: Callable[[], bool] | None = None
+    parked_present: Callable[[str], bool] | None = None
+    reconciled: ReconcileListener | None = None
+
+
+_HOOKS = HostHooks()
+
+
+def install_host_hooks(hooks: HostHooks | None) -> None:
+    """Install the gateway's hooks (``shared_crew.host_hooks``); None removes them."""
+    global _HOOKS
+    _HOOKS = hooks or HostHooks()
+    if _SERVICE is not None:
+        _apply_hooks(_SERVICE)
+
+
+def _apply_hooks(service: AdmissionService) -> None:
+    service.set_shutdown_probe(_HOOKS.shutting_down)
+    service.set_parked_probe(_HOOKS.parked_present)
+    service.set_reconcile_listener(_HOOKS.reconciled)
 
 
 def installed_service() -> AdmissionService | None:
@@ -1420,8 +1725,25 @@ async def startup_check() -> _containment.ContainmentReport | None:
     try:
         service = await current_service()
         if not service.enabled:
-            return None
+            if not service.limits.hard_limits:
+                return None
+            report = _containment.admission_off_report()
+            _containment.publish_report(report)
+            logger.error(
+                "shared crew: hard_limits is on but admission_enabled is off; "
+                "no runtime will start until admission is enabled or hard_limits is off"
+            )
+            return report
         report = await service.containment_report(refresh=True)
+        # Reconcile durable work now, so capacity reads the truth from the start,
+        # and release the per-principal slices an earlier process left behind.
+        await service.ensure_ready()
+        try:
+            released = await service.release_stale_slices()
+            if released:
+                logger.info("shared crew: released %d idle principal slice(s)", released)
+        except Exception:  # noqa: BLE001 -- cleanup never stops the gateway
+            logger.debug("shared crew: stale slice cleanup failed", exc_info=True)
     except Exception as exc:  # noqa: BLE001 -- fail closed below, never stop the gateway
         logger.warning("shared crew: startup containment check raised", exc_info=True)
         report = _containment.failed_report(
@@ -1444,15 +1766,27 @@ async def startup_check() -> _containment.ContainmentReport | None:
     return report
 
 
+async def shutdown_cleanup() -> int:
+    """Gateway stop: release every idle per-principal slice this process sized."""
+    service = _SERVICE
+    if service is None or not service.enabled:
+        return 0
+    try:
+        return await service.sweep_slices(force=True)
+    except Exception:  # noqa: BLE001 -- cleanup never blocks the stop
+        logger.debug("shared crew: slice cleanup at stop failed", exc_info=True)
+        return 0
+
+
 def _configured_hard_limits() -> bool:
-    """Whether config asks for hard limits (admission on too); off when it cannot be read."""
+    """Whether config asks for hard limits; off when it cannot be read."""
     try:
         from kiro_crew.config.sections_shared_crew import load_shared_crew_config
 
         cfg = load_shared_crew_config()
     except Exception:  # noqa: BLE001 -- unreadable config keeps the default (off)
         return False
-    return bool(cfg.admission_enabled and cfg.hard_limits)
+    return bool(cfg.hard_limits)
 
 
 def _start_ticker(service: AdmissionService, *, period: float = 1.0) -> None:
@@ -1533,12 +1867,39 @@ def scope_principal_for_session(session_key: str) -> str | None:
     return service.budget_for_session(session_key)
 
 
+#: Header an internal caller (a runtime's MCP server) names its own session with.
+CALLER_SESSION_HEADER = "X-Session-Key"
+
+
+def internal_initiator(request: Any) -> str | None:
+    """The person whose work runs in an internal request's calling session, or None.
+
+    The internal secret proves the call came from a runtime this gateway
+    started, and that runtime names its own session. The principal whose work
+    is (or last was) running there is the initiator a tool call carries.
+    """
+    service = _SERVICE
+    if service is None or not service.enabled:
+        return None
+    headers = getattr(request, "headers", None)
+    raw = headers.get(CALLER_SESSION_HEADER, "") if headers is not None else ""
+    session = raw.strip() if isinstance(raw, str) else ""
+    if not session or len(session) > 512:
+        return None
+    return service.budget_for_session(session)
+
+
 def actor_budget(request: Any, *, automation: bool = False) -> str:
-    """The budget key for *request*: its actor's principal, automation's, or Unknown."""
+    """The budget key for *request*: its actor's principal, its initiator's, or Unknown.
+
+    An internal request (work an agent starts from inside a turn) is charged
+    to the person whose turn runs in the calling session, so automation never
+    adds a second budget to anyone; with no such person, to automation.
+    """
     actor = actor_of(request)
     if actor is not None and not actor.principal.is_unknown:
         if automation and actor.transport is Transport.INTERNAL:
-            return AUTOMATION_PRINCIPAL.id
+            return internal_initiator(request) or AUTOMATION_PRINCIPAL.id
         return actor.principal.id
     if automation:
         return AUTOMATION_PRINCIPAL.id
@@ -1552,11 +1913,22 @@ __all__ = [
     "AdmissionRefused",
     "AdmissionService",
     "FAILURE_DETAIL_KEY",
+    "SLICE_IDLE_SECONDS",
+    "HostHooks",
+    "install_host_hooks",
+    "MERGED_INTO_KEY",
+    "ORPHANS_REAPED_KEY",
+    "PARKED_KEY",
+    "STOPPED_BEFORE_START",
+    "STOPPED_WHILE_RUNNING",
     "IDEMPOTENCY_HEADER",
     "RECONCILE_DETAIL_KEY",
     "TASK_STORE_UNAVAILABLE_CODE",
     "actor_budget",
+    "CALLER_SESSION_HEADER",
     "coded_json_response",
+    "internal_initiator",
+    "shutdown_cleanup",
     "actor_of",
     "admit_and_run",
     "current_service",

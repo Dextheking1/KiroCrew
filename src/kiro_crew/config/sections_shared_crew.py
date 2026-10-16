@@ -158,7 +158,8 @@ class SharedCrewConfig:
             "Require Enforced Limits",
             "Refuse to admit work when cgroup v2, a trusted systemd-run, a reachable "
             "user bus, or memory and pids delegation is missing, instead of running "
-            "without per-person limits. Off by default.",
+            "without per-person limits. Needs fair admission on: with fair admission "
+            "off, no agent runtime starts. Off by default.",
         ),
     )
     principal_cpu_quota_percent: int = field(

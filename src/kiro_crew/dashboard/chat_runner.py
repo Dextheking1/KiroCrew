@@ -5513,9 +5513,9 @@ async def _start_next_queued_turn(
     # from the server-stamped author on the entries. Entries restored from disk
     # or written by different people name no one, so the turn falls to the
     # bounded Unknown or automation budget (shared_crew.turn_gate).
-    from kiro_crew.shared_crew.turn_gate import initiated_by, queued_initiator
+    from kiro_crew.shared_crew.turn_gate import initiated_by, queued_initiator, queued_work
 
-    with initiated_by(queued_initiator(consumed)):
+    with initiated_by(queued_initiator(consumed)), queued_work(consumed):
         task = spawn_guarded_turn(
             state,
             slot,

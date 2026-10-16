@@ -132,7 +132,12 @@ whois cache and executor, and is read by neither the pin (a direct peer stays
 
 Loopback alone is not proof of a trusted proxy: a loopback request carrying any
 forwarding header (`origin.is_proxied_request`) is never the local operator, and
-its forwarded address is attributed only through the daemon. A
+its forwarded address is attributed only through the daemon, and only after the kernel
+proves the client end of the loopback socket belongs to `tailscaled`
+(`tailnet_proxy_proof.loopback_client_is_daemon`, Linux only; elsewhere the serve row
+never resolves and such a caller is Unknown). A process running as the gateway's own
+user is never that proof, so a local token holder adding `X-Forwarded-For` is Unknown,
+not the person it names. A
 `Tailscale-User-Login` header that disagrees with the daemon drops the
 attribution. A non-loopback peer that sends `X-Forwarded-For` is a proxy on
 another node and is Unknown. Funnel, other reverse proxies and unverifiable
@@ -242,6 +247,15 @@ be reported as recorded. An action whose own durable row already names its actor
 which does not make the caller wait and makes no audit claim in the response; a
 failed write is logged.
 
+Audited sites, all through `schedule_action_audit`:
+
+| Action | Site | Initiator | Responder | Outcome |
+|---|---|---|---|---|
+| `session_create` | `chat_api.slot_create` | request actor | | `accepted` |
+| `message` | `chat_api.chat_send` | request actor | | `accepted` |
+| `cancel` | `routes_admission.api_work_cancel`, target the work id | request actor | | `applied`, or `conflict` on a stale or illegal revision |
+| `approval`, `question_answer` | `DecisionRegistry.resolve` (`decisions.audit_decision_response`), target the decision id | the decision's initiator | the verified responder | `applied` for the winner, `conflict` for a different response that lost; a replay of the winner and a response to nothing pending add no record |
+
 ## 4. Admission and accepted work
 
 ### Operation state machine
@@ -295,6 +309,15 @@ for `IDEMPOTENCY_TTL_SECONDS`. A replay with the same `request_digest` returns t
 existing `AcceptedWork`; a different digest is `idempotency_conflict`. A retry never
 runs a prompt twice.
 
+A chat send asks `admission_entry.chat_replay` before it writes anything, so a retry
+under a key already accepted, whether the first send started a turn, queued behind a
+busy session or already finished, answers JSON with `replayed: true`, the recorded
+`admission` and, for a queued message, its `queue_id`. It appends no row, queues
+nothing, starts no turn and opens no stream. Only a client-supplied key can match;
+every chat path records the same digest (`admission_entry.chat_digest`), so a retry
+matches whichever path the first send took. A replayed `Admission` handle closes its
+coroutine unrun.
+
 ### Responses
 
 A refusal or conflict answers `admission.error_body`: the dashboard's
@@ -320,6 +343,18 @@ Crew have outstanding (`principal_children`, `crew_children`) and refuses past i
 Background runs (task runner, workflows) cannot wait in a request, so they start
 now or are refused with the active-limit reason.
 
+A message sent to a session whose turn is running (or held behind its running
+subagents) waits for that turn, not for capacity. It is accepted as parked work
+(`admit(park=True)`, `FairScheduler.park`): durably `queued`, charged to its sender,
+bounded by `principal_queue` and `crew_queue` and `max_request_bytes` like any root,
+and counted in `queued` capacity, but never dispatched. The queue entry carries its
+work id (`admission_entry.QUEUED_WORK_META_KEY`); the session's drain runs the turn
+as that work (`turn_gate.queued_work`, `AdmissionService.start_parked`), which takes
+its place in the fair queue then. Messages a drain merges into one turn end with that
+turn's outcome (`extra.merged_into`). A parked message's expiry is a check-in: while
+its queue card exists it waits on; once the card is gone it ends `cancelled`
+(`queue_entry_gone`). A card cancelled through the work API does not run.
+
 Across principals the scheduler is deficit round robin. Principals with queued roots
 sit in a ring; a visit adds the quantum (1) to the principal's deficit and admits
 while the deficit covers the head ticket's weight (1) and both scopes have room. A
@@ -342,7 +377,11 @@ principal is `p_unknown`, one shared bucket. A child inherits the budget and roo
 the work running in its parent session (`budget_for_session`), so a collaborator
 steering or spawning inside someone else's turn charges that turn's initiator. Cron
 and loopback automation with no recorded initiator charge `Principal.system("automation")`,
-which has the same limits as anyone.
+which has the same limits as anyone. Work an agent starts from inside a turn reaches
+the gateway on the internal transport naming its calling session (`X-Session-Key`,
+set by the in-process MCP broker); it is charged to the principal whose work runs
+in that session (`admission_gate.internal_initiator`), so a person cannot gain a
+second budget through automation.
 
 ### Accepted work, revalidation and recovery
 
@@ -362,6 +401,12 @@ chat turn holds the slot reservation; while it waits a later send on that slot
 cannot steer into it (`admission_entry.admission_pending`) and queues instead, so a
 queued prompt is never delivered as a steer.
 
+The gateway's own stop (a signal or an in-app restart, read through
+`host_hooks.shutdown_probe`) never records `completed` for work it cut: a running
+turn that returns once the stop began ends `cancelled` with
+`extra.reconcile_detail = host_stopped_while_running`, and admitted or queued work
+that would start then ends `cancelled` with `host_stopped_before_start`, unrun.
+
 Deadlines: `root_deadline_seconds` for roots, `child_deadline_seconds` for children
 and background runs, enforced by `AdmissionService.tick` (once a second): it cancels
 the work and records `cancelled` with `run_deadline`. A root's slot is released only
@@ -369,19 +414,24 @@ after its own task ended and every child it started settled; a child's slot only
 after its owner (subagent manager, task runner, workflow registry) reports it
 terminal.
 
-On the first admission of a process, `ensure_ready` reconciles every non-terminal row
-before admitting anything:
+At gateway start (`startup_check`), and in any case before the first admission or
+capacity read of a process, `ensure_ready` reconciles every non-terminal row:
 
 | Found | Becomes | Capacity |
 |---|---|---|
 | `queued`, `admitted` | `reconciling`, then `queued` and relaunched when a relauncher is registered for its operation and payload, else `cancelled` with `extra.reconcile_detail = host_restarted_before_start` | held only if requeued |
 | `running`, `cancelling` with no unit of its own | `reconciling` -> `unknown_outcome` (`cancelled` if a cancel was asked) | released once proven stopped |
-| `running` with a live scope unit | `reconciling` until `systemctl is-active` says stopped | held |
+| `running` with a live scope unit, or a principal slice holding a populated `kirocrew-rt-*.scope` | `reconciling`; the scopes found are stopped (`extra.orphans_reaped`), and the row ends `unknown_outcome` once `systemctl is-active` says each stopped | held |
 | child or probed background run | `reconciling`; its owner reconciles the run and the probe settles the row | held |
 
 Nothing that may have run is replayed. No relauncher is registered for chat turns in
 this build, so a chat turn queued across a restart ends `cancelled`; its user row is
-in the transcript to resend.
+in the transcript to resend, and the session says so in an error row
+(`host_hooks.reconcile_note`, also for `unknown_outcome`). A parked message is the
+exception: its queue entry is saved with the session and drains again after the
+restart. A session that has never been saved gets its metadata line before its first
+work is accepted (`host_hooks.ensure_slot_recorded`), so a crash right after the
+accept cannot leave a work record for a session that is gone.
 
 ### Containment
 
@@ -391,7 +441,13 @@ a child of the instance slice, sized by `systemctl --user set-property --runtime
 (`principal_cpu_quota_percent`, `principal_memory_max_mb`, `principal_tasks_max`); the
 instance slice gets `crew_cpu_quota_percent`. `sandbox_slice.cgroup_scope_argv` picks
 the principal slice from the `principal_scope` context the gate sets around admitted
-work and around subagent run tasks. A shared session's runtime is one process, so it
+work and around subagent run tasks. A principal slice nothing of its principal has
+used for `SLICE_IDLE_SECONDS` (600) is stopped and its runtime drop-ins removed
+(`systemctl --user stop` then `revert`), only while no runtime scope in it holds a
+process; the gateway's stop releases every idle one at once and its start releases
+those an earlier process left (`AdmissionService.sweep_slices`,
+`release_stale_slices`). The slice is forgotten before it is stopped, so a spawn
+racing the release lands in the instance slice. A shared session's runtime is one process, so it
 stays in the slice of the initiator whose turn started it; later turns by others are
 bounded by admission counts, not that slice.
 
@@ -411,6 +467,10 @@ when the probe or the startup check raised) into `containment_unavailable`
 (503) at admission, and `runtime_start` refuses every runtime spawn and `session/new`
 with `ContainmentUnavailable` (the backstop for entry points that do not reach the
 gate). With it off the gate admits and the capacity answer says what holds.
+`hard_limits` needs fair admission, which applies the limits: with
+`admission_enabled` off and `hard_limits` on, nothing would apply them, so the
+gateway fails closed with `admission_disabled` (every admission and every runtime
+start refused, logged at ERROR at start) rather than running unlimited.
 
 ### Defaults and API
 
@@ -426,7 +486,8 @@ session start gate's automatic width), `crew_child_limit` 0 (twice the Crew widt
 `principal_tasks_max` 8192, `crew_cpu_quota_percent` 2400. These are proof-of-concept
 test targets measured on one host, not product commitments.
 
-`GET /api/shared-crew/capacity` answers `CapacityResponse` plus `effective` (every
+`GET /api/shared-crew/capacity` reconciles first (`ensure_ready`), so after a
+restart it counts work whose runtime is still alive, and answers `CapacityResponse` plus `effective` (every
 resolved limit), `containment` (`ContainmentReport.to_dict`) and `fairness`.
 `GET /api/shared-crew/work?session_key=` lists public records (the viewer's own without
 `session_key`). The key may be a dashboard tab's slot key: it is read as the session
@@ -456,6 +517,13 @@ is never answered with an eviction of someone else's entry. Disconnect and expir
 push a fresh `shared_crew.presence` frame for every session they changed; the
 socket's status tick sweeps stale entries.
 
+In the browser, typing is reported from the composer's user-edit handler
+(`typingSignal.useComposerEditWithTyping`, which ChatInput calls only for the
+user's own edits), not from the draft store: the store keeps one identity and a
+session switch writes it too. The collab strip's `usePresenceReporter` listens to
+that content-free signal and sends `typing`, then `viewing` after
+`TYPING_HOLD_MS` without a keystroke.
+
 A shared decision (`collab.SharedDecision`) is a tool approval or agent question that
 every collaborator sees and any one may answer. `classify_response` decides a response
 under the resolver's lock: the first response to see `pending` wins, a retry with the
@@ -478,9 +546,21 @@ before the registry sees a response. A client that sends `response_id` gets 409
 `already_resolved` with the decision on a lost race; a client that sends none keeps
 the existing 404. A wait that ends through a path with no verified responder closes
 the decision with an Unknown responder, and an unanswered one closes as `expired` or
-`withdrawn`. Approval decision frames ride `broadcast_ws` like approval frames;
-question decision frames go to owner sockets only, the audience the question card
-has. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
+`withdrawn`. Approval decision frames ride `broadcast_ws` like approval frames.
+
+An agent question belongs to every collaborator. `collaborators.is_collaborator_request`
+admits the owner (`is_owner_dashboard_request`) and a dashboard-user session whose
+verified actor is a person a membership boundary admitted: provenance
+`tailscale_serve` (allowlisted and pinned by the middleware) or `enterprise`. A
+direct tailnet peer, a Slack-allowlist dashboard token, an app token, an internal
+caller and Unknown are not collaborators and keep the owner gate's 403.
+`GET /api/ask-question/pending`, `POST /api/ask-question/{id}/answer` and
+`POST /api/ask-question/dismiss` accept every collaborator; opening a question
+(`POST /api/ask-question`) stays owner-only. The card frames (`question_card`,
+`question_card_resolved`) and the question decision frame go to the owner sockets
+and to every collaborator socket (`collaborators.broadcast_to_collaborators`, which
+reads the socket's `_shared_crew_actor`), the same audience the pending read has.
+Nothing else the owner set receives reaches a collaborator socket. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
 `routes_collab`) answer the same state for a reconnecting tab.
 
 Message attribution. The session's creator is its default owner, shown on the

@@ -1817,6 +1817,17 @@ async def start_dashboard(
 
     app.on_startup.append(_shared_crew_startup)
 
+    async def _shared_crew_cleanup(_app: web.Application) -> None:
+        # Release the idle per-principal slices this process sized.
+        from kiro_crew.shared_crew.admission_gate import shutdown_cleanup
+
+        try:
+            await asyncio.wait_for(shutdown_cleanup(), timeout=10)
+        except Exception:  # noqa: BLE001 - cleanup never blocks the stop
+            logger.debug("shared crew: slice cleanup at stop failed", exc_info=True)
+
+    app.on_cleanup.append(_shared_crew_cleanup)
+
     # Register built-in apps (idempotent — surfaces baked-in features in App Store).
     # Runs on the executor: escalation cleanup can traverse/delete legacy app
     # dirs, which must not block the event loop during startup.

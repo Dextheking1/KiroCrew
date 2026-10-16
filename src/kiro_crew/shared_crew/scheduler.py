@@ -120,6 +120,8 @@ class _Principal:
     deficit: int = 0
     root_active: int = 0
     child_active: int = 0
+    #: Parked tickets (waiting on their own session's turn, not on capacity).
+    parked: int = 0
 
 
 class FairScheduler:
@@ -136,6 +138,9 @@ class FairScheduler:
         self._active: dict[str, Ticket] = {}
         #: work_id -> ticket for every queued ticket.
         self._queued: dict[str, Ticket] = {}
+        #: work_id -> ticket for every parked ticket: counted against queue depth,
+        #: never dispatched until :meth:`submit_parked` hands it to the queue.
+        self._parked: dict[str, Ticket] = {}
         self._crew_root_active = 0
         self._crew_child_active = 0
         self._seq = itertools.count(1)
@@ -195,6 +200,8 @@ class FairScheduler:
     def cancel_queued(self, work_id: str) -> Ticket | None:
         """Drop a queued ticket. Returns it, or None when it was not queued."""
         with self._lock:
+            if work_id in self._parked:
+                return self._unpark(work_id)
             ticket = self._queued.pop(work_id, None)
             if ticket is None:
                 return None
@@ -233,6 +240,62 @@ class FairScheduler:
             ticket.seq = ticket.seq or next(self._seq)
             self._activate(ticket)
 
+    def park(self, ticket: Ticket) -> SubmitResult:
+        """Count *ticket* against queue depth while it waits on its own session.
+
+        A message sent to a session whose turn is running waits for that turn,
+        not for capacity, so it is not dispatched; but it is bounded by the same
+        principal and Crew queue depths and shows as queued. Its session's drain
+        hands it to the fair queue with :meth:`submit_parked`.
+        """
+        with self._lock:
+            if ticket.work_id in self._parked:
+                return SubmitResult(Decision.QUEUED, self._parked[ticket.work_id])
+            lim = self._limits
+            p = self._principal(ticket.budget_key)
+            if len(p.queue) + p.parked >= lim.principal_queue:
+                self._forget_if_idle(ticket.budget_key)
+                return SubmitResult(
+                    Decision.REJECTED,
+                    ticket,
+                    ReasonCode.PRINCIPAL_QUEUE_FULL,
+                    CapacityScope.PRINCIPAL,
+                )
+            if len(self._queued) + len(self._parked) >= lim.crew_queue:
+                self._forget_if_idle(ticket.budget_key)
+                return SubmitResult(
+                    Decision.REJECTED, ticket, ReasonCode.CREW_QUEUE_FULL, CapacityScope.CREW
+                )
+            ticket.slots = max(1, int(ticket.slots))
+            ticket.weight = max(1, int(ticket.weight))
+            ticket.seq = next(self._seq)
+            ticket.enqueued_at = self._clock()
+            self._parked[ticket.work_id] = ticket
+            p.parked += 1
+            return SubmitResult(Decision.QUEUED, ticket)
+
+    def submit_parked(self, work_id: str, *, expires_at: float) -> SubmitResult | None:
+        """Move a parked ticket into the fair queue (or straight to a slot). None if not parked.
+
+        Atomic: the ticket's own queue place is given up and retaken under one
+        lock, so a full queue cannot refuse work it already counted.
+        """
+        with self._lock:
+            ticket = self._parked.get(work_id)
+            if ticket is None:
+                return None
+            self._unpark(work_id)
+            ticket.expires_at = expires_at
+            return self._submit_root(ticket)
+
+    def is_parked(self, work_id: str) -> bool:
+        with self._lock:
+            return work_id in self._parked
+
+    def parked_tickets(self) -> tuple[Ticket, ...]:
+        with self._lock:
+            return tuple(sorted(self._parked.values(), key=lambda t: t.seq))
+
     # -- reads --------------------------------------------------------------
 
     def is_active(self, work_id: str) -> bool:
@@ -258,13 +321,13 @@ class FairScheduler:
             lim = self._limits
             principal = ScopeUsage(
                 active=p.root_active,
-                queued=len(p.queue),
+                queued=len(p.queue) + p.parked,
                 active_limit=lim.principal_active,
                 queue_limit=lim.principal_queue,
             )
             crew = ScopeUsage(
                 active=self._crew_root_active,
-                queued=len(self._queued),
+                queued=len(self._queued) + len(self._parked),
                 active_limit=lim.crew_active,
                 queue_limit=lim.crew_queue,
             )
@@ -282,6 +345,7 @@ class FairScheduler:
                 "crew_root_active": self._crew_root_active,
                 "crew_child_active": self._crew_child_active,
                 "queued": len(self._queued),
+                "parked": len(self._parked),
                 "ring": list(self._ring),
                 "principals": {
                     key: {
@@ -362,7 +426,7 @@ class FairScheduler:
             ticket.seq = next(self._seq)
             self._activate(ticket)
             return SubmitResult(Decision.ADMITTED, ticket)
-        if len(p.queue) >= lim.principal_queue:
+        if len(p.queue) + p.parked >= lim.principal_queue:
             self._forget_if_idle(ticket.budget_key)
             return SubmitResult(
                 Decision.REJECTED,
@@ -370,7 +434,7 @@ class FairScheduler:
                 ReasonCode.PRINCIPAL_QUEUE_FULL,
                 CapacityScope.PRINCIPAL,
             )
-        if len(self._queued) >= lim.crew_queue:
+        if len(self._queued) + len(self._parked) >= lim.crew_queue:
             self._forget_if_idle(ticket.budget_key)
             return SubmitResult(
                 Decision.REJECTED, ticket, ReasonCode.CREW_QUEUE_FULL, CapacityScope.CREW
@@ -453,9 +517,25 @@ class FairScheduler:
         if p is not None:
             p.deficit = 0
 
+    def _unpark(self, work_id: str) -> Ticket | None:
+        ticket = self._parked.pop(work_id, None)
+        if ticket is None:
+            return None
+        p = self._principals.get(ticket.budget_key)
+        if p is not None:
+            p.parked = max(0, p.parked - 1)
+            self._forget_if_idle(ticket.budget_key)
+        return ticket
+
     def _forget_if_idle(self, key: str) -> None:
         p = self._principals.get(key)
-        if p is not None and not p.queue and not p.root_active and not p.child_active:
+        if (
+            p is not None
+            and not p.queue
+            and not p.root_active
+            and not p.child_active
+            and not p.parked
+        ):
             self._principals.pop(key, None)
             self._leave_ring(key)
 

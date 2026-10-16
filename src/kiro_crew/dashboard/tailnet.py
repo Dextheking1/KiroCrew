@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from kiro_crew import github_runner
+from kiro_crew.dashboard.tailnet_proxy_proof import loopback_client_is_daemon
 from kiro_crew.dashboard.urls import is_loopback
 from kiro_crew.executors import subprocess_executor
 from kiro_crew.platform.context import redact_log_via_context
@@ -1200,8 +1201,9 @@ def is_forwarded_tailnet_request(request: web.Request, trust: TailnetTrust) -> b
 async def resolve_forwarded_peer(request: web.Request, trust: TailnetTrust) -> ForwardedPeer | None:
     """Resolve the daemon-verified peer behind a local proxy, or ``None``.
 
-    ``None`` covers every unresolvable case — trust off, non-loopback peer,
-    zero/multiple forwarded addresses, non-tailnet address, daemon absent or
+    ``None`` covers every unresolvable case — trust off, non-loopback peer, a
+    loopback client the kernel does not prove is ``tailscaled``
+    (:mod:`kiro_crew.dashboard.tailnet_proxy_proof`), zero/multiple forwarded addresses, non-tailnet address, daemon absent or
     down, timeout, malformed output, or a corroborating header that disagrees
     with the daemon. The caller falls through to the existing token+IP path:
     fail-closed on identity, fail-open on availability.
@@ -1213,14 +1215,25 @@ async def resolve_forwarded_peer(request: web.Request, trust: TailnetTrust) -> F
     addr = _forwarded_peer_candidate(request, trust)
     if addr is None:
         return None
+    loop = asyncio.get_running_loop()
+    # (a') loopback names only the host, not the proxy: any local process
+    # holding a token can send the header. The kernel must prove the client
+    # end of this socket belongs to the daemon before the header is read.
+    transport = getattr(request, "transport", None)
+    sock_peer = transport.get_extra_info("peername") if transport is not None else None
+    sock_local = transport.get_extra_info("sockname") if transport is not None else None
+    proven = await loop.run_in_executor(
+        subprocess_executor(), loopback_client_is_daemon, sock_peer, sock_local
+    )
+    if not proven:
+        logger.debug("forwarded tailnet header from an unproven loopback client; ignoring")
+        return None
     # (e) the daemon decides identity. Offloaded onto the DEDICATED subprocess
     # executor, not asyncio.to_thread's shared default pool: waiters can hold a
     # worker for up to the daemon timeout behind _whois_lock, and starving the
     # process-wide default pool with header-driven work would stall unrelated
     # gateway offloads (the cross-starvation subprocess_executor exists to stop).
-    resolved = await asyncio.get_running_loop().run_in_executor(
-        subprocess_executor(), _whois_cached, addr
-    )
+    resolved = await loop.run_in_executor(subprocess_executor(), _whois_cached, addr)
     if resolved is None:
         return None
     login, node = resolved
