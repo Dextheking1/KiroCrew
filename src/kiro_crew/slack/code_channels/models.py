@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from kiro_crew.slack import features
+
 #: Slack keeps at most this many context-bar items.
 MAX_CONTEXT_BAR_ITEMS = 5
 #: Slack caps a channel at this many runtime commands, across every agent.
@@ -29,9 +31,9 @@ MAX_VIEWS = 5
 #: Channel / session title limit (``agents.sessions.rename``).
 MAX_TITLE_CHARS = 200
 
-#: Answers that mean this INSTALL cannot use code channels: the first one latches
-#: the feature off for the process (``settings.report_slack_refusal``).
-LATCH_ERRORS = frozenset({"feature_disabled", "missing_scope", "not_allowed_token_type"})
+#: Answers that mean this INSTALL cannot use code channels; the first one
+#: latches the feature off for the process (``slack.features.latch_unavailable``).
+LATCH_ERRORS = features.LATCH_ERRORS
 
 #: Answers a caller degrades on -- answer in place, as without code channels --
 #: instead of reporting a failure: the latching ones plus those scoped to one

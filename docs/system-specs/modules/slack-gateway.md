@@ -1125,7 +1125,7 @@ The gate is `slack.features.code_channels_enabled(cfg)`: the `slack.code_channel
 setting is on AND the install can run code channels (the bot holds
 `code_channels:manage` and Slack has not answered `feature_disabled` /
 `missing_scope` / `not_allowed_token_type`). Every refusal the package receives is
-handed to that latch (`code_channels.settings.report_slack_refusal`); the first
+handed to that latch (`features.latch_unavailable`, from `code_channels.client`); the first
 latching one switches code channels off for the process, nothing is posted in
 Slack. With the gate shut no seam below changes anything (no Slack lookup, no
 classifier call, no audit row, mirror posts unchanged). The package docstring (`slack/code_channels/__init__.py`) carries the binding record
