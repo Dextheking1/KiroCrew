@@ -241,6 +241,8 @@ def run_real_slice_exercise() -> dict[str, object]:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
         forked = int((third.stdout or "0").strip() or 0)
