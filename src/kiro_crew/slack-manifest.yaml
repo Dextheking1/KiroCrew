@@ -48,10 +48,12 @@ oauth_config:
       - app_mentions:read
       # agents.sessions.* (status, title, Stop) for the agent_view feature.  #@agent_sessions
       - assistant:write  #@agent_sessions
-      # agents.conversations.* (create, context bar, views, commands, archive).  #@code_channels
+      # agents.conversations.* (create, context bar, views, commands, archive);  #@code_channels
+      # the invite scopes let the agent add people to the channel it opens.  #@code_channels
       - canvases:write  #@code_channels
       - channels:history
       - channels:read
+      - channels:write.invites  #@code_channels
       - chat:write
       - chat:write.customize  #@code_channels
       - code_channels:manage  #@code_channels
@@ -60,6 +62,7 @@ oauth_config:
       - files:write
       - groups:history
       - groups:read
+      - groups:write.invites  #@code_channels
       - im:history
       - im:read
       - im:write

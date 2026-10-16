@@ -1,30 +1,58 @@
-"""Slack Code feature switches and code-channel defaults: the one read path.
+"""Slack Code: whether agent sessions and code channels run, and with what defaults.
 
-Three switches live in ``config.json`` under ``slack`` (see
-``config/sections_slack.py``):
+Two layers decide whether a feature runs, and both are read here so every caller
+answers "is it on?" the same way:
 
-* ``agent_sessions`` -- the app is a Slack agent (``features.agent_view``):
-  thread status/title and Slack's native Stop button;
-* ``code_channels`` -- the agent may open Slack code channels;
-* ``code_channel_defaults`` -- the folder / agent / model / effort a new
-  code-channel session starts with.
+* the **toggle** -- ``slack.agent_sessions`` / ``slack.code_channels`` in
+  ``config.json`` (Settings → Slack). It also decides what the generated app
+  manifest asks Slack for (:func:`manifest_features`). Anything that is not a real
+  ``True`` is off. Read live, so a flip applies on the next event.
+* the **capability** -- whether the installed Slack app can actually use the
+  feature: its granted bot scopes (``auth.test``'s ``x-oauth-scopes``, read when
+  the Slack socket connects and on every reconnect) include the feature's scope
+  (``assistant:write`` / ``code_channels:manage``), and Slack has not answered a
+  call for it with ``feature_disabled``, ``missing_scope`` or
+  ``not_allowed_token_type``. Such an answer LATCHES the feature off for the
+  process (until the next reconnect re-probes): one dashboard notification, one
+  log line, and the runtime falls back silently to today's Slack behaviour.
 
-Every runtime caller (manifest rendering, the settings page, the agent-session
-and code-channel runtimes) reads them through this module instead of poking the
-dataclass, so "is it on?" has one answer and fails closed the same way
-everywhere: anything that is not a real ``True`` is off.
+:func:`agent_sessions_enabled` / :func:`code_channels_enabled` are toggle AND
+capability -- the runtimes call these. :func:`agent_sessions_available` /
+:func:`code_channels_available` are the capability alone, for the settings page.
 
-Pure and synchronous: no I/O, no Slack calls, no dashboard state. Callers that
-need the folder tree pass it in (:func:`find_folder`), which keeps this module
-importable from the manifest renderer and the security scanner alike.
+``code_channel_defaults`` is the folder / agent / model / effort a new
+code-channel session starts with; :func:`resolve_code_channel_session` applies
+the resolution order. The config readers and the resolver are pure; the
+capability record is the one piece of process state, guarded by a lock.
 """
 
 from __future__ import annotations
 
+import logging
+import threading
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from kiro_crew.effort import is_valid_effort
+
+logger = logging.getLogger(__name__)
+
+#: Feature names, matching ``slack_manifest.AGENT_SESSIONS`` / ``CODE_CHANNELS``.
+AGENT_SESSIONS = "agent_sessions"
+CODE_CHANNELS = "code_channels"
+
+#: The bot scope each feature cannot run without.
+REQUIRED_SCOPE: dict[str, str] = {
+    AGENT_SESSIONS: "assistant:write",
+    CODE_CHANNELS: "code_channels:manage",
+}
+
+#: Slack error codes that mean "this install cannot use the feature": they latch
+#: it off rather than being retried on every message.
+LATCH_ERRORS = frozenset({"feature_disabled", "missing_scope", "not_allowed_token_type"})
+
+#: ``availability()`` reasons beyond the latch codes.
+REASON_SCOPES_UNKNOWN = "scopes_unknown"
 
 #: Sidebar folder ids are ``uuid4().hex[:12]`` (``chat_folders``); an id-shaped
 #: reference is matched by id only, never as a folder name.
@@ -72,14 +100,152 @@ def _slack_section(cfg: Any) -> Any:
     return getattr(cfg, "slack", cfg)
 
 
-def agent_sessions_enabled(cfg: Any) -> bool:
-    """Whether Slack threads run as Slack agent sessions (``slack.agent_sessions``)."""
+def agent_sessions_toggle(cfg: Any) -> bool:
+    """The Agent sessions toggle (``slack.agent_sessions``), capability aside."""
     return getattr(_slack_section(cfg), "agent_sessions", False) is True
 
 
-def code_channels_enabled(cfg: Any) -> bool:
-    """Whether the agent may open Slack code channels (``slack.code_channels``)."""
+def code_channels_toggle(cfg: Any) -> bool:
+    """The Code channels toggle (``slack.code_channels``), capability aside."""
     return getattr(_slack_section(cfg), "code_channels", False) is True
+
+
+def agent_sessions_enabled(cfg: Any) -> bool:
+    """Run Slack threads as agent sessions: the toggle is on AND the app can."""
+    return agent_sessions_toggle(cfg) and agent_sessions_available()
+
+
+def code_channels_enabled(cfg: Any) -> bool:
+    """Let the agent open code channels: the toggle is on AND the app can."""
+    return code_channels_toggle(cfg) and code_channels_available()
+
+
+# ── Capability: what the installed Slack app can actually use ──
+
+
+class _Capabilities:
+    """Granted bot scopes and latched refusals for this process."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        #: ``None`` until the connect probe has read them (or when Slack did not say).
+        self.granted: frozenset[str] | None = None
+        #: feature -> the Slack error that latched it off.
+        self.latched: dict[str, str] = {}
+        #: features already notified about this process (one notification each).
+        self.notified: set[str] = set()
+        self.notifier: Callable[[str, str], None] | None = None
+
+
+_CAPS = _Capabilities()
+
+
+def set_capability_notifier(notifier: Callable[[str, str], None] | None) -> None:
+    """Install ``notifier(feature, reason)``, called once per feature per process
+    when it latches off (the gateway wires the dashboard notification here)."""
+    with _CAPS.lock:
+        _CAPS.notifier = notifier
+
+
+def record_granted_scopes(scopes: Iterable[str] | None) -> None:
+    """Record the bot scopes the install holds (``None`` = Slack did not say).
+
+    A ``missing_scope`` latch whose scope is now granted is lifted: the user
+    reinstalled with the updated manifest, so the feature may run again.
+    """
+    granted = frozenset(scopes) if scopes is not None else None
+    with _CAPS.lock:
+        _CAPS.granted = granted
+        if granted is not None:
+            for feature, error in list(_CAPS.latched.items()):
+                if error == "missing_scope" and REQUIRED_SCOPE.get(feature, "") in granted:
+                    del _CAPS.latched[feature]
+
+
+def granted_scopes() -> frozenset[str] | None:
+    """The bot scopes last recorded, or ``None`` when unknown."""
+    with _CAPS.lock:
+        return _CAPS.granted
+
+
+def latch_unavailable(feature: str, error: str) -> bool:
+    """Latch *feature* off after Slack answered a call for it with *error*.
+
+    Only the codes in :data:`LATCH_ERRORS` latch; anything else (a transient
+    failure, a bad argument) returns ``False`` and changes nothing. The first
+    latch of a feature in this process logs one line and notifies once.
+    """
+    if feature not in REQUIRED_SCOPE or error not in LATCH_ERRORS:
+        return False
+    with _CAPS.lock:
+        first = feature not in _CAPS.latched
+        _CAPS.latched[feature] = error
+        notify = first and feature not in _CAPS.notified
+        if notify:
+            _CAPS.notified.add(feature)
+        notifier = _CAPS.notifier
+    if first:
+        logger.warning(
+            "Slack %s unavailable (%s): falling back to plain Slack threads", feature, error
+        )
+    if notify and notifier is not None:
+        try:
+            notifier(feature, error)
+        except Exception:
+            logger.debug("Slack capability notification failed", exc_info=True)
+    return True
+
+
+def clear_latch(feature: str | None = None) -> None:
+    """Lift one feature's latch, or every latch (a reconnect re-probes from scratch)."""
+    with _CAPS.lock:
+        if feature is None:
+            _CAPS.latched.clear()
+        else:
+            _CAPS.latched.pop(feature, None)
+
+
+def latched() -> dict[str, str]:
+    """Feature -> the Slack error that latched it off, this process."""
+    with _CAPS.lock:
+        return dict(_CAPS.latched)
+
+
+def reset_capabilities() -> None:
+    """Forget everything (tests; a gateway that drops its Slack connection)."""
+    with _CAPS.lock:
+        _CAPS.granted = None
+        _CAPS.latched.clear()
+        _CAPS.notified.clear()
+
+
+def availability(feature: str) -> tuple[bool, str]:
+    """``(available, reason)`` for *feature*; reason is '' when available.
+
+    Reasons: a latch code (``feature_disabled`` …), ``missing_scope`` when the
+    granted scopes lack the feature's scope, ``scopes_unknown`` before the
+    connect probe has read them.
+    """
+    with _CAPS.lock:
+        error = _CAPS.latched.get(feature)
+        granted = _CAPS.granted
+    if error:
+        return False, error
+    if granted is None:
+        return False, REASON_SCOPES_UNKNOWN
+    if REQUIRED_SCOPE.get(feature, "\0") not in granted:
+        return False, "missing_scope"
+    return True, ""
+
+
+def agent_sessions_available() -> bool:
+    """The installed app can run agent sessions (scope granted, not latched)."""
+    return availability(AGENT_SESSIONS)[0]
+
+
+def code_channels_available() -> bool:
+    """The installed app can open code channels (scope granted, not latched)."""
+    return availability(CODE_CHANNELS)[0]
 
 
 def manifest_features(cfg: Any) -> frozenset[str]:
@@ -91,10 +257,12 @@ def manifest_features(cfg: Any) -> frozenset[str]:
     """
     from kiro_crew import slack_manifest
 
+    # The TOGGLE, never the capability: the manifest is how an install gains the
+    # capability, so it must ask for the scopes before they are granted.
     on: set[str] = set()
-    if agent_sessions_enabled(cfg):
+    if agent_sessions_toggle(cfg):
         on.add(slack_manifest.AGENT_SESSIONS)
-    if code_channels_enabled(cfg):
+    if code_channels_toggle(cfg):
         on.add(slack_manifest.CODE_CHANNELS)
     return frozenset(on)
 

@@ -98,9 +98,18 @@ async def code_settings_view(cfg: Any, state: Any) -> dict[str, Any]:
             known = None
         if known is not None and defaults.agent not in known:
             warnings.append("agent_missing")
+
+    def _capability(feature: str) -> dict[str, object]:
+        ok, reason = slack_features.availability(feature)
+        return {"available": ok, "reason": reason}
+
     return {
-        "agent_sessions": slack_features.agent_sessions_enabled(cfg),
-        "code_channels": slack_features.code_channels_enabled(cfg),
+        # The toggles as saved; whether each one actually runs also needs the
+        # capability below (toggle AND available is what the runtime checks).
+        "agent_sessions": slack_features.agent_sessions_toggle(cfg),
+        "code_channels": slack_features.code_channels_toggle(cfg),
+        "agent_sessions_capability": _capability(slack_features.AGENT_SESSIONS),
+        "code_channels_capability": _capability(slack_features.CODE_CHANNELS),
         "code_channel_defaults": {
             "folder": defaults.folder,
             "agent": defaults.agent,
@@ -152,8 +161,7 @@ async def validate_code_settings(
     """Validate the Slack Code fields of a PUT body against the stored section.
 
     Returns ``(staged, applied)``: the ``slack.*`` keys to write and their names,
-    staging only real changes (both switches are boot-read, so an unchanged value
-    must not flag a restart). Raises :class:`CodeSettingsError` on the first
+    staging only real changes. Raises :class:`CodeSettingsError` on the first
     refusal; nothing is staged in that case.
     """
     staged: dict[str, object] = {}

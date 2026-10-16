@@ -48,7 +48,13 @@ _BASE_BOT_SCOPES = [
 _AGENT_SESSION_SCOPES = ["assistant:write"]
 #: Granted only with ``slack.code_channels``: agents.conversations.* plus the
 #: session identity override and the channel canvas.
-_CODE_CHANNEL_SCOPES = ["canvases:write", "chat:write.customize", "code_channels:manage"]
+_CODE_CHANNEL_SCOPES = [
+    "canvases:write",
+    "channels:write.invites",
+    "chat:write.customize",
+    "code_channels:manage",
+    "groups:write.invites",
+]
 
 _BASE_BOT_EVENTS = [
     "app_home_opened",

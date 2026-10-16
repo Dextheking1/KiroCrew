@@ -67,8 +67,10 @@ class TestRendering:
         assert change.added_scopes == (
             "assistant:write",
             "canvases:write",
+            "channels:write.invites",
             "chat:write.customize",
             "code_channels:manage",
+            "groups:write.invites",
         )
         assert change.added_events == (
             "agent_session_stopped",

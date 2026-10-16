@@ -255,17 +255,14 @@ class SlackConfig:
         default=False,
         metadata=_meta(
             "Agent Sessions",
-            "Run Slack threads as Slack agent sessions: the app is declared an "
-            "agent (manifest features.agent_view, scope assistant:write and the "
-            "agent-session events), threads show a live status and title, and "
-            "Slack's native Stop button cancels the turn. Changes the app "
-            "manifest: update the app in Slack and reinstall it. Slack cannot "
-            "switch an app back from agent_view to assistant_view. Off by default.",
+            "Run Slack threads as Slack agent sessions: threads show a live status "
+            "and title, and Slack's native Stop button cancels the turn. Adds the "
+            "agent view (features.agent_view), the assistant:write scope and the "
+            "agent-session events to the generated app manifest; an installed app "
+            "needs that manifest update and a reinstall before it takes effect, and "
+            "until then Slack behaves as before. Slack cannot switch an app back "
+            "from agent_view to assistant_view. Off by default; no restart.",
             tags=["slack"],
-            # Boot-read: the manifest features and the event subscriptions are
-            # Slack-side, so a live flip would change behaviour for an app whose
-            # install does not yet carry the scopes and events it relies on.
-            restart=True,
         ),
     )
     code_channels: bool = field(
@@ -274,12 +271,13 @@ class SlackConfig:
             "Code Channels",
             "Let the agent open a Slack code channel for coding work: a channel "
             "that is one session, with a context bar, a diff tab and channel "
-            "commands. Changes the app manifest (features.code_channels and the "
-            "code_channels:manage scope family): update the app in Slack and "
-            "reinstall it. The workspace must have Slack code channels enabled. "
-            "Off by default.",
+            "commands. Adds features.code_channels and the code-channel scopes "
+            "(code_channels:manage, chat:write.customize, canvases:write, "
+            "channels:write.invites, groups:write.invites) to the generated app "
+            "manifest; an installed app needs that update and a reinstall, and the "
+            "workspace must have Slack code channels enabled. Until both hold, "
+            "Slack behaves as before. Off by default; no restart.",
             tags=["slack"],
-            restart=True,
         ),
     )
     code_channel_defaults: CodeChannelDefaultsConfig = field(

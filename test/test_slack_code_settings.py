@@ -116,15 +116,33 @@ class TestSwitches:
     def test_every_combination_saves_and_reads_back(self, env: dict, on: tuple) -> None:
         status, res = _call(env, "PUT", {"agent_sessions": on[0], "code_channels": on[1]})
         assert status == 200
-        # Boot-read switches: a real flip needs a restart, a no-op save does not.
-        assert res["restart_required"] is any(on)
+        # Hot-applied: the runtime reads the toggle per event, behind the
+        # capability guard, so no flip needs a restart.
+        assert res["restart_required"] is False
         _, body = _call(env, "GET")
         assert (body["agent_sessions"], body["code_channels"]) == on
 
     def test_unchanged_switch_is_not_staged(self, env: dict) -> None:
         _call(env, "PUT", {"code_channels": True})
-        status, res = _call(env, "PUT", {"code_channels": True})
-        assert status == 200 and res["restart_required"] is False
+        status, _ = _call(env, "PUT", {"code_channels": True})
+        assert status == 200
+        ok = [c for c in env["sel"].calls if c["outcome"] == "ok"]
+        assert "code_channels" in ok[0]["resources"]
+        assert "code_channels" not in ok[1]["resources"]
+
+    def test_toggle_on_reports_the_capability_it_still_lacks(self, env: dict) -> None:
+        from kiro_crew.slack import features
+
+        features.reset_capabilities()
+        _call(env, "PUT", {"code_channels": True, "agent_sessions": True})
+        _, body = _call(env, "GET")
+        assert body["code_channels"] is True
+        assert body["code_channels_capability"] == {"available": False, "reason": "scopes_unknown"}
+        features.record_granted_scopes({"chat:write", "assistant:write"})
+        _, body = _call(env, "GET")
+        assert body["agent_sessions_capability"] == {"available": True, "reason": ""}
+        assert body["code_channels_capability"] == {"available": False, "reason": "missing_scope"}
+        features.reset_capabilities()
 
     @pytest.mark.parametrize("bad", ["true", 1, None])
     def test_switch_must_be_a_boolean(self, env: dict, bad: object) -> None:
@@ -319,10 +337,12 @@ _AS = frozenset({slack_manifest.AGENT_SESSIONS})
 
 @pytest.fixture(autouse=True)
 def _clean_probe_state() -> Any:
-    scope_probe.clear_feature_disabled()
+    from kiro_crew.slack import features
+
+    features.reset_capabilities()
     scs.reset_status_cache()
     yield
-    scope_probe.clear_feature_disabled()
+    features.reset_capabilities()
     scs.reset_status_cache()
 
 
@@ -338,8 +358,10 @@ class TestDrift:
         assert got.status == scope_probe.STATUS_NEEDS_UPDATE
         assert got.missing_scopes == (
             "canvases:write",
+            "channels:write.invites",
             "chat:write.customize",
             "code_channels:manage",
+            "groups:write.invites",
         )
 
     def test_old_install_after_enabling_agent_sessions_needs_update(self) -> None:
@@ -352,8 +374,10 @@ class TestDrift:
         # emoji:read is the user's own addition, not drift.
         assert got.extra_scopes == (
             "canvases:write",
+            "channels:write.invites",
             "chat:write.customize",
             "code_channels:manage",
+            "groups:write.invites",
         )
 
     def test_unreadable_scopes(self) -> None:
