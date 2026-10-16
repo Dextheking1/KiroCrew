@@ -456,10 +456,15 @@ Each cycle:
 5. `session_read_message` for detail the record does not carry — a question's
    substance, a stall's shape. Never for a verdict, and never as the routine
    cycle read: the ledger is that.
-6. **Say nothing unless there is a real signal.** An item passing acceptance,
-   failing it, asking a question, or stalling. Never post "nothing changed":
-   a cycle with no signal ends with a `nothing_to_do` call, because a turn
-   that stops bare after its tool calls keeps the empty-response recovery.
+6. **Say nothing unless a person needs the message.** Visible text is only a
+   useful result, a decision only the person can make, a blocker they can act
+   on, or a decision they need to know. Repository checks, path searches, tool
+   plans, ledger reads and writes, create → session_create → bind → seed,
+   dispatch, IDs, caps, and concurrency math are internal work, never chat
+   narration. `send_message` and `send_notification` obey the same rule. A
+   cycle with no human-needed signal ends with a `nothing_to_do` call, because
+   a turn that stops bare after its tool calls keeps the empty-response
+   recovery.
 
 **Shell exists for the two bundled scripts, not for work.** `execute_bash` is
 granted so patrol can run `accept_eval.py` and `patrol_budget.py`. Running a work item's build, test, or fix

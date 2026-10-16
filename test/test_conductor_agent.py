@@ -552,6 +552,19 @@ class TestConductorInstaller:
             assert "Can you pick a default?" not in text
             assert "Can I pick a default?" not in text
 
+    def test_human_needed_rule_hides_ledger_dispatch_and_capacity_work(
+        self, tmp_path, monkeypatch
+    ):
+        prompt = " ".join(self._install(tmp_path, monkeypatch)["prompt"].split())
+        body = " ".join((SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").split())
+        for text in (prompt, body):
+            assert "human-needed" in text
+            assert "ledger reads and writes" in text
+            assert "create → session_create → bind → seed" in text
+            assert "concurrency" in text
+            assert "nothing_to_do" in text
+        assert "A milestone is a task starting" not in prompt
+
     def test_back_to_back_rounds_keep_a_spend_bound(self, tmp_path, monkeypatch):
         """Without a pause between rounds, a default concurrency cap and a no-progress
         back-off are the only hard spend gates when the user set no bound; the item

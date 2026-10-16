@@ -3,6 +3,7 @@
   "cases": [
     { "name": "user turn", "role": "user", "content": "Take #4213 first.", "speech": true },
     { "name": "assistant reply", "role": "assistant", "content": "Found the cause of #4213.", "speech": true },
+    { "name": "Mate pre-tool narration", "role": "assistant", "content": "I will inspect the repo, set the ledger goal, then raise the concurrency cap.", "meta": { "kind": "internal_narration" }, "speech": false },
     { "name": "say-nothing reply (U+200B)", "role": "assistant", "content": "\u200b", "speech": false },
     { "name": "compaction notice under the assistant role", "role": "assistant", "content": "Context summary: the conversation so far…", "meta": { "kind": "compaction" }, "speech": false },
     { "name": "session-reload notice under the assistant role", "role": "assistant", "content": "Session reloaded.", "meta": { "kind": "session_reload" }, "speech": false },

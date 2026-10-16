@@ -511,6 +511,7 @@ from kiro_crew.dashboard.turn_dispatch import (
     spawn_guarded_turn,
     tool_approval_timeout_secs,
 )
+from kiro_crew.dashboard.system_notices import INTERNAL_NARRATION_KIND
 from kiro_crew.dashboard.urls import is_loopback
 from kiro_crew.deny_guidance import (  # noqa: F401
     DENY_CLASS_AWS_CREDENTIAL,
@@ -2033,10 +2034,18 @@ def _log_glued_footer_text(slot: Any, glued: list[str]) -> None:
 
 
 def _segment_row_meta(
-    slot: _ChatSlot, blocked_links: list[dict], redactions: list[dict] | None = None
+    slot: _ChatSlot,
+    blocked_links: list[dict],
+    redactions: list[dict] | None = None,
+    *,
+    include_decisions: bool = True,
 ) -> dict | None:
     """The assistant row's ``meta``: the decision strip, redaction records and the
     segment's native message id, which this consumes.
+
+    ``include_decisions=False`` is for Mate's internal pre-tool narration. A
+    decision belongs on the next human-facing result, not on a hidden process
+    row, so the strip stays pending until that result is appended.
 
     One function because every field has to reach ``slot.append`` in the same
     dict -- that call broadcasts the live frame from inside itself, so a field
@@ -2044,7 +2053,7 @@ def _segment_row_meta(
     an open tab renders. Returns None when there is nothing to carry, which is
     what ``slot.append`` expects for a row with no meta.
     """
-    meta = _decisions_strip_meta(slot)
+    meta = _decisions_strip_meta(slot) if include_decisions else None
     message_id = getattr(slot, "segment_message_id", "")
     if message_id:
         slot.segment_message_id = ""
@@ -2183,8 +2192,15 @@ def _flush_segment(
     broadcast: bool = True,
     quiet_persist: bool = False,
     interrupted: bool = False,
+    internal_narration: bool = False,
 ) -> None:
     """Finalize current text block as a segment and persist it.
+
+    ``internal_narration`` marks Mate text that led into a tool call. It stays
+    in history and the crew log for audit and model continuity, but it is not a
+    message to the person: it is persisted without a live message broadcast,
+    and Mate readers hide it by its structured kind. The next completed text
+    segment remains the human-facing result.
 
     ``quiet_persist`` additionally suppresses the per-message ``chat_message``
     broadcast that ``slot.append`` emits for the finalized assistant message.
@@ -2276,18 +2292,27 @@ def _flush_segment(
     # other tabs viewing the same slot receive the finalized text.
     # The active tab already has this content from streaming chunks;
     # the chat_segment event tells it to finalize streaming → assistant.
+    row_meta = _segment_row_meta(
+        slot,
+        blocked_links,
+        redactions,
+        include_decisions=not internal_narration,
+    )
+    if internal_narration:
+        row_meta = {**(row_meta or {}), "kind": INTERNAL_NARRATION_KIND}
     _note_reply_row(
         slot,
         slot.append(
             "assistant",
             redacted,
             "msg msg-a",
-            broadcast=not quiet_persist,
+            broadcast=not quiet_persist and not internal_narration,
             # The decision strip, when this turn made one, and the blocked-link records
             # from the redaction above. Passed here rather than written onto the row
             # afterwards so the frame this call broadcasts carries them too -- see
-            # _decisions_strip_meta for why that matters.
-            meta=_segment_row_meta(slot, blocked_links, redactions),
+            # _decisions_strip_meta for why that matters. Internal narration leaves
+            # a decision pending for the next human-facing result.
+            meta=row_meta,
         ),
     )
     # The append-only log's copy of the same body. Written here rather than at the
@@ -6928,6 +6953,10 @@ async def _run_chat(
         return injected
 
     turn.assistant_text = ""
+    # Mate is a conversation, not a turn trace. Buffer its text until a segment
+    # proves human-facing by completing without another tool call. Pre-tool text
+    # is then retained only as tagged internal history.
+    _mate_human_facing_only = slot.mode == DM_SLOT_MODE
     # The accumulated text at the last segment cut that was deferred because a
     # construct was open (see open_construct_at_end). While `assistant_text`
     # still starts with it, the pending segment holds text a cut was held back
@@ -10667,7 +10696,12 @@ async def _run_chat(
                             _open_construct,
                         )
                     elif turn.assistant_text:
-                        _flush_segment(state, slot, turn.assistant_text)
+                        _flush_segment(
+                            state,
+                            slot,
+                            turn.assistant_text,
+                            internal_narration=_mate_human_facing_only,
+                        )
                         turn.assistant_text = ""
                         _turn_flushed_visible_text = True
                     else:
@@ -10794,7 +10828,11 @@ async def _run_chat(
                 # the trailing (possibly-partial-credential) run is withheld until
                 # the next chunk or the segment flush. assistant_text above still
                 # accumulates the full text for the authoritative final redaction.
-                wire = _wsred.feed(event.text)
+                # A Mate segment is not sent until it proves human-facing by
+                # completing without a following tool call. Streaming it here
+                # would flash repo searches, ledger writes, dispatch plans and
+                # capacity work before the tool boundary can classify them.
+                wire = "" if _mate_human_facing_only else _wsred.feed(event.text)
                 if wire:
                     _ttft_visible.mark(wire)
                     turn.chunk_seq += 1
@@ -10902,7 +10940,13 @@ async def _run_chat(
                             _open_construct,
                         )
                     else:
-                        _flush_segment(state, slot, turn.assistant_text, broadcast=False)
+                        _flush_segment(
+                            state,
+                            slot,
+                            turn.assistant_text,
+                            broadcast=False,
+                            internal_narration=_mate_human_facing_only,
+                        )
                         turn.assistant_text = ""
                         _turn_flushed_visible_text = True
                 # AFTER the flush, because seq is the order a reader folds on and
@@ -12179,7 +12223,12 @@ async def _run_chat(
                         _open_construct,
                     )
                 elif turn.assistant_text:
-                    _flush_segment(state, slot, turn.assistant_text)
+                    _flush_segment(
+                        state,
+                        slot,
+                        turn.assistant_text,
+                        internal_narration=_mate_human_facing_only,
+                    )
                     turn.assistant_text = ""
                     _turn_flushed_visible_text = True
                 _pre_tool_hooks_fired = False
@@ -13859,7 +13908,13 @@ async def _run_chat(
                         turn.assistant_text
                     )
                     _flush_text_stream()
-                    _flush_segment(state, slot, turn.assistant_text, broadcast=False)
+                    _flush_segment(
+                        state,
+                        slot,
+                        turn.assistant_text,
+                        broadcast=False,
+                        internal_narration=_mate_human_facing_only,
+                    )
                     turn.assistant_text = ""
                     _deferred_cut_text = ""
                     _turn_flushed_visible_text = True

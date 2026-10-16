@@ -19,8 +19,14 @@ from kiro_crew.constants import (
 from kiro_crew.preview_text import drop_format_chars
 
 SESSION_RELOAD_KIND = "session_reload"
+#: Assistant text emitted before a tool call in a Mate turn. The runner keeps
+#: it for audit and model history, but it is process narration rather than a
+#: message to the person. Both the roster preview and Mate chat hide it.
+INTERNAL_NARRATION_KIND = "internal_narration"
 
-SYSTEM_NOTICE_KINDS: frozenset[str] = frozenset({"compaction", SESSION_RELOAD_KIND})
+SYSTEM_NOTICE_KINDS: frozenset[str] = frozenset(
+    {"compaction", SESSION_RELOAD_KIND, INTERNAL_NARRATION_KIND}
+)
 
 
 def is_system_notice(role: object, meta: object) -> bool:

@@ -60,7 +60,9 @@ const radar = { name: 'Radar' }
 /** A patroller's history: wakes, a shell call and a say-nothing reply — no speech. */
 const MACHINERY = [
   { role: 'nudge', content: '[auto-nudge cycle 1]\nPatrol.', cls: '', ts: '2026-09-22T06:00:00Z' },
+  { role: 'assistant', content: 'I will inspect the repo, set the ledger goal, then raise the concurrency cap.', cls: '', ts: '2026-09-22T06:00:02Z', meta: { kind: 'internal_narration' } },
   { role: 'tool', content: '🔧 gh issue list --label needs-triage', cls: '', ts: '2026-09-22T06:00:05Z' },
+  { role: 'tool', content: '🔧 spawn_run', cls: '', ts: '2026-09-22T06:00:06Z', meta: { tool_call_id: 'spawn-1', tool_name: 'spawn_run', output: 'Spawned 1 subagent(s).\n  a1b2c3d4 (default): inspect repo\n' } },
   { role: 'assistant', content: '\u200b', cls: '', ts: '2026-09-22T06:00:09Z' },
 ]
 
@@ -108,6 +110,9 @@ describe("a crewmate's chat", () => {
     expect(hint).toHaveTextContent("Radar hasn't said anything to you yet.")
     expect(view.queryByText(/Session ready/)).toBeNull()
     expect(view.queryByText(/gh issue list/)).toBeNull()
+    expect(view.queryByText(/inspect the repo/)).toBeNull()
+    expect(view.queryByText(/concurrency cap/)).toBeNull()
+    expect(view.queryByText(/spawn_run/)).toBeNull()
     expect(view.queryByText(/auto-nudge/)).toBeNull()
   })
 
@@ -139,15 +144,16 @@ describe("a crewmate's chat", () => {
     )
   }
 
-  it("while it works, the current step is the status line above the indicator; the patrol wake does not draw", async () => {
+  it("while it works, the chat shows generic activity; tool purpose stays in the Work log", async () => {
     ;(api.chatSlotDetail as ReturnType<typeof vi.fn>).mockResolvedValue({
       messages: MACHINERY, running: true, has_more: false, total: MACHINERY.length,
     })
     const view = renderLive(liveStore({ kind: 'tool', purpose: 'Checking the triage queue', toolName: 'gh issue list', toolCallId: 'tc-1' }))
-    await view.findByText('Checking the triage queue')
-    const line = view.getByTestId('crewmate-live-activity')
+    const line = await view.findByTestId('crewmate-live-activity')
+    expect(line).toHaveTextContent('Thinking…')
     expect(line.dataset.activity).toBe('tool')
     expect(view.getAllByTestId('crewmate-live-activity')).toHaveLength(1)
+    expect(view.queryByText('Checking the triage queue')).toBeNull()
     expect(view.queryByText(/auto-nudge/)).toBeNull()
     expect(view.queryByText(/gh issue list/)).toBeNull()
     expect(view.queryByTestId('crewmate-quiet-hint')).toBeNull()
@@ -178,7 +184,9 @@ describe("a crewmate's chat", () => {
       </Provider>
     )
     const view = render(pane(SLOT, radar))
-    await view.findByText('Checking the triage queue')
+    await view.findByTestId('crewmate-live-activity')
+    expect(view.getByTestId('crewmate-live-activity').dataset.activity).toBe('tool')
+    expect(view.queryByText('Checking the triage queue')).toBeNull()
     view.rerender(pane(SLOT_B, { name: 'Sonar' }))
     // Synchronous on purpose: "at once" means no timer has to run first.
     const line = view.getByTestId('crewmate-live-activity')
@@ -244,11 +252,13 @@ describe("a crewmate's chat", () => {
     expect(line).toHaveTextContent('Stopping…')
   })
 
-  it('a long step shows its FULL label (the pill clamps; this column has the room) and carries it as title', async () => {
+  it('a long tool purpose stays out of Mate chat and its title', async () => {
     const long = 'Attempt an authenticated read of the SIM-T ticket through the alternate endpoint'
     const view = renderLive(liveStore({ kind: 'tool', purpose: long, toolName: 'curl', toolCallId: 'tc-1' }))
-    await view.findByText(long)
-    expect(view.getByTestId('crewmate-live-activity').querySelector('[role="status"]')).toHaveAttribute('title', long)
+    const line = await view.findByTestId('crewmate-live-activity')
+    expect(line).toHaveTextContent('Thinking…')
+    expect(line.querySelector('[role="status"]')).toHaveAttribute('title', 'Thinking…')
+    expect(view.queryByText(long)).toBeNull()
   })
 
   it('a BOUNDED window with no speech in it is not proof: the pane reads the whole history first', async () => {

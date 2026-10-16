@@ -59,6 +59,7 @@ from kiro_crew.acp.types import (
 )
 from kiro_crew.dashboard.handlers import usage as usage_handlers
 from kiro_crew.llm_helpers import PromptBusyExhaustedError
+from kiro_crew.members import DM_SLOT_MODE
 from kiro_crew.slack.client import SlackClientOps
 
 _DONE = AcpEvent(kind=EVENT_COMPLETE, stop_reason=STOP_REASON_END_TURN)
@@ -90,6 +91,42 @@ def _steer_from_another_task(ctx: TurnContext) -> None:
 
 def _assistant(record: TurnRecord) -> list[str]:
     return [row["content"] for row in record.rows("assistant")]
+
+
+class TestMateHumanFacingOutput:
+    @pytest.mark.asyncio
+    async def test_mate_hides_pre_tool_narration_and_streams_only_the_result(self) -> None:
+        def _member(ctx: TurnContext) -> None:
+            ctx.slot.mode = DM_SLOT_MODE
+            ctx.slot.agent = "radar"
+
+        record = await run_turn(
+            TurnScript(
+                setup=_member,
+                events=[
+                    AcpEvent(
+                        kind=EVENT_TEXT_CHUNK,
+                        text="I will inspect the repo, set the ledger goal, and raise the cap.",
+                    ),
+                    _tool(1),
+                    AcpEvent(kind=EVENT_TEXT_CHUNK, text="The fix is ready in PR #4213."),
+                    _DONE,
+                ],
+            ),
+            config={"agents": {"radar": {"kiro_agent": "kirocrew"}}},
+        )
+
+        internal, result = record.rows("assistant")
+        assert internal["meta"]["kind"] == "internal_narration"
+        assert result["content"] == "The fix is ready in PR #4213."
+        assert result.get("meta", {}).get("kind") != "internal_narration"
+        assert record.frames("chat_chunk") == []
+        shown = [
+            frame.payload["content"]
+            for frame in record.frames("chat_message")
+            if frame.payload.get("role") == "assistant"
+        ]
+        assert shown == ["The fix is ready in PR #4213."]
 
 
 class TestSteerCutAndCancel:

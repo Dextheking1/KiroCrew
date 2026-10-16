@@ -8,7 +8,13 @@
  * One predicate shared by all scan sites so a new notice kind cannot be added
  * to one scan and forgotten in another.
  */
-const SYSTEM_NOTICE_KINDS: ReadonlySet<string> = new Set(['compaction', 'session_reload'])
+const SYSTEM_NOTICE_KINDS: ReadonlySet<string> = new Set([
+  'compaction',
+  'session_reload',
+  // Mate pre-tool text is retained for audit and model continuity. It is a
+  // process trace, not something the person must read.
+  'internal_narration',
+])
 
 export function isSystemNoticeKind(kind: string | undefined): boolean {
   return !!kind && SYSTEM_NOTICE_KINDS.has(kind)
