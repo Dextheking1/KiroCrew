@@ -102,8 +102,12 @@ before the switch silently lacks `code_channels:manage` and every call fails.
 `SlackConfig.code_channels` (bool, default `False`) and
 `SlackConfig.code_channel_defaults` (`CodeChannelDefaultsConfig`). All three are
 ordinary Slack settings on the Slack settings page, not a Developer or Feature
-Preview flag, and all three hot-apply: the runtime reads them per event, behind
-the capability guard below, so a flip needs no restart. The builder treats
+Preview flag, and all three hot-apply: the runtimes (Phases 2 and 3) read them
+per event, behind the capability guard below, so a flip needs no restart. In
+Phase 1 alone nothing reads the switches yet, which is why the capability line
+under each says *Ready* (the app holds the permissions) rather than claiming the
+feature runs, and why Phase 1 lands together with the runtime phases stacked on
+it. The builder treats
 anything that is not a real `True` as off and normalizes every default string,
 with `None` as the one "not set" spelling and an effort outside `low…max`
 dropped.
@@ -226,12 +230,38 @@ Behind `agent_sessions_enabled(cfg)`, reusing the preview branch's `7888cb2ec3`:
 Behind `code_channels_enabled(cfg)`, reusing `ae2545752c`, `8b243f0b1d` and
 `21fc677d5d`, and the reference implementation's ten design decisions.
 
-* **Routing.** A directed human message (not a bot copy) in an ordinary
-  conversation may open a code channel. The decision is the agent's: it gets a
-  `create_code_channel` tool and opens one for work that needs multiple steps,
-  code changes, builds, tests or a PR; when unsure it stays. A deterministic
-  `session_id = sha256(app_id, team_id, conversation, source_ts)` makes the
-  `agents.conversations.create` call idempotent across retries and restarts.
+* **Routing (a model classifier, in scope for this stack).** A directed human
+  message (not a bot copy) in an ordinary conversation may open a code channel,
+  and a model decides whether it does, as Slack's lifecycle guidance asks: "This decision
+  is better made by the model reading the request than by a keyword check in
+  front of it" ([lifecycle of a code channel](https://docs.slack.dev/ai/slack-code/lifecycle)).
+  The reference implementation does the same in kiro-bot's `code_channel_routing`.
+  * **The call.** One sandboxed, tool-less model call: no tools, no MCP servers,
+    no hooks, no resources. Its input is the request plus a bounded window of
+    recent context from the origin conversation (the last few messages, capped
+    in count and characters). Its output is a fixed JSON contract,
+    `{"route": "stay" | "code_channel", "title"?: string}`, parsed strictly. A
+    `title` names the new channel, capped and stripped like any channel name;
+    without one Slack names it from the origin message.
+  * **Stays in place on doubt.** An ambiguous request (the model's own `stay`),
+    output that does not parse or breaks the contract, a model error, and a
+    timeout all leave the conversation where it is, and the request is answered
+    in place as it is today. The timeout is at most 12 s. This follows Slack's
+    "when it's genuinely ambiguous, reply in place and offer to go deeper in a
+    code channel".
+  * **Never a silent wait.** Before the classifier runs, the origin thread gets
+    its immediate acknowledgement, the same working status and reaction a turn
+    shows today, so the user sees at once that the request was received.
+  * **Latency budget.** The acknowledgement is immediate (sent before the model
+    call); the route decision's p95 is at most the timeout. The live p50 and p95
+    are recorded from the Phase 3 live test run.
+  * **Cost.** One extra model call per directed human message, and only in an
+    ordinary conversation while `code_channels_enabled(cfg)` is true. A message
+    inside a code channel, a bot copy, and every message with the switch off or
+    unavailable skip the classifier entirely.
+  * **Idempotent creation.** A deterministic
+    `session_id = sha256(app_id, team_id, conversation, source_ts)` makes the
+    `agents.conversations.create` call idempotent across retries and restarts.
 * **Creation.** `agents.conversations.create(name, session_id,
   origin_channel_id, origin_message_ts)`, privacy inherited from the origin.
   Slack's own copy of the origin message (the `agent_channel_origin_context`
@@ -272,7 +302,7 @@ Behind `code_channels_enabled(cfg)`, reusing `ae2545752c`, `8b243f0b1d` and
 |---|---|---|
 | 1 | Config, `slack/features.py`, the toggle-aware manifest, the drift probe, the settings API and UI, docs | Every switch combination renders a manifest that the exfil scanner exempts; the API refuses a missing folder, a missing agent, an unavailable model and an off-ladder effort; the drift probe reports each status against recorded payloads; with both switches off the deep-link payload is byte-identical to before |
 | 2 | Agent sessions runtime | A turn sets `processing` then `active`; Stop cancels it and leaves the session `active`; `feature_disabled` falls back to plain threads |
-| 3 | Code channels runtime | A coding request opens one channel (idempotent on retry), the session files under the default folder on the resolved agent, the diff view and context bar follow each turn, archive posts the summary to the origin |
+| 3 | Code channels runtime | The classifier routes a coding request to a code channel and stays in place for an ambiguous, unparseable, failed or timed-out (≤12 s) call; the origin thread is acknowledged before the classifier runs; live p50/p95 of the route decision are recorded; one channel opens per request (idempotent on retry), the session files under the default folder on the resolved agent, the diff view and context bar follow each turn, archive posts the summary to the origin |
 
 Each phase is shippable alone. Phase 1 changes nothing for a user who leaves both
 switches off.
@@ -306,6 +336,11 @@ is private to the security package.
   per switch.
 * **Phase 3 authorization** is the origin conversation's, never the new channel's
   membership, and every agent tool is pinned to its own channel.
+* **The routing classifier holds no capability.** It runs with no tools, MCP
+  servers, hooks or resources, so text in the request or its context window can
+  at most choose `stay` or `code_channel` and suggest a title. The title is
+  capped and sanitised like any channel name, and anything outside the JSON
+  contract is treated as `stay`.
 
 ## Alternatives considered
 
@@ -321,6 +356,13 @@ the user added by hand (an extra scope, a shortcut, a renamed bot), and it would
 make the irreversible `agent_view` switch with one click rather than through
 Slack's own manifest editor. Copy, paste and reinstall keeps Slack's review screen
 in the loop, and the drift probe gives the same closing signal ("Up to date").
+A hand-pasted full manifest replaces the configuration just as a push would; the
+difference is that the person does it in Slack's editor, which shows what
+changes, and the panel says so before they do: it warns that replacing the YAML
+drops hand-made additions and offers adding only the listed lines instead. The
+copied manifest also keeps the app's own slash command and name (the alias is
+derived from the saved `slack.command`), so pasting it does not rename an
+existing app's `/kirocrew-<alias>` command.
 A future revision could revisit this with `apps.manifest.export` → merge →
 update and a short-lived token the user pastes per push, never stored.
 
@@ -331,10 +373,13 @@ which the scope ratchet exists to prevent.
 **Optional regex segments in the exfil pattern** instead of four exact patterns.
 Rejected: it would accept combinations no emitter renders.
 
-**A model classifier to decide when to open a code channel** (the reference
-implementation's sandboxed router). Deferred: the agent already decides with a
-tool, as on the preview branch, and a second model call per message costs a turn
-on every message in every tracked channel.
+**Letting the agent open the channel itself with a `create_code_channel` tool**
+(the preview branch's approach) instead of a classifier. Rejected by the owner
+for this stack in favour of the model classifier (§3, Routing): the tool fires
+only after a full agent turn has started in the origin thread, so the decision
+is made late and inside a session that has every tool, while the classifier is
+a bounded, tool-less call that decides before any turn starts and falls back to
+staying in place.
 
 ## Open questions
 

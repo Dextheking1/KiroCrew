@@ -132,31 +132,6 @@ _TOKEN_ERRORS = frozenset(
 _NO_SUCH_CHANNEL = "C00000000000"
 
 
-def note_feature_disabled(feature: str) -> None:
-    """Record that Slack refused *feature* with ``feature_disabled`` at runtime.
-
-    Kept for callers that only know the one code; it is the capability latch in
-    :mod:`kiro_crew.slack.features`.
-    """
-    from kiro_crew.slack import features
-
-    features.latch_unavailable(feature, "feature_disabled")
-
-
-def clear_feature_disabled(feature: str | None = None) -> None:
-    """Lift a recorded refusal (all of them when *feature* is None)."""
-    from kiro_crew.slack import features
-
-    features.clear_latch(feature)
-
-
-def feature_disabled_seen() -> frozenset[str]:
-    """Features latched off because Slack answered ``feature_disabled``."""
-    from kiro_crew.slack import features
-
-    return frozenset(f for f, e in features.latched().items() if e == "feature_disabled")
-
-
 def _slack_error(exc: BaseException) -> str:
     """Slack's ``error`` code from a ``SlackApiError``-shaped exception, else ''."""
     response = getattr(exc, "response", None)
@@ -265,15 +240,17 @@ async def probe_manifest_status(
     features.record_granted_scopes(granted)
     missing = tuple(sorted(required - granted))
     extra = tuple(sorted((granted & frozenset(known_scopes)) - required))
-    disabled = set(feature_disabled_seen())
+    disabled = {f for f, e in features.latched().items() if e == "feature_disabled"}
     if probe_code_channels and "code_channels:manage" in granted:
         if await _code_channels_refused(client):
+            # Reported on the page only: the runtime latch is the connect probe's
+            # and the runtime's to set, so a settings-page read never raises a
+            # notification or switches a feature off by itself.
             disabled.add("code_channels")
-            features.latch_unavailable("code_channels", "feature_disabled")
         else:
             # A probe that now gets past the gate retires a stale runtime record.
             disabled.discard("code_channels")
-            clear_feature_disabled("code_channels")
+            features.clear_latch("code_channels")
     if missing:
         status = STATUS_NEEDS_UPDATE
     elif disabled:

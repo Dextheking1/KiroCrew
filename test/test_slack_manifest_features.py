@@ -137,6 +137,26 @@ class TestExfilExemption:
         assert len(url.split("?", 1)[1]) >= 200
         assert scan_exfiltration_urls(url) == []
 
+    def test_a_variant_that_fails_to_build_costs_only_its_own_link(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kiro_crew.security import exfil
+
+        real = slack_manifest.stripped_template
+
+        def broken_for_code_channels(features: frozenset[str] = frozenset()) -> str:
+            if slack_manifest.CODE_CHANNELS in features:
+                raise OSError("variant unreadable")
+            return real(features)
+
+        monkeypatch.setattr(exfil, "_slack_manifest_re_slot", [])
+        monkeypatch.setattr(slack_manifest, "stripped_template", broken_for_code_channels)
+        # The stock link keeps its exemption; the one variant that did not
+        # build is refused rather than accepted by a looser pattern.
+        assert scan_exfiltration_urls(slack_manifest.deep_link("someone", frozenset())) == []
+        monkeypatch.setattr(slack_manifest, "stripped_template", real)
+        assert scan_exfiltration_urls(slack_manifest.deep_link("someone", _CC)) != []
+
     def test_a_mixed_combination_is_redacted(self) -> None:
         # Agent-view feature block WITHOUT its scope: no emitter renders this, so
         # the validator must not accept it even though every line is legitimate.
@@ -154,3 +174,47 @@ class TestExfilExemption:
         )
         url = "https://api.slack.com/apps?new_app=1&manifest_yaml=" + quote(payload, safe="")
         assert scan_exfiltration_urls(url) != []
+
+
+class TestExistingAppKeepsItsCommand:
+    @pytest.mark.parametrize(
+        "command,alias",
+        [
+            ("kirocrew", "kirocrew"),
+            ("kirocrew-jdoe", "jdoe"),
+            ("crew", "kirocrew"),
+            ("kirocrew-", "kirocrew"),
+        ],
+    )
+    def test_alias_for_command(self, command: str, alias: str) -> None:
+        assert slack_manifest.alias_for_command(command) == alias
+
+    def test_render_takes_the_saved_command_and_ignores_a_bad_one(self) -> None:
+        assert "/crew\n" in slack_manifest.render("kirocrew", command="crew")
+        assert "/kirocrew\n" in slack_manifest.render("kirocrew", command="Bad Command!")
+
+    @pytest.mark.parametrize(
+        "saved,name,slash",
+        [
+            ("kirocrew-jdoe", "KiroCrew-jdoe", "/kirocrew-jdoe"),  # brand-ok: manifest app name
+            ("crew", "KiroCrew-kirocrew", "/crew"),  # brand-ok: manifest app name
+        ],
+    )
+    def test_endpoint_renders_for_this_install(
+        self, saved: str, name: str, slash: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import kiro_crew.dashboard.handlers.messaging as mod
+
+        cfg = _cfg(command=saved, code_channels=True)
+        monkeypatch.setattr(KiroCrewConfig, "load", classmethod(lambda cls, *a, **k: cfg))
+        resp = asyncio.run(
+            mod.api_slack_manifest(make_mocked_request("GET", "/api/slack/manifest"))
+        )
+        body = json.loads(resp.text)
+        parsed = yaml.safe_load(body["manifest"])
+        assert parsed["display_information"]["name"] == name
+        assert parsed["features"]["slash_commands"][0]["command"] == slash
+        assert body["command"] == slash.lstrip("/")
+        assert "code_channels" in parsed["features"]
+        # The create-app deep link stays one the exfil validator exempts.
+        assert scan_exfiltration_urls(body["create_url"]) == []

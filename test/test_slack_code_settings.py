@@ -23,7 +23,7 @@ import kiro_crew.dashboard.handlers.core as core_handlers
 import kiro_crew.dashboard.handlers.messaging as mod
 from kiro_crew import slack_manifest
 from kiro_crew.dashboard import slack_code_settings as scs
-from kiro_crew.slack import scope_probe
+from kiro_crew.slack import features, scope_probe
 
 _FOLDERS = [
     {"id": "aaaaaaaaaaaa", "name": "Dev", "parent_id": "", "project_dir": "/tmp"},
@@ -443,10 +443,10 @@ class TestDrift:
         assert "agents.conversations.listViews" not in client.calls
 
     def test_runtime_refusal_is_reported_and_retired_by_a_passing_probe(self) -> None:
-        scope_probe.note_feature_disabled("agent_sessions")
+        features.latch_unavailable("agent_sessions", "feature_disabled")
         got = _probe(_FakeClient(_scopes(_AS)), _AS)
         assert got.status == scope_probe.STATUS_FEATURE_DISABLED
-        scope_probe.note_feature_disabled("code_channels")
+        features.latch_unavailable("code_channels", "feature_disabled")
         got = _probe(_FakeClient(_scopes(_CC | _AS)), _CC | _AS)
         assert got.disabled_features == ("agent_sessions",)
 

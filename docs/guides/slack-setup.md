@@ -342,11 +342,14 @@ To update an existing app:
 1. Turn the switch on in Settings and **Save**.
 2. In the **Update your Slack app** panel, select **Copy manifest YAML**, then **Open App
    Manifest** (or **App Config → App Manifest** on <https://api.slack.com/apps>).
-3. Replace the YAML with the copied manifest and select **Save Changes**.
+3. Replace the YAML with the copied manifest and select **Save Changes**. Replacing the
+   YAML replaces the app's whole configuration, so re-add anything you added by hand
+   (or add only the lines the panel lists). The copied manifest keeps your app's slash
+   command.
 4. Reinstall when Slack asks (**Install App → Reinstall to Workspace**). The bot token
    usually stays the same; if Slack issues a new one, paste it in Settings.
 5. Select **Check again**. The panel reads **Up to date**, and the line under the switch
-   reads **Active**. No gateway restart is needed.
+   reads **Ready**. No gateway restart is needed.
 
 `kirocrew manifest` renders the same manifest for the switches saved in `config.json`.
 If the panel reads **Workspace not enabled**, the app has the scopes but Slack has not
