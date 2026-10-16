@@ -125,6 +125,20 @@ async def admitted_chat_turn(
         mark_admission_pending(slot_key, False)
 
 
+def admitted_or_direct(
+    slot_key: str,
+    admission: _gate.Admission,
+    turn: Coroutine[Any, Any, Any],
+    *,
+    still_live: Callable[[], bool],
+    on_ended: Callable[[], Any],
+) -> Coroutine[Any, Any, Any]:
+    """*turn* itself when *admission* is a pass-through, else :func:`admitted_chat_turn`."""
+    if admission.passthrough:
+        return turn
+    return admitted_chat_turn(slot_key, admission, turn, still_live=still_live, on_ended=on_ended)
+
+
 # -- subagents -------------------------------------------------------------------
 
 
@@ -329,6 +343,7 @@ async def admit_background_run(
 __all__ = [
     "admit_background_run",
     "admitted_chat_turn",
+    "admitted_or_direct",
     "admitted_cron_dispatch",
     "taskrunner_probe",
     "workflow_probe",

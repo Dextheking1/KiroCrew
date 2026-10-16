@@ -81,7 +81,6 @@ from kiro_crew.dashboard.slot_queue_repository import (
 from kiro_crew.dashboard.state import _MAX_DISMISSED_SOURCE_LINKS
 from kiro_crew.memory_stores import named_store_or_empty
 from kiro_crew.messaging.link import is_channel_session_key
-from kiro_crew.shared_crew import attribution as shared_crew_attribution
 from kiro_crew.validation import ARTIFACT_SLUG_RE, normalize_theme_consent_sha
 
 if TYPE_CHECKING:
@@ -779,10 +778,15 @@ def _read_created_by(r: _Read) -> None:
 def _read_attribution(r: _Read) -> None:
     # Shared Crew creator attribution. A line with no key reads as legacy and
     # stays legacy, so a later stamp can never invent a creator for it.
+    # Function-local: the chat_persistence facade's import closure stays unchanged.
+    from kiro_crew.shared_crew import attribution as shared_crew_attribution
+
     shared_crew_attribution.restore_from_metadata(r.slot, r.meta)
 
 
 def _attribution_value(slot: Any, folds: SaveFolds) -> object:
+    from kiro_crew.shared_crew import attribution as shared_crew_attribution
+
     value = shared_crew_attribution.metadata_value(slot)
     return OMIT if value is None else value
 

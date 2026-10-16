@@ -1219,16 +1219,17 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             _turn_kwargs["_attachments"] = _accepted_attachments
             # Typed form for the refusal replay: keeps ``dirs`` entries as folders.
             _turn_kwargs["_attachment_meta"] = _accepted_attachment_meta
-        _turn = state.run_background_turn(slot, _run_chat(state, slot, message, **_turn_kwargs))
-        if not turn_admission.passthrough:
-            _turn = admission_entry.admitted_chat_turn(
+        task = spawn_guarded_turn(
+            state,
+            slot,
+            admission_entry.admitted_or_direct(
                 slot.key,
                 turn_admission,
-                _turn,
+                state.run_background_turn(slot, _run_chat(state, slot, message, **_turn_kwargs)),
                 still_live=lambda: slot_is_live(state, slot),
                 on_ended=state.push_slots_update,
-            )
-        task = spawn_guarded_turn(state, slot, _turn)
+            ),
+        )
         slot.task = task
     finally:
         if _reserve_turn_admission:
