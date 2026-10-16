@@ -55,6 +55,25 @@ export interface AutoNudgeLoop {
    *  the ledger changes. Carried by the REST list and the `autonudge_state`
    *  frame; `undefined` reads as not held. */
   waiting_on_person?: boolean
+  /** True with `waiting_on_person` when the loop's own agent DECLARED the wait
+   *  (`monitor_update`'s `waiting_on_person`): it fires nothing until a person
+   *  replies in this chat, answers an approval or fires it. Carried by the REST
+   *  list and the `autonudge_state` frame; `undefined` reads as not declared. */
+  person_wait_declared?: boolean
+  /** How a declared person-wait ended: `expired` when the hold lifted on the
+   *  clock with no reply and no press, `person` or `agent` when one of them
+   *  acted; absent or '' when none has. Carried by the REST list and the
+   *  `autonudge_state` frame. The popover shows a muted "expired with no answer"
+   *  line on `expired`, and nothing for the other two -- those WERE the person
+   *  acting. `undefined`/'' reads as "no release to report". */
+  person_wait_release?: string
+  /** While a declared hold is ON, the wall-clock instant it expires (epoch
+   *  seconds): the hold lifts after the earlier of 24h and the loop's remaining
+   *  runtime budget, then the loop resumes or stops on its budget. Carried by
+   *  the REST list and the `autonudge_state` frame; absent or 0 when no declared
+   *  hold is on. The declared-hold status line names it so the wait does not
+   *  read as open-ended. */
+  person_wait_expires_at?: number
   /** Short stand-in for `message` in the visible transcript row; '' = none. */
   banner?: string
   /** The kill-switch file the server substitutes for `{{STOP_FILE}}` at fire
