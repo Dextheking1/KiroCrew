@@ -18,11 +18,38 @@ because an identity lookup failed. Every authorized collaborator has the same
 application rights. There are no roles, no per-session ACLs, no invitations and no
 in-Crew member management.
 
-Status: the contract types, codec, state machine and their tests are in the tree. The
-behaviour each later section describes (derivation, stores, scheduler, routes, frames)
-is the contract those modules implement; a section names its module once that module
-exists. Until then the gateway behaves as a single-operator Crew and `Capabilities`
-reports every Shared Crew capability unavailable.
+Status: proof of concept. Every section below names the module that implements it.
+`shared_crew.wiring` connects them at gateway start (`dashboard.server`): it registers
+the identity, presence and admission capability sources and makes the admission
+scheduler the People usage reader. The routes register through the `shared_crew`
+slice of `dashboard.routes`, after every existing slice. With
+`dashboard.shared_crew.admission_enabled` off (the default) the gateway behaves as a
+single-operator Crew, plus attribution, presence and shared decisions.
+
+Admission coverage. `POST /api/chat`, subagent spawn, continue and retry, the task
+runner, workflow run, run-intent, saved-definition run and rerun, and cron admit at
+the handler. Every other chat turn passes `shared_crew.turn_gate.gate_turn`, which
+`chat_runner._run_chat`'s exit guard calls: the queue drain, continue, regenerate,
+edit-resend, rewind, thread replies, side chat, app agents, send-message, the OpenAI
+shim, task-runner hand-offs, nudges and linked channel threads. A turn already inside
+admitted work, or nested in one (`_prompt_depth`), is not admitted twice. Channel
+transports admit in `messaging.dispatch.ChannelTurns._run`, the Telegram dispatcher and
+`slack.handler.handle_message`. With admission on, the speculative eager spawn is
+skipped, so a runtime only starts inside an admitted turn. Not covered: background
+one-liners (titles, the optimizer, workflow authoring, decision and knowledge LLM
+calls), warm connections, lifecycle respawns and the CLI's own `kirocrew chat` and
+`kirocrew run`. They keep today's behaviour and the `hard_limits` backstop in
+`runtime_start`. A WebSocket never starts a turn, and resume starts no runtime: its
+`session/load` runs inside the next admitted turn.
+
+Charging. A turn is charged to its initiator: the request's actor at a handler, the
+server-stamped `author` of a queued entry at the drain (entries restored from disk or
+merged from different people name no one), the bounded automation principal for an
+automation actor (`app`, `cron`, `gateway`, `crew`, `subagent`) or a synthetic turn,
+and the bounded Unknown bucket otherwise. A channel sender has no Shared Crew principal,
+so a person's channel message is Unknown and a monitor wake is automation. A refused
+turn never runs: the dashboard shows an error row, a channel gets a one-line reply, and
+a wake answers busy so it retries its claim.
 
 ## 2. Identity
 
@@ -434,6 +461,8 @@ has. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
 | `POST /api/shared-crew/work/{work_id}/cancel` `{expected_revision}` | the next `AcceptedWork`, or 409 with `current` |
 | a chat send | 200 when admitted, 202 with `work` when queued, 429 / 413 / 503 with `error_body` |
 | an approval or answer, with `response_id` | the `SharedDecision`; 409 `already_resolved` with it on a lost race |
+| `GET /api/shared-crew/presence?session_key=` | the session's `PresenceEntry` list (dashboard users only) |
+| `GET /api/shared-crew/decisions?session_key=` | the session's `SharedDecision` list (dashboard users only) |
 
 Browser-bound principals use `to_public_dict` (no issuer or subject); browser-bound
 work uses `AcceptedWork.to_public_dict` (no idempotency scope, lease or fencing ids).
@@ -604,3 +633,78 @@ record version, unrelated to the platform `CONTRACT_VERSION`. Rules:
 
 The contracts are pinned by `test/test_shared_crew_contracts.py`. Changing a field,
 an enum value or a transition changes that test and the TypeScript mirror together.
+
+### Operations
+
+Prerequisites. One gateway on a host the operator controls. Collaborators reach it
+through `tailscale serve` (preferred) or the tailnet address directly (only when
+`KIROCREW_BIND` widens the bind), with
+`dashboard.tailscale.trust_identity` on and `dashboard.tailscale.allowed_logins`
+listing each person (section 2). Without that opt-in every remote caller is Unknown.
+Per-person containment needs Linux with cgroup v2, a `systemd --user` session and the
+cpu, memory and pids controllers delegated to the user slice; anything else runs with
+admission counts only and reports it.
+
+Supported profiles.
+
+| Profile | Admission | Containment | `hard_limits` |
+|---|---|---|---|
+| macOS, Windows, Linux without delegation | counts and queues | `unavailable` | refuses all work, by design |
+| Linux, cgroup v2, delegated user slice | counts and queues | `best_effort` (CPU, memory, pids) | allowed |
+| Unrestricted host root | counts and queues | `best_effort` | not adversarial containment |
+
+Start, stop and configure. Start with `kirocrew gateway` (or the installed service)
+and stop with `kirocrew stop`. Limits live under `dashboard.shared_crew` (section 4)
+and are re-read within seconds, without a restart:
+
+```bash
+kirocrew config set dashboard.shared_crew.admission_enabled true
+kirocrew config set dashboard.shared_crew.principal_concurrency 2
+kirocrew config set dashboard.shared_crew.hard_limits true   # only on a delegated Linux host
+```
+
+Check what holds with `GET /api/shared-crew/capabilities` (what is enforced) and
+`GET /api/shared-crew/capacity` (the effective limits, the containment report and the
+viewer's usage). A `hard_limits` host that lacks a prerequisite logs
+`hard-limit mode is on and containment is unavailable (<reason>)` at start and refuses
+every admission and runtime start until it is fixed.
+
+Migration. Nothing is rewritten. Sessions created before Shared Crew read as
+`legacy_missing` with an Unknown creator; their messages have no author. New sessions
+and messages carry `attribution` and `author` stamps. No creator is backfilled and no
+access is inferred from an author.
+
+Rollback. Drain first: list `GET /api/shared-crew/work`, cancel what should not run
+(`POST /api/shared-crew/work/{id}/cancel`), and wait until `capacity` shows nothing
+active or queued. Then set `admission_enabled` false; new work passes through at once.
+Accepted-work records stay in the task store (`tasks.db`), and attribution stays in
+session metadata, which older readers carry as unowned keys. Never delete sessions to
+roll back.
+
+Diagnosing Unknown attribution. `GET /api/auth/me` answers the caller's `principal`.
+`kind: unknown` with provenance `none` means the request did not come through a
+verified tailnet path: check `trust_identity`, the caller's login in `allowed_logins`,
+that `tailscale serve` (not Funnel or another proxy) fronts the port, and the gateway
+log for whois failures. A channel sender is always Unknown in this build.
+
+Quota ownership. `GET /api/shared-crew/capacity` names the limiting scope (`principal`
+or `crew`) and the viewer's active and queued counts. `GET /api/shared-crew/people`
+shows each observed person's usage when admission is on. Work records carry
+`budget_key`, the opaque principal id charged.
+
+Cancellation and recovery. Cancel a queued or admitted item from the work list in the
+chat, or by the cancel route with its `expected_revision`; a stale revision answers
+409 with the current record. A restart reconciles accepted work before admitting new
+work (section 4): nothing that may have run is replayed, and a chat turn queued across
+a restart ends `cancelled` with its user row in the transcript to resend.
+
+Cleanup. The admission service purges terminal work records from the task store
+24 hours after they ended (`IDEMPOTENCY_TTL_SECONDS`), while admission is on.
+Presence, observed people and shared decisions are in memory and reset on restart.
+Principal slices are runtime-only systemd units and disappear with the user session.
+
+Known limits. Containment is `best_effort`: runtimes share the gateway's uid. IO is not
+limited, and disk is accounting of accepted request bytes, not a filesystem quota. A
+shared session's runtime stays in its first initiator's slice. Channel senders are
+Unknown. The routes in the "Not covered" list above bypass fair admission. Enterprise
+grant and budget gates exist as contracts (section 8) and nothing calls them yet.

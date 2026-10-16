@@ -889,6 +889,27 @@ The proxy strips the prefix before forwarding, relays cookies, and rewrites
 
 ---
 
+### Share one Crew with teammates
+
+Several people can use one Crew over Tailscale. Turn on identity trust and list
+each person's tailnet login, so the gateway names who did what:
+
+```bash
+kirocrew config set dashboard.tailscale.trust_identity true
+kirocrew config set dashboard.tailscale.allowed_logins '["alice@example.com", "bob@example.com"]'
+```
+
+Each session then shows its creator, each message its author, and the People
+settings page lists who has connected. To give every person a fair share of the
+host, turn on fair admission:
+
+```bash
+kirocrew config set dashboard.shared_crew.admission_enabled true
+```
+
+Limits, profiles, rollback and troubleshooting are in the
+[Shared Crew operations runbook](../system-specs/modules/shared-crew.md#operations).
+
 ## 3. Keep it alive as a service
 
 ### The built-in installer
