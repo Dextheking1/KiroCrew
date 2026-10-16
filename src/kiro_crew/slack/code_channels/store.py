@@ -64,6 +64,10 @@ class Binding:
 
     ``created_by_us`` is False for a channel opened from Slack's own UI that
     names this app as its agent; such a channel is adopted on first use.
+
+    ``channel_name`` is the Slack channel name at bind time; ``archived_at`` /
+    ``wrapped_up_at`` are wall-clock stamps the wrap-up feature sets. ``""`` / ``0``
+    mean unset, so a record written before these fields existed loads unchanged.
     """
 
     channel_id: str
@@ -76,6 +80,9 @@ class Binding:
     created_by_us: bool = True
     title: str = ""
     created_at: float = field(default=0.0)
+    channel_name: str = ""
+    archived_at: float = 0.0
+    wrapped_up_at: float = 0.0
 
     @property
     def origin_link(self) -> tuple[str, str] | None:
@@ -219,6 +226,27 @@ class CodeChannelStore:
             self._ensure_loaded()
             stored = Binding(**{**asdict(binding), "created_at": binding.created_at or time.time()})
             self._bindings[binding.channel_id] = stored
+            self._flush()
+            return stored
+
+    def update_binding(self, channel_id: str, **fields: Any) -> Binding | None:
+        """Change some fields of a stored binding; None when the channel is unbound.
+
+        Read, change and write happen under the store lock, so two updaters
+        never lose each other's fields. ``channel_id`` itself cannot change, and
+        an unknown field name is refused (``TypeError``) before anything is
+        written.
+        """
+        unknown = set(fields) - (set(Binding.__dataclass_fields__) - {"channel_id"})
+        if unknown:
+            raise TypeError(f"unknown Binding field(s): {', '.join(sorted(unknown))}")
+        with self._lock:
+            self._ensure_loaded()
+            existing = self._bindings.get(channel_id)
+            if existing is None:
+                return None
+            stored = Binding(**{**asdict(existing), **fields})
+            self._bindings[channel_id] = stored
             self._flush()
             return stored
 

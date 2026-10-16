@@ -67,10 +67,16 @@ def _error_code(exc: BaseException) -> str:
 
 
 def _report(code: str, method: str) -> None:
-    """Every refusal passes the latch, which acts only on the install-wide ones."""
-    from kiro_crew.slack.code_channels.settings import report_slack_refusal
+    """Hand every refusal to the shared capability latch.
 
-    report_slack_refusal(code, method=method)
+    ``features.latch_unavailable`` keeps only the install-wide codes
+    (``feature_disabled`` / ``missing_scope`` / ``not_allowed_token_type``) and
+    switches code channels off for the process on the first one.
+    """
+    from kiro_crew.slack import features
+
+    if features.latch_unavailable(features.CODE_CHANNELS, code):
+        logger.info("%s latched code channels off (%s)", method, code)
 
 
 def _safe(text: str) -> str:

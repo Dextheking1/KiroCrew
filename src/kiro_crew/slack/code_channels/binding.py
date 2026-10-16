@@ -7,19 +7,12 @@ any other chat. Slack is a second window onto it: a message in the channel is
 delivered to the session, and the session's replies are mirrored back into the
 channel TOP-LEVEL (a code channel is one session, never a thread).
 
-**What the session starts with** (:func:`resolve_session_spec`)
-
-========== =================================================================
-field      first that is set wins
-========== =================================================================
-agent      explicit default agent > the default folder's ``default_agent``
-           (nearest ancestor that declares one) > Slack's default agent
-model      explicit default model > the agent's own
-effort     explicit default reasoning effort > the agent's own
-folder     the default folder when it still exists > top level
-project    the folder's project directory (nearest ancestor) > the origin
-           thread's bound project (``!project``) > none (dashboard default)
-========== =================================================================
+**What the session starts with** (:func:`resolve_session_spec`): the order
+:func:`kiro_crew.slack.features.resolve_code_channel_session` applies --
+agent from the explicit default, else the default folder's ``default_agent``,
+else Slack's default agent; model and effort explicit or the agent's own; the
+default folder when it exists; project from the folder chain, else the origin
+thread's ``!project``, else the dashboard default.
 
 **How Slack reaches it.** The session's Slack link is recorded against the ts
 of the kickoff message this gateway posts when it binds the channel (the
@@ -36,15 +29,30 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from kiro_crew.slack.code_channels.settings import (
-    CodeChannelDefaults,
-    code_channels_on,
-    find_folder,
-    live_config,
-)
+from kiro_crew.slack import features
 from kiro_crew.slack.code_channels.store import Binding, store
 
 logger = logging.getLogger(__name__)
+
+
+def live_config(orch: Any | None = None) -> Any | None:
+    """The gateway's live config (reload-aware), or None when it cannot be read."""
+    try:
+        from kiro_crew.slack.handler import slack_cfg
+
+        return slack_cfg(orch)
+    except Exception:
+        logger.debug("code channels: live config unavailable", exc_info=True)
+        return None
+
+
+def code_channels_on(cfg: Any | None) -> bool:
+    """The one gate: :func:`kiro_crew.slack.features.code_channels_enabled`.
+
+    The setting is on AND the installed app can run code channels (scope
+    granted, not latched). An unreadable config is off.
+    """
+    return cfg is not None and features.code_channels_enabled(cfg)
 
 
 @dataclass(frozen=True)
@@ -60,32 +68,6 @@ class SessionSpec:
 
 class BindingUnavailable(Exception):
     """No dashboard session could be created (no dashboard, store failure...)."""
-
-
-def _folder_by_id(folders: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {str(f.get("id") or ""): f for f in folders if isinstance(f, dict)}
-
-
-def folder_default_agent(folders: list[dict[str, Any]], folder_id: str) -> str:
-    """The nearest ``default_agent`` up *folder_id*'s ancestor chain ("" if none).
-
-    The same walk the dashboard's agent picker makes (``folderAgent.ts``), so a
-    code channel filed in a folder starts on the agent a chat opened there
-    would.
-    """
-    by_id = _folder_by_id(folders)
-    seen: set[str] = set()
-    current = folder_id
-    while current and current not in seen:
-        seen.add(current)
-        folder = by_id.get(current)
-        if folder is None:
-            return ""
-        agent = folder.get("default_agent")
-        if isinstance(agent, str) and agent.strip():
-            return agent.strip()
-        current = str(folder.get("parent_id") or "")
-    return ""
 
 
 def _slack_default_agent(cfg: Any) -> str:
@@ -107,39 +89,39 @@ def _origin_project(origin_thread_ts: str) -> str:
         return ""
 
 
-async def resolve_session_spec(
-    state: Any,
-    cfg: Any,
-    defaults: CodeChannelDefaults,
-    *,
-    origin_thread_ts: str = "",
-) -> SessionSpec:
-    """Apply the resolution table in the module docstring."""
+async def resolve_session_spec(state: Any, cfg: Any, *, origin_thread_ts: str = "") -> SessionSpec:
+    """Apply :func:`kiro_crew.slack.features.resolve_code_channel_session`.
+
+    The order is that function's; this only supplies its inputs (the live folder
+    tree, Slack's default agent, the origin thread's project) and validates a
+    folder project directory, which the pure resolver leaves to the session
+    layer.
+    """
     folders: list[dict[str, Any]] = []
     if state is not None and hasattr(state, "read_folders"):
         folders = await state.read_folders(lambda fs: [dict(f) for f in fs if isinstance(f, dict)])
-    found = find_folder(folders, defaults.folder)
-    folder_id = str(found.get("id") or "") if found else ""
-    if defaults.folder and not folder_id:
-        logger.info(
-            "code channel default folder %s does not exist; filing at top level",
-            defaults.folder,
-        )
-    agent = defaults.agent or folder_default_agent(folders, folder_id) or _slack_default_agent(cfg)
-    project = ""
-    if folder_id:
+    origin_project = _origin_project(origin_thread_ts)
+    resolved = features.resolve_code_channel_session(
+        features.code_channel_defaults(cfg),
+        folders,
+        slack_agent=_slack_default_agent(cfg),
+        origin_project_dir=origin_project,
+    )
+    if resolved.folder_missing:
+        logger.info("code channel default folder does not exist; filing at top level")
+    folder_id = resolved.folder_id or ""
+    project = resolved.project_dir or ""
+    if resolved.project_source == "folder":
         from kiro_crew.dashboard.chat_folders import resolve_folder_project_dir_off_loop
 
         project, error = await resolve_folder_project_dir_off_loop(folders, folder_id)
         if error:
             logger.info("code channel folder project unusable (%s); ignoring it", error)
-            project = ""
-    if not project:
-        project = _origin_project(origin_thread_ts)
+            project = origin_project
     return SessionSpec(
-        agent=agent,
-        model=defaults.model,
-        reasoning_effort=defaults.reasoning_effort,
+        agent=resolved.agent or "",
+        model=resolved.model or "",
+        reasoning_effort=resolved.reasoning_effort or "",
         folder_id=folder_id,
         project_dir=project,
     )

@@ -15,15 +15,14 @@ from typing import Any
 import pytest
 
 from kiro_crew.config.loader import ACTIVATION_MENTION, ChannelConfig
+from kiro_crew.slack import features
 from kiro_crew.slack.code_channels import binding as binding_mod
-from kiro_crew.slack.code_channels import recognition, routing
-from kiro_crew.slack.code_channels import settings as cc_settings
-from kiro_crew.slack.code_channels import status
+from kiro_crew.slack.code_channels import recognition, routing, status
 from kiro_crew.slack.code_channels.classifier import RouteDecision
 from kiro_crew.slack.code_channels.client import CodeChannelsClient
-from kiro_crew.slack.code_channels.settings import REQUIRED_SCOPE
 from kiro_crew.slack.code_channels.store import CodeChannelStore, set_store
 
+REQUIRED_SCOPE = features.REQUIRED_SCOPE[features.CODE_CHANNELS]
 SELF_USER = "UBOT"
 SELF_BOT = "BBOT"
 OWNER = "UOWNER"
@@ -139,8 +138,8 @@ class Env:
         recognition.clear_cache()
         _reset_routing()
         # The install was granted the scope (connect-time probe stand-in).
-        cc_settings.reset_capability()
-        cc_settings.note_granted_scopes(["chat:write", REQUIRED_SCOPE])
+        features.reset_capabilities()
+        features.record_granted_scopes(["chat:write", REQUIRED_SCOPE])
 
         def cfg(_orch: Any = None) -> Any:
             return SimpleNamespace(
@@ -200,7 +199,7 @@ def make_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Iterator[Env]:
     set_store(None)
     status.set_client_factory(None)
     recognition.clear_cache()
-    cc_settings.reset_capability()
+    features.reset_capabilities()
     _reset_routing()
 
 
