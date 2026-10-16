@@ -53,6 +53,9 @@ _PERSON_ACTORS = frozenset({"", "user"})
 #: Error-row CSS class, shared with the runner's own failure rows.
 _ERROR_CLS = "msg msg-err"
 
+#: Turn outcomes (``metrics.turns.turn_outcome``) that settle the work ``failed``.
+_FAULT_OUTCOMES = frozenset({"error", "timeout", "stall_exhausted"})
+
 
 @contextlib.contextmanager
 def mark_admitted(work_id: str) -> Iterator[None]:
@@ -122,6 +125,50 @@ def turn_budget(kwargs: Mapping[str, Any], initiator: str = "") -> str:
     return Principal.unknown().id
 
 
+def turn_failure(stop_reason: str | None, new_rows: Iterable[object]) -> str:
+    """Why a turn that returned normally failed, or ``""`` when it did not.
+
+    *stop_reason* is the terminal event's stop reason, or None when the turn
+    reached no terminal event. With one, a fault outcome is a failure. Without
+    one, the turn failed when it wrote an error row (a runtime that could not
+    start, a dead transport); a local command with no row is not a failure.
+    """
+    from kiro_crew.metrics.turns import turn_outcome
+
+    if stop_reason is not None:
+        outcome = turn_outcome(stop_reason)
+        return f"turn ended: {outcome}" if outcome in _FAULT_OUTCOMES else ""
+    for row in new_rows:
+        if isinstance(row, Mapping) and row.get("role") == "error":
+            return "turn ended on an error with no terminal event"
+    return ""
+
+
+def _rows_since(slot: Any, start_total: int) -> list[object]:
+    messages = getattr(slot, "messages", None)
+    total = getattr(slot, "total_messages", None)
+    if not isinstance(messages, list) or not isinstance(total, int):
+        return []
+    added = total - start_total
+    return list(messages[-added:]) if added > 0 else []
+
+
+def _judge_turn(
+    slot: Any, work_id: str, start_total: int, stop_reason: Callable[[], str | None] | None
+) -> None:
+    """Report a failed turn to its admitted work, so it settles ``failed``."""
+    if not work_id or stop_reason is None:
+        return
+    try:
+        detail = turn_failure(stop_reason(), _rows_since(slot, start_total))
+    except Exception:  # noqa: BLE001 -- judging is best effort; the turn already ended
+        logger.debug("shared crew: could not judge a turn's outcome", exc_info=True)
+        return
+    service = _gate.installed_service()
+    if detail and service is not None:
+        service.note_failure(work_id, detail)
+
+
 def _note_not_started(slot: Any, reason: ReasonCode | None) -> None:
     try:
         slot.append(
@@ -165,19 +212,27 @@ async def gate_turn(
     message: object,
     kwargs: Mapping[str, Any],
     run: Callable[[], Coroutine[Any, Any, None]],
+    *,
+    stop_reason: Callable[[], str | None] | None = None,
 ) -> None:
     """Run *run()* as one admitted chat turn, or note why it did not start.
 
     Both marks are consumed here, in the turn's own task: a task the turn
     creates later (the queue drain starting the next entry) copies this
     context, and must face admission itself rather than inherit this turn's.
+    *stop_reason* reads the turn's terminal stop reason once it returned (None
+    for no terminal event); a failed turn settles its work ``failed``.
     """
     admitted = _ADMITTED_WORK.get()
     initiator = _INITIATOR.get()
     _ADMITTED_WORK.set("")
     _INITIATOR.set("")
-    if admitted or int(kwargs.get("_prompt_depth") or 0) > 0:
+    nested = int(kwargs.get("_prompt_depth") or 0) > 0
+    if admitted or nested:
+        start_total = getattr(slot, "total_messages", 0)
         await run()
+        if not nested:
+            _judge_turn(slot, admitted, start_total, stop_reason)
         return
     from kiro_crew.dashboard.chat_slack import slot_is_live
     from kiro_crew.dashboard.chat_utils import effective_session_key
@@ -199,10 +254,15 @@ async def gate_turn(
         _note_not_started(slot, work.reason if work is not None else None)
         state.push_slots_update()
 
+    async def _judged() -> None:
+        work_id, start_total = admitted_work(), getattr(slot, "total_messages", 0)
+        await run()
+        _judge_turn(slot, work_id, start_total, stop_reason)
+
     await admission_entry.admitted_chat_turn(
         slot.key,
         admission,
-        run(),
+        _judged(),
         still_live=lambda: slot_is_live(state, slot),
         on_ended=_ended,
     )
@@ -288,4 +348,5 @@ __all__ = [
     "run_channel_turn",
     "run_slack_message",
     "turn_budget",
+    "turn_failure",
 ]

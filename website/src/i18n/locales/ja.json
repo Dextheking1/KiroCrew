@@ -18985,6 +18985,7 @@
     "ended_policy": "ポリシー変更により停止",
     "ended_queue_expired": "キューでの待ち時間が長すぎました",
     "ended_run_deadline": "実行時間の上限を超えました",
+    "ended_runtime_error": "エラーで停止しました",
     "filter_all": "すべてのセッション",
     "filter_counts": "一致 {{shown}} 件 · このフィルターで非表示 {{hidden}} 件",
     "filter_empty": "このフィルターに一致するセッションはありません。",

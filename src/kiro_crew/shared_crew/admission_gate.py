@@ -100,6 +100,8 @@ TASK_STORE_UNAVAILABLE_CODE = "task_store_unavailable"
 
 #: ``extra`` key naming why reconciliation ended a record, for operators.
 RECONCILE_DETAIL_KEY = "reconcile_detail"
+#: ``extra`` key naming why ``failed`` work failed (bounded, no prompt text).
+FAILURE_DETAIL_KEY = "failure_detail"
 RECONCILE_RESTARTED_BEFORE_START = "host_restarted_before_start"
 RECONCILE_RAN_BEFORE_RESTART = "host_restarted_while_running"
 
@@ -214,6 +216,8 @@ class _Live:
     self_stopped: bool = False
     #: Reconciliation: runtime ownership not yet proven stopped.
     awaiting_proof: bool = False
+    #: Set by :meth:`AdmissionService.note_failure`: the work returned, but failed.
+    failure: str = ""
 
 
 @dataclass
@@ -878,12 +882,31 @@ class AdmissionService:
         ok = await asyncio.to_thread(_apply)
         return name if ok else ""
 
+    def note_failure(self, work_id: str, detail: str) -> bool:
+        """Mark running work *work_id* as failed when it settles, with *detail*.
+
+        For work that reports its own failure and returns normally (a chat turn
+        whose runtime errored writes an error row and returns). No I/O; the
+        settle that follows records ``failed`` with ``runtime_error``.
+        """
+        live = self._live.get(work_id)
+        if live is None or live.work.state is not S.RUNNING:
+            return False
+        live.failure = (detail or "failed")[:200]
+        return True
+
     async def _settle(self, live: _Live, outcome: OperationState) -> None:
         """Record *live*'s terminal state and release its slot once allowed."""
         assert self._store is not None
         state = live.work.state
         target = outcome
         reason: ReasonCode | None = None
+        extra: dict[str, Any] | None = None
+        if target is S.COMPLETED and live.failure:
+            target = S.FAILED
+        if target is S.FAILED:
+            reason = ReasonCode.RUNTIME_ERROR
+            extra = {FAILURE_DETAIL_KEY: live.failure or "raised"}
         if live.cancel_reason is not None:
             target = S.CANCELLED
             reason = live.cancel_reason
@@ -893,7 +916,11 @@ class AdmissionService:
             stopped = self._stopped_ref(live)
             if live.work.state not in TERMINAL:
                 live.work = await self._store.advance(
-                    live.work, target, reason=reason, runtime=stopped
+                    live.work,
+                    target,
+                    reason=reason,
+                    runtime=stopped,
+                    extra=extra if target is S.FAILED else None,
                 )
         except (StaleRevision, InvalidTransition):
             current = await self._store.get(live.work.work_id)
@@ -1498,6 +1525,7 @@ __all__ = [
     "AdmissionEnded",
     "AdmissionRefused",
     "AdmissionService",
+    "FAILURE_DETAIL_KEY",
     "IDEMPOTENCY_HEADER",
     "RECONCILE_DETAIL_KEY",
     "TASK_STORE_UNAVAILABLE_CODE",

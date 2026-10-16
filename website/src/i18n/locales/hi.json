@@ -19268,6 +19268,7 @@
     "ended_policy": "नीति बदलने से रोका गया",
     "ended_queue_expired": "कतार में बहुत देर तक इंतज़ार किया",
     "ended_run_deadline": "समय सीमा पार हो गई",
+    "ended_runtime_error": "एक त्रुटि के साथ रुक गया",
     "filter_all": "सभी सत्र",
     "filter_counts": "{{shown}} मेल खाते हैं · {{hidden}} इस फ़िल्टर से छिपे हैं",
     "filter_empty": "कोई सत्र इस फ़िल्टर से मेल नहीं खाता।",

@@ -18985,6 +18985,7 @@
     "ended_policy": "정책 변경으로 중지됨",
     "ended_queue_expired": "대기열에서 너무 오래 기다림",
     "ended_run_deadline": "실행 시간 제한을 넘김",
+    "ended_runtime_error": "오류로 중지됨",
     "filter_all": "모든 세션",
     "filter_counts": "일치 {{shown}}개 · 이 필터로 숨김 {{hidden}}개",
     "filter_empty": "이 필터에 맞는 세션이 없습니다.",

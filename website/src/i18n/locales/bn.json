@@ -19268,6 +19268,7 @@
     "ended_policy": "নীতি বদলের কারণে থেমেছে",
     "ended_queue_expired": "সারিতে খুব বেশিক্ষণ অপেক্ষা করেছে",
     "ended_run_deadline": "সময়সীমা পেরিয়ে গেছে",
+    "ended_runtime_error": "একটি ত্রুটিতে থেমে গেছে",
     "filter_all": "সব সেশন",
     "filter_counts": "{{shown}}টি মিলেছে · {{hidden}}টি এই ফিল্টারে লুকানো",
     "filter_empty": "এই ফিল্টারে কোনো সেশন মেলেনি।",

@@ -6,7 +6,7 @@ import { api } from '../../../api/client'
 import { WorkStatusList } from './WorkStatusList'
 import { PresenceChips } from './PresenceChips'
 import { DecisionAttributionList } from './DecisionAttributionList'
-import { refusalMessage, queuedReason } from './overloadCopy'
+import { endedReason, refusalMessage, queuedReason } from './overloadCopy'
 import { alreadyResolvedDecision, resolvedByLine } from '../../../components/chat-input/sharedDecision'
 import { readSendReceipt } from '../../../utils/sendDelivery'
 
@@ -145,6 +145,10 @@ describe('overload copy', () => {
       expect(s).toMatch(/still in the composer/)
       expect(s).not.toMatch(/second|minute/i)
     }
+  })
+
+  it('names a turn that ended in a runtime error', () => {
+    expect(endedReason('runtime_error')).toBe('stopped with an error')
   })
 
   it('leaves non Shared Crew refusals to the caller', () => {

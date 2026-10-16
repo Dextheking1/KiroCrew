@@ -19551,6 +19551,7 @@
     "ended_policy": "arrêté par un changement de règle",
     "ended_queue_expired": "a attendu trop longtemps dans la file",
     "ended_run_deadline": "a dépassé sa limite de temps",
+    "ended_runtime_error": "s'est arrêté sur une erreur",
     "filter_all": "Toutes les sessions",
     "filter_counts": "{{shown}} correspondantes · {{hidden}} masquées par ce filtre",
     "filter_empty": "Aucune session ne correspond à ce filtre.",

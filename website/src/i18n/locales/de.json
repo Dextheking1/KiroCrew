@@ -19268,6 +19268,7 @@
     "ended_policy": "durch eine Richtlinienänderung beendet",
     "ended_queue_expired": "hat zu lange in der Warteschlange gewartet",
     "ended_run_deadline": "hat sein Zeitlimit überschritten",
+    "ended_runtime_error": "wurde mit einem Fehler beendet",
     "filter_all": "Alle Sitzungen",
     "filter_counts": "{{shown}} passend · {{hidden}} durch diesen Filter ausgeblendet",
     "filter_empty": "Keine Sitzung passt zu diesem Filter.",

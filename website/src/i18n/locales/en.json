@@ -10364,6 +10364,7 @@
     "ended_policy": "stopped by a policy change",
     "ended_queue_expired": "waited too long in the queue",
     "ended_run_deadline": "ran past its time limit",
+    "ended_runtime_error": "stopped with an error",
     "filter_all": "All sessions",
     "filter_counts": "{{shown}} matching · {{hidden}} hidden by this filter",
     "filter_empty": "No sessions match this filter.",

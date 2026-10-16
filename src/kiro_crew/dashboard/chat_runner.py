@@ -6012,6 +6012,7 @@ class _TurnExit:
         "outcome",
         "reached_provider",
         "responsive_owner",
+        "stop_reason",
         "turn_id",
     )
 
@@ -6026,6 +6027,8 @@ class _TurnExit:
         self.outcome: _TurnOutcome | None = None
         self.reached_provider = False
         self.responsive_owner: Any = None
+        # The terminal event's stop reason; None while the turn reached none.
+        self.stop_reason: str | None = None
 
 
 async def _end_turn_tail(
@@ -6205,6 +6208,7 @@ def _hands_off_queue_on_exit(
                 args[0] if args else "",
                 kwargs,
                 lambda: fn(state, slot, turn_exit, *args, **kwargs),
+                stop_reason=lambda: turn_exit.stop_reason,
             )
         except GeneratorExit:
             closing = True
@@ -18289,6 +18293,8 @@ async def _run_chat(
         # session with no routed turn in flight, which is every session while
         # ``decisions.model_route_derive`` is off.
         _settle_jev_route(session_key, _jev_route_turn_ok(_crew_log_terminal))
+        if _crew_log_terminal is not None:
+            turn_exit.stop_reason = str(_crew_log_terminal.get("stop_reason") or "")
         if _crew_log_terminal is not None:
             # Any tool still open produced no result frame of its own. Closed
             # before the turn completes so a turn never completes with an open

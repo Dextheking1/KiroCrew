@@ -146,6 +146,8 @@ class ReasonCode(str, enum.Enum):
     CONTAINMENT_UNAVAILABLE = "containment_unavailable"
     QUEUE_EXPIRED = "queue_expired"
     RUN_DEADLINE = "run_deadline"
+    #: The work ran and ended in an error (a raise, or a turn its runtime failed).
+    RUNTIME_ERROR = "runtime_error"
     GRANT_REVOKED = "grant_revoked"
     POLICY_CHANGED = "policy_changed"
     CANCELLED_BY_USER = "cancelled_by_user"
@@ -168,6 +170,7 @@ REASON_HTTP_STATUS: Mapping[ReasonCode, int] = {
     ReasonCode.CONTAINMENT_UNAVAILABLE: 503,
     ReasonCode.QUEUE_EXPIRED: 409,
     ReasonCode.RUN_DEADLINE: 409,
+    ReasonCode.RUNTIME_ERROR: 409,
     ReasonCode.GRANT_REVOKED: 403,
     ReasonCode.POLICY_CHANGED: 409,
     ReasonCode.CANCELLED_BY_USER: 409,

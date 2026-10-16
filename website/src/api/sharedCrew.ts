@@ -141,6 +141,7 @@ export type ReasonCode =
   | 'containment_unavailable'
   | 'queue_expired'
   | 'run_deadline'
+  | 'runtime_error'
   | 'grant_revoked'
   | 'policy_changed'
   | 'cancelled_by_user'

@@ -19551,6 +19551,7 @@
     "ended_policy": "detenido por un cambio de política",
     "ended_queue_expired": "esperó demasiado en la cola",
     "ended_run_deadline": "superó su límite de tiempo",
+    "ended_runtime_error": "se detuvo con un error",
     "filter_all": "Todas las sesiones",
     "filter_counts": "{{shown}} coinciden · {{hidden}} ocultas por este filtro",
     "filter_empty": "Ninguna sesión coincide con este filtro.",

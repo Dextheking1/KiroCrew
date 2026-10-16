@@ -18985,6 +18985,7 @@
     "ended_policy": "因策略变更而停止",
     "ended_queue_expired": "在队列中等待太久",
     "ended_run_deadline": "超出运行时间限制",
+    "ended_runtime_error": "因错误而停止",
     "filter_all": "所有会话",
     "filter_counts": "{{shown}} 个匹配 · {{hidden}} 个被此筛选隐藏",
     "filter_empty": "没有符合此筛选的会话。",
