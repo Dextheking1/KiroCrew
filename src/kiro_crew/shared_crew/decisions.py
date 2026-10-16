@@ -318,6 +318,43 @@ def settle_after_wait(
         broadcast_decision(state, settled)
 
 
+def open_slot_approval(state: Any, slot: Any, request_id: str) -> str:
+    """Open the shared decision for a slot permission prompt the moment it shows.
+
+    The initiator is the author of the turn that asked. Returns the decision id
+    for :func:`settle_slot_approval`. Never raises into the caller.
+    """
+    decision_id = approval_decision_id(str(slot.key), str(request_id))
+    open_and_broadcast(
+        state,
+        decision_id,
+        DecisionKind.APPROVAL,
+        str(slot.key),
+        turn_initiator(getattr(slot, "messages", None)),
+    )
+    return decision_id
+
+
+def settle_slot_approval(state: Any, decision_id: str, fut: Any, *, withdrawn: bool) -> None:
+    """Close a slot approval's decision once its wait ended. Never raises.
+
+    A future a person settled through the approve route is already resolved,
+    so this does nothing; one the host settled resolves with an Unknown
+    responder; one nobody settled ends ``withdrawn`` (the turn was cancelled)
+    or ``expired``.
+    """
+    try:
+        outcome: str | None = None
+        if fut.done() and not fut.cancelled() and fut.exception() is None:
+            outcome = str(fut.result() or "") or None
+        closed = DecisionState.WITHDRAWN if withdrawn else DecisionState.EXPIRED
+        settle_after_wait(state, decision_id, outcome, closed)
+    except Exception:
+        log = getattr(state, "_log", None)
+        if log is not None:
+            log.warning("shared decision settle failed", exc_info=True)
+
+
 def system_initiator(source: str) -> Principal:
     """The bounded automation principal behind a background request source."""
     component = (source or "").split(":", 1)[0].strip() or "dashboard"

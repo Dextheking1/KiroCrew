@@ -687,6 +687,7 @@ from kiro_crew.session_agent_selection import (  # noqa: F401
     session_agent_selection_kind,
 )
 from kiro_crew.session_capabilities import CapabilityStartupError
+from kiro_crew.shared_crew.decisions import open_slot_approval, settle_slot_approval
 from kiro_crew.slack.handler import post_linked_approval, resolve_linked_approval
 from kiro_crew.slack.outbound import PostedOptions
 from kiro_crew.start_priority import StartPriority, person_priority
@@ -13211,6 +13212,11 @@ async def _run_chat(
                 loop = asyncio.get_running_loop()
                 fut: asyncio.Future[str] = loop.create_future()
                 slot.register_approval(str(event.request_id), fut, permission_row)
+                _decision_id = (
+                    ""
+                    if "resolved" in perm_meta
+                    else open_slot_approval(state, slot, str(event.request_id))
+                )
                 # Push via global SSE AFTER registering the future, so the
                 # slot dict reflects pending_approval=true and Board cards
                 # move into the Blocked lane without a browser refresh.
@@ -13477,6 +13483,8 @@ async def _run_chat(
                         except Exception:
                             logger.debug("Failed to render approval card", exc_info=True)
                     _owns_approval = slot.unregister_approval(str(event.request_id), fut)
+                    if _owns_approval and _decision_id:
+                        settle_slot_approval(state, _decision_id, fut, withdrawn=_host_cancelled)
                     # The decision is final here and nowhere earlier: every path
                     # out of the await above converges on this ``finally`` -- the
                     # human's answer, the window expiring, the no-budget decline,

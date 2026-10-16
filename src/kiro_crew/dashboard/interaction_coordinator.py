@@ -29,6 +29,8 @@ _Redactor = Callable[[str], tuple[str, object]]
 _EXPIRED_DECISION = "expired"
 #: The audit outcome of a wait whose id a later same-id request took over.
 _SUPERSEDED_DECISION = "superseded"
+#: Question endings in which nobody answered; their shared decision is closed.
+_UNANSWERED_REASONS = frozenset({"expired", "withdrawn", "no_client"})
 
 
 def _redact(text: object, redact_url: _Redactor, redact_secret: _Redactor) -> str:
@@ -612,6 +614,19 @@ class QuestionCoordinator:
             ask["reason"] = terminal_reason
         QuestionCoordinator._record_resolution(state, ask_id, terminal_reason)
         future.set_result(answers)
+        if responder is None:
+            # No verified responder: an expiry or withdrawal closes the decision,
+            # any other ending resolves it with an Unknown responder.
+            settle_after_wait(
+                state,
+                question_decision_id(ask_id),
+                None if terminal_reason in _UNANSWERED_REASONS else terminal_reason,
+                (
+                    DecisionState.EXPIRED
+                    if terminal_reason == "expired"
+                    else DecisionState.WITHDRAWN
+                ),
+            )
         if ask is not None:
             # Synchronously, not as a done-callback: a callback runs a loop tick
             # later, and in that window the card is still on screen and still
@@ -710,6 +725,13 @@ class QuestionCoordinator:
         state._pending_questions[ask_id] = payload
         state._question_futures[ask_id] = future
         state.mark_question_pending(slot_key, blocking=True, card_id=ask_id)
+        open_and_broadcast(
+            state,
+            question_decision_id(ask_id),
+            DecisionKind.QUESTION,
+            slot_key,
+            _question_initiator(state, slot_key),
+        )
         clients = int(await state.deliver_ws_owners("question_card", payload))
         retained = state._agent_asks.get(ask_id)
         if retained is None or retained["future"] is not future:
