@@ -2,8 +2,9 @@
 
 Use a pull-request monitor when you want Kiro Crew to keep checking a GitHub,
 GitLab, Azure DevOps, or Bitbucket Cloud pull request without spending a model
-turn on every poll. Kiro Crew wakes the owning conversation only when a new
-revision needs action.
+turn on every poll. Kiro Crew wakes the owning conversation when the pull
+request needs action, when its checks finish while it still waits for review,
+and when a person comments on it.
 
 ## Before you start
 
@@ -61,13 +62,36 @@ Kiro Crew probes and compares provider facts before it invokes the conversation:
 |---|---:|
 | No material change | 0 |
 | Checks still pending | 0 |
+| Bot comments edited while checks run | 0 |
 | Provider retry | 0 |
 | Review-ready success or terminal blocker | 0 |
 | New actionable fingerprint | At most 1 |
+| Every check finished, none failed, still waiting for review or mergeability | 1 |
+| A person comments or edits a comment (GitHub) | 1 |
 
 An actionable wake includes a compact summary. The agent can then fetch only the
 logs, comments, or diff needed for that change. Kiro Crew retains accepted
 fingerprints across restart, so the same revision is not handled twice.
+
+The two single wakes are for things that just happened, so a pull request that
+then sits waiting for an approval stays quiet and the watch stays active:
+
+- **Checks finished.** Review verdicts post before their own check ends, so this
+  is the point where every verdict of the round is readable. A draft does not get
+  this wake. If checks re-run on the same revision and finish again, the watch
+  wakes again only when the pull request's comments changed in between (for
+  example, a review lane posted a new verdict), or after the six-hour re-alert
+  interval. A new revision starts fresh. A board with more passing checks than
+  one bucket holds still counts as finished: passing checks are counted, not
+  listed in full.
+- **A person commented.** Only GitHub accounts of user type that are not the pull
+  request's author count, on PR-level comments and on reviews submitted with a
+  body and no verdict. Bot accounts and the author never wake the watch, so the
+  session that opened the pull request does not wake itself. This wake applies
+  in any open state, a draft included. GitLab, Azure DevOps and Bitbucket
+  monitors do not have it yet.
+
+Either way, the woken agent reads the pull request and decides what to do.
 
 Terminal success does not wake the conversation. The dashboard instead reports
 success, a terminal blocker, an exhausted budget, or an unavailable owning

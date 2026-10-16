@@ -17,6 +17,7 @@ from kiro_crew.monitoring.models import (
     PULL_REQUEST_CHECK_FIELDS,
     PULL_REQUEST_MERGEABILITY,
     PULL_REQUEST_MONITOR_KINDS,
+    PULL_REQUEST_PASSED_TOTAL_PREFIX,
     PULL_REQUEST_REVIEW_DECISIONS,
     PULL_REQUEST_STATES,
     PULL_REQUEST_SUPERSEDED_CHECK_FIELD,
@@ -169,6 +170,12 @@ class PullRequestFacts:
     #: lives on -- created_at frozen at PR open, body rewritten in place -- so it
     #: is the digest that catches the four bot verdicts a thread digest cannot see.
     pr_comment_body_digest: str = ""
+    #: A stable digest over the comments and commented reviews a PERSON wrote: an
+    #: account of user type that is not the pull request's author. "" when there
+    #: are none, and ``None`` when they were not read completely this tick -- an
+    #: adapter that cannot tell a person from a bot, or a refused or capped read.
+    #: Only the GitHub adapter sets it today.
+    person_comment_digest: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in PULL_REQUEST_MONITOR_KINDS:
@@ -203,6 +210,10 @@ class PullRequestFacts:
             raise ValueError("checks_complete must be a boolean")
         if not isinstance(self.pr_comment_body_digest, str):
             raise ValueError("pr_comment_body_digest must be a string")
+        if self.person_comment_digest is not None and not isinstance(
+            self.person_comment_digest, str
+        ):
+            raise ValueError("person_comment_digest must be a string or None")
 
 
 @dataclass(frozen=True)
@@ -222,7 +233,18 @@ def build_pull_request_probe_result(
     supplemental_provider_error: ProviderErrorKind | None = None,
 ) -> PullRequestProbeResult:
     """Build the shared canonical snapshot, fingerprint, and classification."""
+    previous = _previous_reading(previous_observation)
     canonical = canonical_pull_request_facts(facts)
+    person_digest = facts.person_comment_digest
+    if person_digest is None:
+        # Not read this tick, so the last reading's value stands. Dropping it
+        # would make the next complete read look like a person had just written
+        # every comment they ever wrote, and wake for it. With no value to carry
+        # the key stays absent, which means "not known" and names no edge.
+        carried = previous.get(PERSON_COMMENT_DIGEST_FIELD) if previous else None
+        person_digest = carried if isinstance(carried, str) else None
+    if person_digest is not None:
+        canonical[PERSON_COMMENT_DIGEST_FIELD] = person_digest
     status, reason_code = classify_pull_request_facts(facts)
     fingerprint_facts = (
         actionable_fingerprint_facts(canonical)
@@ -250,17 +272,184 @@ def build_pull_request_probe_result(
             supplemental_provider_error=supplemental_provider_error,
             reason_code=reason_code,
             head_changed=head_changed,
-            # Conditions are carried only for an ACTIONABLE subject, because the
-            # coalescing window is the only thing that reads them and nothing
-            # else is put through it. A PENDING subject naming conditions would
-            # be state with no reader, which is the shape that rots.
-            conditions=(
-                pull_request_conditions(canonical)
-                if status is MonitorObservationStatus.ACTIONABLE
-                else ()
+            # An ACTIONABLE subject names every condition it carries. Any other
+            # subject names only the EDGES this reading crossed -- checks that
+            # just settled, a person who just wrote -- because the decision
+            # engine wakes on a condition, and a condition a PENDING subject
+            # kept naming on every tick would be a level, not an edge.
+            conditions=_merge_conditions(
+                (
+                    pull_request_conditions(canonical)
+                    if status is MonitorObservationStatus.ACTIONABLE
+                    else ()
+                ),
+                pull_request_edge_conditions(
+                    canonical,
+                    previous,
+                    status,
+                    person_read=facts.person_comment_digest is not None,
+                ),
             ),
         ),
     )
+
+
+#: The canonical key carrying :attr:`PullRequestFacts.person_comment_digest`. Its
+#: PRESENCE is the fact "who wrote what was known": present with "" when a complete
+#: read found no person, absent when nothing was ever read -- another provider, a
+#: record written before the key existed, or a watch whose reads have all failed.
+#: Absence in the previous reading therefore makes the next reading a baseline.
+PERSON_COMMENT_DIGEST_FIELD = "person_comment_digest"
+
+
+def _person_count(value: object) -> int:
+    """The number of person-written entries a person digest covers."""
+    if not isinstance(value, str) or ":" not in value:
+        return 0
+    count = value.split(":", 1)[0]
+    return int(count) if count.isascii() and count.isdecimal() else 0
+
+
+def _previous_reading(previous_observation: object) -> Mapping[str, object] | None:
+    """The last canonical reading, or ``None`` when there is none to compare with.
+
+    An empty record -- a watch that has never read its subject, or one just
+    re-aimed -- is no reading, so no edge can be measured against it. That is what
+    keeps a watch armed on an already-green pull request quiet on its first tick.
+    """
+    if not isinstance(previous_observation, Mapping):
+        return None
+    head = previous_observation.get("head_revision")
+    if not isinstance(head, str) or not head:
+        return None
+    if not isinstance(previous_observation.get("checks"), Mapping):
+        return None
+    return previous_observation
+
+
+def _checks_settled(canonical: Mapping[str, object]) -> bool:
+    """Whether every check on the board finished and none failed.
+
+    A board with no passed check is not settled: right after a push the host may
+    report no checks at all for a few seconds, and an empty board read as settled
+    would wake before CI started and then mask the real settle on the same head.
+    A record without ``checks_complete`` predates the field and was only ever
+    written from a complete board, the same legacy reading the projection uses.
+    """
+    checks = canonical.get("checks")
+    if not isinstance(checks, Mapping) or canonical.get("checks_complete", True) is not True:
+        return False
+    for state in ("failed", "pending", "unknown"):
+        values = checks.get(state)
+        if not isinstance(values, (list, tuple)) or values:
+            return False
+    passed = checks.get("passed")
+    return isinstance(passed, (list, tuple)) and bool(passed)
+
+
+def _edge_key(prefix: str, *parts: object) -> str:
+    """A bounded condition key naming one edge by what it was observed on."""
+    encoded = json.dumps([str(part) for part in parts], separators=(",", ":"))
+    return f"{prefix}:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:32]}"
+
+
+def pull_request_edge_conditions(
+    canonical: Mapping[str, object],
+    previous: Mapping[str, object] | None,
+    status: MonitorObservationStatus,
+    *,
+    person_read: bool,
+) -> tuple[MonitorCondition, ...]:
+    """Name the two things that just HAPPENED on an open pull request.
+
+    Both are edges between the previous reading and this one, so a subject that
+    stays the same names nothing on the next tick and the watch goes quiet again.
+    Both are ``IMMEDIATE`` because an edge is reported on one tick only: held
+    inside the coalescing floor, it would be gone from the next tick before the
+    floor could release it.
+
+    **Checks settled.** The previous reading had a check still running, unknown,
+    failed or unread -- or described another head -- and this one has every check
+    finished with none failed, while the subject is still PENDING (waiting for
+    review or for mergeability). A review lane's verdict lands before its own
+    check finishes, so this is the tick every verdict of the round is readable.
+    It is keyed by the head AND the PR-level comment digest, which is the default
+    dedupe: checks re-run and settle again on the same head with no comment
+    changed is masked for the re-alert interval, while a re-run during which a
+    lane re-posted its verdict wakes again. ``REVISION`` scope, so a new head
+    starts clean. Draft subjects are left out: nothing is asked of a draft yet.
+
+    **A person wrote.** The digest over comments and commented reviews written by
+    a user account other than the author moved between two complete readings.
+    Bots never move it and neither does the author, so a session commenting on
+    its own pull request does not wake itself. Named in any open state, a draft
+    included: a person's comment usually needs an answer. ``NEVER`` scope, the
+    same reasoning as the comment-body condition. An unread digest (``person_read``
+    false) names nothing; the digest is carried forward instead, so the next
+    complete read compares against what was last really seen. A previous reading
+    that never knew the digest is a baseline, and a digest covering fewer entries
+    than before is a deletion: neither names the edge.
+
+    The previous reading must exist. A first reading is a baseline, not an edge.
+    """
+    if previous is None or canonical.get("state") != "open":
+        return ()
+    if status not in {MonitorObservationStatus.PENDING, MonitorObservationStatus.ACTIONABLE}:
+        return ()
+    head = canonical.get("head_revision")
+    conditions: list[MonitorCondition] = []
+    if (
+        status is MonitorObservationStatus.PENDING
+        and canonical.get("draft") is False
+        and _checks_settled(canonical)
+        and (not _checks_settled(previous) or previous.get("head_revision") != head)
+    ):
+        conditions.append(
+            MonitorCondition(
+                key=_edge_key(
+                    "checks_settled",
+                    head,
+                    canonical.get("pr_comment_body_digest", ""),
+                ),
+                severity=MonitorSeverity.IMMEDIATE,
+                brief="every check finished and none failed",
+                resets_on=MonitorResetsOn.REVISION,
+            )
+        )
+    person = canonical.get(PERSON_COMMENT_DIGEST_FIELD)
+    before = previous.get(PERSON_COMMENT_DIGEST_FIELD)
+    if (
+        person_read
+        and isinstance(person, str)
+        and person
+        and isinstance(before, str)
+        and person != before
+        # Fewer entries than before is a deletion, which asks nothing of anyone.
+        and _person_count(person) >= _person_count(before)
+    ):
+        conditions.append(
+            MonitorCondition(
+                key=_edge_key("person_comment", person),
+                severity=MonitorSeverity.IMMEDIATE,
+                brief="a person commented on the pull request",
+                resets_on=MonitorResetsOn.NEVER,
+            )
+        )
+    return tuple(conditions)
+
+
+def _merge_conditions(
+    *groups: tuple[MonitorCondition, ...],
+) -> tuple[MonitorCondition, ...]:
+    """Join condition groups, first key wins, within the per-observation cap."""
+    seen: set[str] = set()
+    merged: list[MonitorCondition] = []
+    for group in groups:
+        for condition in group:
+            if condition.key not in seen:
+                seen.add(condition.key)
+                merged.append(condition)
+    return tuple(merged[:MAX_MONITOR_CONDITIONS])
 
 
 def provider_error_result(
@@ -286,12 +475,25 @@ def canonical_pull_request_facts(facts: PullRequestFacts) -> dict[str, object]:
         state: sorted(check.identity for check in facts.checks if check.state == state)
         for state in PULL_REQUEST_CHECK_FIELDS
     }
+    # A failed, pending or unknown bucket past the bound leaves the board
+    # unmeasured: a verdict that could wake someone would be cut. The passed bucket
+    # is the exception. Its rows carry no such verdict, so it is cut and COUNTED
+    # instead, and a board with more passing checks than one bucket holds still
+    # reads complete -- otherwise it reads PENDING forever and never settles.
     overflow = not facts.checks_complete or any(
-        len(values) > MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET for values in buckets.values()
+        len(values) > MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET
+        for state, values in buckets.items()
+        if state != "passed"
     )
     checks = {
         state: values[:MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET] for state, values in buckets.items()
     }
+    passed = buckets["passed"]
+    if len(passed) > MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET:
+        checks["passed"] = [
+            *passed[: MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET - 1],
+            f"{PULL_REQUEST_PASSED_TOTAL_PREFIX}{len(passed)}",
+        ]
     if overflow:
         checks["unknown"] = [
             *checks["unknown"][: MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET - 1],

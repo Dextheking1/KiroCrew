@@ -146,6 +146,38 @@ PULL_REQUEST_SUPERSEDED_CHECK_FIELD = "superseded"
 #: compact inspection reads it to keep its count off the sentinel and to say the cut
 #: out loud -- a compact reader never sees the list itself.
 PULL_REQUEST_SUPERSEDED_INCOMPLETE_IDENTITY = f"{PULL_REQUEST_SUPERSEDED_CHECK_FIELD}:incomplete"
+#: The prefix of the identity that replaces the last entry when the passed bucket is
+#: cut. The rest of it is the bucket's real size, so the fingerprint moves when a
+#: passed check appears or disappears even past the cut, and a reader can report the
+#: real count. Spent inside the bucket rather than on ``checks_complete`` because a
+#: passed row carries no verdict: a board of more passing checks than one bucket holds
+#: is still fully measured.
+PULL_REQUEST_PASSED_TOTAL_PREFIX = "passed:total:"
+
+
+def pull_request_passed_count(values: object) -> int:
+    """How many checks passed, read from a canonical passed bucket.
+
+    A bucket the projection cut ends in a :data:`PULL_REQUEST_PASSED_TOTAL_PREFIX`
+    sentinel carrying the real size; any other list is its own length.
+    """
+    if not isinstance(values, list):
+        return 0
+    if values and len(values) == MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET:
+        last = values[-1]
+        if isinstance(last, str) and last.startswith(PULL_REQUEST_PASSED_TOTAL_PREFIX):
+            total = last[len(PULL_REQUEST_PASSED_TOTAL_PREFIX) :]
+            # The projection writes the sentinel only past the bound, so a smaller
+            # number is a real check that happens to carry the prefix.
+            if (
+                total.isascii()
+                and total.isdecimal()
+                and int(total) > MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET
+            ):
+                return int(total)
+    return len(values)
+
+
 PULL_REQUEST_BLOCKING_REVIEWS = {
     "unknown",
     "changes_requested",
@@ -530,12 +562,14 @@ MAX_MONITOR_CONDITION_KEY_CHARS = 200
 #: already bounds each check bucket, so the honest cap is that bound plus the
 #: fixed keys an adapter adds beside it: a review verdict, the unresolved-thread
 #: count, one mergeability condition, and the PR-level-comment-body digest --
-#: which wakes on an in-place comment edit a count cannot see. Four fixed keys
-#: can co-occur (conflict and behind are mutually exclusive), and the cap keeps
-#: the same one-key margin over that population the original carried. Derived
-#: rather than written out, so widening either half cannot leave the other
-#: behind.
-MAX_MONITOR_FIXED_CONDITIONS = 5
+#: which wakes on an in-place comment edit a count cannot see -- and the person
+#: comment edge, which can land on the same actionable tick. Five fixed keys can
+#: co-occur (conflict and behind are mutually exclusive, and the checks-settled
+#: edge is only ever emitted on a PENDING tick, which carries no failed check),
+#: and the cap keeps the same one-key margin over that population the original
+#: carried. Derived rather than written out, so widening either half cannot leave
+#: the other behind.
+MAX_MONITOR_FIXED_CONDITIONS = 6
 MAX_MONITOR_CONDITIONS = MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET + MAX_MONITOR_FIXED_CONDITIONS
 
 

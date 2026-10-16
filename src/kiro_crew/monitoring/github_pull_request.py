@@ -22,6 +22,7 @@ from kiro_crew.github_runner import (
     resolve_gh,
     run_gh,
 )
+from kiro_crew.monitoring import github_pull_request_people as people_reads
 from kiro_crew.monitoring.github_provider_errors import (
     REASON_SHARED_COOLDOWN,
     classify_cli_error,
@@ -97,7 +98,9 @@ _MAX_SUBJECTS_PER_QUERY = 25
 # interpolated into a query document. Every one of those travels as a typed
 # GraphQL variable instead.
 _ALIAS_RE = re.compile(r"^s(\d+)$")
-_PR_CORE_SELECTION = "number state isDraft headRefOid mergeable mergeStateStatus reviewDecision"
+_PR_CORE_SELECTION = (
+    "number state isDraft headRefOid mergeable mergeStateStatus reviewDecision author{login}"
+)
 _ROLLUP_SELECTION = """
 headRefOid
 commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:PAGE_SIZE,after:$CURSOR){
@@ -118,7 +121,7 @@ reviewThreads(first:PAGE_SIZE,after:$CURSOR){
 _PR_COMMENTS_SELECTION = """
 comments(first:PAGE_SIZE,after:$CURSOR){
   pageInfo{hasNextPage endCursor}
-  nodes{body}
+  nodes{body author{__typename login}}
 }
 """.replace("PAGE_SIZE", str(_PR_COMMENT_PAGE_SIZE)).strip()
 # GitHub meters GraphQL in points and REST in requests, and the two budgets are
@@ -232,6 +235,10 @@ class GitHubPullRequestResponse:
     #: or the comment read was incomplete. Set after the supplemental comment
     #: read via ``replace``; the primary-only and REST paths leave it empty.
     pr_comment_body_digest: str = ""
+    #: The pull request author's login, "" when GitHub reported none.
+    author_login: str = ""
+    #: See ``PullRequestFacts.person_comment_digest``; ``None`` when not read whole.
+    person_comment_digest: str | None = None
 
 
 GitHubPullRequestProbeResult = PullRequestProbeResult
@@ -416,7 +423,12 @@ class GitHubPullRequestProvider:
         graphql_live = [member for member in live if member.raw not in degraded]
         checks = self._checks(gh, host, graphql_live, heads)
         threads = self._review_threads(gh, host, graphql_live)
-        comments = self._pr_comments(gh, host, graphql_live)
+        comments = self._pr_comments(
+            gh,
+            host,
+            graphql_live,
+            {member.raw: facts[member.raw].author_login for member in graphql_live},
+        )
         rest_checks = self._checks_rest(
             gh,
             host,
@@ -435,7 +447,9 @@ class GitHubPullRequestProvider:
             unresolved, threads_complete, threads_error = (
                 (0, False, None) if member.raw in degraded else threads[member.raw]
             )
-            comment_digest = "" if member.raw in degraded else comments[member.raw]
+            comment_digest, person_digest = (
+                ("", None) if member.raw in degraded else comments[member.raw]
+            )
             if threads_error is ProviderErrorKind.RATE_LIMITED:
                 # Thread resolution is the ONE signal REST cannot express, so a
                 # refused thread read is reported as an incomplete COUNT rather
@@ -450,6 +464,7 @@ class GitHubPullRequestProvider:
                 unresolved_review_threads=unresolved,
                 review_threads_complete=threads_complete,
                 pr_comment_body_digest=comment_digest,
+                person_comment_digest=person_digest,
             )
             results[member.raw] = _build_result(
                 response,
@@ -860,8 +875,14 @@ class GitHubPullRequestProvider:
         gh: str,
         host: str,
         members: Sequence[_BatchSubject],
-    ) -> dict[str, str]:
+        authors: Mapping[str, str],
+    ) -> dict[str, tuple[str, str | None]]:
         """Digest each subject's PR-level (issue) comment bodies in shared pages.
+
+        Returns ``(body_digest, person_digest)`` per subject. The second digest is
+        over what a PERSON wrote (``github_pull_request_people``), commented
+        reviews included, which the first page's document also reads; it is
+        ``None`` when any of that was not read whole.
 
         Mirrors :meth:`_review_threads` in paging shape -- page size 100, the same
         page cap, cursor de-duplication and fail-closed handling -- but reports
@@ -876,16 +897,19 @@ class GitHubPullRequestProvider:
         digest moves once and wakes once, then dedupes.
         """
         bodies: dict[str, list[str]] = {member.raw: [] for member in members}
+        people: dict[str, list[str]] = {member.raw: [] for member in members}
         complete: dict[str, bool] = dict.fromkeys((m.raw for m in members), True)
+        people_complete: dict[str, bool] = dict.fromkeys((m.raw for m in members), True)
         pending = list(members)
         cursors: dict[str, str] = {}
         seen_cursors: dict[str, set[str]] = {member.raw: set() for member in members}
-        for _ in range(_PR_COMMENT_MAX_PAGES):
+        for page_index in range(_PR_COMMENT_MAX_PAGES):
             if not pending:
                 break
             document, argv_tail = _batch_document(
                 pending,
-                _PR_COMMENTS_SELECTION,
+                _PR_COMMENTS_SELECTION
+                + ("" if page_index else "\n" + people_reads.PR_REVIEWS_SELECTION),
                 cursors=cursors,
             )
             payload, _group_failure = self._graphql(gh, host, document, argv_tail)
@@ -906,6 +930,13 @@ class GitHubPullRequestProvider:
                     complete[member.raw] = False
                     continue
                 bodies[member.raw].extend(page_bodies)
+                author = authors.get(member.raw, "")
+                for found, whole in (
+                    people_reads.person_fingerprints(node.get("comments"), author),
+                    *(() if page_index else (people_reads.review_fingerprints(node, author),)),
+                ):
+                    people[member.raw].extend(found)
+                    people_complete[member.raw] = people_complete[member.raw] and whole
                 if member.raw in round_errors or not nodes_complete:
                     complete[member.raw] = False
                     continue
@@ -924,7 +955,12 @@ class GitHubPullRequestProvider:
             complete[member.raw] = False
         return {
             member.raw: (
-                _pr_comment_body_digest(bodies[member.raw]) if complete[member.raw] else ""
+                _pr_comment_body_digest(bodies[member.raw]) if complete[member.raw] else "",
+                (
+                    people_reads.person_comment_digest(people[member.raw])
+                    if complete[member.raw] and people_complete[member.raw]
+                    else None
+                ),
             )
             for member in members
         }
@@ -1063,7 +1099,10 @@ def _normalize_response(
     review_decision = raw["reviewDecision"]
     if review_decision is not None and not isinstance(review_decision, str):
         raise ValueError("GitHub pull request response is malformed")
+    author = raw.get("author")
+    login = author.get("login") if isinstance(author, Mapping) else None
     return GitHubPullRequestResponse(
+        author_login=login if isinstance(login, str) else "",
         target=target,
         state=_normalize_pr_state(raw["state"]),
         draft=raw["isDraft"],
@@ -1251,6 +1290,12 @@ def _bounded_checks(checks: tuple[GitHubCheck, ...]) -> tuple[tuple[GitHubCheck,
     complete = True
     for state in PULL_REQUEST_CHECK_FIELDS:
         matching = [check for check in checks if check.state == state]
+        if state == "passed":
+            # A passed row carries no verdict that could wake anyone, so a board
+            # with more of them than one bucket holds is still fully measured. The
+            # total row cap bounds them; the projection cuts the bucket and counts.
+            bounded.extend(matching)
+            continue
         if len(matching) > MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET:
             complete = False
         bounded.extend(matching[:MAX_MONITOR_CHECK_IDENTITIES_PER_BUCKET])
@@ -1586,6 +1631,7 @@ def _build_result(
             unresolved_review_threads=response.unresolved_review_threads,
             review_threads_complete=response.review_threads_complete,
             pr_comment_body_digest=response.pr_comment_body_digest,
+            person_comment_digest=response.person_comment_digest,
         ),
         previous_observation=previous_observation,
         response=response,

@@ -285,6 +285,10 @@ def _decide_effect(
         _reset_revision_memory(state)
     if observation.status is MonitorObservationStatus.ACTIONABLE:
         return _coalesce_actionable(state, observation, now=now)
+    if observation.conditions:
+        edge = _wake_on_edge(state, observation, now=now)
+        if edge is not None:
+            return edge
     # Any non-actionable outcome settles the subject, so no window stays open.
     _close_window(state, now=now)
     if observation.supplemental_provider_error is not None:
@@ -406,6 +410,43 @@ def _coalesce_actionable(
         return _wake(state, unmasked, now=now)
     # A follow-up change still inside the floor: record it and keep waiting.
     return MonitorDecision.RECORD_ONLY
+
+
+def _wake_on_edge(
+    state: MonitorState,
+    observation: MonitorObservation,
+    *,
+    now: float,
+) -> MonitorDecision | None:
+    """Wake a non-actionable subject for an edge it names, unless masked.
+
+    A probe names a condition on a subject that is not actionable only for an
+    EDGE -- something that happened between the last reading and this one, which
+    the next reading will not name again. So there is no window to wait out: the
+    edge either wakes now or is gone. The re-alert mask still applies, which is
+    what dedupes an edge seen again under the same key.
+
+    ``None`` means every condition is masked, and the tick then takes the
+    ordinary non-actionable path, which is what keeps a masked edge from changing
+    any other decision.
+    """
+    _prune_alerted(state, now=now)
+    unmasked = [
+        (key, severity)
+        for key, severity in _window_entries(observation)
+        if _realert_ready(state, key, now=now)
+    ]
+    if not unmasked:
+        return None
+    decision = _wake(state, unmasked, now=now)
+    # The window left open names what this wake delivers, which is what the
+    # stamp masks. An edge has nothing left to fold, so its window is born already
+    # past the floor: an actionable change on the very next tick wakes at once
+    # instead of waiting out a floor this wake never needed.
+    opened = max(0.0, now - models.DEFAULT_MONITOR_COALESCE_SECS)
+    for key in state.coalesce_windows:
+        state.coalesce_windows[key] = opened
+    return decision
 
 
 def _wake(

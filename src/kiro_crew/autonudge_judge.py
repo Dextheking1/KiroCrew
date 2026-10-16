@@ -304,10 +304,14 @@ def render_pr_checks(observation: Mapping[str, Any]) -> str:
         rendered = _render_check_bucket(checks, bucket)
         if rendered:
             parts.append(rendered)
+    from kiro_crew.monitoring.models import pull_request_passed_count
+
     for bucket in COUNTED_CHECK_BUCKETS:
         values = checks.get(bucket)
         if isinstance(values, (list, tuple)) and values:
-            parts.append(f"{bucket} {len(values)}")
+            # A cut passed bucket ends in a sentinel carrying its real size.
+            count = pull_request_passed_count(list(values)) if bucket == "passed" else len(values)
+            parts.append(f"{bucket} {count}")
     if not parts:
         parts.append("no checks reported")
     if observation.get("checks_complete") is False:

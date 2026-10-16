@@ -269,10 +269,25 @@ def test_check_bucket_overflow_is_bounded_without_changing_provider_completeness
     result = build_pull_request_probe_result(_facts(checks=checks))
 
     assert len(long_check.identity) <= 200
-    assert len(result.canonical["checks"]["passed"]) == 100
-    assert result.canonical["checks"]["unknown"] == ["checks:incomplete"]
+    passed = result.canonical["checks"]["passed"]
+    assert len(passed) == 100
+    # A passed bucket past the bound is cut and counted, and the board stays
+    # measured: no passed row carries a verdict that could wake anyone.
+    assert passed[-1] == "passed:total:101"
+    assert result.canonical["checks"]["unknown"] == []
+    assert result.canonical["checks_complete"] is True
     assert result.observation.status is MonitorObservationStatus.SUCCESS
     assert result.observation.reason_code == "review_ready"
+
+
+def test_a_pending_bucket_past_the_bound_still_reads_incomplete() -> None:
+    checks = tuple(PullRequestCheck(f"check-{index:03d}", "pending") for index in range(101))
+
+    result = build_pull_request_probe_result(_facts(checks=checks))
+
+    assert result.canonical["checks"]["unknown"] == ["checks:incomplete"]
+    assert result.canonical["checks_complete"] is False
+    assert result.observation.status is MonitorObservationStatus.PENDING
 
 
 def test_duplicate_check_rows_remain_a_complete_provider_result() -> None:

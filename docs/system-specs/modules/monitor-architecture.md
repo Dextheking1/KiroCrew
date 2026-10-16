@@ -1283,6 +1283,39 @@ owner forever. Each comment body is reduced to a fixed-width fingerprint at the
 point of retention, so what the probe keeps does not scale with how much a
 reviewer wrote and no body text survives into the condition key.
 
+**Two edges wake a subject that is not actionable.** A `PENDING` pull request
+names no level conditions, but `pull_request_edge_conditions` names an edge the
+reading just crossed, and `decision._wake_on_edge` wakes for it unless its key is
+masked. Both edges are `IMMEDIATE`: an edge is named on one tick only, so held
+inside the coalescing floor it would be gone before the floor released it.
+
+- `checks_settled:<hash of head and comment-body digest>`, `REVISION`: the
+  previous reading had a check pending, unknown, failed or unread, or another
+  head, and this one has every check finished with none failed and at least one
+  passed, on an open non-draft subject still `PENDING`. A review lane edits its
+  verdict comment before its own check finishes, so this is the tick every
+  verdict of the round is readable. The comment digest in the key is the dedupe:
+  a re-run that settles again on the same head with no comment change is masked
+  for the re-alert interval. An empty board is not settled, because a host can
+  report no checks for a moment after a push.
+- `person_comment:<hash of the person digest>`, `NEVER`: the digest over
+  comments and commented reviews written by a `User` account other than the
+  author moved between two complete readings (GitHub only). The canonical key is
+  present (possibly empty) once a complete read has happened, and absent while
+  nothing is known; a previous reading without it is a baseline, so neither a
+  record written before the key existed nor a failed first read wakes for old
+  comments. An unread digest is carried forward from the previous reading. The
+  digest carries its entry count, and a digest covering fewer entries than
+  before is a deletion, which names no edge.
+
+A first reading is a baseline and names neither edge. After the wake the subject
+stays `PENDING`, which the stall fold never counts, so a pull request waiting
+hours for an approval stays quiet and active. The passed bucket alone is exempt
+from the per-bucket overflow that marks a board incomplete: it is cut to 99
+identities plus a `passed:total:<n>` sentinel, so a board of more passing checks
+than a bucket holds still settles, and its fingerprint still moves when one
+appears or disappears.
+
 **An armed structured monitor is not freely swappable, though the key is.**
 Flipping the key back restores the previous wording on the next tool-list build
 and needs nothing else. An already-armed monitor is different:

@@ -50,6 +50,7 @@ from kiro_crew.monitoring.models import (
     MAX_MONITOR_WAKE_INSTRUCTIONS_CHARS,
     MIN_MONITOR_CADENCE_SECS,
     PULL_REQUEST_SUPERSEDED_INCOMPLETE_IDENTITY,
+    pull_request_passed_count,
     retained_outcome_blocks_rearm,
 )
 from kiro_crew.monitoring.registry import (
@@ -446,9 +447,11 @@ def schemas(*, names_only: bool = False) -> list[dict[str, Any]]:
             "name": "monitor_watch",
             "description": (
                 "Watch a supported pull request with cheap provider probes. The owning session "
-                "is woken only when a new revision needs action; unchanged, pending, retry, "
-                "and terminal probes use no agent turn. Available from dashboard, Slack, and "
-                "Discord sessions. One structured monitor per session."
+                "is woken when the pull request needs action, once when its checks finish "
+                "with none failed while it still waits (for review or mergeability), and once "
+                "when a person other than the author comments or edits a comment. Unchanged, "
+                "still-waiting, retry and terminal probes use no agent turn. Available from "
+                "dashboard, Slack, and Discord sessions. One structured monitor per session."
                 + (_WATCH_STEER_STRUCTURED_DEFAULT if prefer_structured else "")
             ),
             "inputSchema": {
@@ -2292,7 +2295,7 @@ def _compact_monitor_inspection(result: dict[str, Any]) -> dict[str, Any]:
                     check_summary[f"{status}_count"] = len(values)
             passed = checks.get("passed")
             if isinstance(passed, list):
-                check_summary["passed_count"] = len(passed)
+                check_summary["passed_count"] = pull_request_passed_count(passed)
             # Displaced rows are counted, not listed: the count is what tells a reader
             # that rows were declassified, and the identities are in the full
             # observation for whoever needs them. A cut bucket spends its last slot on
