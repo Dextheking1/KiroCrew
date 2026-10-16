@@ -23,7 +23,12 @@ from slack_gateway_coverage_helpers import (
     _within_lost_run,
 )
 
-from kiro_crew.autonudge import MANUAL_STOP_REASON, MONITOR_TERMINAL_REASON, NudgeLoop
+from kiro_crew.autonudge import (
+    AGENT_STOP_REASON,
+    MANUAL_STOP_REASON,
+    MONITOR_TERMINAL_REASON,
+    NudgeLoop,
+)
 from kiro_crew.monitoring import models as monitor_models
 from kiro_crew.monitoring.models import MonitorOutcome, MonitorState
 from kiro_crew.slack import gateway as gw
@@ -236,6 +241,52 @@ class TestAutonudgeRouterAndObserver:
         assert "monitor" not in payload["loop"]
 
     @pytest.mark.asyncio
+    async def test_observer_frame_carries_the_agents_stop_words(self):
+        """The popover shows why the agent stopped a loop, and it renders from the
+        frame, so the words ride it beside the reason they explain."""
+        orch = _make_orchestrator()
+        orch.dashboard_state = _mock_dashboard_state()
+        _on_fire, observer, _inst = await self._wire(orch)
+
+        observer("armed", _loop("chat-1-1721"))
+        _topic, payload = orch.dashboard_state.broadcast_ws.call_args.args
+        assert payload["loop"]["stopped_detail"] == ""
+
+        stopped = _loop(
+            "chat-1-1721",
+            active=False,
+            stopped_reason=AGENT_STOP_REASON,
+            stopped_detail="PR merged, nothing left to do",
+        )
+        observer("updated", stopped)
+        _topic, payload = orch.dashboard_state.broadcast_ws.call_args.args
+        assert payload["loop"]["stopped_reason"] == AGENT_STOP_REASON
+        assert payload["loop"]["stopped_detail"] == "PR merged, nothing left to do"
+
+    @pytest.mark.asyncio
+    async def test_observer_frame_redacts_the_stop_words_it_broadcasts(self, monkeypatch):
+        """The frame reaches every dashboard socket, so the agent's words go through
+        the frame's redaction like every other stored string it carries."""
+        from kiro_crew.slack import gateway as gateway_module
+
+        def _redactor(value):
+            return value.replace("ghp_stopword", "[redacted]") if isinstance(value, str) else value
+
+        monkeypatch.setattr(gateway_module, "_redact_monitor_value", _redactor)
+        orch = _make_orchestrator()
+        orch.dashboard_state = _mock_dashboard_state()
+        _on_fire, observer, _inst = await self._wire(orch)
+        stopped = _loop(
+            "chat-1-1721",
+            active=False,
+            stopped_reason=AGENT_STOP_REASON,
+            stopped_detail="blocked on ghp_stopword",
+        )
+        observer("updated", stopped)
+        _topic, payload = orch.dashboard_state.broadcast_ws.call_args.args
+        assert payload["loop"]["stopped_detail"] == "blocked on [redacted]"
+
+    @pytest.mark.asyncio
     async def test_observer_frame_redacts_the_watch_kind_it_broadcasts(self, monkeypatch):
         """The kind is a stored string a hand-edited state file reads back as
         written, and this frame reaches every dashboard socket, so the scalar
@@ -298,6 +349,99 @@ class TestAutonudgeRouterAndObserver:
         assert appended == [
             ("crew-x", PATROL_STOPPED, {"slot_key": "member-crew-x", "reason": "stop_sentinel"})
         ]
+
+    @pytest.mark.asyncio
+    async def test_observer_logs_a_member_patrol_its_agent_stopped_as_stopped(self):
+        """An agent stop keeps the row deactivated and arrives as ``updated``; the
+        member event log must close the patrol before the frame is broadcast, or
+        the member projection keeps reading ``armed``."""
+        from kiro_crew import eventlog_hooks
+        from kiro_crew.eventlog.types import PATROL_STOPPED
+
+        orch = _make_orchestrator()
+        orch.dashboard_state = _mock_dashboard_state()
+        _on_fire, observer, inst = await self._wire(orch)
+        order: list[str] = []
+        appended: list[tuple[str, str, dict]] = []
+
+        def _emit(slug, _actor, etype, data):
+            order.append("append")
+            appended.append((slug, etype, data))
+            return True
+
+        orch.dashboard_state.broadcast_ws.side_effect = lambda *_a, **_k: order.append("publish")
+        with (
+            patch.object(eventlog_hooks, "member_slug_for_slot", lambda slot: "crew-x"),
+            patch.object(eventlog_hooks, "submit", lambda fn: (fn(), True)[1]),
+            patch.object(eventlog_hooks, "emit", _emit),
+        ):
+            stopped = _loop(
+                "member-crew-x",
+                active=False,
+                stopped_reason=AGENT_STOP_REASON,
+                stopped_detail="done",
+            )
+            inst._activity_transition_for_observer.side_effect = [
+                (True, False, ""),
+                (False, False, AGENT_STOP_REASON),
+            ]
+            observer("updated", stopped)
+            observer("updated", stopped)
+        assert appended == [
+            ("crew-x", PATROL_STOPPED, {"slot_key": "member-crew-x", "reason": AGENT_STOP_REASON})
+        ]
+        # The publish is scheduled back onto the loop after the append lands, so
+        # nothing may have been broadcast ahead of it.
+        assert order[0] == "append"
+
+    @pytest.mark.asyncio
+    async def test_observer_logs_a_revived_member_patrol_as_started(self):
+        """Play revives a kept agent-stop row through ``updated`` rather than add."""
+        from kiro_crew import eventlog_hooks
+        from kiro_crew.eventlog.types import PATROL_STARTED
+
+        orch = _make_orchestrator()
+        orch.dashboard_state = _mock_dashboard_state()
+        _on_fire, observer, inst = await self._wire(orch)
+        appended: list[tuple[str, str, dict]] = []
+        with (
+            patch.object(eventlog_hooks, "member_slug_for_slot", lambda slot: "crew-x"),
+            patch.object(eventlog_hooks, "submit", lambda fn: (fn(), True)[1]),
+            patch.object(
+                eventlog_hooks,
+                "emit",
+                lambda slug, _actor, etype, data: (appended.append((slug, etype, data)), True)[1],
+            ),
+        ):
+            inst._activity_transition_for_observer.return_value = (False, True, AGENT_STOP_REASON)
+            observer("updated", _loop("member-crew-x", active=True))
+        assert appended == [("crew-x", PATROL_STARTED, {"slot_key": "member-crew-x"})]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "prior_reason", [MANUAL_STOP_REASON, "max_cycles", "max_runtime", "stop_sentinel"]
+    )
+    async def test_observer_logs_no_start_for_a_resume_the_agent_did_not_stop(self, prior_reason):
+        """Only reviving an agent-stopped row logs the patrol started; every other
+        resume keeps the event log as the base wrote it."""
+        from kiro_crew import eventlog_hooks
+
+        orch = _make_orchestrator()
+        orch.dashboard_state = _mock_dashboard_state()
+        _on_fire, observer, inst = await self._wire(orch)
+        appended: list[tuple[str, str, dict]] = []
+        with (
+            patch.object(eventlog_hooks, "member_slug_for_slot", lambda slot: "crew-x"),
+            patch.object(eventlog_hooks, "submit", lambda fn: (fn(), True)[1]),
+            patch.object(
+                eventlog_hooks,
+                "emit",
+                lambda slug, _actor, etype, data: (appended.append((slug, etype, data)), True)[1],
+            ),
+        ):
+            inst._activity_transition_for_observer.return_value = (False, True, prior_reason)
+            observer("updated", _loop("member-crew-x", active=True))
+        assert appended == []
 
     @pytest.mark.asyncio
     async def test_observer_broadcasts_structured_state_to_owners_only(self):

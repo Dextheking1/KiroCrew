@@ -237,6 +237,14 @@ async def _init_autonudge(self: GatewayOrchestrator) -> None:
                 # REST list already.
                 "next_due_ts": loop.next_due_ts,
                 "stopped_reason": loop.stopped_reason,
+                # The agent's own words on an ``agent_stop`` row, which the popover
+                # shows under the status line; "" on every other stop. Cleaned on
+                # every write and load (``autonudge_stop_log.clean_stop_detail``),
+                # and put through this frame's own redaction too, since the frame
+                # reaches every dashboard socket.
+                "stopped_detail": (
+                    _redact_monitor_value(loop.stopped_detail) if loop.stopped_detail else ""
+                ),
                 # The settled outcome of the loop's own watch ("success" for a
                 # merged subject or an accepted work ledger, "blocked" for one
                 # closed without merging or rejected), "" while none has settled,
@@ -321,22 +329,46 @@ async def _init_autonudge(self: GatewayOrchestrator) -> None:
             try:
 
                 from kiro_crew import eventlog_hooks
+                from kiro_crew.autonudge import AGENT_STOP_REASON
                 from kiro_crew.eventlog.types import PATROL_STARTED, PATROL_STOPPED
 
                 _pslug = eventlog_hooks.member_slug_for_slot(loop.slot_key)
                 _etype2: str | None = None
                 _edata: dict = {}
-                if event == "added":
-                    _etype2, _edata = PATROL_STARTED, {"slot_key": loop.slot_key}
-                elif event in ("removed", "expired") or (
-                    # A loop FINISHED by its stop file is kept and deactivated,
-                    # so it arrives as ``updated``; the patrol is over all the
-                    # same, and a log left reading ``armed`` would never close --
-                    # the boot closer closes only a log whose row is gone. A
-                    # plain pause stays a pause: not a stop, not recorded.
+                _activity_edge = (
+                    self.autonudge_svc._activity_transition_for_observer(loop.id)
+                    if event == "updated" and self.autonudge_svc is not None
+                    else None
+                )
+                # A loop its own agent stopped is kept and deactivated too. Only the
+                # active-to-inactive edge logs it, so a later edit of that kept row
+                # writes no second stop.
+                _agent_stop_edge = (
+                    _activity_edge is not None
+                    and _activity_edge[:2] == (True, False)
+                    and loop.stopped_reason == AGENT_STOP_REASON
+                )
+                if event == "added" or (
+                    # Play on a row the agent stopped revives it through
+                    # ``updated``, and that stop logged the patrol stopped, so
+                    # the revival logs it started. Any other resume logs nothing.
                     event == "updated"
-                    and not loop.active
-                    and reason_in(loop.stopped_reason, FINISHED_LOOP_REASONS)
+                    and _activity_edge == (False, True, AGENT_STOP_REASON)
+                ):
+                    _etype2, _edata = PATROL_STARTED, {"slot_key": loop.slot_key}
+                elif (
+                    _agent_stop_edge
+                    or event in ("removed", "expired")
+                    or (
+                        # A loop FINISHED by its stop file is kept and deactivated,
+                        # so it arrives as ``updated``; the patrol is over all the
+                        # same, and a log left reading ``armed`` would never close --
+                        # the boot closer closes only a log whose row is gone. A
+                        # plain pause stays a pause: not a stop, not recorded.
+                        event == "updated"
+                        and not loop.active
+                        and reason_in(loop.stopped_reason, FINISHED_LOOP_REASONS)
+                    )
                 ):
                     _reason = getattr(loop, "stopped_reason", None) or event
                     _etype2, _edata = (
