@@ -662,6 +662,53 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     expect(screen.queryByText(/Stopped/)).toBeNull()
   })
 
+  it('a loop the agent stopped reads Stopped with the agent\'s own words under the status, and Play still resumes it', () => {
+    renderWith(paused({ stopped_reason: 'agent_stop', stopped_detail: 'PR merged, nothing left to do' }))
+    expect(title()).toBe('Stopped')
+    expect(screen.queryByText(/^Paused/)).toBeNull()
+    const line = status()!
+    expect(line.firstChild?.textContent).toBe('Stopped · the agent ended it')
+    const detail = screen.getByTestId('auto-nudge-stop-detail')
+    expect(line).toContainElement(detail)
+    expect(detail.textContent).toBe('Agent’s reason: PR merged, nothing left to do')
+    expect(detail.className).toMatch(/\bline-clamp-3\b/)
+    expect(byLabel(RESUME)!).toBeEnabled()
+    expect(clearAction()!.textContent).toBe('Clear stopped goal')
+  })
+
+  it('a new goal typed over a loop the agent stopped goes out as the resume PATCH, never as a create the kept row would refuse', async () => {
+    const resumed = running({ message: 'watch the next PR' })
+    stubWriteThenFire(resumed, { ok: true, loop: resumed })
+    renderWith(paused({ stopped_reason: 'agent_stop', stopped_detail: 'done' }))
+    fireEvent.change(goalBox(), { target: { value: 'watch the next PR' } })
+    await act(async () => { fireEvent.click(byLabel(SAVE_AND_RESUME)!) })
+    expect(createCalls()).toHaveLength(0)
+    expect(patchCalls()).toHaveLength(1)
+    expect(JSON.parse(patchCalls()[0][1]!.body!)).toMatchObject({ message: 'watch the next PR', active: true })
+    expect(fireCalls()).toHaveLength(1)
+  })
+
+  it('the agent\'s words render as text, never markup', () => {
+    renderWith(paused({ stopped_reason: 'agent_stop', stopped_detail: '<img src=x onerror=alert(1)><b>done</b>' }))
+    const detail = screen.getByTestId('auto-nudge-stop-detail')
+    expect(detail.textContent).toBe('Agent’s reason: <img src=x onerror=alert(1)><b>done</b>')
+    expect(detail.querySelector('img, b')).toBeNull()
+  })
+
+  it.each([
+    ['an agent stop with no words', { stopped_reason: 'agent_stop', stopped_detail: '' }],
+    ['an agent stop whose words are blank', { stopped_reason: 'agent_stop', stopped_detail: '   ' }],
+    ['a person\'s pause carrying stray words', { stopped_reason: 'manual', stopped_detail: 'left over' }],
+  ])('%s shows no reason line', (_case, over) => {
+    renderWith(paused(over))
+    expect(screen.queryByTestId('auto-nudge-stop-detail')).toBeNull()
+  })
+
+  it('a running loop carrying stray stop words shows no reason line', () => {
+    renderWith(running({ stopped_reason: 'agent_stop', stopped_detail: 'left over' }))
+    expect(screen.queryByTestId('auto-nudge-stop-detail')).toBeNull()
+  })
+
   it('an active loop held for approval reads paused: warn box, Play resumes, Pause still stops it, no Clear', () => {
     renderWith(running({ approval_stalled: true, next_due_ts: Math.floor(Date.now() / 1000) - 5 }))
     expect(status()!.textContent).toBe('Paused · an approval in this chat timed out. Press Play or send a message to resume.')

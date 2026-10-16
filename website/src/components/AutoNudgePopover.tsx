@@ -67,10 +67,13 @@ const defaultMsg = () => i18nT('components.autoNudgePopover.default_goal', {
 })
 
 /** The paused line per persisted `stopped_reason` (`autoNudgeLoop.ts` lists
- *  the codes). An unlisted or absent reason renders the bare "Paused". */
+ *  the codes). An unlisted or absent reason renders the bare "Paused". The
+ *  agent's own stop (`agent_stop`) is worded as stopped, not paused: the agent
+ *  ended it on purpose, and a person's Play is how it runs again. */
 const PAUSED_STATUS_KEY: Record<string, string> = {
   manual: 'components.autoNudgePopover.paused_manual',
   autonudge_stop: 'components.autoNudgePopover.paused_agent',
+  agent_stop: 'components.autoNudgePopover.stopped_agent',
   cycle_cap: 'components.autoNudgePopover.paused_cycle_cap',
   runtime_budget: 'components.autoNudgePopover.paused_runtime_budget',
   approval_stalled: 'components.autoNudgePopover.paused_approval_stalled',
@@ -611,15 +614,22 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
             ? i18nT(PAUSED_STATUS_KEY[loop.stopped_reason], { cycles: loop.cycle_count, max: loop.max_cycles })
             : i18nT('components.autoNudgePopover.loop_paused')
     : ''
+  /** The agent ended this loop itself (`agent_stop`): titled Stopped, with the
+   *  agent's own words, when it gave any, on a line under the status. */
+  const agentStopped = !!loop && !loop.active && loop.stopped_reason === 'agent_stop'
+  const agentStopDetail = agentStopped ? (loop?.stopped_detail ?? '').trim() : ''
   /** The title names the state: the goal's cycle while running, Done once
-   *  finished, Paused otherwise, and the invitation when there is no loop. */
+   *  finished, Stopped when the agent ended it, Paused otherwise, and the
+   *  invitation when there is no loop. */
   const titleText = !loop
     ? i18nT('components.autoNudgePopover.set_a_goal')
     : runsNow
       ? i18nT('components.autoNudgePopover.goal_active_cycle', { cycle: cycleText })
       : finished
         ? i18nT('components.autoNudgePopover.loop_done')
-        : i18nT('components.autoNudgePopover.loop_paused')
+        : agentStopped
+          ? i18nT('components.autoNudgePopover.loop_stopped')
+          : i18nT('components.autoNudgePopover.loop_paused')
   /** Whether a cycle is ALREADY armed to run. Derived from the same countdown
    *  the status line renders, so the button and the text can never disagree.
    *  Never while held: its deadline has passed but nothing is armed, and the
@@ -712,6 +722,19 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
           >
             {doneLine?.check && <Check size={12} className="lucide-inline mr-1" aria-hidden data-testid="auto-nudge-done-check" />}
             {statusText}
+            {/* The agent's words are model-authored: rendered as text (never
+                markup), already redacted and clipped by the server, and clamped
+                to three lines here so a long reason cannot push the form off the
+                panel; the full text stays in the hover title. */}
+            {agentStopDetail && (
+              <span
+                data-testid="auto-nudge-stop-detail"
+                className="mt-1 block line-clamp-3 break-words"
+                title={agentStopDetail}
+              >
+                {i18nT('components.autoNudgePopover.stopped_agent_reason', { reason: agentStopDetail })}
+              </span>
+            )}
           </p>
         )}
         {onSetUpBoundedMonitor ? (

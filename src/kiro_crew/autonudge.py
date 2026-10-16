@@ -96,6 +96,7 @@ from kiro_crew.autonudge_service.model import (  # noqa: F401 -- re-exported
     _START_FAILURE_BACKOFF_AFTER,
     _START_FAILURE_STANDDOWN_AFTER,
     _TERMINAL_BOUND_REASONS,
+    AGENT_STOP_REASON,
     APPROVAL_STALL_REASON,
     AUTONUDGE_STOP_REASON,
     CONSECUTIVE_FAILURE_REASON,
@@ -174,6 +175,7 @@ from kiro_crew.monitoring.github_provider_errors import (  # noqa: F401 -- re-ex
 )
 from kiro_crew.monitoring.limits import validate_runtime_secs  # noqa: F401 -- re-exported
 from kiro_crew.monitoring.models import (  # noqa: F401 -- re-exported
+    MAX_MONITOR_STOP_REASON_CHARS,
     MONITOR_BUSY_RETRY_SECS,
     MONITOR_COMPLETION_EVIDENCE_TIMEOUT_SECS,
     MONITOR_STATE_VERSION,
@@ -1060,6 +1062,15 @@ class AutoNudgeService:
                     "blocked",
                 ):
                     loop_values["subject_outcome"] = ""
+                # Model-authored and agent-writable on disk: cleaned the way every
+                # write cleans it (``clean_stop_detail``). A value the clean changed is
+                # written back clean.
+                if "stopped_detail" in loop_values:
+                    raw_detail = loop_values["stopped_detail"]
+                    detail = _mutations.clean_stop_detail(raw_detail)
+                    if detail != raw_detail:
+                        self._store_dirty = True
+                    loop_values["stopped_detail"] = detail
                 # The judge fields come out of the same agent-writable store, so they
                 # are normalised HERE rather than at each read site, for the reason
                 # ``gate`` is: a stored ``"judge": "yes"`` would otherwise reach a

@@ -2080,6 +2080,11 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # read, not an egress pass.
         "autonudge.py",
         "autonudge_authz.py",
+        # ``clean_stop_detail``: the agent's stop reason is scrubbed under the platform
+        # policy and clipped where the store writes and loads it, so every reader gets
+        # cleaned text. At-rest sanitisation at the store boundary; the egress that
+        # serves it is the gateway broadcast, which redacts the frame again.
+        "autonudge_service/mutations.py",
         # Applies no redactor at all: the pipeline conductor's fleet probe BUILDS a
         # command fragment for a `BANNED` line out of what can hold no secret -- a
         # runner or launcher name drawn from a fixed vocabulary, and an option name

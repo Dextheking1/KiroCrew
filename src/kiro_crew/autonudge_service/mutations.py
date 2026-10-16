@@ -64,13 +64,32 @@ from kiro_crew.autonudge_service.subject import (
     read_session_texts,
 )
 from kiro_crew.monitoring.limits import validate_runtime_secs
-from kiro_crew.monitoring.models import MONITOR_STATE_VERSION, MonitorCreationSurface
+from kiro_crew.monitoring.models import (
+    MAX_MONITOR_STOP_REASON_CHARS,
+    MONITOR_STATE_VERSION,
+    MonitorCreationSurface,
+)
+from kiro_crew.platform import redact_via_context
+from kiro_crew.security import redact_and_truncate
 
 if TYPE_CHECKING:
     from kiro_crew.autonudge import AutoNudgeService
 
 # The service's own logger: callers and tests filter on it by name.
 logger = logging.getLogger("kiro_crew.autonudge")
+
+
+def clean_stop_detail(value: object) -> str:
+    """The agent's stop words as a row holds them, or ``""``.
+
+    Scrubbed under the active platform credential policy (which a companion can
+    extend), then by the baseline redactor, then clipped to its bound. Every write
+    and every load goes through here, so the state frame that broadcasts the row
+    only ever carries the cleaned text.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    return redact_and_truncate(redact_via_context(value), max_chars=MAX_MONITOR_STOP_REASON_CHARS)
 
 
 def _stop_file_lifted(loop: NudgeLoop) -> bool:
@@ -489,6 +508,7 @@ async def update(
     fresh_run: bool = False,
     max_runtime_secs: int | None = None,
     stopped_reason: str | None = None,
+    stopped_detail: str | None = None,
     banner: str | None = None,
     judge: dict | None = None,
     watch: str | None = None,
@@ -528,6 +548,7 @@ async def update(
             fresh_run=fresh_run,
             max_runtime_secs=max_runtime_secs,
             stopped_reason=stopped_reason,
+            stopped_detail=stopped_detail,
             banner=banner,
             judge=judge,
             watch=watch,
@@ -565,6 +586,7 @@ async def _update_locked(
     fresh_run: bool = False,
     max_runtime_secs: int | None = None,
     stopped_reason: str | None = None,
+    stopped_detail: str | None = None,
     banner: str | None = None,
     judge: dict | None = None,
     watch: str | None = None,
@@ -586,6 +608,7 @@ async def _update_locked(
             fresh_run=fresh_run,
             max_runtime_secs=max_runtime_secs,
             stopped_reason=stopped_reason,
+            stopped_detail=stopped_detail,
             banner=banner,
             judge=judge,
             watch=watch,
@@ -609,6 +632,7 @@ async def _update_unserialized(
     fresh_run: bool = False,
     max_runtime_secs: int | None = None,
     stopped_reason: str | None = None,
+    stopped_detail: str | None = None,
     banner: str | None = None,
     judge: dict | None = None,
     watch: str | None = None,
@@ -1079,6 +1103,7 @@ async def _update_unserialized(
                 # "manual", which the revive logic never auto-resumes.
                 if loop.active:
                     loop.stopped_reason = ""
+                    loop.stopped_detail = ""
                     # Spent only by an actual REVIVAL, hence ``not
                     # was_active``. A still-active loop also receives
                     # ``active=True`` from an ordinary settings save (the
@@ -1140,6 +1165,7 @@ async def _update_unserialized(
                             restart_runtime_clock(loop)
                 else:
                     loop.stopped_reason = stopped_reason or MANUAL_STOP_REASON
+                    loop.stopped_detail = clean_stop_detail(stopped_detail)
         if (
             refused_revival
             and not any(

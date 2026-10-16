@@ -237,6 +237,14 @@ async def _init_autonudge(self: GatewayOrchestrator) -> None:
                 # REST list already.
                 "next_due_ts": loop.next_due_ts,
                 "stopped_reason": loop.stopped_reason,
+                # The agent's own words on an ``agent_stop`` row, which the popover
+                # shows under the status line; "" on every other stop. Cleaned on
+                # every write and load (``mutations.clean_stop_detail``), and put
+                # through this frame's own redaction too, since the frame reaches
+                # every dashboard socket.
+                "stopped_detail": (
+                    _redact_monitor_value(loop.stopped_detail) if loop.stopped_detail else ""
+                ),
                 # The settled outcome of the loop's own watch ("success" for a
                 # merged subject or an accepted work ledger, "blocked" for one
                 # closed without merging or rejected), "" while none has settled,

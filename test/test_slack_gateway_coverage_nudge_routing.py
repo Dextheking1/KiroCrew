@@ -23,7 +23,12 @@ from slack_gateway_coverage_helpers import (
     _within_lost_run,
 )
 
-from kiro_crew.autonudge import MANUAL_STOP_REASON, MONITOR_TERMINAL_REASON, NudgeLoop
+from kiro_crew.autonudge import (
+    AGENT_STOP_REASON,
+    MANUAL_STOP_REASON,
+    MONITOR_TERMINAL_REASON,
+    NudgeLoop,
+)
 from kiro_crew.monitoring import models as monitor_models
 from kiro_crew.monitoring.models import MonitorOutcome, MonitorState
 from kiro_crew.slack import gateway as gw
@@ -234,6 +239,52 @@ class TestAutonudgeRouterAndObserver:
         assert payload["loop"]["monitor_outcome"] == "blocked"
         assert payload["loop"]["monitor_kind"] == "gh-pr"
         assert "monitor" not in payload["loop"]
+
+    @pytest.mark.asyncio
+    async def test_observer_frame_carries_the_agents_stop_words(self):
+        """The popover shows why the agent stopped a loop, and it renders from the
+        frame, so the words ride it beside the reason they explain."""
+        orch = _make_orchestrator()
+        orch.dashboard_state = _mock_dashboard_state()
+        _on_fire, observer, _inst = await self._wire(orch)
+
+        observer("armed", _loop("chat-1-1721"))
+        _topic, payload = orch.dashboard_state.broadcast_ws.call_args.args
+        assert payload["loop"]["stopped_detail"] == ""
+
+        stopped = _loop(
+            "chat-1-1721",
+            active=False,
+            stopped_reason=AGENT_STOP_REASON,
+            stopped_detail="PR merged, nothing left to do",
+        )
+        observer("updated", stopped)
+        _topic, payload = orch.dashboard_state.broadcast_ws.call_args.args
+        assert payload["loop"]["stopped_reason"] == AGENT_STOP_REASON
+        assert payload["loop"]["stopped_detail"] == "PR merged, nothing left to do"
+
+    @pytest.mark.asyncio
+    async def test_observer_frame_redacts_the_stop_words_it_broadcasts(self, monkeypatch):
+        """The frame reaches every dashboard socket, so the agent's words go through
+        the frame's redaction like every other stored string it carries."""
+        from kiro_crew.slack import gateway as gateway_module
+
+        def _redactor(value):
+            return value.replace("ghp_stopword", "[redacted]") if isinstance(value, str) else value
+
+        monkeypatch.setattr(gateway_module, "_redact_monitor_value", _redactor)
+        orch = _make_orchestrator()
+        orch.dashboard_state = _mock_dashboard_state()
+        _on_fire, observer, _inst = await self._wire(orch)
+        stopped = _loop(
+            "chat-1-1721",
+            active=False,
+            stopped_reason=AGENT_STOP_REASON,
+            stopped_detail="blocked on ghp_stopword",
+        )
+        observer("updated", stopped)
+        _topic, payload = orch.dashboard_state.broadcast_ws.call_args.args
+        assert payload["loop"]["stopped_detail"] == "blocked on [redacted]"
 
     @pytest.mark.asyncio
     async def test_observer_frame_redacts_the_watch_kind_it_broadcasts(self, monkeypatch):
