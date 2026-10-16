@@ -239,6 +239,15 @@ be reported as recorded. An action whose own durable row already names its actor
 which does not make the caller wait and makes no audit claim in the response; a
 failed write is logged.
 
+Audited sites, all through `schedule_action_audit`:
+
+| Action | Site | Initiator | Responder | Outcome |
+|---|---|---|---|---|
+| `session_create` | `chat_api.slot_create` | request actor | | `accepted` |
+| `message` | `chat_api.chat_send` | request actor | | `accepted` |
+| `cancel` | `routes_admission.api_work_cancel`, target the work id | request actor | | `applied`, or `conflict` on a stale or illegal revision |
+| `approval`, `question_answer` | `DecisionRegistry.resolve` (`decisions.audit_decision_response`), target the decision id | the decision's initiator | the verified responder | `applied` for the winner, `conflict` for a different response that lost; a replay of the winner and a response to nothing pending add no record |
+
 ## 4. Admission and accepted work
 
 ### Operation state machine

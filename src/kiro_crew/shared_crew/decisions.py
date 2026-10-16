@@ -19,6 +19,7 @@ registry never admits a caller, it only orders the admitted ones.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -34,7 +35,16 @@ from kiro_crew.shared_crew.collab import (
     classify_response,
     decision_frame,
 )
-from kiro_crew.shared_crew.contracts import ACTOR_REQUEST_KEY, ActorContext, Principal
+from kiro_crew.shared_crew.contracts import (
+    ACTOR_REQUEST_KEY,
+    ActionOutcome,
+    ActionType,
+    ActorContext,
+    Principal,
+    Transport,
+)
+
+logger = logging.getLogger(__name__)
 
 #: Decisions retained (open plus recently settled). Settled ones yield first.
 MAX_RETAINED_DECISIONS = 1000
@@ -106,6 +116,49 @@ def turn_initiator(messages: object) -> Principal:
             return principal_or_unknown(meta.get(_AUTHOR_META_KEY))
         return Principal.unknown()
     return Principal.unknown()
+
+
+def audit_decision_response(resolution: "Resolution", responder: Principal) -> None:
+    """Write a decision response to the Shared Crew audit trail. Never raises.
+
+    The winning response is ``applied``; a different response that lost the race
+    is ``conflict``. A replay of the winning response and a response to nothing
+    pending add no record. The record names the decision's initiator, this
+    responder and the decision id, never the answer text.
+    """
+    decision = resolution.decision
+    if decision is None:
+        return
+    if resolution.outcome is ResolveOutcome.WON:
+        outcome = ActionOutcome.APPLIED
+    elif resolution.outcome is ResolveOutcome.ALREADY_RESOLVED:
+        outcome = ActionOutcome.CONFLICT
+    else:
+        return
+    try:
+        from kiro_crew.shared_crew.audit import schedule_action_audit
+
+        action = (
+            ActionType.QUESTION_ANSWER
+            if decision.kind is DecisionKind.QUESTION
+            else ActionType.APPROVAL
+        )
+        schedule_action_audit(
+            action,
+            session_key=decision.session_key,
+            initiator=ActorContext(
+                principal=decision.initiator,
+                request_id=decision.decision_id,
+                transport=Transport.HTTP,
+            ),
+            outcome=outcome,
+            target=decision.decision_id,
+            responder=ActorContext(
+                principal=responder, request_id=decision.decision_id, transport=Transport.HTTP
+            ),
+        )
+    except Exception:
+        logger.debug("shared decision audit failed", exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -188,6 +241,18 @@ class DecisionRegistry:
         """
         if not outcome:
             raise ValueError("a resolution names its outcome")
+        resolution = self._resolve_locked(decision_id, response_id, responder, outcome, apply)
+        audit_decision_response(resolution, responder)
+        return resolution
+
+    def _resolve_locked(
+        self,
+        decision_id: str,
+        response_id: str,
+        responder: Principal,
+        outcome: str,
+        apply: Callable[[], bool],
+    ) -> Resolution:
         with self._lock:
             current = self._records.get(decision_id)
             if current is None:

@@ -25,6 +25,7 @@ Shapes:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aiohttp import web
@@ -38,7 +39,10 @@ from kiro_crew.shared_crew.admission import (
     http_status,
 )
 from kiro_crew.shared_crew.admission_gate import coded_json_response
+from kiro_crew.shared_crew.contracts import ActionOutcome, ActionType
 from kiro_crew.shared_crew.scheduler import DEFAULT_QUANTUM
+
+logger = logging.getLogger(__name__)
 
 CAPACITY_PATH = "/api/shared-crew/capacity"
 WORK_PATH = "/api/shared-crew/work"
@@ -129,10 +133,29 @@ async def api_work_cancel(request: web.Request) -> web.Response:
             else ReasonCode.INVALID_TRANSITION
         )
         current = await service.current_work(work_id)
+        _audit_cancel(request, work_id, current, ActionOutcome.CONFLICT)
         return coded_json_response(
             error_body(reason, str(exc), current=current), status=http_status(reason)
         )
+    _audit_cancel(request, work_id, work, ActionOutcome.APPLIED)
     return web.json_response(work.to_public_dict())
+
+
+def _audit_cancel(request: web.Request, work_id: str, work: Any, outcome: ActionOutcome) -> None:
+    """Record a cancellation attempt on the Shared Crew audit trail. Never raises."""
+    try:
+        from kiro_crew.shared_crew.audit import schedule_action_audit
+        from kiro_crew.shared_crew.identity import actor_of
+
+        schedule_action_audit(
+            ActionType.CANCEL,
+            session_key=str(getattr(work, "session_key", "") or ""),
+            initiator=actor_of(request),
+            outcome=outcome,
+            target=work_id,
+        )
+    except Exception:
+        logger.debug("shared crew cancel audit failed", exc_info=True)
 
 
 def register(app: web.Application) -> None:
