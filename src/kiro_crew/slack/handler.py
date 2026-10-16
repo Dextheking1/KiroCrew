@@ -196,6 +196,7 @@ from kiro_crew.slack.blocks import (  # noqa: F401 - read by the owners
     build_working_blocks,
     deprecation_warning_block,
 )
+from kiro_crew.slack.agent_sessions.fence import enter_turn, exit_turn
 from kiro_crew.slack.client import SlackClientOps
 from kiro_crew.slack.format import (  # noqa: F401 - read by the owners
     SLACK_MSG_LIMIT,
@@ -1604,6 +1605,7 @@ async def handle_message(
             # there); a waiter admitted now finds an idle session.
             sessions.close_replay_gap(session_key)
 
+    _turn_scope = enter_turn(channel, reply_ts)  # native Stop's write fence
     try:
         task.start()
         while True:
@@ -2487,6 +2489,7 @@ async def handle_message(
         await sessions.record_failure(session_key)
         Stats().inc_message_failed()
     finally:
+        exit_turn(_turn_scope)
         # A turn that consumed the post-compaction flag but never landed (an
         # error arm, a cancel) discarded the prompt carrying the re-injected
         # context, and a backend that compacted the session during the turn
