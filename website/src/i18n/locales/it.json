@@ -17531,13 +17531,17 @@
           "step_copy": "Copia il manifest.",
           "step_paste": "Apri la pagina App Manifest della tua app, sostituisci lo YAML con il manifest copiato e seleziona Save Changes.",
           "step_reinstall": "Quando Slack lo chiede, reinstalla l’app nella tua area di lavoro (Install App → Reinstall).",
-          "step_restart": "Riavvia il gateway perché rilevi le nuove opzioni.",
           "step_check": "Seleziona «Controlla di nuovo»: lo stato indica «Aggiornata».",
           "nothing_to_do": "Niente da aggiornare.",
           "open_app_manifest": "Apri App Manifest",
           "open_slack_apps": "Apri le tue app Slack",
           "check_again": "Controlla di nuovo",
-          "events_unverifiable": "Slack riporta i permessi di un’app ma non le sue sottoscrizioni agli eventi, quindi lo stato verifica solo i permessi."
+          "events_unverifiable": "Slack riporta i permessi di un’app ma non le sue sottoscrizioni agli eventi, quindi lo stato verifica solo i permessi.",
+          "cap_active": "Attivo: la tua app Slack può usare questa funzione.",
+          "cap_missing_scope": "Non ancora attivo: alla tua app Slack manca il permesso {{scope}}. Aggiorna l’app qui sotto e reinstallala. Fino ad allora Slack funziona come prima.",
+          "cap_feature_disabled": "Non attivo: Slack non ha attivato questa funzione per la tua area di lavoro. Slack funziona come prima.",
+          "cap_token_type": "Non attivo: Slack ha rifiutato il token del bot per questa funzione. Slack funziona come prima.",
+          "cap_scopes_unknown": "Non ancora attivo: {{productName}} legge i permessi della tua app Slack quando Slack si connette. Seleziona «Controlla di nuovo» qui sotto quando Slack è connesso."
         }
       },
       "sttSettings": {

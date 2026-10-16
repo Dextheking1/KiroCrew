@@ -7637,13 +7637,17 @@
           "step_copy": "Copy the manifest.",
           "step_paste": "Open your app's App Manifest page, replace the YAML with the copied manifest and select Save Changes.",
           "step_reinstall": "When Slack asks, reinstall the app to your workspace (Install App → Reinstall).",
-          "step_restart": "Restart the gateway so it picks up the new switches.",
           "step_check": "Select Check again: the status reads Up to date.",
           "nothing_to_do": "Nothing to update.",
           "open_app_manifest": "Open App Manifest",
           "open_slack_apps": "Open your Slack apps",
           "check_again": "Check again",
-          "events_unverifiable": "Slack reports an app's permissions but not its event subscriptions, so the status checks permissions only."
+          "events_unverifiable": "Slack reports an app's permissions but not its event subscriptions, so the status checks permissions only.",
+          "cap_active": "Active: your Slack app can use this.",
+          "cap_missing_scope": "Not active yet: your Slack app does not have the {{scope}} permission. Update the app below and reinstall it. Until then Slack works as before.",
+          "cap_feature_disabled": "Not active: Slack has not enabled this for your workspace. Slack works as before.",
+          "cap_token_type": "Not active: Slack refused the bot token for this feature. Slack works as before.",
+          "cap_scopes_unknown": "Not active yet: {{productName}} reads your Slack app's permissions when Slack connects. Select Check again below once Slack is connected."
         }
       },
       "botChannelPanel": {

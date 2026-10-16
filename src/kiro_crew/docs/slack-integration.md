@@ -265,8 +265,11 @@ to `config.json`.
 
 ## Slack Code: agent sessions and code channels
 
-Two switches in the Slack channel view's **Slack Code** section, both off by default,
-both read at boot (restart the gateway after changing them):
+Two switches in the Slack channel view's **Slack Code** section, both off by default and
+applied without a restart. A switch that is on runs only once your installed Slack app
+can use the feature: its permissions (read from Slack each time the gateway connects)
+include the feature's scope, and Slack has not refused it for your workspace. Until then
+Slack works exactly as with the switch off, and the page says why under the switch.
 
 - **Agent sessions** (`slack.agent_sessions`) declares the Slack app an agent
   (`features.agent_view`): threads show a live status and title, and Slack's own Stop
@@ -275,7 +278,9 @@ both read at boot (restart the gateway after changing them):
   asks you to confirm.
 - **Code channels** (`slack.code_channels`) lets the agent open a Slack code channel for
   coding work: one channel per task, with a context bar, a diff tab and channel commands.
-  Your workspace must have Slack code channels enabled.
+  It adds the `code_channels:manage`, `chat:write.customize`, `canvases:write`,
+  `channels:write.invites` and `groups:write.invites` scopes. Your workspace must have
+  Slack code channels enabled.
 
 **Defaults for new code channels** (`slack.code_channel_defaults`, applied without a
 restart): a folder, an agent, a model and a reasoning effort. Set any of them; anything
@@ -296,8 +301,11 @@ feature blocks), and Slack grants scopes only when the app is (re)installed. The
 your installed app holds, and reads one of: *Up to date*, *Needs update*, *Workspace not
 enabled* (Slack refuses code channels for this workspace), *Cannot check*. To update:
 copy the manifest, open the app's **App Manifest** page (the panel links it), replace the
-YAML, save, reinstall the app when Slack asks, restart the gateway, then select **Check
-again**. Slack does not report event subscriptions, so the check covers scopes only.
+YAML, save, reinstall the app when Slack asks, then select **Check again**: the gateway
+picks up the new permissions at once. Slack does not report event subscriptions, so the
+check covers scopes only. If Slack refuses a feature at runtime (`feature_disabled`,
+`missing_scope`), Kiro Crew posts one notification, keeps Slack working as before and
+retries after the next reconnect.
 
 The same manifest is printed by `kirocrew manifest`, which renders the switches saved in
 `config.json`. Kiro Crew does not push the manifest into your app itself:

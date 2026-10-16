@@ -17531,13 +17531,17 @@
           "step_copy": "Copia el manifiesto.",
           "step_paste": "Abre la página App Manifest de tu app, reemplaza el YAML por el manifiesto copiado y selecciona Save Changes.",
           "step_reinstall": "Cuando Slack lo pida, reinstala la app en tu espacio de trabajo (Install App → Reinstall).",
-          "step_restart": "Reinicia el gateway para que tome los nuevos interruptores.",
           "step_check": "Selecciona \"Comprobar de nuevo\": el estado indica \"Al día\".",
           "nothing_to_do": "No hay nada que actualizar.",
           "open_app_manifest": "Abrir App Manifest",
           "open_slack_apps": "Abrir tus apps de Slack",
           "check_again": "Comprobar de nuevo",
-          "events_unverifiable": "Slack informa los permisos de una app, pero no sus suscripciones a eventos, así que el estado solo comprueba permisos."
+          "events_unverifiable": "Slack informa los permisos de una app, pero no sus suscripciones a eventos, así que el estado solo comprueba permisos.",
+          "cap_active": "Activo: tu app de Slack puede usar esto.",
+          "cap_missing_scope": "Aún no activo: tu app de Slack no tiene el permiso {{scope}}. Actualiza la app abajo y reinstálala. Hasta entonces, Slack funciona como antes.",
+          "cap_feature_disabled": "No activo: Slack no lo ha habilitado para tu espacio de trabajo. Slack funciona como antes.",
+          "cap_token_type": "No activo: Slack rechazó el token de bot para esta función. Slack funciona como antes.",
+          "cap_scopes_unknown": "Aún no activo: {{productName}} lee los permisos de tu app de Slack cuando Slack se conecta. Selecciona \"Comprobar de nuevo\" abajo cuando Slack esté conectado."
         }
       },
       "sttSettings": {

@@ -222,3 +222,40 @@ describe('Update your Slack app', () => {
     expect(screen.getByTestId('slack-manifest-update')).toHaveTextContent('after you save')
   })
 })
+
+describe('Capability line under a saved toggle', () => {
+  it('says the toggle is not running yet while the scope is missing', async () => {
+    seed({
+      code_channels: true,
+      code_channels_capability: { available: false, reason: 'missing_scope', scope: 'code_channels:manage' },
+    }, status({ status: 'needs_update', missing_scopes: ['code_channels:manage'] }))
+    const line = await screen.findByTestId('slack-capability')
+    expect(line).toHaveAttribute('data-available', 'false')
+    expect(line).toHaveTextContent('code_channels:manage')
+    expect(line).toHaveTextContent('Slack works as before')
+  })
+
+  it('says a workspace without the feature keeps working as before', async () => {
+    seed({
+      agent_sessions: true,
+      agent_sessions_capability: { available: false, reason: 'feature_disabled', scope: 'assistant:write' },
+    })
+    const line = await screen.findByTestId('slack-capability')
+    expect(line).toHaveAttribute('data-reason', 'feature_disabled')
+    expect(line).toHaveTextContent('has not enabled this for your workspace')
+  })
+
+  it('reads Active once the app can use it', async () => {
+    seed({
+      agent_sessions: true,
+      agent_sessions_capability: { available: true, reason: '', scope: 'assistant:write' },
+    })
+    expect(await screen.findByTestId('slack-capability')).toHaveTextContent('Active')
+  })
+
+  it('shows nothing under a toggle that is off', async () => {
+    seed({ agent_sessions_capability: { available: false, reason: 'scopes_unknown', scope: 'assistant:write' } })
+    await hydrated()
+    expect(screen.queryByTestId('slack-capability')).toBeNull()
+  })
+})

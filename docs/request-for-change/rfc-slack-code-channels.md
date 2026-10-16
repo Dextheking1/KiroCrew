@@ -99,15 +99,36 @@ before the switch silently lacks `code_channels:manage` and every call fails.
 ### 1. Settings (Phase 1)
 
 **Config.** `config/sections_slack.py` adds `SlackConfig.agent_sessions` and
-`SlackConfig.code_channels` (bool, default `False`, `restart=True`: both change
-what Slack delivers and what the app may call, so a live flip would run code
-against an install that lacks the scopes) and `SlackConfig.code_channel_defaults`
-(`CodeChannelDefaultsConfig`, hot). The builder treats anything that is not a
-real `True` as off and normalizes every default string, with `None` as the one
-"not set" spelling and an effort outside `low…max` dropped.
+`SlackConfig.code_channels` (bool, default `False`) and
+`SlackConfig.code_channel_defaults` (`CodeChannelDefaultsConfig`). All three are
+ordinary Slack settings on the Slack settings page, not a Developer or Feature
+Preview flag, and all three hot-apply: the runtime reads them per event, behind
+the capability guard below, so a flip needs no restart. The builder treats
+anything that is not a real `True` as off and normalizes every default string,
+with `None` as the one "not set" spelling and an effort outside `low…max`
+dropped.
+
+**Two layers: toggle and capability.** A feature runs only when its toggle is on
+AND the installed app can use it:
+
+* *capability* (`agent_sessions_available()` / `code_channels_available()`,
+  `availability(feature) -> (ok, reason)`): the bot scopes Slack reports in
+  `auth.test`'s `x-oauth-scopes` header include the feature's scope
+  (`assistant:write` / `code_channels:manage`), and Slack has not answered a call
+  for the feature with `feature_disabled`, `missing_scope` or
+  `not_allowed_token_type`. Those answers latch the feature off for the process
+  (`latch_unavailable`): one dashboard notification, one log line, and a silent
+  fallback to today's Slack behaviour with no error in Slack. The scopes are read
+  on every Socket Mode `hello` (the first connect and each reconnect), which also
+  clears the latches, and again whenever the settings page checks the install;
+  a reinstall that grants a missing scope lifts its `missing_scope` latch.
+* *toggle* (`agent_sessions_toggle(cfg)` / `code_channels_toggle(cfg)`): what
+  the manifest renders. The manifest follows the toggle, never the capability,
+  because the manifest is how an install gains the capability.
 
 **One read path.** `kiro_crew/slack/features.py` is what every consumer reads:
-`agent_sessions_enabled(cfg)`, `code_channels_enabled(cfg)`,
+`agent_sessions_enabled(cfg)` / `code_channels_enabled(cfg)` (toggle AND
+capability; what the runtimes call), the two layers above,
 `code_channel_defaults(cfg) -> CodeChannelDefaults` (frozen), `manifest_features`,
 and the pure resolver `resolve_code_channel_session(defaults, folders,
 slack_agent=, origin_project_dir=)`.
@@ -142,7 +163,7 @@ point. Template lines ending in `#@agent_sessions`, `#@code_channels` or
 | Switch | Feature block | Bot scopes | Bot events |
 |---|---|---|---|
 | `agent_sessions` | `agent_view` (`agent_description`) | `assistant:write` | `app_context_changed`, `agent_session_stopped`, `agent_session_title_changed` |
-| `code_channels` | `code_channels: {enabled: true}` | `code_channels:manage`, `chat:write.customize`, `canvases:write` | `agent_session_stopped` |
+| `code_channels` | `code_channels: {enabled: true}` | `code_channels:manage`, `chat:write.customize`, `canvases:write`, `channels:write.invites`, `groups:write.invites` | `agent_session_stopped` |
 
 `channels:read`, `groups:read`, `groups:history` and `message.groups` are already
 in the base manifest. No `slash_command_url` is set: Socket Mode delivers channel
@@ -159,8 +180,8 @@ the app through `bots.info` (for the App Manifest deep link). Status:
 * `needs_update`: some are missing (listed);
 * `feature_disabled`: scopes are granted but Slack refuses the feature. For code
   channels this is probed with a read-only `agents.conversations.listViews` on a
-  channel id no workspace issues; for agent sessions it is recorded by the runtime
-  through `scope_probe.note_feature_disabled` when `setStatus` answers
+  channel id no workspace issues; for agent sessions it is the latch the runtime
+  sets with `features.latch_unavailable` when `setStatus` answers
   `feature_disabled`;
 * `unknown`: no scopes header, or a network failure;
 * `token_rejected` / `not_configured`.
@@ -195,9 +216,10 @@ Behind `agent_sessions_enabled(cfg)`, reusing the preview branch's `7888cb2ec3`:
   `slack_stop_in_flight` path, then moves the status away from `processing` (Slack
   does not), stopping the streams named in `streaming_message_ts`.
 * `agent_session_title_changed` updates the session title in the dashboard.
-* `feature_disabled` from `setStatus` is recorded with
-  `note_feature_disabled("agent_sessions")` and the runtime falls back to today's
-  thread behaviour for the rest of the process.
+* Runs only while `agent_sessions_enabled(cfg)` holds. A `feature_disabled`,
+  `missing_scope` or `not_allowed_token_type` answer from `setStatus` is passed to
+  `latch_unavailable("agent_sessions", …)`, and the runtime falls back to today's
+  thread behaviour until the next reconnect re-probes.
 
 ### 3. Code channels runtime (Phase 3)
 
@@ -259,7 +281,10 @@ switches off.
 
 Both switches default off. With both off, the rendered manifest and the deep-link
 payload are byte-identical to before (pinned by a test), so an existing app needs
-no change and `kirocrew manifest` prints what it always printed. The
+no change and `kirocrew manifest` prints what it always printed. With a switch on
+but its scope not yet granted, or Slack answering `feature_disabled`, the runtime
+behaves exactly as with the switch off and the settings page says why (also
+pinned). The
 `_slack_manifest_payload_re` helper returns a tuple of patterns instead of one; it
 is private to the security package.
 
@@ -275,7 +300,8 @@ is private to the security package.
 * **Settings writes stay loopback-only and SEL-audited**, and validation runs
   before any write, so a refused field changes nothing.
 * **Code channels widen the bot's scopes** (`code_channels:manage`,
-  `chat:write.customize`, `canvases:write`), visible on Slack's consent screen and
+  `chat:write.customize`, `canvases:write`, `channels:write.invites`,
+  `groups:write.invites`), visible on Slack's consent screen and
   listed before the user reinstalls. The scope-ratchet test pins the exact set
   per switch.
 * **Phase 3 authorization** is the origin conversation's, never the new channel's

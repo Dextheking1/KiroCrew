@@ -188,7 +188,6 @@ export function SlackManifestUpdate({ data, draft, manifestText }: {
           <li>{i18nT('pages.settings.slackPanel.slackCode.step_copy')}</li>
           <li>{i18nT('pages.settings.slackPanel.slackCode.step_paste')}</li>
           <li>{i18nT('pages.settings.slackPanel.slackCode.step_reinstall')}</li>
-          <li>{i18nT('pages.settings.slackPanel.slackCode.step_restart')}</li>
           <li>{i18nT('pages.settings.slackPanel.slackCode.step_check')}</li>
         </ol>
       )}

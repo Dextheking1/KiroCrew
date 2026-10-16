@@ -36,6 +36,18 @@ export interface SlackConfigData {
   code_channel_effective?: SlackCodeChannelEffective
   /** Saved defaults that no longer resolve: "folder_missing", "agent_missing". */
   code_channel_warnings?: string[]
+  /** Whether the installed app can use each feature (a toggle runs only when it can). */
+  agent_sessions_capability?: SlackCapability
+  code_channels_capability?: SlackCapability
+}
+
+/** One feature's capability. reason: "" | missing_scope | feature_disabled |
+ *  not_allowed_token_type | scopes_unknown. */
+export interface SlackCapability {
+  available: boolean
+  reason: string
+  /** The bot scope the feature needs (assistant:write, code_channels:manage). */
+  scope: string
 }
 
 /** `slack.code_channel_defaults`. Every field optional; null falls through. */

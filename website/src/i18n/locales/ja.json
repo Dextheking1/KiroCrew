@@ -17001,13 +17001,17 @@
           "step_copy": "マニフェストをコピーします。",
           "step_paste": "アプリの「App Manifest」ページを開き、YAML をコピーしたマニフェストに置き換えて「Save Changes」を選択します。",
           "step_reinstall": "Slack から求められたら、アプリをワークスペースに再インストールします（Install App → Reinstall）。",
-          "step_restart": "新しいスイッチを読み込むため、ゲートウェイを再起動します。",
           "step_check": "「再確認」を選択します。ステータスが「最新の状態」と表示されます。",
           "nothing_to_do": "更新するものはありません。",
           "open_app_manifest": "App Manifest を開く",
           "open_slack_apps": "Slack アプリを開く",
           "check_again": "再確認",
-          "events_unverifiable": "Slack はアプリのアクセス許可を報告しますが、イベントのサブスクリプションは報告しないため、ステータスはアクセス許可のみを確認します。"
+          "events_unverifiable": "Slack はアプリのアクセス許可を報告しますが、イベントのサブスクリプションは報告しないため、ステータスはアクセス許可のみを確認します。",
+          "cap_active": "有効です。Slack アプリでこの機能を使用できます。",
+          "cap_missing_scope": "まだ有効ではありません。Slack アプリに {{scope}} のアクセス許可がありません。下でアプリを更新し、再インストールしてください。それまで Slack は従来どおり動作します。",
+          "cap_feature_disabled": "有効ではありません。Slack がこのワークスペースでこの機能を有効にしていません。Slack は従来どおり動作します。",
+          "cap_token_type": "有効ではありません。Slack がこの機能に対するボットトークンを拒否しました。Slack は従来どおり動作します。",
+          "cap_scopes_unknown": "まだ有効ではありません。{{productName}} は Slack の接続時に Slack アプリのアクセス許可を読み取ります。Slack が接続されたら、下の「再確認」を選択してください。"
         }
       },
       "sttSettings": {

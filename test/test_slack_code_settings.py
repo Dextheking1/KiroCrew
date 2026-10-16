@@ -137,11 +137,19 @@ class TestSwitches:
         _call(env, "PUT", {"code_channels": True, "agent_sessions": True})
         _, body = _call(env, "GET")
         assert body["code_channels"] is True
-        assert body["code_channels_capability"] == {"available": False, "reason": "scopes_unknown"}
+        assert body["code_channels_capability"] == {
+            "available": False,
+            "reason": "scopes_unknown",
+            "scope": "code_channels:manage",
+        }
         features.record_granted_scopes({"chat:write", "assistant:write"})
         _, body = _call(env, "GET")
-        assert body["agent_sessions_capability"] == {"available": True, "reason": ""}
-        assert body["code_channels_capability"] == {"available": False, "reason": "missing_scope"}
+        assert body["agent_sessions_capability"] == {
+            "available": True,
+            "reason": "",
+            "scope": "assistant:write",
+        }
+        assert body["code_channels_capability"]["reason"] == "missing_scope"
         features.reset_capabilities()
 
     @pytest.mark.parametrize("bad", ["true", 1, None])

@@ -17001,13 +17001,17 @@
           "step_copy": "复制清单。",
           "step_paste": "打开应用的“App Manifest”页面，将 YAML 替换为复制的清单，然后选择“Save Changes”。",
           "step_reinstall": "Slack 提示时，将应用重新安装到工作区（Install App → Reinstall）。",
-          "step_restart": "重启网关，使其加载新的开关设置。",
           "step_check": "选择“重新检查”：状态显示为“已是最新”。",
           "nothing_to_do": "无需更新。",
           "open_app_manifest": "打开 App Manifest",
           "open_slack_apps": "打开 Slack 应用",
           "check_again": "重新检查",
-          "events_unverifiable": "Slack 会报告应用的权限，但不报告其事件订阅，因此状态只检查权限。"
+          "events_unverifiable": "Slack 会报告应用的权限，但不报告其事件订阅，因此状态只检查权限。",
+          "cap_active": "已生效：你的 Slack 应用可以使用此功能。",
+          "cap_missing_scope": "尚未生效：Slack 应用缺少 {{scope}} 权限。在下方更新应用并重新安装。在此之前，Slack 照常工作。",
+          "cap_feature_disabled": "未生效：Slack 尚未为你的工作区启用此功能。Slack 照常工作。",
+          "cap_token_type": "未生效：Slack 拒绝了此功能使用的机器人令牌。Slack 照常工作。",
+          "cap_scopes_unknown": "尚未生效：Slack 连接时，{{productName}} 会读取 Slack 应用的权限。Slack 连接后，在下方选择“重新检查”。"
         }
       },
       "sttSettings": {

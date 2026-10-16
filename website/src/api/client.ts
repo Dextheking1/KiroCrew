@@ -243,6 +243,7 @@ export type {
 export type {
   SlackConfigData,
   SlackConfigSave,
+  SlackCapability,
   SlackCodeChannelDefaults,
   SlackCodeChannelEffective,
   SlackManifestChange,

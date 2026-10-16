@@ -17266,13 +17266,17 @@
           "step_copy": "Kopiere das Manifest.",
           "step_paste": "Öffne die Seite „App Manifest“ deiner App, ersetze das YAML durch das kopierte Manifest und wähle „Save Changes“.",
           "step_reinstall": "Wenn Slack dich fragt, installiere die App in deinem Workspace neu („Install App“ → „Reinstall“).",
-          "step_restart": "Starte das Gateway neu, damit es die neuen Schalter übernimmt.",
           "step_check": "Wähle „Erneut prüfen“: Der Status lautet „Aktuell“.",
           "nothing_to_do": "Nichts zu aktualisieren.",
           "open_app_manifest": "App Manifest öffnen",
           "open_slack_apps": "Deine Slack-Apps öffnen",
           "check_again": "Erneut prüfen",
-          "events_unverifiable": "Slack meldet die Berechtigungen einer App, aber nicht ihre Event-Abonnements, deshalb prüft der Status nur Berechtigungen."
+          "events_unverifiable": "Slack meldet die Berechtigungen einer App, aber nicht ihre Event-Abonnements, deshalb prüft der Status nur Berechtigungen.",
+          "cap_active": "Aktiv: Deine Slack-App kann das nutzen.",
+          "cap_missing_scope": "Noch nicht aktiv: Deiner Slack-App fehlt die Berechtigung {{scope}}. Aktualisiere die App unten und installiere sie neu. Bis dahin funktioniert Slack wie bisher.",
+          "cap_feature_disabled": "Nicht aktiv: Slack hat das für deinen Workspace nicht aktiviert. Slack funktioniert wie bisher.",
+          "cap_token_type": "Nicht aktiv: Slack hat das Bot-Token für diese Funktion abgelehnt. Slack funktioniert wie bisher.",
+          "cap_scopes_unknown": "Noch nicht aktiv: {{productName}} liest die Berechtigungen deiner Slack-App, wenn Slack sich verbindet. Wähle unten „Erneut prüfen“, sobald Slack verbunden ist."
         }
       },
       "sttSettings": {

@@ -17531,13 +17531,17 @@
           "step_copy": "Copie le manifeste.",
           "step_paste": "Ouvre la page App Manifest de ton application, remplace le YAML par le manifeste copié et sélectionne Save Changes.",
           "step_reinstall": "Quand Slack le demande, réinstalle l’application dans ton espace de travail (Install App → Reinstall).",
-          "step_restart": "Redémarre la passerelle pour qu’elle prenne en compte les nouvelles options.",
           "step_check": "Sélectionne « Vérifier à nouveau » : le statut indique « À jour ».",
           "nothing_to_do": "Rien à mettre à jour.",
           "open_app_manifest": "Ouvrir App Manifest",
           "open_slack_apps": "Ouvrir tes applications Slack",
           "check_again": "Vérifier à nouveau",
-          "events_unverifiable": "Slack indique les permissions d’une application, mais pas ses abonnements aux événements, donc le statut ne vérifie que les permissions."
+          "events_unverifiable": "Slack indique les permissions d’une application, mais pas ses abonnements aux événements, donc le statut ne vérifie que les permissions.",
+          "cap_active": "Actif : ton application Slack peut l’utiliser.",
+          "cap_missing_scope": "Pas encore actif : ton application Slack n’a pas la permission {{scope}}. Mets à jour l’application ci-dessous et réinstalle-la. D’ici là, Slack fonctionne comme avant.",
+          "cap_feature_disabled": "Inactif : Slack n’a pas activé cette fonctionnalité pour ton espace de travail. Slack fonctionne comme avant.",
+          "cap_token_type": "Inactif : Slack a refusé le jeton de bot pour cette fonctionnalité. Slack fonctionne comme avant.",
+          "cap_scopes_unknown": "Pas encore actif : {{productName}} lit les permissions de ton application Slack quand Slack se connecte. Sélectionne « Vérifier à nouveau » ci-dessous une fois Slack connecté."
         }
       },
       "sttSettings": {

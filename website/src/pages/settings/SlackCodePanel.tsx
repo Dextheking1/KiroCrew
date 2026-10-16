@@ -9,13 +9,12 @@
  */
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, Bot, Folder, FolderGit2, Info } from 'lucide-react'
+import { AlertTriangle, Bot, CheckCircle2, Folder, FolderGit2, Info } from 'lucide-react'
 import { SettingsSection, SettingsCard, SettingsToggle } from '../../components/settings'
 import SimpleSelect from '../../components/SimpleSelect'
 import ErrorNotice from '../../components/ErrorNotice'
 import { useConfirm } from '../../components/ConfirmDialog'
-import { SchemaRestartBadge } from '../../components/settingRef/RestartRequiredBadge'
-import { api, type SlackConfigData, type SlackConfigSave } from '../../api/client'
+import { api, type SlackCapability, type SlackConfigData, type SlackConfigSave } from '../../api/client'
 import type { ChatFolder } from '../../types'
 import { orderFoldersWithPaths } from '../../utils/folderTree'
 import { useFolderSortMode } from '../../hooks/useFolderSortMode'
@@ -91,6 +90,33 @@ function PreviewRow({ icon, label, value, source }: { icon: React.ReactNode; lab
       <span className="text-[12px] text-muted flex-none w-[84px]">{label}</span>
       <span className="text-[12px] text-text font-mono min-w-0 break-all">{value}</span>
       {source && <span className="ml-auto text-[11px] text-muted flex-none whitespace-nowrap">{source}</span>}
+    </div>
+  )
+}
+
+const CAPABILITY_KEY: Record<string, string> = {
+  missing_scope: 'pages.settings.slackPanel.slackCode.cap_missing_scope',
+  feature_disabled: 'pages.settings.slackPanel.slackCode.cap_feature_disabled',
+  not_allowed_token_type: 'pages.settings.slackPanel.slackCode.cap_token_type',
+  scopes_unknown: 'pages.settings.slackPanel.slackCode.cap_scopes_unknown',
+}
+
+/** Whether a SAVED toggle is actually running: it also needs the installed app
+ *  to hold the feature's scope, and Slack not to have refused it. Until then
+ *  Slack behaves exactly as with the toggle off, and this line says why. */
+function CapabilityLine({ capability }: { capability?: SlackCapability }) {
+  if (!capability) return null
+  if (capability.available) {
+    return (
+      <div className="flex items-center gap-1.5 text-[12px] text-ok mt-1" data-testid="slack-capability" data-available="true">
+        <CheckCircle2 size={12} className="flex-none" /> {i18nT('pages.settings.slackPanel.slackCode.cap_active')}
+      </div>
+    )
+  }
+  const key = CAPABILITY_KEY[capability.reason] ?? CAPABILITY_KEY.scopes_unknown
+  return (
+    <div className="flex items-start gap-1.5 text-[12px] text-warn mt-1" data-testid="slack-capability" data-available="false" data-reason={capability.reason}>
+      <AlertTriangle size={12} className="flex-none mt-0.5" /> <span>{i18nT(key, { scope: capability.scope })}</span>
     </div>
   )
 }
@@ -201,7 +227,7 @@ export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText
           <AlertTriangle size={13} className="text-warn flex-none mt-0.5" />
           <span className="text-[12px] text-muted">{i18nT('pages.settings.slackPanel.slackCode.agent_sessions_irreversible')}</span>
         </div>
-        <div className="pt-1"><SchemaRestartBadge configKey="slack.agent_sessions" /></div>
+        {data.agent_sessions && <CapabilityLine capability={data.agent_sessions_capability} />}
 
         {/* ── Code channels ── */}
         <div className="border-t border-border mt-4 pt-4">
@@ -213,7 +239,7 @@ export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText
             disabled={readOnly}
             configKey="slack.code_channels"
           />
-          <div className="pt-1"><SchemaRestartBadge configKey="slack.code_channels" /></div>
+          {data.code_channels && <CapabilityLine capability={data.code_channels_capability} />}
         </div>
 
         {draft.code_channels && (

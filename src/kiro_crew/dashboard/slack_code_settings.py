@@ -101,7 +101,11 @@ async def code_settings_view(cfg: Any, state: Any) -> dict[str, Any]:
 
     def _capability(feature: str) -> dict[str, object]:
         ok, reason = slack_features.availability(feature)
-        return {"available": ok, "reason": reason}
+        return {
+            "available": ok,
+            "reason": reason,
+            "scope": slack_features.REQUIRED_SCOPE[feature],
+        }
 
     return {
         # The toggles as saved; whether each one actually runs also needs the
