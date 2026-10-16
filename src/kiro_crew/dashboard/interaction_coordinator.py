@@ -9,6 +9,10 @@ from collections.abc import Callable
 from typing import Any
 
 from kiro_crew.shared_crew.collab import DecisionKind, DecisionState
+from kiro_crew.shared_crew.collaborators import (
+    broadcast_to_collaborators,
+    deliver_to_collaborators,
+)
 from kiro_crew.shared_crew.contracts import Principal
 from kiro_crew.shared_crew.decisions import (
     decisions_for,
@@ -404,7 +408,7 @@ class QuestionCoordinator:
             "native": native,
             "ts": time.time(),
         }
-        return int(await state.deliver_ws_owners("question_card", payload))
+        return int(await deliver_to_collaborators(state, "question_card", payload))
 
     @staticmethod
     def mark_pending(
@@ -476,7 +480,7 @@ class QuestionCoordinator:
                 else {"card_id": card_id, "slot": slot_key}
             )
             try:
-                state.broadcast_ws_owners("question_card_resolved", payload)
+                broadcast_to_collaborators(state, "question_card_resolved", payload)
             except Exception:
                 state._log.warning("WS broadcast failed for card retirement", exc_info=True)
 
@@ -507,7 +511,7 @@ class QuestionCoordinator:
         state._pending_questions[ask_id] = payload
         state._question_futures[ask_id] = future
         state.mark_question_pending(slot_key, blocking=True, card_id=ask_id)
-        state.broadcast_ws_owners("question_card", payload)
+        broadcast_to_collaborators(state, "question_card", payload)
         decision_id = question_decision_id(ask_id)
         open_and_broadcast(
             state,
@@ -553,7 +557,8 @@ class QuestionCoordinator:
                 reason=terminal_reason,
             )
             try:
-                state.broadcast_ws_owners(
+                broadcast_to_collaborators(
+                    state,
                     "question_card_resolved",
                     {"ask_id": ask_id, "reason": terminal_reason},
                 )
@@ -732,7 +737,7 @@ class QuestionCoordinator:
             slot_key,
             _question_initiator(state, slot_key),
         )
-        clients = int(await state.deliver_ws_owners("question_card", payload))
+        clients = int(await deliver_to_collaborators(state, "question_card", payload))
         retained = state._agent_asks.get(ask_id)
         if retained is None or retained["future"] is not future:
             # The tool gave up while this send was awaiting a slow socket, and its
@@ -765,7 +770,8 @@ class QuestionCoordinator:
                 reason=reason,
             )
         try:
-            state.broadcast_ws_owners(
+            broadcast_to_collaborators(
+                state,
                 "question_card_resolved",
                 {"ask_id": ask_id, "reason": reason},
             )

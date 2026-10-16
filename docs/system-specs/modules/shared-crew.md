@@ -124,7 +124,12 @@ whois cache and executor, and is read by neither the pin (a direct peer stays
 
 Loopback alone is not proof of a trusted proxy: a loopback request carrying any
 forwarding header (`origin.is_proxied_request`) is never the local operator, and
-its forwarded address is attributed only through the daemon. A
+its forwarded address is attributed only through the daemon, and only after the kernel
+proves the client end of the loopback socket belongs to `tailscaled`
+(`tailnet_proxy_proof.loopback_client_is_daemon`, Linux only; elsewhere the serve row
+never resolves and such a caller is Unknown). A process running as the gateway's own
+user is never that proof, so a local token holder adding `X-Forwarded-For` is Unknown,
+not the person it names. A
 `Tailscale-User-Login` header that disagrees with the daemon drops the
 attribution. A non-loopback peer that sends `X-Forwarded-For` is a proxy on
 another node and is Unknown. Funnel, other reverse proxies and unverifiable
@@ -233,6 +238,15 @@ be reported as recorded. An action whose own durable row already names its actor
 (a message row carries its author) is audited with `schedule_action_audit`,
 which does not make the caller wait and makes no audit claim in the response; a
 failed write is logged.
+
+Audited sites, all through `schedule_action_audit`:
+
+| Action | Site | Initiator | Responder | Outcome |
+|---|---|---|---|---|
+| `session_create` | `chat_api.slot_create` | request actor | | `accepted` |
+| `message` | `chat_api.chat_send` | request actor | | `accepted` |
+| `cancel` | `routes_admission.api_work_cancel`, target the work id | request actor | | `applied`, or `conflict` on a stale or illegal revision |
+| `approval`, `question_answer` | `DecisionRegistry.resolve` (`decisions.audit_decision_response`), target the decision id | the decision's initiator | the verified responder | `applied` for the winner, `conflict` for a different response that lost; a replay of the winner and a response to nothing pending add no record |
 
 ## 4. Admission and accepted work
 
@@ -495,6 +509,13 @@ is never answered with an eviction of someone else's entry. Disconnect and expir
 push a fresh `shared_crew.presence` frame for every session they changed; the
 socket's status tick sweeps stale entries.
 
+In the browser, typing is reported from the composer's user-edit handler
+(`typingSignal.useComposerEditWithTyping`, which ChatInput calls only for the
+user's own edits), not from the draft store: the store keeps one identity and a
+session switch writes it too. The collab strip's `usePresenceReporter` listens to
+that content-free signal and sends `typing`, then `viewing` after
+`TYPING_HOLD_MS` without a keystroke.
+
 A shared decision (`collab.SharedDecision`) is a tool approval or agent question that
 every collaborator sees and any one may answer. `classify_response` decides a response
 under the resolver's lock: the first response to see `pending` wins, a retry with the
@@ -517,9 +538,21 @@ before the registry sees a response. A client that sends `response_id` gets 409
 `already_resolved` with the decision on a lost race; a client that sends none keeps
 the existing 404. A wait that ends through a path with no verified responder closes
 the decision with an Unknown responder, and an unanswered one closes as `expired` or
-`withdrawn`. Approval decision frames ride `broadcast_ws` like approval frames;
-question decision frames go to owner sockets only, the audience the question card
-has. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
+`withdrawn`. Approval decision frames ride `broadcast_ws` like approval frames.
+
+An agent question belongs to every collaborator. `collaborators.is_collaborator_request`
+admits the owner (`is_owner_dashboard_request`) and a dashboard-user session whose
+verified actor is a person a membership boundary admitted: provenance
+`tailscale_serve` (allowlisted and pinned by the middleware) or `enterprise`. A
+direct tailnet peer, a Slack-allowlist dashboard token, an app token, an internal
+caller and Unknown are not collaborators and keep the owner gate's 403.
+`GET /api/ask-question/pending`, `POST /api/ask-question/{id}/answer` and
+`POST /api/ask-question/dismiss` accept every collaborator; opening a question
+(`POST /api/ask-question`) stays owner-only. The card frames (`question_card`,
+`question_card_resolved`) and the question decision frame go to the owner sockets
+and to every collaborator socket (`collaborators.broadcast_to_collaborators`, which
+reads the socket's `_shared_crew_actor`), the same audience the pending read has.
+Nothing else the owner set receives reaches a collaborator socket. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
 `routes_collab`) answer the same state for a reconnecting tab.
 
 ## 6. Wire shapes
