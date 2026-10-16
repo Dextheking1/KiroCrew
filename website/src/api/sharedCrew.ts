@@ -73,6 +73,46 @@ export interface SharedCrewCapabilities {
   membership_link: MembershipLink
   remote_actions: CapabilityState
   protocols: number[]
+  /** Why a capability field is not what its sources would answer: `no_source`
+   *  (nothing registered for it) or `source_failed` (its source raised). Only
+   *  fields with such a reason appear. */
+  reasons: Partial<Record<CapabilityField, CapabilityReason>>
+  /** Each enterprise seam's state; the public build answers `not_configured`. */
+  enterprise: Record<EnterpriseCapabilityKey, EnterpriseCapability>
+}
+
+export type CapabilityField =
+  | 'attribution'
+  | 'presence'
+  | 'queueing'
+  | 'containment'
+  | 'containment_level'
+  | 'authoritative_directory'
+  | 'membership_link'
+  | 'remote_actions'
+
+export type CapabilityReason = 'no_source' | 'source_failed'
+
+export type EnterpriseCapabilityKey =
+  | 'human_credentials'
+  | 'individual_grants'
+  | 'workload_identity'
+  | 'crew_identity'
+  | 'heartbeat'
+  | 'inference_budget'
+  | 'deployment_context'
+
+export type EnterpriseUnavailableReason =
+  | 'not_configured'
+  | 'provider_refused'
+  | 'test_provider_refused'
+  | 'provider_failed'
+  | 'requires_workload_identity'
+
+export interface EnterpriseCapability {
+  state: CapabilityState
+  /** An `EnterpriseUnavailableReason` when unavailable, else empty. */
+  reason: EnterpriseUnavailableReason | ''
 }
 
 export type OperationKind =

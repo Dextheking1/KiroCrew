@@ -97,6 +97,16 @@ export const ALL_UNAVAILABLE: SharedCrewCapabilities = {
   membership_link: '',
   remote_actions: 'unavailable',
   protocols: [],
+  reasons: {},
+  enterprise: {
+    human_credentials: { state: 'unavailable', reason: 'not_configured' },
+    individual_grants: { state: 'unavailable', reason: 'not_configured' },
+    workload_identity: { state: 'unavailable', reason: 'not_configured' },
+    crew_identity: { state: 'unavailable', reason: 'not_configured' },
+    heartbeat: { state: 'unavailable', reason: 'not_configured' },
+    inference_budget: { state: 'unavailable', reason: 'not_configured' },
+    deployment_context: { state: 'unavailable', reason: 'not_configured' },
+  },
 }
 
 /** A capability the UI may lean on: `available` or `degraded`. */
