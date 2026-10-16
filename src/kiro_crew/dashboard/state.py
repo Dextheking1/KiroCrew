@@ -4395,7 +4395,7 @@ class _ChatSlot:
         # steer has stamped its own row.
         self._steer_attachment_meta: dict[str, dict[str, Any]] = {}
         # Pending steers the composer's own human sent, held with the lists above
-        # and released the same ways. Requeue stamps ``STEER_INTENT_META`` on the
+        # and released the same ways. Requeue stamps ``COMPOSER_SEND_META`` on the
         # entry, so the sub-agent hold lets it drain instead of parking it.
         self._steer_act_now: set[str] = set()
         # In-flight `wait` tool sleep, as reported by the tool's own keepalive
