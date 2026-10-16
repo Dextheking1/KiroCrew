@@ -24,19 +24,21 @@ import time
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-from kiro_crew import shutdown_event
+from kiro_crew import probes, shutdown_event
 from kiro_crew.autonudge_service.model import (
     _CONSECUTIVE_FAILURE_STANDDOWN_AFTER,
     _START_FAILURE_BACKOFF_AFTER,
     _START_FAILURE_STANDDOWN_AFTER,
     APPROVAL_HOLD,
     PERSON_WAIT_HOLD,
+    SUBJECT_READ_SECS,
     NudgeLoop,
     credit_held_runtime,
     hold_span,
     is_structured_monitor_loop,
     note_hold_start,
 )
+from kiro_crew.autonudge_service.subject import loop_subject
 from kiro_crew.monitoring.models import MONITOR_STATE_VERSION, MonitorDispatchResult
 
 if TYPE_CHECKING:
@@ -106,6 +108,19 @@ def _current_task_or_none() -> "asyncio.Task[Any] | None":
 _ACTING_TIMER: contextvars.ContextVar["asyncio.Task[Any] | None"] = contextvars.ContextVar(
     "autonudge_acting_timer", default=None
 )
+
+
+def _held_tick_rearms(loop: NudgeLoop) -> bool:
+    """Whether *loop*'s held tick re-arms one read interval out to read its subject again.
+
+    Only an approval-held loop that names one pull request does, which
+    ``subject_reads.hold_tick`` reads so a merge or a close settles the loop. With
+    nothing to read, a held tick arms nothing until a person is back.
+    """
+    if not loop.approval_stalled:
+        return False
+    target = loop_subject(loop)
+    return target is not None and target.kind == probes.GH_PR
 
 
 def notify_approval_stalled(self: AutoNudgeService, slot_key: str) -> None:
@@ -824,6 +839,15 @@ def _arm_from_deadline(self: AutoNudgeService, loop: NudgeLoop) -> None:
             MONITOR_STATE_VERSION,
         )
         return
+    if _held_tick_rearms(loop) and not is_structured_monitor_loop(loop):
+        # A held loop naming one pull request: its timer is its subject read
+        # (``subject_reads.hold_tick``), one read interval out whatever its deadline,
+        # from every arm: a turn ending, a deferred re-arm, a reconciler rescue. A held
+        # loop naming none is armed toward its deadline as any loop is, so its tick
+        # still reaches the cycle cap and the stop sentinel. The release arms toward
+        # the deadline.
+        self._arm_timer(loop, delay=SUBJECT_READ_SECS)
+        return
     now = time.time()
     if loop.next_due_ts <= 0:
         loop.next_due_ts = now + loop.idle_secs
@@ -965,10 +989,15 @@ def _reconcile_once(self: AutoNudgeService) -> None:
             continue
         if loop.id in self._firing or loop.id in self._maintenance_quiescing:
             continue
-        if loop.approval_stalled and not is_structured_monitor_loop(loop):
-            # Paused for approval: no live timer is the intended state, and
-            # ``release_approval_hold`` re-arms it. Rescuing it here would only
-            # wake a tick that holds again, every pass, for as long as it waits.
+        if (
+            loop.approval_stalled
+            and not is_structured_monitor_loop(loop)
+            and not _held_tick_rearms(loop)
+        ):
+            # Paused for approval with no pull request to read: no live timer is the
+            # intended state, and ``release_approval_hold`` re-arms it. One that names
+            # a pull request re-arms itself to keep reading it
+            # (``subject_reads.hold_tick``), so it is rescued like any other.
             continue
         monitor = loop.monitor
         if monitor is not None and monitor.version != MONITOR_STATE_VERSION:
