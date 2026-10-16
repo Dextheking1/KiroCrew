@@ -222,11 +222,15 @@ code.
      within **14 days**. A release the tracking issue marks for prompt adoption
      (the fast path): an insider build carrying the new pin ships within
      **3 days**, and stable follows through the usual soak, which the deadline
-     never shortens. The tracking issue, opened and updated by the scheduled
-     pin-drift check, is both the trigger and the record: it names the pinned
-     and latest versions, the first-seen date and the `Due:` date, and it
-     closes once the pin catches up. Until that check runs on `main`, whoever
-     notices a newer release opens the issue by hand.
+     never shortens. A maintainer who judges a release needs prompt adoption
+     marks it by adding the `fast-path` label to the tracking issue; once the
+     scheduled pin-drift check runs, it also adds that label when the
+     release's changelog matches the check's prompt-adoption keywords. The
+     tracking issue, opened and updated by the scheduled pin-drift check, is
+     both the trigger and the record: it names the pinned and latest versions,
+     the first-seen date and the `Due:` date, and it closes once the pin
+     catches up. Until that check runs on `main`, whoever notices a newer
+     release opens the issue by hand.
 2. **Cut the RC — verify content, not PR status.** On the target commit confirm:
    `github-release` has an `if:`; `CHANGELOG.md` line 5 is `## [X.Y.Z]` with zero
    non-bare-release `##` headings; no `### Contributors` (the GitHub Release
