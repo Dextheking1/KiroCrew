@@ -47,6 +47,9 @@ _INITIATOR: contextvars.ContextVar[str] = contextvars.ContextVar(
 _IN_CHANNEL_TURN: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "shared_crew_in_channel_turn", default=False
 )
+_QUEUED_WORK: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "shared_crew_queued_work", default=()
+)
 
 #: Turn actors that are a person. Every other recorded actor is automation.
 _PERSON_ACTORS = frozenset({"", "user"})
@@ -76,6 +79,21 @@ def initiated_by(principal_id: str) -> Iterator[None]:
         yield
     finally:
         _INITIATOR.reset(token)
+
+
+@contextlib.contextmanager
+def queued_work(entries: Iterable[Mapping[str, Any]]) -> Iterator[None]:
+    """Start the turn created inside the block as the parked work *entries* carry.
+
+    A message sent to a busy session was accepted then as parked work
+    (``admission_entry.admit_queued_send``); the drain's turn runs as that work
+    rather than being admitted a second time.
+    """
+    token = _QUEUED_WORK.set(tuple(admission_entry.queued_work_ids(entries)))
+    try:
+        yield
+    finally:
+        _QUEUED_WORK.reset(token)
 
 
 def queued_initiator(entries: Iterable[Mapping[str, Any]]) -> str:
@@ -244,8 +262,10 @@ async def gate_turn(
     """
     admitted = _ADMITTED_WORK.get()
     initiator = _INITIATOR.get()
+    parked = list(_QUEUED_WORK.get())
     _ADMITTED_WORK.set("")
     _INITIATOR.set("")
+    _QUEUED_WORK.set(())
     nested = int(kwargs.get("_prompt_depth") or 0) > 0
     if admitted or nested:
         start_total = getattr(slot, "total_messages", 0)
@@ -256,11 +276,13 @@ async def gate_turn(
     from kiro_crew.dashboard.chat_slack import slot_is_live
     from kiro_crew.dashboard.chat_utils import effective_session_key
 
-    admission = await admit_turn(
-        budget_key=turn_budget(kwargs, initiator),
-        session_key=effective_session_key(slot) or slot.key,
-        text=message if isinstance(message, str) else "",
-    )
+    admission = await _start_parked(parked)
+    if admission is None:
+        admission = await admit_turn(
+            budget_key=turn_budget(kwargs, initiator),
+            session_key=effective_session_key(slot) or slot.key,
+            text=message if isinstance(message, str) else "",
+        )
     if admission is None:
         await run()
         return
@@ -285,6 +307,14 @@ async def gate_turn(
         still_live=lambda: slot_is_live(state, slot),
         on_ended=_ended,
     )
+
+
+async def _start_parked(work_ids: list[str]) -> _gate.Admission | None:
+    """The parked work a drained turn runs as, or None to admit it afresh."""
+    if not work_ids or not await admission_on():
+        return None
+    service = await _gate.current_service()
+    return await service.start_parked(work_ids)
 
 
 async def run_admitted(
@@ -452,6 +482,7 @@ __all__ = [
     "initiated_by",
     "mark_admitted",
     "queued_initiator",
+    "queued_work",
     "TurnRefused",
     "run_admitted",
     "run_admitted_or_raise",

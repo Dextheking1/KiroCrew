@@ -57,9 +57,134 @@ async def admit_chat_turn(
         session_key=session_key or slot_key,
         operation=OperationKind.CHAT_TURN,
         idempotency_key=_gate.idempotency_key_of(request),
-        digest=_gate.request_digest("chat", slot_key, message),
+        digest=chat_digest(slot_key, message),
         request_bytes=len(message.encode("utf-8", "replace")),
     )
+
+
+#: Queue-entry meta key naming the parked work a message sent to a busy session holds.
+QUEUED_WORK_META_KEY = "sharedCrewWork"
+
+
+def admission_enforced() -> bool:
+    """Whether the installed service enforces fair admission. In memory."""
+    service = _gate.installed_service()
+    return service is not None and service.enabled
+
+
+def explicit_idempotency_key(request: Any) -> str:
+    """The client's own ``Idempotency-Key`` when it sent a well-formed one, else ``""``."""
+    from kiro_crew.shared_crew.admission import validate_idempotency_key
+    from kiro_crew.shared_crew.codec import ContractError
+
+    headers = getattr(request, "headers", None)
+    raw = headers.get(_gate.IDEMPOTENCY_HEADER, "") if headers is not None else ""
+    key = raw.strip() if isinstance(raw, str) else ""
+    if not key:
+        return ""
+    try:
+        return validate_idempotency_key(key)
+    except ContractError:
+        return ""
+
+
+def chat_digest(slot_key: str, message: str) -> str:
+    """The request digest every chat send path records, so a retry matches either path."""
+    return _gate.request_digest("chat", slot_key, message)
+
+
+async def chat_replay(
+    request: Any, *, session_key: str, slot_key: str, message: str
+) -> _gate.Admission | None:
+    """The recorded answer to a retried chat send, or None when the send is new.
+
+    Only a client-supplied key can match (a server key is fresh every time).
+    Reads only: the caller answers with :func:`chat_replay_response` and
+    writes no row, queues nothing and starts nothing.
+    """
+    key = explicit_idempotency_key(request)
+    if not key:
+        return None
+    service = _gate.installed_service()
+    if service is None or not service.enabled:
+        return None
+    service = await _gate.current_service()
+    return await service.lookup(
+        budget_key=_gate.actor_budget(request),
+        session_key=session_key or slot_key,
+        idempotency_key=key,
+        digest=chat_digest(slot_key, message),
+    )
+
+
+def chat_replay_response(admission: _gate.Admission, *, slot_key: str) -> Any:
+    """The JSON answer to a retried send: the recorded work, never a second stream."""
+    from aiohttp import web
+
+    if admission.rejected:
+        return admission.refusal_response()
+    work = admission.work
+    body: dict[str, Any] = {"ok": True, "slot": slot_key, "replayed": True}
+    receipt = admission_receipt(admission)
+    if receipt is not None:
+        body["admission"] = receipt
+    if work is not None and work.state is OperationState.QUEUED:
+        body["queued"] = True
+        queue_id = admission.service.queue_id_for(work.work_id) if admission.service else ""
+        if queue_id:
+            body["queue_id"] = queue_id
+    return web.json_response(body, headers=admission_headers(admission))
+
+
+async def admit_queued_send(
+    request: Any, *, session_key: str, slot_key: str, message: str
+) -> _gate.Admission:
+    """Accept a message sent to a busy session as parked work charged to its sender.
+
+    Bounded by the sender's and the Crew's queue depth and by the request size,
+    and idempotent under the client's key; the session's drain starts it
+    through :func:`kiro_crew.shared_crew.turn_gate.gate_turn`. A pass-through
+    with fair admission off.
+    """
+    if _gate.installed_service() is None:
+        return _gate.Admission(None, "passthrough")
+    service = await _gate.current_service()
+    return await service.admit(
+        budget_key=_gate.actor_budget(request),
+        session_key=session_key or slot_key,
+        operation=OperationKind.CHAT_TURN,
+        idempotency_key=_gate.idempotency_key_of(request),
+        digest=chat_digest(slot_key, message),
+        request_bytes=len(message.encode("utf-8", "replace")),
+        park=True,
+    )
+
+
+def stamp_queued_work(slot: Any, queue_id: str, admission: _gate.Admission) -> None:
+    """Name *admission*'s parked work on the queue entry *queue_id*, for the drain."""
+    if admission.passthrough or admission.work is None or not queue_id:
+        return
+    work_id = admission.work.work_id
+    if admission.service is not None:
+        admission.service.note_queue_id(work_id, queue_id)
+    for entry in getattr(slot, "_queue", None) or ():
+        if isinstance(entry, dict) and entry.get("id") == queue_id:
+            meta = entry.get("meta")
+            if not isinstance(meta, dict):
+                meta = entry["meta"] = {}
+            meta[QUEUED_WORK_META_KEY] = work_id
+            return
+
+
+def queued_work_ids(entries: Any) -> list[str]:
+    """The parked work ids a drain's consumed queue entries carry, in order."""
+    ids: list[str] = []
+    for entry in entries or ():
+        meta = entry.get("meta") if isinstance(entry, dict) else None
+        work_id = meta.get(QUEUED_WORK_META_KEY) if isinstance(meta, dict) else None
+        if isinstance(work_id, str) and work_id and work_id not in ids:
+            ids.append(work_id)
+    return ids
 
 
 def admission_receipt(admission: _gate.Admission) -> dict[str, Any] | None:
@@ -368,6 +493,15 @@ async def admit_background_run(
 
 
 __all__ = [
+    "QUEUED_WORK_META_KEY",
+    "admission_enforced",
+    "admit_queued_send",
+    "chat_digest",
+    "chat_replay",
+    "chat_replay_response",
+    "explicit_idempotency_key",
+    "queued_work_ids",
+    "stamp_queued_work",
     "admit_app_spawn",
     "admit_background_run",
     "admitted_chat_turn",

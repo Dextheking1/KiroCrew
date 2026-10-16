@@ -58,6 +58,9 @@ FAIRNESS_DESCRIPTION: dict[str, Any] = {
 
 async def api_capacity(request: web.Request) -> web.Response:
     service = await admission_gate.current_service()
+    # Durable work a restart left is reconciled before capacity is read, so a
+    # runtime still alive is counted rather than reported as free.
+    await service.ensure_ready()
     budget = admission_gate.actor_budget(request)
     body = service.capacity(budget).to_dict()
     body["effective"] = service.limits.to_dict()
