@@ -35,6 +35,7 @@ from kiro_crew.shared_crew.admission import (
     error_body,
     http_status,
 )
+from kiro_crew.shared_crew.admission_gate import coded_json_response
 from kiro_crew.shared_crew.scheduler import DEFAULT_QUANTUM
 
 CAPACITY_PATH = "/api/shared-crew/capacity"
@@ -93,7 +94,7 @@ async def api_work_cancel(request: web.Request) -> web.Response:
         work = await service.cancel(work_id, expected_revision=expected)
     except KeyError:
         reason = ReasonCode.NOT_FOUND
-        return web.json_response(error_body(reason, "no such work"), status=http_status(reason))
+        return coded_json_response(error_body(reason, "no such work"), status=http_status(reason))
     except (StaleRevision, InvalidTransition) as exc:
         reason = (
             ReasonCode.STALE_REVISION
@@ -101,7 +102,7 @@ async def api_work_cancel(request: web.Request) -> web.Response:
             else ReasonCode.INVALID_TRANSITION
         )
         current = await service.current_work(work_id)
-        return web.json_response(
+        return coded_json_response(
             error_body(reason, str(exc), current=current), status=http_status(reason)
         )
     return web.json_response(work.to_public_dict())

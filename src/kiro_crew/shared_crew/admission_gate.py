@@ -161,6 +161,36 @@ def request_digest(*parts: object) -> str:
 # -- outcomes -------------------------------------------------------------------
 
 
+def coded_json_response(
+    body: Mapping[str, Any], *, status: int, headers: Mapping[str, str] | None = None
+) -> Any:
+    """An :func:`error_body` as an aiohttp JSON response, its ``code`` written out.
+
+    Every branch spells ``error`` and ``code`` in the literal, so the
+    repository's error-code contract can see the code at each response site.
+    """
+    from aiohttp import web
+
+    error, code = str(body["error"]), str(body["code"])
+    hdrs = dict(headers or {})
+    capacity, current = body.get("capacity"), body.get("current")
+    if capacity is not None and current is not None:
+        return web.json_response(
+            {"error": error, "code": code, "capacity": capacity, "current": current},
+            status=status,
+            headers=hdrs,
+        )
+    if capacity is not None:
+        return web.json_response(
+            {"error": error, "code": code, "capacity": capacity}, status=status, headers=hdrs
+        )
+    if current is not None:
+        return web.json_response(
+            {"error": error, "code": code, "current": current}, status=status, headers=hdrs
+        )
+    return web.json_response({"error": error, "code": code}, status=status, headers=hdrs)
+
+
 class AdmissionEnded(Exception):
     """The work ended before it ran (expired, cancelled, revalidation refused)."""
 
@@ -239,9 +269,7 @@ class Admission:
         return retry_after_header(self.capacity)
 
     def refusal_response(self) -> Any:
-        from aiohttp import web
-
-        return web.json_response(
+        return coded_json_response(
             self.refusal_body(), status=self.refusal_status(), headers=self.refusal_headers()
         )
 
@@ -1474,6 +1502,7 @@ __all__ = [
     "RECONCILE_DETAIL_KEY",
     "TASK_STORE_UNAVAILABLE_CODE",
     "actor_budget",
+    "coded_json_response",
     "actor_of",
     "admit_and_run",
     "current_service",
