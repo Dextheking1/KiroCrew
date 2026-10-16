@@ -151,7 +151,9 @@ describe('Agent sessions switch', () => {
     await hydrated()
     fireEvent.click(screen.getByRole('switch', { name: 'Agent sessions' }))
     const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveTextContent(/cannot switch an app back/)
+    expect(dialog).toHaveTextContent(/You can turn this off here at any time/)
+    expect(dialog).toHaveTextContent(/cannot go back to the older assistant view/)
+    expect(dialog).not.toHaveTextContent('agent_view')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Agent sessions' })).not.toBeChecked())
 
@@ -187,6 +189,7 @@ describe('Update your Slack app', () => {
     expect(panel).toHaveTextContent('features.code_channels')
     expect(panel).toHaveTextContent('code_channels:manage· missing')
     expect(panel).toHaveTextContent('reinstall the app')
+    expect(within(panel).getByTestId('slack-manifest-replace-warning')).toHaveTextContent('whole configuration')
     expect(within(panel).getByRole('link', { name: /Open App Manifest/ }))
       .toHaveAttribute('href', 'https://api.slack.com/apps/A0123ABCD/app-manifest')
   })
@@ -195,10 +198,18 @@ describe('Update your Slack app', () => {
     const { getStatus } = seed({ code_channels: true }, status({ status: 'needs_update', missing_scopes: ['code_channels:manage'] }))
     const panel = await screen.findByTestId('slack-manifest-update')
     getStatus.mockResolvedValue(status())
+    const cfgCalls = () => vi.mocked(api.getSlackConfig).mock.calls.length
+    const cfgBefore = cfgCalls()
     fireEvent.click(within(panel).getByRole('button', { name: /Check again/ }))
     await waitFor(() => expect(getStatus).toHaveBeenLastCalledWith(true))
     await waitFor(() => expect(within(panel).getByTestId('slack-manifest-status')).toHaveAttribute('data-status', 'up_to_date'))
     expect(panel).toHaveTextContent('Nothing to update.')
+    // Lines the install holds no longer read as additions.
+    expect(panel).not.toHaveTextContent('+ code_channels:manage')
+    expect(panel).toHaveTextContent('code_channels:manage')
+    expect(screen.queryByTestId('slack-manifest-replace-warning')).toBeNull()
+    // The capability lines (config query) are re-read after the check.
+    await waitFor(() => expect(cfgCalls()).toBeGreaterThan(cfgBefore))
   })
 
   it('names a workspace that does not have code channels enabled', async () => {
@@ -206,6 +217,7 @@ describe('Update your Slack app', () => {
     const panel = await screen.findByTestId('slack-manifest-update')
     expect(within(panel).getByTestId('slack-manifest-status')).toHaveTextContent('Workspace not enabled')
     expect(panel).toHaveTextContent('does not have Code channels enabled')
+    expect(panel).toHaveTextContent('No app update is needed')
     // Reinstalling does not enable a workspace feature, so no update steps.
     expect(panel).not.toHaveTextContent('reinstall the app')
   })
@@ -252,15 +264,15 @@ describe('Capability line under a saved toggle', () => {
     })
     const line = await screen.findByTestId('slack-capability')
     expect(line).toHaveAttribute('data-reason', 'feature_disabled')
-    expect(line).toHaveTextContent('has not enabled this for your workspace')
+    expect(line).toHaveTextContent('Needs a workspace admin')
   })
 
-  it('reads Active once the app can use it', async () => {
+  it('reads Ready once the app holds the permissions', async () => {
     seed({
       agent_sessions: true,
       agent_sessions_capability: { available: true, reason: '', scope: 'assistant:write' },
     })
-    expect(await screen.findByTestId('slack-capability')).toHaveTextContent('Active')
+    expect(await screen.findByTestId('slack-capability')).toHaveTextContent('Ready')
   })
 
   it('shows nothing under a toggle that is off', async () => {

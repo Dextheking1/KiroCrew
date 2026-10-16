@@ -46,6 +46,9 @@ const FEATURE_LABEL_KEY: Record<string, string> = {
 /** Install statuses an update + reinstall can fix. */
 const STEPS_HELP = new Set(['needs_update', 'unknown'])
 
+/** Install statuses whose reading includes the app's granted scopes. */
+const SCOPES_KNOWN = new Set(['up_to_date', 'needs_update', 'feature_disabled'])
+
 function StatusPill({ status }: { status: string }) {
   const [key, variant] = STATUS_KEY[status] ?? STATUS_KEY.unknown
   return (
@@ -55,33 +58,47 @@ function StatusPill({ status }: { status: string }) {
   )
 }
 
-/** A monospace chip; a scope the install lacks is marked. */
-function Chip({ text, kind, missing }: { text: string; kind: 'add' | 'remove'; missing?: boolean }) {
+/** A monospace manifest line. ``add``: the app still needs it (``missing`` when
+ *  Slack confirms the install lacks it); ``have``: Slack confirms the install
+ *  holds it; ``line``: in the manifest, which Slack cannot confirm (events,
+ *  feature blocks); ``remove``: held but no longer asked for. */
+function Chip({ text, kind, missing }: { text: string; kind: 'add' | 'have' | 'line' | 'remove'; missing?: boolean }) {
   const tone = kind === 'remove'
     ? 'border-border text-muted line-through'
     : missing ? 'border-warn text-warn' : 'border-border text-text'
+  const sign = kind === 'add' ? '+ ' : kind === 'remove' ? '− ' : ''
   return (
     <span className={`inline-flex items-center gap-1 rounded border bg-bg px-1.5 py-0.5 text-[11.5px] font-mono ${tone}`}>
-      {kind === 'add' ? '+' : '−'} {text}
+      {kind === 'have' && <Check size={11} className="text-ok flex-none" aria-hidden />}
+      {sign}{text}
       {missing && <span className="font-sans text-[10.5px]">· {i18nT('pages.settings.slackPanel.slackCode.missing')}</span>}
     </span>
   )
 }
 
-/** The manifest lines one switch adds, grouped by kind. */
-function ChangeLines({ change, missing }: { change: SlackManifestChange; missing: Set<string> }) {
-  const rows: [string, string[]][] = [
-    ['pages.settings.slackPanel.slackCode.lines_features', change.added_features.map(f => `features.${f}`)],
-    ['pages.settings.slackPanel.slackCode.lines_scopes', change.added_scopes],
-    ['pages.settings.slackPanel.slackCode.lines_events', change.added_events],
+/** The manifest lines one switch adds, grouped by kind. *pending* = the switch
+ *  is not saved yet, so every line is still to be added; otherwise a scope Slack
+ *  reports as granted reads as held. */
+function ChangeLines({ change, missing, scopesKnown, pending }: {
+  change: SlackManifestChange; missing: Set<string>; scopesKnown: boolean; pending: boolean
+}) {
+  const rows: [string, string[], boolean][] = [
+    ['pages.settings.slackPanel.slackCode.lines_features', change.added_features.map(f => `features.${f}`), false],
+    ['pages.settings.slackPanel.slackCode.lines_scopes', change.added_scopes, true],
+    ['pages.settings.slackPanel.slackCode.lines_events', change.added_events, false],
   ]
+  const kindFor = (item: string, isScope: boolean): 'add' | 'have' | 'line' => {
+    if (pending || missing.has(item)) return 'add'
+    if (isScope) return scopesKnown ? 'have' : 'add'
+    return 'line'
+  }
   return (
     <div className="flex flex-col gap-1.5">
-      {rows.filter(([, items]) => items.length > 0).map(([labelKey, items]) => (
+      {rows.filter(([, items]) => items.length > 0).map(([labelKey, items, isScope]) => (
         <div key={labelKey} className="flex items-start gap-2">
           <span className="text-[11px] text-muted w-[64px] flex-none pt-0.5">{i18nT(labelKey)}</span>
           <div className="flex flex-wrap gap-1">
-            {items.map(item => <Chip key={item} text={item} kind="add" missing={missing.has(item)} />)}
+            {items.map(item => <Chip key={item} text={item} kind={kindFor(item, isScope)} missing={missing.has(item)} />)}
           </div>
         </div>
       ))}
@@ -113,6 +130,10 @@ export function SlackManifestUpdate({ data, draft, manifestText }: {
     setRecheckFailed(false)
     try {
       qc.setQueryData(['slack-manifest-status'], await api.getSlackManifestStatus(true))
+      // The check just re-read the install's scopes, which the capability line
+      // under each switch (from the config query) reports: refresh it too, or
+      // it keeps saying "Not active yet" after a successful reinstall.
+      await qc.invalidateQueries({ queryKey: ['slack-config'] })
     } catch {
       setRecheckFailed(true)
     } finally {
@@ -148,6 +169,9 @@ export function SlackManifestUpdate({ data, draft, manifestText }: {
 
   return (
     <div className="border-t border-border mt-4 pt-4 flex flex-col gap-3" data-testid="slack-manifest-update">
+      {/* role="status": a re-check's outcome (the pill and the line under it)
+          is announced to a screen reader without moving focus. */}
+      <div role="status" className="flex flex-col gap-3">
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-[13px] font-semibold text-text">{i18nT('pages.settings.slackPanel.slackCode.update_title')}</span>
         {savedOn.length > 0 || extra.length > 0 ? <StatusPill status={installStatus} /> : null}
@@ -173,6 +197,7 @@ export function SlackManifestUpdate({ data, draft, manifestText }: {
           })}
         </p>
       )}
+      </div>
       {/* No hand-off: the check is retried in place with Check again, and the
           hand-off would navigate away from the unsaved Slack draft. */}
       {(statusQ.isError || recheckFailed) && (
@@ -191,7 +216,12 @@ export function SlackManifestUpdate({ data, draft, manifestText }: {
             <span className="text-[12px] font-semibold text-text">{i18nT(FEATURE_LABEL_KEY[f])}</span>
             {pendingOn.includes(f) && <span className="text-[11px] text-muted">{i18nT('pages.settings.slackPanel.slackCode.after_save')}</span>}
           </div>
-          <ChangeLines change={status.feature_changes[f]} missing={missing} />
+          <ChangeLines
+            change={status.feature_changes[f]}
+            missing={missing}
+            scopesKnown={SCOPES_KNOWN.has(installStatus)}
+            pending={pendingOn.includes(f)}
+          />
         </div>
       ))}
 
@@ -213,6 +243,11 @@ export function SlackManifestUpdate({ data, draft, manifestText }: {
           <li>{i18nT('pages.settings.slackPanel.slackCode.step_reinstall')}</li>
           <li>{i18nT('pages.settings.slackPanel.slackCode.step_check')}</li>
         </ol>
+      )}
+      {(STEPS_HELP.has(installStatus) || pendingOn.length > 0) && savedOn.length + pendingOn.length > 0 && (
+        <p className="m-0 text-[11.5px] text-muted" data-testid="slack-manifest-replace-warning">
+          {i18nT('pages.settings.slackPanel.slackCode.replace_warning')}
+        </p>
       )}
       {installStatus === 'up_to_date' && savedOn.length > 0 && pendingOn.length === 0 && (
         <div className="flex items-center gap-1.5 text-[12px] text-ok">

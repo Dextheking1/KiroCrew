@@ -57,6 +57,10 @@ REASON_SCOPES_UNKNOWN = "scopes_unknown"
 #: Sidebar folder ids are ``uuid4().hex[:12]`` (``chat_folders``); an id-shaped
 #: reference is matched by id only, never as a folder name.
 _FOLDER_ID_LEN = 12
+#: Separator of a sidebar folder PATH (``Parent/Child``), the spelling the folder
+#: tools and settings take. A display path of folder names, never a filesystem
+#: path, so it is the same on every platform.
+FOLDER_PATH_SEP = "/"
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -303,7 +307,7 @@ def folder_paths(folders: Iterable[Mapping[str, Any]]) -> dict[str, str]:
             seen.add(cur)
             segments.append(str(by_id[cur].get("name") or "?"))
             cur = str(by_id[cur].get("parent_id") or "")
-        paths[fid] = "/".join(reversed(segments))
+        paths[fid] = FOLDER_PATH_SEP.join(reversed(segments))
     return paths
 
 
@@ -322,7 +326,9 @@ def find_folder(folders: Iterable[Mapping[str, Any]], ref: str | None) -> Mappin
             return folder
     if looks_like_folder_id(ref):
         return None
-    wanted = "/".join(seg.strip().lower() for seg in ref.split("/") if seg.strip())
+    wanted = FOLDER_PATH_SEP.join(
+        seg.strip().lower() for seg in ref.split(FOLDER_PATH_SEP) if seg.strip()
+    )
     paths = folder_paths(listed)
     hits = [f for f in listed if paths.get(str(f.get("id")), "").lower() == wanted]
     return hits[0] if len(hits) == 1 else None
