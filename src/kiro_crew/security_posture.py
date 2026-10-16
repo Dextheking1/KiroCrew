@@ -1382,6 +1382,8 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
         "slack/blocks.py",
         "Message text rendered into Block Kit payloads (Home Tab, session views).",
     ),
+    ("Slack code-channel bar", "slack/code_channels/workspace/context_bar.py", "Its labels."),
+    ("Slack code-channel diff", "slack/code_channels/workspace/service.py", "Its diff view."),
     (
         "File cards broadcast to the browser",
         "dashboard/handlers/files.py",
