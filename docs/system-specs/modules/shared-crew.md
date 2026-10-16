@@ -169,12 +169,39 @@ verified actor, folds every tab of one principal into one entry, expires after
 `ACTIVITY_MIN_INTERVAL_SECONDS` per connection, and is never persisted. It never
 grants access or frees a slot. Draft text is never sent.
 
+`presence.PresenceRegistry` implements it in memory. `dashboard.ws` reads the
+connection's principal once, from `request[ACTOR_REQUEST_KEY]` on the upgrade
+request (Unknown when none was published), and hands each `shared_crew.activity`
+frame to `presence.handle_activity_frame`, which reads only `session_key` and
+`activity`, admits dashboard-user sockets only, and only for a session the gateway
+has open. A refused frame (too soon, malformed, registry full) changes nothing and
+is never answered with an eviction of someone else's entry. Disconnect and expiry
+push a fresh `shared_crew.presence` frame for every session they changed; the
+socket's status tick sweeps stale entries.
+
 A shared decision (`collab.SharedDecision`) is a tool approval or agent question that
 every collaborator sees and any one may answer. `classify_response` decides a response
 under the resolver's lock: the first response to see `pending` wins, a retry with the
 winning `response_id` replays the same outcome, and any other response receives the
 resolved decision with `already_resolved`. A resolved decision always names its
 responder.
+
+`decisions.DecisionRegistry` is that resolver: one in-memory, bounded record per
+decision, with the classification, the side effect that settles the waiting future,
+and the state write under one lock. A decision id is derived from what the card
+already shows (`approval:<len>:<slot>:<request id>`, `approval-state:<id>`,
+`question:<ask id>`), so every tab computes it without a lookup. The initiator is the
+author of the turn that asked (the latest user message's `author` stamp) or, for a
+background approval, the `Principal.system` of its source; the responder is the
+request's verified actor. Every existing gate on the approve and answer routes runs
+before the registry sees a response. A client that sends `response_id` gets 409
+`already_resolved` with the decision on a lost race; a client that sends none keeps
+the existing 404. A wait that ends through a path with no verified responder closes
+the decision with an Unknown responder, and an unanswered one closes as `expired` or
+`withdrawn`. Approval decision frames ride `broadcast_ws` like approval frames;
+question decision frames go to owner sockets only, the audience the question card
+has. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
+`routes_collab`) answer the same state for a reconnecting tab.
 
 ## 6. Wire shapes
 
