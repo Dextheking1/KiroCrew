@@ -102,8 +102,12 @@ before the switch silently lacks `code_channels:manage` and every call fails.
 `SlackConfig.code_channels` (bool, default `False`) and
 `SlackConfig.code_channel_defaults` (`CodeChannelDefaultsConfig`). All three are
 ordinary Slack settings on the Slack settings page, not a Developer or Feature
-Preview flag, and all three hot-apply: the runtime reads them per event, behind
-the capability guard below, so a flip needs no restart. The builder treats
+Preview flag, and all three hot-apply: the runtimes (Phases 2 and 3) read them
+per event, behind the capability guard below, so a flip needs no restart. In
+Phase 1 alone nothing reads the switches yet, which is why the capability line
+under each says *Ready* (the app holds the permissions) rather than claiming the
+feature runs, and why Phase 1 lands together with the runtime phases stacked on
+it. The builder treats
 anything that is not a real `True` as off and normalizes every default string,
 with `None` as the one "not set" spelling and an effort outside `low…max`
 dropped.
@@ -321,6 +325,13 @@ the user added by hand (an extra scope, a shortcut, a renamed bot), and it would
 make the irreversible `agent_view` switch with one click rather than through
 Slack's own manifest editor. Copy, paste and reinstall keeps Slack's review screen
 in the loop, and the drift probe gives the same closing signal ("Up to date").
+A hand-pasted full manifest replaces the configuration just as a push would; the
+difference is that the person does it in Slack's editor, which shows what
+changes, and the panel says so before they do: it warns that replacing the YAML
+drops hand-made additions and offers adding only the listed lines instead. The
+copied manifest also keeps the app's own slash command and name (the alias is
+derived from the saved `slack.command`), so pasting it does not rename an
+existing app's `/kirocrew-<alias>` command.
 A future revision could revisit this with `apps.manifest.export` → merge →
 update and a short-lived token the user pastes per push, never stored.
 

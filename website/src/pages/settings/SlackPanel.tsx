@@ -252,7 +252,10 @@ export function SlackPanel() {
       // The manifest renders for the saved Slack Code switches, so a save can
       // change it and what the installed app is compared against.
       qc.invalidateQueries({ queryKey: ['slack-manifest'] })
-      qc.invalidateQueries({ queryKey: ['slack-manifest-status'] })
+      // The status read records the install's scopes; the capability lines come
+      // from the config query, so read it once more after the status settles.
+      void qc.invalidateQueries({ queryKey: ['slack-manifest-status'] })
+        .then(() => qc.invalidateQueries({ queryKey: ['slack-config'] }))
     },
   })
 

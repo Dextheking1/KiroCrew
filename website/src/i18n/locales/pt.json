@@ -17565,11 +17565,12 @@
           "open_slack_apps": "Abrir seus apps do Slack",
           "check_again": "Verificar novamente",
           "events_unverifiable": "O Slack informa as permissões de um app, mas não as assinaturas de eventos, então o status verifica apenas as permissões.",
-          "cap_active": "Ativo: seu app do Slack pode usar isto.",
+          "cap_active": "Pronto: seu app do Slack tem as permissões de que isto precisa.",
           "cap_missing_scope": "Ainda não ativo: seu app do Slack não tem a permissão {{scope}}. Atualize o app abaixo e reinstale-o. Até lá, o Slack funciona como antes.",
           "cap_feature_disabled": "Inativo: o Slack não habilitou isto para o seu espaço de trabalho. O Slack funciona como antes.",
           "cap_token_type": "Inativo: o Slack recusou o token de bot para este recurso. O Slack funciona como antes.",
-          "cap_scopes_unknown": "Ainda não ativo: o {{productName}} lê as permissões do seu app do Slack quando o Slack se conecta. Selecione \"Verificar novamente\" abaixo quando o Slack estiver conectado."
+          "cap_scopes_unknown": "Ainda não ativo: o {{productName}} lê as permissões do seu app do Slack quando o Slack se conecta. Selecione \"Verificar novamente\" abaixo quando o Slack estiver conectado.",
+          "replace_warning": "Substituir o YAML substitui toda a configuração do app, então tudo o que você adicionou manualmente no Slack, como um escopo extra ou um atalho, precisa ser adicionado de novo. Para manter essas adições, adicione em vez disso apenas as linhas listadas acima."
         }
       },
       "sttSettings": {

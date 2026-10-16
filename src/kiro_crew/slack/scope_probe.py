@@ -268,8 +268,10 @@ async def probe_manifest_status(
     disabled = set(feature_disabled_seen())
     if probe_code_channels and "code_channels:manage" in granted:
         if await _code_channels_refused(client):
+            # Reported on the page only: the runtime latch is the connect probe's
+            # and the runtime's to set, so a settings-page read never raises a
+            # notification or switches a feature off by itself.
             disabled.add("code_channels")
-            features.latch_unavailable("code_channels", "feature_disabled")
         else:
             # A probe that now gets past the gate retires a stale runtime record.
             disabled.discard("code_channels")

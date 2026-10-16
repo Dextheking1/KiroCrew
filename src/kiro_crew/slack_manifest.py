@@ -63,6 +63,10 @@ ALIAS_MAX = 32
 #: Accepted alias shape, anchored. Kept in sync with ``ALIAS_MAX``.
 ALIAS_RE = re.compile(rf"\A[A-Za-z0-9_-]{{1,{ALIAS_MAX}}}\Z")
 
+#: A slash-command name Slack accepts (no leading ``/``), as ``slack.command``
+#: stores it.
+_COMMAND_RE = re.compile(rf"\A[a-z0-9_-]{{1,{SLASH_COMMAND_MAX - 1}}}\Z")
+
 #: Alias body for embedding in a larger pattern (unanchored, no group).
 ALIAS_PATTERN = rf"[A-Za-z0-9_-]{{1,{ALIAS_MAX}}}"
 
@@ -153,16 +157,41 @@ def stripped_template(features: Iterable[str] | None = None) -> str:
 
 
 def render(
-    alias: str, *, strip_comments: bool = False, features: Iterable[str] | None = None
+    alias: str,
+    *,
+    strip_comments: bool = False,
+    features: Iterable[str] | None = None,
+    command: str | None = None,
 ) -> str:
     """The manifest with *alias* substituted, for the switches in *features*.
 
     ``strip_comments=False`` keeps the guidance comments, which is what a human
     reads or pastes into Slack. ``True`` yields exactly the deep-link payload.
     No *features* renders the manifest with every Slack Code switch off.
+    *command* overrides the slash command (default ``slash_command(alias)``):
+    the manifest an EXISTING app is updated from must keep the command that app
+    already registers, which the gateway answers as ``slack.command``. A
+    command of the wrong shape is ignored. The deep link never takes one: its
+    payload must stay one the exfil validator can rebuild from the alias.
     """
     text = stripped_template(features) if strip_comments else template(features)
-    return text.replace(COMMAND_PLACEHOLDER, slash_command(alias)).replace(ALIAS_PLACEHOLDER, alias)
+    slash = command if command and _COMMAND_RE.match(command) else slash_command(alias)
+    return text.replace(COMMAND_PLACEHOLDER, slash).replace(ALIAS_PLACEHOLDER, alias)
+
+
+def alias_for_command(command: str) -> str:
+    """The alias whose manifest registers *command*, else :data:`DEFAULT_ALIAS`.
+
+    Inverts :func:`slash_command` for ``kirocrew-<alias>`` commands. The alias is
+    lowercase by then (Slack command names are), so an app created from a
+    mixed-case alias gets the lowercase spelling back; the slash command, which
+    is what routing depends on, is the same either way.
+    """
+    if command.startswith(SLASH_COMMAND_PREFIX):
+        candidate = command[len(SLASH_COMMAND_PREFIX) :]
+        if valid_alias(candidate):
+            return candidate
+    return DEFAULT_ALIAS
 
 
 def deep_link(alias: str, features: Iterable[str] | None = None) -> str:

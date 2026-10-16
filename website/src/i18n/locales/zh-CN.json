@@ -17035,11 +17035,12 @@
           "open_slack_apps": "打开 Slack 应用",
           "check_again": "重新检查",
           "events_unverifiable": "Slack 会报告应用的权限，但不报告其事件订阅，因此状态只检查权限。",
-          "cap_active": "已生效：你的 Slack 应用可以使用此功能。",
+          "cap_active": "已就绪：你的 Slack 应用拥有此功能所需的权限。",
           "cap_missing_scope": "尚未生效：Slack 应用缺少 {{scope}} 权限。在下方更新应用并重新安装。在此之前，Slack 照常工作。",
           "cap_feature_disabled": "未生效：Slack 尚未为你的工作区启用此功能。Slack 照常工作。",
           "cap_token_type": "未生效：Slack 拒绝了此功能使用的机器人令牌。Slack 照常工作。",
-          "cap_scopes_unknown": "尚未生效：Slack 连接时，{{productName}} 会读取 Slack 应用的权限。Slack 连接后，在下方选择“重新检查”。"
+          "cap_scopes_unknown": "尚未生效：Slack 连接时，{{productName}} 会读取 Slack 应用的权限。Slack 连接后，在下方选择“重新检查”。",
+          "replace_warning": "替换 YAML 会覆盖整个应用配置，所以你在 Slack 中手动添加的内容（例如额外权限范围或快捷方式）都需要重新添加。如需保留，改为只添加上面列出的行。"
         }
       },
       "sttSettings": {

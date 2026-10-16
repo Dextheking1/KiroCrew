@@ -187,6 +187,7 @@ describe('Update your Slack app', () => {
     expect(panel).toHaveTextContent('features.code_channels')
     expect(panel).toHaveTextContent('code_channels:manage· missing')
     expect(panel).toHaveTextContent('reinstall the app')
+    expect(within(panel).getByTestId('slack-manifest-replace-warning')).toHaveTextContent('whole configuration')
     expect(within(panel).getByRole('link', { name: /Open App Manifest/ }))
       .toHaveAttribute('href', 'https://api.slack.com/apps/A0123ABCD/app-manifest')
   })
@@ -195,10 +196,18 @@ describe('Update your Slack app', () => {
     const { getStatus } = seed({ code_channels: true }, status({ status: 'needs_update', missing_scopes: ['code_channels:manage'] }))
     const panel = await screen.findByTestId('slack-manifest-update')
     getStatus.mockResolvedValue(status())
+    const cfgCalls = () => vi.mocked(api.getSlackConfig).mock.calls.length
+    const cfgBefore = cfgCalls()
     fireEvent.click(within(panel).getByRole('button', { name: /Check again/ }))
     await waitFor(() => expect(getStatus).toHaveBeenLastCalledWith(true))
     await waitFor(() => expect(within(panel).getByTestId('slack-manifest-status')).toHaveAttribute('data-status', 'up_to_date'))
     expect(panel).toHaveTextContent('Nothing to update.')
+    // Lines the install holds no longer read as additions.
+    expect(panel).not.toHaveTextContent('+ code_channels:manage')
+    expect(panel).toHaveTextContent('code_channels:manage')
+    expect(screen.queryByTestId('slack-manifest-replace-warning')).toBeNull()
+    // The capability lines (config query) are re-read after the check.
+    await waitFor(() => expect(cfgCalls()).toBeGreaterThan(cfgBefore))
   })
 
   it('names a workspace that does not have code channels enabled', async () => {
@@ -255,12 +264,12 @@ describe('Capability line under a saved toggle', () => {
     expect(line).toHaveTextContent('has not enabled this for your workspace')
   })
 
-  it('reads Active once the app can use it', async () => {
+  it('reads Ready once the app holds the permissions', async () => {
     seed({
       agent_sessions: true,
       agent_sessions_capability: { available: true, reason: '', scope: 'assistant:write' },
     })
-    expect(await screen.findByTestId('slack-capability')).toHaveTextContent('Active')
+    expect(await screen.findByTestId('slack-capability')).toHaveTextContent('Ready')
   })
 
   it('shows nothing under a toggle that is off', async () => {

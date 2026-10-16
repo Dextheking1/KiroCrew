@@ -17300,11 +17300,12 @@
           "open_slack_apps": "Deine Slack-Apps öffnen",
           "check_again": "Erneut prüfen",
           "events_unverifiable": "Slack meldet die Berechtigungen einer App, aber nicht ihre Event-Abonnements, deshalb prüft der Status nur Berechtigungen.",
-          "cap_active": "Aktiv: Deine Slack-App kann das nutzen.",
+          "cap_active": "Bereit: Deine Slack-App hat die Berechtigungen, die das braucht.",
           "cap_missing_scope": "Noch nicht aktiv: Deiner Slack-App fehlt die Berechtigung {{scope}}. Aktualisiere die App unten und installiere sie neu. Bis dahin funktioniert Slack wie bisher.",
           "cap_feature_disabled": "Nicht aktiv: Slack hat das für deinen Workspace nicht aktiviert. Slack funktioniert wie bisher.",
           "cap_token_type": "Nicht aktiv: Slack hat das Bot-Token für diese Funktion abgelehnt. Slack funktioniert wie bisher.",
-          "cap_scopes_unknown": "Noch nicht aktiv: {{productName}} liest die Berechtigungen deiner Slack-App, wenn Slack sich verbindet. Wähle unten „Erneut prüfen“, sobald Slack verbunden ist."
+          "cap_scopes_unknown": "Noch nicht aktiv: {{productName}} liest die Berechtigungen deiner Slack-App, wenn Slack sich verbindet. Wähle unten „Erneut prüfen“, sobald Slack verbunden ist.",
+          "replace_warning": "Wenn du das YAML ersetzt, ersetzt du die gesamte Konfiguration der App. Alles, was du in Slack von Hand hinzugefügt hast, etwa einen zusätzlichen Scope oder einen Shortcut, musst du danach erneut hinzufügen. Um das zu behalten, füge stattdessen nur die oben aufgeführten Zeilen hinzu."
         }
       },
       "sttSettings": {

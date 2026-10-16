@@ -154,3 +154,47 @@ class TestExfilExemption:
         )
         url = "https://api.slack.com/apps?new_app=1&manifest_yaml=" + quote(payload, safe="")
         assert scan_exfiltration_urls(url) != []
+
+
+class TestExistingAppKeepsItsCommand:
+    @pytest.mark.parametrize(
+        "command,alias",
+        [
+            ("kirocrew", "kirocrew"),
+            ("kirocrew-jdoe", "jdoe"),
+            ("crew", "kirocrew"),
+            ("kirocrew-", "kirocrew"),
+        ],
+    )
+    def test_alias_for_command(self, command: str, alias: str) -> None:
+        assert slack_manifest.alias_for_command(command) == alias
+
+    def test_render_takes_the_saved_command_and_ignores_a_bad_one(self) -> None:
+        assert "/crew\n" in slack_manifest.render("kirocrew", command="crew")
+        assert "/kirocrew\n" in slack_manifest.render("kirocrew", command="Bad Command!")
+
+    @pytest.mark.parametrize(
+        "saved,name,slash",
+        [
+            ("kirocrew-jdoe", "KiroCrew-jdoe", "/kirocrew-jdoe"),  # brand-ok: manifest app name
+            ("crew", "KiroCrew-kirocrew", "/crew"),  # brand-ok: manifest app name
+        ],
+    )
+    def test_endpoint_renders_for_this_install(
+        self, saved: str, name: str, slash: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import kiro_crew.dashboard.handlers.messaging as mod
+
+        cfg = _cfg(command=saved, code_channels=True)
+        monkeypatch.setattr(KiroCrewConfig, "load", classmethod(lambda cls, *a, **k: cfg))
+        resp = asyncio.run(
+            mod.api_slack_manifest(make_mocked_request("GET", "/api/slack/manifest"))
+        )
+        body = json.loads(resp.text)
+        parsed = yaml.safe_load(body["manifest"])
+        assert parsed["display_information"]["name"] == name
+        assert parsed["features"]["slash_commands"][0]["command"] == slash
+        assert body["command"] == slash.lstrip("/")
+        assert "code_channels" in parsed["features"]
+        # The create-app deep link stays one the exfil validator exempts.
+        assert scan_exfiltration_urls(body["create_url"]) == []

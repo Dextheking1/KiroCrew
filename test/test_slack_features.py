@@ -333,7 +333,12 @@ class TestReconnectHook:
 
         async def _probe(client: object, *, probe_code_channels: bool = False) -> None:
             calls.append(client)
+            probes.append(probe_code_channels)
 
+        probes: list[bool] = []
+        cfg = KiroCrewConfig()
+        cfg.slack = _build_slack_config({"code_channels": True})
+        monkeypatch.setattr(KiroCrewConfig, "load", classmethod(lambda cls, *a, **k: cfg))
         monkeypatch.setattr(scope_probe, "refresh_capabilities", _probe)
         orch = SimpleNamespace(
             dashboard_state=None, _socket_client=SimpleNamespace(message_listeners=[])
@@ -346,7 +351,17 @@ class TestReconnectHook:
             await listener(None, {"type": "hello"}, "")
             await listener(None, {"type": "events_api"}, "")
             await listener(None, {"type": "hello"}, "")  # a reconnect
-            await asyncio.sleep(0)
+            for _ in range(50):  # each probe reads the live config off the loop first
+                if len(calls) == 2:
+                    break
+                await asyncio.sleep(0.02)
 
         asyncio.run(_drive())
         assert calls == [web, web]
+        # The workspace-feature probe follows the live Code channels toggle.
+        assert probes == [True, True]
+        cfg.slack = _build_slack_config({})
+        calls.clear()
+        probes.clear()
+        asyncio.run(_drive())
+        assert probes == [False, False]
