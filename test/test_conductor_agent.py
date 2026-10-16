@@ -552,9 +552,7 @@ class TestConductorInstaller:
             assert "Can you pick a default?" not in text
             assert "Can I pick a default?" not in text
 
-    def test_human_needed_rule_hides_ledger_dispatch_and_capacity_work(
-        self, tmp_path, monkeypatch
-    ):
+    def test_human_needed_rule_hides_ledger_dispatch_and_capacity_work(self, tmp_path, monkeypatch):
         prompt = " ".join(self._install(tmp_path, monkeypatch)["prompt"].split())
         body = " ".join((SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").split())
         for text in (prompt, body):

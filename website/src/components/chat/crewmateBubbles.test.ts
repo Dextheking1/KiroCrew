@@ -108,28 +108,35 @@ describe('filterCrewmateChat', () => {
   })
 })
 
-describe('filterCrewmateChat and delegated work', () => {
+describe('filterCrewmateChat and the spawn_run launch (#21138)', () => {
   const opener = user(at('2026-10-16T06:40:00Z'), 'Take #4213 first.')
-  const narration = said(at('2026-10-16T06:40:19Z'), 'I will inspect the repo, then dispatch two workers.')
-  narration.meta = { kind: 'internal_narration' }
+  const onIt = said(at('2026-10-16T06:40:19Z'), 'On it. I am sending two workers out.')
   const launch = spawn(at('2026-10-16T06:40:26Z'))
   const launchDone: ChatMessage = { role: 'tool', content: '✅ done', cls: '', ts: at('2026-10-16T06:40:28Z'), meta: { tool_call_id: launch.meta!.tool_call_id } }
-  const result = said(at('2026-10-16T06:52:10Z'), 'Both workers found the cause: PR #4102.')
 
-  it('draws only the request and useful result, not narration or dispatch plumbing', () => {
-    const rows = [opener, narration, launch, launchDone, tool(at('2026-10-16T06:40:41Z')), result]
-    expect(filterCrewmateChat(rows)).toEqual([opener, result])
-    expect(isCrewmateChatRow(narration)).toBe(false)
-    expect(isCrewmateChatRow(launch)).toBe(false)
+  it('draws the spawn_run launch row and nothing else of the turn\'s machinery', () => {
+    const drawn = filterCrewmateChat([opener, onIt, launch, launchDone, tool(at('2026-10-16T06:40:41Z'))])
+    expect(drawn).toEqual([opener, onIt, launch])
+    expect(isCrewmateChatRow(launch)).toBe(true)
   })
 
-  it('reads through hidden dispatch rows when grouping human-facing results', () => {
-    const before = said(at('2026-10-16T06:40:10Z'), 'I found one useful fact.')
-    const transcript = [opener, before, launch, launchDone, result]
+  it('an ordinary tool row, even one named spawn_run with no launch output, stays hidden', () => {
+    const bare: ChatMessage = { role: 'tool', content: '🔧 spawn_run', cls: '', ts: at('2026-10-16T06:40:26Z'), meta: { tool_call_id: 'x', tool_name: 'spawn_run' } }
+    expect(isCrewmateChatRow(bare)).toBe(false)
+    expect(isCrewmateChatRow(tool(at('2026-10-16T06:40:41Z')))).toBe(false)
+  })
+
+  it('the drawn card is a run boundary: the reply after it opens a new run', () => {
+    const back = said(at('2026-10-16T06:52:10Z'), 'Both workers are back. The cause is PR #4102.')
+    const transcript = [opener, onIt, launch, launchDone, back]
     const drawn = filterCrewmateChat(transcript)
-    expect(drawn).toEqual([opener, before, result])
-    expect(crewmateRunPosition(drawn, drawn.indexOf(before), transcript)).toBe('start')
-    expect(crewmateRunPosition(drawn, drawn.indexOf(result), transcript)).toBe('end')
+    expect(drawn).toEqual([opener, onIt, launch, back])
+    expect(crewmateRunPosition(drawn, drawn.indexOf(onIt), transcript)).toBe('single')
+    expect(crewmateRunPosition(drawn, drawn.indexOf(back), transcript)).toBe('single')
+  })
+
+  it('a launch alone is content: the quiet hint does not show over a live card', () => {
+    expect(filterCrewmateChat([launch, launchDone])).toEqual([launch])
   })
 })
 

@@ -1,8 +1,8 @@
 /**
  * CrewmateLiveActivity — what a crewmate's chat shows while its turn runs: a
  * typing bubble (three bouncing dots in the crewmate's own gray bubble) with
- * ONE generic status line under it (#18238, #19997). Tool names and purposes
- * are process detail, so Mate says only that work is in progress.
+ * ONE status line under it naming what the crewmate is doing right now
+ * (#18238, #19997).
  *
  * It is the crewmate chat's whole working indicator; the pane does not mount
  * the chat page's `ChatFooter` (the ghost-pose carousel) beside it, or two
@@ -24,10 +24,11 @@
  * same quiet rule `ChatFooter` uses (`useStreamIdle`) brings the dots back
  * when the model pauses mid-stream.
  *
- * The caption uses the DM header pill's activity KIND (`useSlotActivity` →
- * `resolvePillActivity`) but not its tool name or purpose. Those facts stay in
- * the Work log. `stopping` and `compacting` are spelled here too — the footer
- * that used to say them is not mounted in a crewmate chat.
+ * The caption is the DM header pill's own reading (`useSlotActivity` →
+ * `resolvePillActivity`, over the slot's live status record and the shared
+ * `toolStatusLabel`), so the chat and the header name one moment the same way.
+ * `stopping` and `compacting` are spelled here too — the footer that used to
+ * say them is not mounted in a crewmate chat.
  */
 import { useTranslation } from 'react-i18next'
 import { motion, useReducedMotion } from 'framer-motion'
@@ -59,11 +60,7 @@ export default function CrewmateLiveActivity({
   // opposite of the caption, so the bubble folds for those two phases too.
   const idlePhase = activity.kind === 'stopping' || activity.kind === 'compacting'
   const dotsShown = (!streamingText || streamQuiet) && !idlePhase
-  // Tool purpose belongs in the Work log, not the conversation. A generic
-  // working label keeps liveness without turning tool events into chat prose.
-  const label = activity.kind === 'tool'
-    ? t('pages.chat.chatFooter.thinking')
-    : activity.fullText ?? activity.text ?? t(PILL_ACTIVITY_KEY[activity.kind as Exclude<PillActivityKind, 'tool' | 'thinking'>])
+  const label = activity.fullText ?? activity.text ?? t(PILL_ACTIVITY_KEY[activity.kind as Exclude<PillActivityKind, 'tool' | 'thinking'>])
   return (
     <div
       data-testid="crewmate-live-activity"

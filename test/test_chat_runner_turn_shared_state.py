@@ -128,6 +128,41 @@ class TestMateHumanFacingOutput:
         ]
         assert shown == ["The fix is ready in PR #4213."]
 
+    @pytest.mark.asyncio
+    async def test_mate_keeps_text_before_a_human_facing_closing_tool(self) -> None:
+        def _member(ctx: TurnContext) -> None:
+            ctx.slot.mode = DM_SLOT_MODE
+            ctx.slot.agent = "radar"
+
+        record = await run_turn(
+            TurnScript(
+                setup=_member,
+                events=[
+                    AcpEvent(kind=EVENT_TEXT_CHUNK, text="The useful result is ready."),
+                    AcpEvent(
+                        kind=EVENT_TOOL_CALL,
+                        tool_call_id="t-close",
+                        title="nothing_to_do",
+                        tool_kind="other",
+                        tool_name="nothing_to_do",
+                        mcp_server_name="kirocrew-core",
+                    ),
+                    _DONE,
+                ],
+            ),
+            config={"agents": {"radar": {"kiro_agent": "kirocrew"}}},
+        )
+
+        [result] = record.rows("assistant")
+        assert result["content"] == "The useful result is ready."
+        assert result.get("meta", {}).get("kind") != "internal_narration"
+        shown = [
+            frame.payload["content"]
+            for frame in record.frames("chat_message")
+            if frame.payload.get("role") == "assistant"
+        ]
+        assert shown == ["The useful result is ready."]
+
 
 class TestSteerCutAndCancel:
     @pytest.mark.asyncio

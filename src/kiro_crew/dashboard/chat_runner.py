@@ -2179,6 +2179,21 @@ def _append_command_reply(slot: _ChatSlot, text: str) -> None:
     slot.append("assistant", redacted, "msg msg-a", meta=meta or None)
 
 
+#: Tools whose call follows a human-facing message rather than turning that
+#: text into process narration. These are conversation closers/surfaces: hiding
+#: the text before one can erase the result or question the tool accompanies.
+#: Compare canonical ``tool_name`` only; an absent/untrusted identity stays on
+#: the fail-quiet internal side rather than trusting an agent-authored title.
+_MATE_TEXT_CLOSING_TOOLS: frozenset[str] = frozenset(
+    {"ask_question", "nothing_to_do", "send_message", "send_notification", "suggest_followup"}
+)
+
+
+def _mate_tool_keeps_preamble(event: LLMEvent) -> bool:
+    """Whether *event* is a human-facing closer whose preceding text stays visible."""
+    return (event.tool_name or "") in _MATE_TEXT_CLOSING_TOOLS
+
+
 #: Window rows a tool group puts between a segment's chunk rows: the call row,
 #: the approval card a gated call appends, and a change card or guide offer.
 _TOOL_GROUP_ROLES = frozenset({"tool", "permission", "card"})
@@ -6956,7 +6971,10 @@ async def _run_chat(
     # Mate is a conversation, not a turn trace. Buffer its text until a segment
     # proves human-facing by completing without another tool call. Pre-tool text
     # is then retained only as tagged internal history.
-    _mate_human_facing_only = slot.mode == DM_SLOT_MODE
+    _mate_human_facing_only = getattr(slot, "mode", "") == DM_SLOT_MODE
+    # Verdict for a deferred segment cut. Updated from each tool event before
+    # that event can flush or defer the segment.
+    _mate_preamble_is_internal = False
     # The accumulated text at the last segment cut that was deferred because a
     # construct was open (see open_construct_at_end). While `assistant_text`
     # still starts with it, the pending segment holds text a cut was held back
@@ -10700,7 +10718,7 @@ async def _run_chat(
                             state,
                             slot,
                             turn.assistant_text,
-                            internal_narration=_mate_human_facing_only,
+                            internal_narration=_mate_preamble_is_internal,
                         )
                         turn.assistant_text = ""
                         _turn_flushed_visible_text = True
@@ -10927,6 +10945,9 @@ async def _run_chat(
                         event.tool_identity_trusted is True,
                     )
                 )
+                _mate_preamble_is_internal = (
+                    _mate_human_facing_only and not _mate_tool_keeps_preamble(event)
+                )
                 # Flush pre-tool text silently (no broadcast) so it persists,
                 # but keep the streaming message in place for correct tool ordering.
                 _flush_text_stream()
@@ -10945,7 +10966,7 @@ async def _run_chat(
                             slot,
                             turn.assistant_text,
                             broadcast=False,
-                            internal_narration=_mate_human_facing_only,
+                            internal_narration=_mate_preamble_is_internal,
                         )
                         turn.assistant_text = ""
                         _turn_flushed_visible_text = True
@@ -12207,6 +12228,9 @@ async def _run_chat(
                 # and the LLM continues with text. Resetting it here was the
                 # cause of pills staying in "running" state until the next tool
                 # call or message end.
+                _mate_preamble_is_internal = (
+                    _mate_human_facing_only and not _mate_tool_keeps_preamble(event)
+                )
                 # Flush accumulated text as a finalized segment before the
                 # permission flow so the frontend renders them in order. The
                 # same open-construct deferral as the tool-call cut applies: an
@@ -12227,7 +12251,7 @@ async def _run_chat(
                         state,
                         slot,
                         turn.assistant_text,
-                        internal_narration=_mate_human_facing_only,
+                        internal_narration=_mate_preamble_is_internal,
                     )
                     turn.assistant_text = ""
                     _turn_flushed_visible_text = True
@@ -13913,7 +13937,7 @@ async def _run_chat(
                         slot,
                         turn.assistant_text,
                         broadcast=False,
-                        internal_narration=_mate_human_facing_only,
+                        internal_narration=_mate_preamble_is_internal,
                     )
                     turn.assistant_text = ""
                     _deferred_cut_text = ""
