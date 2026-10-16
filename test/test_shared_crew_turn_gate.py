@@ -225,7 +225,7 @@ async def test_wiring_publishes_truthful_capabilities_and_usage(service, monkeyp
         assert caps.containment is CapabilityState.AVAILABLE
         assert caps.containment_level is EnforcementLevel.BEST_EFFORT
         assert caps.presence is CapabilityState.AVAILABLE
-        assert caps.attribution is CapabilityState.DEGRADED
+        assert caps.attribution is CapabilityState.AVAILABLE
         assert caps.authoritative_directory is CapabilityState.UNAVAILABLE
         assert caps.membership_link == ""
         assert wiring.admission_usage() == {}

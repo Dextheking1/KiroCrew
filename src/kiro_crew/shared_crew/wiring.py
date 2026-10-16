@@ -32,15 +32,17 @@ _LOCK = threading.Lock()
 
 
 def identity_source() -> CapabilityContribution:
-    """Attribution is recorded on the dashboard chat and session-create paths.
+    """Attribution is recorded on every send site.
 
-    Channel transports, regenerate and other send sites keep their legacy rows
-    without an author, so attribution is ``degraded`` rather than ``available``.
-    No authoritative directory exists: observed people are not a membership list.
+    A user row written by an authorized request's handler names that request's
+    server-derived author (``attribution.with_request_author``); the queue drain
+    keeps the queued entry's stamp; channel rows name the bounded Unknown
+    principal and automation rows the automation principal. No authoritative
+    directory exists: observed people are not a membership list.
     """
     return CapabilityContribution(
         states={
-            "attribution": CapabilityState.DEGRADED,
+            "attribution": CapabilityState.AVAILABLE,
             "authoritative_directory": CapabilityState.UNAVAILABLE,
         },
         membership_link="",

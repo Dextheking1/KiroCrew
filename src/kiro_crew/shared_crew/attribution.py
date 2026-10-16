@@ -19,6 +19,8 @@ writer carries the key unchanged because no writer lists it as owned.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
 import time
 from collections.abc import Mapping
@@ -178,6 +180,59 @@ def message_author(meta: Mapping[str, Any] | None) -> Principal:
     if not isinstance(meta, Mapping):
         return Principal.unknown()
     return principal_or_unknown(meta.get(MESSAGE_AUTHOR_META_KEY))
+
+
+#: The authorized request whose handler is running in this task: ``(task, author)``.
+_REQUEST_AUTHOR: contextvars.ContextVar[tuple[object, dict[str, Any]] | None] = (
+    contextvars.ContextVar("shared_crew_request_author", default=None)
+)
+
+
+def bind_request_author(actor: ActorContext) -> None:
+    """Record *actor* as the author of user rows its request's handler appends.
+
+    Called by ``identity.publish_actor`` in the request's own task. Bound to
+    that task, so a turn or drain the handler starts (a task that copies this
+    context) never inherits it: those rows carry their own server-stamped author.
+    """
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        task = None
+    if task is not None:
+        _REQUEST_AUTHOR.set((task, author_meta(actor)))
+
+
+def with_request_author(meta: dict[str, Any] | None) -> dict[str, Any] | None:
+    """*meta* with the running request's author when it names none.
+
+    A row that already carries an author keeps it. Outside an authorized
+    request's own task this returns *meta* unchanged.
+    """
+    if isinstance(meta, dict) and MESSAGE_AUTHOR_META_KEY in meta:
+        return meta
+    bound = _REQUEST_AUTHOR.get()
+    if bound is None:
+        return meta
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        current = None
+    if current is None or current is not bound[0]:
+        return meta
+    out = dict(meta or {})
+    out[MESSAGE_AUTHOR_META_KEY] = dict(bound[1])
+    return out
+
+
+def stamp_principal_author(meta: dict[str, Any], principal: Principal) -> dict[str, Any]:
+    """Set *principal* as the author of a row no request carries (channels, automation).
+
+    A channel sender has no Shared Crew principal and is stamped Unknown; Crew
+    automation is stamped with its bounded system principal. Never a client claim.
+    """
+    meta[MESSAGE_AUTHOR_META_KEY] = principal.to_public_dict()
+    return meta
 
 
 def is_person(principal: Principal) -> bool:

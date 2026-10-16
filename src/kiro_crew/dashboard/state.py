@@ -125,6 +125,7 @@ from kiro_crew.session_compaction import (
     COMPACT_OUTCOME_RESTARTED_UNCOMPACTABLE,
     COMPACT_OUTCOME_WAITING_FOR_SUBAGENTS,
 )
+from kiro_crew.shared_crew.attribution import with_request_author
 
 if TYPE_CHECKING:
     from kiro_crew.dashboard._types import (  # noqa: F401
@@ -5097,6 +5098,10 @@ class _ChatSlot:
                 datetime.now(timezone.utc),
             ),
         }
+        if role == "user" and broadcast:
+            # Shared Crew: a live user row written by a request handler names
+            # that request's server-derived author unless it already names one.
+            meta = with_request_author(meta)
         if meta:
             msg["meta"] = meta
         # Stamp a per-row delivery identity. A client sees the SAME row through
