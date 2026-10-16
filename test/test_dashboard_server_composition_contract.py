@@ -1429,6 +1429,7 @@ _DASHBOARD_HOOKS = {
     "on_cleanup": (
         "_tunnel_shutdown",
         "_status_sink_shutdown",
+        "_shared_crew_cleanup",
         "_hooks_shutdown",
         "_contrib_shutdown",
         "_watchdog_shutdown",
