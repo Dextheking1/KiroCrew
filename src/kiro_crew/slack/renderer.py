@@ -63,6 +63,11 @@ from kiro_crew.messaging.renderer import (
 from kiro_crew.messaging.split import repaired_for_delivery, split_markdown_safe
 from kiro_crew.messaging.transport import TransportCapabilities
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
+from kiro_crew.slack.agent_sessions.status import (
+    SESSION_STATUS_PROCESSING,
+    SESSION_STATUS_SUSPENDED,
+    set_session_status,
+)
 from kiro_crew.slack.files import (
     extract_outbound_with_audit,
     rejection_notes,
@@ -706,6 +711,10 @@ class SlackRenderer(Renderer):
         # Visible text withheld from the append-only stream because a local image
         # reference is in play; released (markup removed) at the seal.
         self._ref_hold = ""
+        # The agent session is paused on a tool-approval prompt (``suspended``);
+        # the next output puts it back to ``processing``. Only ever set while
+        # agent sessions are live.
+        self._suspended = False
 
     async def on_turn_start(self) -> None:
         # Native sets the working thread-status before streaming and arms the
@@ -1314,6 +1323,7 @@ class SlackRenderer(Renderer):
         # the answer (no-op when show_thinking is off or nothing accumulated).
         await self._maybe_post_thinking()
         self._set_phase("thinking")
+        await self._resume_from_suspended()
         ts = await self._ensure_stream()
         # Accumulate the FULL raw text (incl. any [OPTIONS:...]) so the final
         # extract_options in on_done sees it; only filter what is *shown*.
@@ -1553,6 +1563,23 @@ class SlackRenderer(Renderer):
             if self.decider is not None:
                 self.decider.discard(request_id)
             raise
+
+        # The turn now waits on a person: with agent sessions live the session reads
+        # ``suspended`` until output resumes (and ``active`` at turn end). No call at
+        # all with the feature off. Best-effort: the prompt is already posted.
+        if self.thread_ts:
+            self._suspended = await set_session_status(
+                self.slack, self.channel, self.thread_ts, SESSION_STATUS_SUSPENDED
+            )
+
+    async def _resume_from_suspended(self) -> None:
+        """Put a session paused on an approval back to ``processing``; never raises."""
+        if not self._suspended:
+            return
+        self._suspended = False
+        await set_session_status(
+            self.slack, self.channel, self.thread_ts or None, SESSION_STATUS_PROCESSING
+        )
 
     async def on_compaction(self, context_usage_pct: float) -> None:
         # Best-effort: MUST NOT raise. Decoration only.
