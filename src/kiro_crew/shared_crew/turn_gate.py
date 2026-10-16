@@ -143,7 +143,7 @@ async def admit_turn(
     None means fair admission is off, the gateway has not built its service, or
     the caller already runs inside admitted work.
     """
-    if _ADMITTED_WORK.get() or _gate.installed_service() is None:
+    if _ADMITTED_WORK.get() or not admission_active():
         return None
     service = await _gate.current_service()
     if not service.enabled:
@@ -182,9 +182,6 @@ async def gate_turn(
     from kiro_crew.dashboard.chat_slack import slot_is_live
     from kiro_crew.dashboard.chat_utils import effective_session_key
 
-    if _gate.installed_service() is None:
-        await run()
-        return
     admission = await admit_turn(
         budget_key=turn_budget(kwargs, initiator),
         session_key=effective_session_key(slot) or slot.key,

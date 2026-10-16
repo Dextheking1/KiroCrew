@@ -1417,6 +1417,7 @@ _API_CHAIN = (
 #: route slices and handler modules register are not the server's and are left out.
 _DASHBOARD_HOOKS = {
     "on_startup": (
+        "_shared_crew_startup",
         "_hooks_startup",
         "_contrib_startup",
         "_stt_startup",

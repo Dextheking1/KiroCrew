@@ -4290,7 +4290,7 @@ async def api_approval_resolve(request: web.Request) -> web.Response:
         from kiro_crew.shared_crew import decisions as shared_decisions
 
         try:
-            raw_body = await request.json() if request.can_read_body else {}
+            raw_body = await request.json() if request.can_read_body is True else {}
         except ValueError:
             raw_body = {}
         response_id, response_id_ok = shared_decisions.read_response_id(
