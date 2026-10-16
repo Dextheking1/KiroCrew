@@ -95,9 +95,28 @@ def queued_initiator(entries: Iterable[Mapping[str, Any]]) -> str:
 
 
 def admission_active() -> bool:
-    """Whether the installed admission service enforces fair admission. No I/O."""
+    """Whether the installed admission service enforces fair admission. No I/O.
+
+    Reflects config as of the service's last refresh; a caller that can await
+    uses :func:`admission_on`, which picks up a config change itself.
+    """
     service = _gate.installed_service()
     return service is not None and service.enabled
+
+
+async def admission_on() -> bool:
+    """Whether fair admission is on, re-reading config when it is due.
+
+    The gateway installs its service at start; from then on every call
+    refreshes it from config (at most every few seconds), so enabling or
+    disabling admission by config takes effect at the next turn even before
+    any chat send or capacity read. Before the gateway built a service (a
+    unit test, a CLI process) this is off.
+    """
+    if _gate.installed_service() is None:
+        return False
+    service = await _gate.current_service()
+    return service.enabled
 
 
 def in_channel_turn() -> bool:
@@ -187,14 +206,13 @@ async def admit_turn(
 ) -> _gate.Admission | None:
     """Admit one turn charged to *budget_key*; None when it runs unadmitted.
 
-    None means fair admission is off, the gateway has not built its service, or
-    the caller already runs inside admitted work.
+    None means fair admission is off (config re-read through
+    :func:`admission_on`), the gateway has not built its service, or the caller
+    already runs inside admitted work.
     """
-    if _ADMITTED_WORK.get() or not admission_active():
+    if _ADMITTED_WORK.get() or not await admission_on():
         return None
     service = await _gate.current_service()
-    if not service.enabled:
-        return None
     admission = await service.admit(
         budget_key=budget_key,
         session_key=session_key,
@@ -337,6 +355,7 @@ async def run_slack_message(
 
 __all__ = [
     "admission_active",
+    "admission_on",
     "admit_turn",
     "admitted_work",
     "capacity_note",

@@ -424,7 +424,14 @@ class AdmissionService:
     async def containment_report(self, *, refresh: bool = False) -> _containment.ContainmentReport:
         stale = time.monotonic() - self._report_at >= _REPORT_TTL_SECONDS
         if self._report is None or refresh or stale:
-            self._report = await asyncio.to_thread(self._containment_probe)
+            try:
+                self._report = await asyncio.to_thread(self._containment_probe)
+            except Exception as exc:  # noqa: BLE001 -- a raising probe proves nothing
+                logger.warning("shared crew: containment probe raised", exc_info=True)
+                self._report = _containment.failed_report(
+                    hard_limits=self._limits.hard_limits,
+                    detail=f"containment probe raised {type(exc).__name__}",
+                )
             self._report_at = time.monotonic()
             if _SERVICE is self:
                 _containment.publish_report(self._report if self.enabled else None)
@@ -1410,10 +1417,18 @@ async def startup_check() -> _containment.ContainmentReport | None:
     admission and every runtime start is refused (``runtime_start``'s backstop),
     so nothing runs without its limits.
     """
-    service = await current_service()
-    if not service.enabled:
-        return None
-    report = await service.containment_report(refresh=True)
+    try:
+        service = await current_service()
+        if not service.enabled:
+            return None
+        report = await service.containment_report(refresh=True)
+    except Exception as exc:  # noqa: BLE001 -- fail closed below, never stop the gateway
+        logger.warning("shared crew: startup containment check raised", exc_info=True)
+        report = _containment.failed_report(
+            hard_limits=_configured_hard_limits(),
+            detail=f"startup containment check raised {type(exc).__name__}",
+        )
+        _containment.publish_report(report if report.hard_limits else None)
     if report.refusal_reason is not None:
         logger.error(
             "shared crew: hard-limit mode is on and containment is unavailable (%s); "
@@ -1427,6 +1442,17 @@ async def startup_check() -> _containment.ContainmentReport | None:
             report.reason,
         )
     return report
+
+
+def _configured_hard_limits() -> bool:
+    """Whether config asks for hard limits (admission on too); off when it cannot be read."""
+    try:
+        from kiro_crew.config.sections_shared_crew import load_shared_crew_config
+
+        cfg = load_shared_crew_config()
+    except Exception:  # noqa: BLE001 -- unreadable config keeps the default (off)
+        return False
+    return bool(cfg.admission_enabled and cfg.hard_limits)
 
 
 def _start_ticker(service: AdmissionService, *, period: float = 1.0) -> None:

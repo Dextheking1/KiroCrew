@@ -1198,8 +1198,8 @@ async def handle_message(
 
     if (
         _compaction_replay is None
-        and _sc_turn_gate.admission_active()
         and not _sc_turn_gate.in_channel_turn()
+        and await _sc_turn_gate.admission_on()
     ):
         await _sc_turn_gate.run_slack_message(handle_message, _sc_args)
         return

@@ -168,6 +168,24 @@ def _delegated_controllers() -> set[str] | None:
         return None
 
 
+def failed_report(*, hard_limits: bool, detail: str) -> ContainmentReport:
+    """The report for a probe that raised: nothing is proven, so hard mode refuses.
+
+    ``hard_ready`` stays false, so with ``hard_limits`` on :attr:`refusal_reason`
+    is :data:`REASON_UNKNOWN` and every admission and runtime start is refused.
+    """
+    return ContainmentReport(
+        platform=sys.platform,
+        available=False,
+        reason=REASON_UNKNOWN,
+        cpu=False,
+        memory=False,
+        pids=False,
+        hard_limits=hard_limits,
+        detail=detail[:200],
+    )
+
+
 def probe_containment(*, hard_limits: bool, slices_enabled: bool) -> ContainmentReport:
     """Probe this host. Reads a handful of files and dials the user bus; call off-loop."""
     from kiro_crew import platform_compat, sandbox_cgroup
