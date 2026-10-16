@@ -79,7 +79,65 @@ export interface SharedCrewCapabilities {
   reasons: Partial<Record<CapabilityField, CapabilityReason>>
   /** Each enterprise seam's state; the public build answers `not_configured`. */
   enterprise: Record<EnterpriseCapabilityKey, EnterpriseCapability>
+  /** Each shared-access setup path's availability. An older gateway omits it. */
+  setup_paths?: Record<SetupPath, SetupPathCapability>
+  /** The three access modes, each with its own requirement. */
+  access_modes?: AccessModes
+  /** The hosted platforms workload identity supports, and this host. */
+  workload_identity?: WorkloadIdentityHost
 }
+
+export type SetupPath =
+  | 'tailscale'
+  | 'kiro_login'
+  | 'systems_manager'
+
+export type SetupPathReason =
+  | 'not_configured'
+  | 'not_in_this_build'
+  | 'tailnet_unreachable'
+  | 'source_failed'
+
+export interface SetupPathCapability {
+  state: CapabilityState
+  /** A `SetupPathReason` when not available, else empty. */
+  reason: SetupPathReason | ''
+}
+
+export type IdentityClass =
+  | 'organization_directory'
+  | 'individual'
+  | 'tailnet'
+
+export type AccessRequirement = 'cloud_account' | 'individual_login'
+
+export interface AccessMode {
+  state: CapabilityState
+  requires: AccessRequirement
+  identity_classes?: IdentityClass[]
+  /** Personal remote control only: whether it is on before the operator chooses. */
+  default_enabled?: boolean
+}
+
+export interface AccessModes {
+  shared_multi_user: AccessMode
+  personal_remote_control: AccessMode
+  agent_workload_identity: AccessMode
+}
+
+export interface WorkloadIdentityHost {
+  supported_hosts: string[]
+  host: string
+  host_supported: boolean
+  /** `host_not_supported` on any host outside `supported_hosts`. */
+  reason: '' | 'host_not_supported'
+}
+
+/** The Crew's heartbeat health. Telemetry only: it never grants or revokes access. */
+export type HeartbeatHealth =
+  | 'healthy'
+  | 'not_connected'
+  | 'heartbeat_late'
 
 export type CapabilityField =
   | 'attribution'
@@ -108,6 +166,7 @@ export type EnterpriseUnavailableReason =
   | 'test_provider_refused'
   | 'provider_failed'
   | 'requires_workload_identity'
+  | 'host_not_supported'
 
 export interface EnterpriseCapability {
   state: CapabilityState

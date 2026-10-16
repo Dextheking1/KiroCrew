@@ -18,6 +18,14 @@ because an identity lookup failed. Every authorized collaborator has the same
 application rights. There are no roles, no per-session ACLs, no invitations and no
 in-Crew member management.
 
+No permission scoping in this release: every collaborator a Crew admits has the same
+rights, and no code path reads a role or an ACL. The enterprise `GrantGate` decides
+only whether a person may use the Crew at all, never what they may do in it.
+
+A Crew is a machine identity, not a group of people. Its synthetic principal is the
+Crew acting as itself; the people who may work in it are individual grants, and
+several Crews may have overlapping member lists.
+
 Status: proof of concept. Every section below names the module that implements it.
 `shared_crew.wiring` connects them at gateway start (`dashboard.server`): it registers
 the identity, presence and admission capability sources and makes the admission
@@ -475,6 +483,17 @@ question decision frames go to owner sockets only, the audience the question car
 has. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
 `routes_collab`) answer the same state for a reconnecting tab.
 
+Message attribution. The session's creator is its default owner, shown on the
+session row in the list (`SessionCreatorByline`). In the transcript a user message
+written by the creator carries no extra label; a message any other participant
+wrote carries the sender's name (`MessageByline`, `sharedCrewUi.bylineFor`). A
+session with no recorded creator (legacy) treats the viewer as the default owner, so
+a single-operator transcript is unchanged. An Unknown author reads as Unknown.
+
+Recorded non-goal: no input lock. Typing or presence never locks the composer or the
+session for anyone else; every collaborator can send at any time, and admission
+(section 4) orders the turns. Presence and typing stay telemetry only.
+
 ## 6. Wire shapes
 
 ### HTTP
@@ -553,9 +572,26 @@ module speaks for a field; the gateway wires the registrations at startup.
 A source answers from state it already holds; it does no I/O on the request path.
 
 `GET /api/shared-crew/capabilities` (`routes_capabilities`) answers
-`Capabilities.to_dict()` plus two additive keys: `reasons` (field to `no_source` or
-`source_failed`) and `enterprise` (each key in `enterprise.ENTERPRISE_CAPABILITY_KEYS`
-to `{state, reason}`). It carries states and reasons only, and is sent `no-store`.
+`Capabilities.to_dict()` plus these additive keys, states and reasons only, sent
+`no-store`:
+
+- `reasons`: field to `no_source` or `source_failed`;
+- `enterprise`: each key in `enterprise.ENTERPRISE_CAPABILITY_KEYS` to `{state, reason}`;
+- `setup_paths`: each shared-access setup path (`access.SETUP_PATHS`: `tailscale`,
+  `kiro_login`, `systems_manager`) to `{state, reason}`. Tailscale reports what the
+  gateway resolved at start (`access.note_tailnet`): `available` once Tailscale access
+  is on and the tailnet name resolved, `degraded` (`tailnet_unreachable`) when it is
+  on without a name, else `not_configured`. A path no source registered for
+  (`access.register_setup_path_source`) reports `not_in_this_build`;
+- `access_modes`: `shared_multi_user`, `personal_remote_control` and
+  `agent_workload_identity`, each with `state` and `requires` (see Access modes);
+- `workload_identity`: `supported_hosts`, the detected `host`, `host_supported` and a
+  `reason` (`host_not_supported` off a supported host).
+
+The People surface (Settings > People) shows one setup empty state while no setup
+path is `available`: it names the three paths, each with the availability its
+capability reports and a link to existing docs only. It offers no button that does
+nothing.
 
 ### Enterprise seams
 
@@ -568,7 +604,7 @@ protocol before use and reports one capability per concern:
 |---|---|---|
 | `human_credentials` | `CredentialVerifier`; `verify_credential` checks issuer, audience, key id, key rotation window, signature, lifetime, expiry and not-before with bounded skew | every credential rejected `unavailable` |
 | `individual_grants` | `GrantAuthority.lookup` per person per Crew; `GrantGate` decides new access | `not_configured`; Tailscale and dashboard auth govern alone |
-| `workload_identity` | `WorkloadIdentityProvider.bind` / `renew`; `WorkloadLease` binds, renews, disables | `unavailable`; no fallback credential exists |
+| `workload_identity` | `WorkloadIdentityProvider.bind` / `renew`; `WorkloadLease` binds, renews, disables; only on a host in `access.SUPPORTED_WORKLOAD_HOSTS` | `unavailable`; `host_not_supported` on any other host; no fallback credential exists |
 | `crew_identity` | `CrewBindingProvider`; `CrewBinding` pairs `CrewIdentity` with a synthetic `system` principal | none |
 | `heartbeat` | `HeartbeatTransport.send(payload, workload credential)`; `HeartbeatTracker` | never sent; needs `workload_identity` too |
 | `inference_budget` | `InferenceBudgetProvider.state`; `BudgetGate` | `not_enforced` |
@@ -583,10 +619,32 @@ No production credential format is defined in core. A provider parses its own fo
 into `PresentedCredential` and supplies the `KeySet`. A pass yields a `human`
 principal keyed by `(provider, issuer, subject)` with `enterprise` provenance.
 
+Identity class. A human credential carries an `access.IdentityClass`:
+`organization_directory` (organization-managed, directory-backed), `individual` (an
+individually authenticated consumer account) or `tailnet` (a Tailscale user). The
+verifier copies `CredentialClaims.identity_class` onto the principal's `extra`; a
+credential that states none, or an unknown value, is `individual`. A tailnet principal
+is `tailnet`. Shared multi-user access is for `organization_directory` and `tailnet`:
+`GrantGate.decide` refuses `individual` with `individual_account_not_eligible` before
+it asks the authority. Personal remote control of one's own machine admits every human
+class (`access.remote_control_eligibility`). Tailscale attribution is unchanged.
+
 Grants are individual only: no group field, and `GrantGate.decide` reads only the
-principal and the authority. Session attribution, authorship, presence and heartbeat
-state are not inputs, so none of them grants access. Non-human principals are refused
-`not_individual`. Call it at every start of new work, queued work included.
+principal, its identity class and the authority. Session attribution, authorship,
+presence and heartbeat state are not inputs, so none of them grants access. Non-human
+principals are refused `not_individual`.
+
+Call sites. `enterprise_gates.enterprise_gate_middleware` runs inner to token auth on
+the dashboard. A request from a person on a shared path (tailnet or enterprise
+provenance) passes `GrantGate.decide`; a POST that starts model work
+(`enterprise_gates.CHARGEABLE_ROUTES`: chat send, the OpenAI shim, continue, side
+turn, thread reply, member thread, regenerate, edit-resend, task retry, spawn,
+continue a subagent, cron run, task plan and execute) passes `BudgetGate.check`. A
+refusal is 403 `{error: shared_access_refused | inference_refused, reason}`. The local
+operator, automation and apps are not shared access. With the default seam neither
+gate is composed, so the middleware is a no-op and both concerns report unavailable.
+Model work that does not arrive over HTTP (cron schedules, channels) is not yet
+budget-checked here.
 
 Cache and outage policy (`GrantCachePolicy`): a confirmed active grant is reused for
 `fresh_seconds` (default 60, max 300). After that the authority is asked; when it is
@@ -605,8 +663,8 @@ The synthetic Crew principal is keyed under its own provider namespace
 (`crew-workload`), so no human credential can produce its id. `CrewBinding.inference_owner`
 is the Crew, so chargeable inference is never billed to the human who started it.
 
-Heartbeat: `never_connected -> online <-> offline`, moved only by an acknowledged,
-workload-authenticated send. The payload is the closed `HEARTBEAT_PAYLOAD_KEYS` set of
+Heartbeat health: `not_connected -> healthy <-> heartbeat_late`, moved only by an
+acknowledged, workload-authenticated send; `last_seen` is the last acknowledged send. The payload is the closed `HEARTBEAT_PAYLOAD_KEYS` set of
 ids, counts and capability states; anything else is refused before sending, so no
 transcript, prompt, title or principal can ride in it. Freshness is telemetry, never
 authorization.
@@ -626,6 +684,23 @@ enterprise setting is read from `config.json`.
 
 ### Service prerequisites and open decisions
 
+Access modes and what each needs (`access.access_modes_dict`):
+
+| Mode | Needs | Identity classes |
+|---|---|---|
+| `shared_multi_user` | a cloud account setup | `organization_directory`, `tailnet` |
+| `agent_workload_identity` | a cloud account setup, on a supported host | the Crew's own machine identity |
+| `personal_remote_control` | an individual login only | every human class |
+
+Workload identity runs only on EKS at launch (`SUPPORTED_WORKLOAD_HOSTS = ('eks',)`,
+detected by `access.detect_workload_host`); any other host reports
+`host_not_supported`, and there is no static-key fallback. Personal remote control
+is off by default (opt-in, `REMOTE_CONTROL_DEFAULT_ENABLED = False`) until that is
+decided.
+
+Infrastructure cost of the hosted platform belongs to the customer's own account. The
+product shows no cost UI and reports no cost.
+
 Live enterprise verification needs, none of which exist in the public build:
 
 - an approved human credential contract and issuer key distribution;
@@ -639,10 +714,18 @@ running work is stopped on revocation or only new work is refused; whether an un
 budget should refuse (current) or allow for a bounded window; how the Crew and a relay
 check each other through the authority.
 
+Open product questions:
+
+- whether a Crew must be deployed in the same cloud account as the console that
+  manages it;
+- where connection, membership and heartbeat state lives, in the backend or in the
+  relay, preferring the least persistent storage, possibly a heartbeat over the relay;
+- whether personal remote control is opt-in (current default) or opt-out.
+
 Acceptance probes once services exist: forged, expired, wrong-audience, wrong-issuer
 and retired-key credentials are refused; a revoked person cannot start work within the
 revocation bound; the authority down past the bound refuses; disabling the workload
-stops renewals and heartbeats; the Console shows `offline` after the threshold; a
+stops renewals and heartbeats; the Console shows `heartbeat_late` after the threshold; a
 heartbeat capture holds only allowlisted keys; an exhausted budget refuses a new turn
 and still serves an existing result.
 

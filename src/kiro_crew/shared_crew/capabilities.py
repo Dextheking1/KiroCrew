@@ -27,13 +27,24 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+from kiro_crew.shared_crew.access import (
+    HOST_LOCAL,
+    access_modes_dict,
+    detect_workload_host,
+    setup_paths_dict,
+    workload_host_dict,
+)
 from kiro_crew.shared_crew.contracts import (
     MEMBERSHIP_LINKS,
     Capabilities,
     CapabilityState,
     EnforcementLevel,
 )
-from kiro_crew.shared_crew.enterprise import EnterpriseSeams, resolve_enterprise
+from kiro_crew.shared_crew.enterprise import (
+    CAP_WORKLOAD_IDENTITY,
+    EnterpriseSeams,
+    resolve_enterprise,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +139,29 @@ class CapabilityReport:
     reasons: Mapping[str, str]
     enterprise: EnterpriseSeams
 
+    workload_host: str = HOST_LOCAL
+
     def to_dict(self) -> dict[str, Any]:
+        """The wire body: the frozen fields plus the additive report keys.
+
+        ``setup_paths`` is each shared-access setup path's availability.
+        ``access_modes`` keeps shared multi-user access, personal remote control
+        and agent workload identity apart, each with its own requirement.
+        ``workload_identity`` names the supported hosts and this host.
+        """
         body = self.capabilities.to_dict()
         body["reasons"] = dict(self.reasons)
-        body["enterprise"] = self.enterprise.capabilities_dict()
+        enterprise = self.enterprise.capabilities_dict()
+        body["enterprise"] = enterprise
+        setup = setup_paths_dict()
+        body["setup_paths"] = setup
+        shared_on = any(row["state"] == CapabilityState.AVAILABLE.value for row in setup.values())
+        workload = enterprise[CAP_WORKLOAD_IDENTITY]["state"]
+        body["access_modes"] = access_modes_dict(
+            shared_state=CapabilityState.AVAILABLE if shared_on else CapabilityState.UNAVAILABLE,
+            workload_state=CapabilityState(workload),
+        )
+        body["workload_identity"] = workload_host_dict(self.workload_host)
         return body
 
 
@@ -209,5 +239,8 @@ def aggregate_capabilities(*, enterprise: Optional[EnterpriseSeams] = None) -> C
         membership_link=membership_link,
         remote_actions=states.get("remote_actions", CapabilityState.UNAVAILABLE),
     )
-    seams = enterprise if enterprise is not None else resolve_enterprise()
-    return CapabilityReport(capabilities=caps, reasons=reasons, enterprise=seams)
+    host = detect_workload_host()
+    seams = enterprise if enterprise is not None else resolve_enterprise(workload_host=host)
+    return CapabilityReport(
+        capabilities=caps, reasons=reasons, enterprise=seams, workload_host=host
+    )

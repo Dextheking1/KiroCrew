@@ -3,7 +3,11 @@
 Each concern here is a separate contract, because each has a separate owner and
 a separate failure mode: a human credential, an individual grant, the Crew's
 workload identity, the synthetic Crew identity and its Profile, the outbound
-heartbeat and the inference budget. An edition supplies the providers through
+heartbeat and the inference budget.
+
+A Crew is a machine identity, not a group of people. Its synthetic principal is
+the Crew acting as itself; the people who may work in it are individual grants,
+and several Crews may grant the same people, so member lists can overlap. An edition supplies the providers through
 ``PlatformContext.shared_crew_enterprise``; :func:`resolve_enterprise` checks
 each one before anything uses it. The public build supplies none, so every
 concern answers "not configured" and nothing reaches the network.
@@ -28,6 +32,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
+from kiro_crew.shared_crew.access import (
+    IDENTITY_CLASS_KEY,
+    REASON_HOST_NOT_SUPPORTED,
+    IdentityClass,
+    detect_workload_host,
+    shared_access_eligibility,
+    workload_host_supported,
+)
 from kiro_crew.shared_crew.codec import SCHEMA_VERSION, ContractError
 from kiro_crew.shared_crew.contracts import (
     CapabilityState,
@@ -87,6 +99,8 @@ class UnavailableReason(str, enum.Enum):
     PROVIDER_FAILED = "provider_failed"
     #: The heartbeat has a transport but no workload identity to authenticate with.
     REQUIRES_WORKLOAD_IDENTITY = "requires_workload_identity"
+    #: Workload identity runs only on a supported hosted container platform.
+    HOST_NOT_SUPPORTED = REASON_HOST_NOT_SUPPORTED
 
 
 # ── deployment context and cap composition ──
@@ -174,7 +188,9 @@ class CredentialClaims:
     """The claims a provider extracted from a presented credential.
 
     Times are epoch seconds. ``key_id`` names the signing key so a rotated key
-    set can hold several keys at once.
+    set can hold several keys at once. ``identity_class`` is how the issuer
+    established the person; a provider that cannot say leaves the default,
+    ``individual``, which is not eligible for shared multi-user access.
     """
 
     issuer: str
@@ -184,6 +200,7 @@ class CredentialClaims:
     issued_at: float
     expires_at: float
     not_before: Optional[float] = None
+    identity_class: IdentityClass = IdentityClass.INDIVIDUAL
 
 
 @dataclass(frozen=True)
@@ -260,6 +277,7 @@ class CredentialRejection(str, enum.Enum):
 class VerificationResult:
     principal: Optional[Principal] = None
     rejection: Optional[CredentialRejection] = None
+    identity_class: Optional[IdentityClass] = None
 
     @property
     def ok(self) -> bool:
@@ -287,7 +305,8 @@ def verify_credential(
     Checks run cheapest first and stop at the first failure. The signature is
     checked before any time claim is trusted, so an attacker cannot learn which
     times would pass by varying an unsigned credential. A pass yields a human
-    :class:`Principal` keyed by ``(provider, issuer, subject)``, never by email.
+    :class:`Principal` keyed by ``(provider, issuer, subject)``, never by email,
+    carrying the credential's identity class.
     """
     c = presented.claims
     if (
@@ -327,6 +346,11 @@ def verify_credential(
     starts = c.not_before if c.not_before is not None else c.issued_at
     if now + skew < starts:
         return VerificationResult.reject(CredentialRejection.NOT_YET_VALID)
+    identity_class = (
+        c.identity_class
+        if isinstance(c.identity_class, IdentityClass)
+        else IdentityClass.INDIVIDUAL
+    )
     principal = Principal(
         id=principal_id_for(provider, c.issuer, c.subject),
         kind=PrincipalKind.HUMAN,
@@ -334,8 +358,9 @@ def verify_credential(
         issuer=c.issuer,
         subject=c.subject,
         provenance=Provenance.ENTERPRISE,
+        extra={IDENTITY_CLASS_KEY: identity_class.value},
     )
-    return VerificationResult(principal=principal)
+    return VerificationResult(principal=principal, identity_class=identity_class)
 
 
 @runtime_checkable
@@ -441,6 +466,9 @@ class AccessReason(str, enum.Enum):
     NO_GRANT = "no_grant"
     GRANT_REVOKED = "grant_revoked"
     NOT_INDIVIDUAL = "not_individual"
+    #: An individual consumer account: eligible for personal remote control of
+    #: its own machine, never for shared multi-user access.
+    INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE = "individual_account_not_eligible"
     AUTHORITY_UNAVAILABLE = "authority_unavailable"
     NOT_CONFIGURED = "not_configured"
 
@@ -520,12 +548,22 @@ class GrantGate:
             IndividualGrant(principal_id, self._crew_id, GrantState.REVOKED, revision), now
         )
 
-    def decide(self, principal: Principal, now: float) -> AccessDecision:
+    def decide(
+        self, principal: Principal, now: float, identity_class: Optional[IdentityClass] = None
+    ) -> AccessDecision:
+        """Decide shared access for *principal*.
+
+        *identity_class* defaults to the class the principal carries
+        (``access.identity_class_of``). An ``individual`` account is refused
+        ``individual_account_not_eligible`` before the authority is asked.
+        """
         pid = principal.id
         if self._authority is None:
             return AccessDecision(AccessReason.NOT_CONFIGURED, pid)
         if principal.kind is not PrincipalKind.HUMAN:
             return AccessDecision(AccessReason.NOT_INDIVIDUAL, pid)
+        if not shared_access_eligibility(principal, identity_class).eligible:
+            return AccessDecision(AccessReason.INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE, pid)
         held = self._cached(pid)
         age = None if held is None else now - held.confirmed_at
         fresh = age is not None and 0 <= age < self._policy.fresh_seconds
@@ -704,10 +742,10 @@ CREW_WORKLOAD_PROVIDER = "crew-workload"
 
 
 def synthetic_crew_principal(crew_id: str, issuer: str) -> Principal:
-    """The Crew's own principal: a ``system`` identity, never a human one.
+    """The Crew's own principal: a machine identity, never a person or a group.
 
-    Keyed under its own provider namespace, so no human credential can produce
-    the same id.
+    It is a ``system`` principal keyed under its own provider namespace, so no
+    human credential can produce the same id, and it names no members.
     """
     if not crew_id or not issuer:
         raise ContractError("malformed_record", "crew_id", "crew id and issuer are required")
@@ -725,6 +763,8 @@ def synthetic_crew_principal(crew_id: str, issuer: str) -> Principal:
 class CrewBinding:
     """The stable Crew, its workload, and the synthetic identity inference runs as.
 
+    The Crew is a machine identity. Who may work in it is decided per person by
+    the grant authority, and several Crews may grant overlapping sets of people.
     The Profile reference lives on the Crew, so chargeable inference is billed
     to the Crew's synthetic identity and never to the human who started a turn.
     """
@@ -755,9 +795,14 @@ class CrewBindingProvider(Protocol):
 
 
 class HeartbeatState(str, enum.Enum):
-    NEVER_CONNECTED = "never_connected"
-    ONLINE = "online"
-    OFFLINE = "offline"
+    """The Crew's heartbeat health, as the Console shows it."""
+
+    #: An acknowledged heartbeat arrived within the late threshold.
+    HEALTHY = "healthy"
+    #: No heartbeat has ever been acknowledged.
+    NOT_CONNECTED = "not_connected"
+    #: The last acknowledged heartbeat is older than the late threshold.
+    HEARTBEAT_LATE = "heartbeat_late"
 
 
 #: The only keys a heartbeat may carry. Counts and states, never content: there
@@ -834,19 +879,19 @@ class HeartbeatTransport(Protocol):
 
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 60.0
-DEFAULT_OFFLINE_AFTER_SECONDS = 180.0
+DEFAULT_LATE_AFTER_SECONDS = 180.0
 
 
 class HeartbeatTracker:
-    """never_connected -> online <-> offline, from acknowledged sends only.
+    """not_connected -> healthy <-> heartbeat_late, from acknowledged sends only.
 
     The state is telemetry for the Console and the UI. It is not an input to any
-    access decision: an online Crew grants nothing and an offline one revokes
+    access decision: a healthy Crew grants nothing and a late one revokes
     nothing.
     """
 
-    def __init__(self, *, offline_after_seconds: float = DEFAULT_OFFLINE_AFTER_SECONDS) -> None:
-        self._offline_after = max(0.0, offline_after_seconds)
+    def __init__(self, *, late_after_seconds: float = DEFAULT_LATE_AFTER_SECONDS) -> None:
+        self._late_after = max(0.0, late_after_seconds)
         self._last_seen: Optional[float] = None
         self._lock = threading.Lock()
 
@@ -864,9 +909,13 @@ class HeartbeatTracker:
         with self._lock:
             last = self._last_seen
         if last is None:
-            return HeartbeatState.NEVER_CONNECTED
+            return HeartbeatState.NOT_CONNECTED
         age = now - last
-        return HeartbeatState.ONLINE if 0 <= age <= self._offline_after else HeartbeatState.OFFLINE
+        return (
+            HeartbeatState.HEALTHY
+            if 0 <= age <= self._late_after
+            else HeartbeatState.HEARTBEAT_LATE
+        )
 
     def snapshot(self, now: float) -> dict[str, Any]:
         return {"state": self.state(now).value, "last_seen": self.last_seen}
@@ -1081,7 +1130,10 @@ def _unavailable(reason: UnavailableReason) -> EnterpriseCapability:
 
 
 def resolve_enterprise(
-    provider: Optional[object] = None, *, allow_test_providers: bool = False
+    provider: Optional[object] = None,
+    *,
+    allow_test_providers: bool = False,
+    workload_host: Optional[str] = None,
 ) -> EnterpriseSeams:
     """Check the composed enterprise providers and report what each can back.
 
@@ -1091,6 +1143,11 @@ def resolve_enterprise(
     make a production Crew look connected. A capability reads ``available``
     when a checked provider is composed. That says the Crew is configured for
     it, not that the remote service answered.
+
+    A workload identity provider is used only on a supported host
+    (``access.SUPPORTED_WORKLOAD_HOSTS``); on any other host it is dropped with
+    ``host_not_supported`` and no other credential takes its place.
+    *workload_host* defaults to the detected one.
     """
     source = _context_provider() if provider is None else provider
     caps: dict[str, EnterpriseCapability] = {}
@@ -1125,6 +1182,12 @@ def resolve_enterprise(
         else:
             chosen[attr] = obj
             caps[key] = EnterpriseCapability(CapabilityState.AVAILABLE)
+
+    if "workload_identity" in chosen:
+        host = detect_workload_host() if workload_host is None else workload_host
+        if not workload_host_supported(host):
+            del chosen["workload_identity"]
+            caps[CAP_WORKLOAD_IDENTITY] = _unavailable(UnavailableReason.HOST_NOT_SUPPORTED)
 
     if "heartbeat_transport" in chosen and "workload_identity" not in chosen:
         # An unauthenticated heartbeat is never sent, so a transport alone backs nothing.

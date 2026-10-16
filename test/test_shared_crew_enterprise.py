@@ -134,6 +134,7 @@ def _human(subject: str = "user-123") -> Principal:
         issuer=ISSUER,
         subject=subject,
         provenance=Provenance.ENTERPRISE,
+        extra={"identity_class": "organization_directory"},
     )
 
 
@@ -299,7 +300,7 @@ class TestResolution:
         assert caps[CAP_HUMAN_CREDENTIALS]["state"] == "available"
 
     def test_full_provider_resolves_when_tests_opt_in(self) -> None:
-        seams = resolve_enterprise(_Enterprise(), allow_test_providers=True)
+        seams = resolve_enterprise(_Enterprise(), allow_test_providers=True, workload_host="eks")
         caps = seams.capabilities_dict()
         assert {r["state"] for r in caps.values()} == {"available"}
         assert seams.deployment == DeploymentContext(deployment_ref="dep-1", tenant_ref="ten-1")
@@ -560,7 +561,7 @@ class TestGrantGate:
         authority.down = True
         tracker = HeartbeatTracker()
         tracker.record_ack(T0)
-        assert tracker.state(T0) is HeartbeatState.ONLINE
+        assert tracker.state(T0) is HeartbeatState.HEALTHY
         assert self._gate(authority).decide(_human(), T0).reason is (
             AccessReason.AUTHORITY_UNAVAILABLE
         )
@@ -681,14 +682,14 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 
 class TestHeartbeat:
     def test_state_machine(self) -> None:
-        tracker = HeartbeatTracker(offline_after_seconds=180)
-        assert tracker.state(T0) is HeartbeatState.NEVER_CONNECTED
-        assert tracker.snapshot(T0) == {"state": "never_connected", "last_seen": None}
+        tracker = HeartbeatTracker(late_after_seconds=180)
+        assert tracker.state(T0) is HeartbeatState.NOT_CONNECTED
+        assert tracker.snapshot(T0) == {"state": "not_connected", "last_seen": None}
         tracker.record_ack(T0)
-        assert tracker.state(T0 + 180) is HeartbeatState.ONLINE
-        assert tracker.state(T0 + 181) is HeartbeatState.OFFLINE
+        assert tracker.state(T0 + 180) is HeartbeatState.HEALTHY
+        assert tracker.state(T0 + 181) is HeartbeatState.HEARTBEAT_LATE
         tracker.record_ack(T0 + 200)
-        assert tracker.state(T0 + 210) is HeartbeatState.ONLINE
+        assert tracker.state(T0 + 210) is HeartbeatState.HEALTHY
         tracker.record_ack(T0 + 5)
         assert tracker.last_seen == T0 + 200
 
@@ -713,19 +714,19 @@ class TestHeartbeat:
         with pytest.raises(ContractError):
             validate_heartbeat_payload(_payload(**extra))
 
-    def test_send_authenticates_with_workload_and_marks_online(self) -> None:
+    def test_send_authenticates_with_workload_and_marks_healthy(self) -> None:
         transport, workload = _Transport(), _Workload()
         tracker = HeartbeatTracker()
         sender = HeartbeatSender(transport, WorkloadLease(workload, crew_id=CREW), tracker)
         assert sender.tick(_payload(), T0) is HeartbeatOutcome.SENT
         assert transport.sent[0][1].crew_id == CREW
-        assert tracker.state(T0) is HeartbeatState.ONLINE
+        assert tracker.state(T0) is HeartbeatState.HEALTHY
 
     def test_no_send_without_workload_identity(self) -> None:
         transport, tracker = _Transport(), HeartbeatTracker()
         sender = HeartbeatSender(transport, WorkloadLease(None, crew_id=CREW), tracker)
         assert sender.tick(_payload(), T0) is HeartbeatOutcome.WORKLOAD_UNAVAILABLE
-        assert transport.sent == [] and tracker.state(T0) is HeartbeatState.NEVER_CONNECTED
+        assert transport.sent == [] and tracker.state(T0) is HeartbeatState.NOT_CONNECTED
 
     def test_disabled_workload_stops_heartbeat(self) -> None:
         transport, workload = _Transport(), _Workload()
@@ -741,7 +742,7 @@ class TestHeartbeat:
         tracker = HeartbeatTracker()
         sender = HeartbeatSender(transport, WorkloadLease(_Workload(), crew_id=CREW), tracker)
         assert sender.tick(_payload(), T0) is HeartbeatOutcome.NOT_ACKNOWLEDGED
-        assert tracker.state(T0) is HeartbeatState.NEVER_CONNECTED
+        assert tracker.state(T0) is HeartbeatState.NOT_CONNECTED
 
     def test_bad_payload_never_sent(self) -> None:
         transport = _Transport()

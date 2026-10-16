@@ -32,3 +32,21 @@ def test_typescript_capabilities_mirror_names_reasons_and_enterprise():
     assert union("EnterpriseUnavailableReason") == {r.value for r in UnavailableReason}
     assert union("CapabilityReason") == {REASON_NO_SOURCE, REASON_SOURCE_FAILED}
     assert union("ReasonCode") == {r.value for r in ReasonCode}
+
+
+def test_typescript_mirror_names_setup_paths_identity_classes_and_heartbeat_health():
+    from kiro_crew.shared_crew.access import SETUP_PATHS, IdentityClass
+    from kiro_crew.shared_crew.enterprise import HeartbeatState
+
+    source = (REPO / "website" / "src" / "api" / "sharedCrew.ts").read_text(encoding="utf-8")
+
+    def union(name: str) -> set[str]:
+        body = source.split(f"export type {name} =", 1)[1].split("\n\n", 1)[0]
+        return set(re.findall(r"'([a-z_]+)'", body))
+
+    assert union("SetupPath") == set(SETUP_PATHS)
+    assert union("IdentityClass") == {c.value for c in IdentityClass}
+    assert union("HeartbeatHealth") == {s.value for s in HeartbeatState}
+    block = source.split("export interface SharedCrewCapabilities", 1)[1].split("\n}\n", 1)[0]
+    for key in ("setup_paths", "access_modes", "workload_identity"):
+        assert re.search(rf"^\s+{key}\?: ", block, re.M)

@@ -1956,6 +1956,10 @@ async def start_dashboard(
         _ts_cfg = _cfg.dashboard.tailscale
         _tailnet_host = await tailnet.resolve_tailnet_host(_ts_cfg.enabled)
         _tailnet_trust = await _resolve_tailnet_trust(_cfg)
+        # Shared Crew: the Tailscale setup path reports what resolved here.
+        from kiro_crew.shared_crew.access import note_tailnet
+
+        note_tailnet(enabled=bool(_ts_cfg.enabled), host=_tailnet_host)
         if _tailnet_host:
             logger.info(
                 "tailnet access enabled: trusting origin https://%s (bind and auth unchanged)",
@@ -2077,6 +2081,10 @@ async def start_dashboard(
         _register_connections_warm_lifecycle(app, state)
         _register_workflow_lifecycle(app, state)
         _register_crewmate_prune_gate(app, state)
+        # Shared Crew enterprise grant and budget gates; a no-op on the default seam.
+        from kiro_crew.shared_crew import enterprise_gates
+
+        enterprise_gates.install(app)
         _register_change_card_hook(app)
 
         # Unix-socket cleanup hook — registered before runner.setup freezes the
