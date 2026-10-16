@@ -605,7 +605,9 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
     ? heldForApproval
       ? i18nT('components.autoNudgePopover.paused_approval_hold')
       : waitingOnPerson
-        ? i18nT('components.autoNudgePopover.waiting_on_person_hold')
+        ? loop.person_wait_declared === true
+          ? i18nT('components.autoNudgePopover.waiting_on_person_declared_hold')
+          : i18nT('components.autoNudgePopover.waiting_on_person_hold')
         : loop.active
         ? countdownText
         : doneLine
@@ -620,21 +622,38 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
   const agentStopped =
     !!loop && !loop.active && (loop.stopped_reason === 'agent_stop' || loop.stopped_reason === 'autonudge_stop')
   const agentStopDetail = agentStopped ? (loop?.stopped_detail ?? '').trim() : ''
+  /** The loop's own agent declared a wait on the person (it asked a question and
+   *  fires nothing until the person acts). Detected the same way the status line
+   *  is; defined here because the title reads from it too. */
+  const declaredPersonWait = loop?.person_wait_declared === true && loop?.waiting_on_person === true
   /** The title names the state: the goal's cycle while running, Done once
-   *  finished, Paused otherwise, and the invitation when there is no loop. */
+   *  finished, Paused otherwise, and the invitation when there is no loop. A
+   *  declared person-wait is held, not running, so its title reads as held
+   *  rather than "Goal active" -- which otherwise sat over a "Waiting on you"
+   *  status line beside a live Pause and left the reader unsure whether the loop
+   *  was running or stopped. It matches the approval hold, whose title is already
+   *  "Paused" while its status says why. */
   const titleText = !loop
     ? i18nT('components.autoNudgePopover.set_a_goal')
-    : runsNow
-      ? i18nT('components.autoNudgePopover.goal_active_cycle', { cycle: cycleText })
-      : finished
-        ? i18nT('components.autoNudgePopover.loop_done')
-        : i18nT('components.autoNudgePopover.loop_paused')
+    : declaredPersonWait
+      ? i18nT('components.autoNudgePopover.loop_paused')
+      : runsNow
+        ? i18nT('components.autoNudgePopover.goal_active_cycle', { cycle: cycleText })
+        : finished
+          ? i18nT('components.autoNudgePopover.loop_done')
+          : i18nT('components.autoNudgePopover.loop_paused')
+  /** The declared-wait status line tells the person to press Nudge now, so the
+   *  press is named on the button too, beside its icon; the accessible name is
+   *  `playName` either way. */
+  const showPlayLabel = runsNow && declaredPersonWait && !formDirty
   /** Whether a cycle is ALREADY armed to run. Derived from the same countdown
    *  the status line renders, so the button and the text can never disagree.
-   *  Never while held: its deadline has passed but nothing is armed, and the
-   *  press is how a person resumes it. */
+   *  Never while held for an approval or a declared person-wait: the deadline
+   *  has passed but nothing is armed, and the press is how a person releases it. */
   const cycleAlreadyDue =
-    !heldForApproval && countdownText === i18nT('components.autoNudgePopover.next_cycle_due')
+    !heldForApproval &&
+    !declaredPersonWait &&
+    countdownText === i18nT('components.autoNudgePopover.next_cycle_due')
   /** Help line under the goal textarea while it carries the raw kill-switch
    *  token; '' otherwise. See the JSX comment at the render site (#10458). */
   const stopFileHelp = message.includes(STOP_FILE_TOKEN)
@@ -1011,7 +1030,7 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
               <Btn
                 type="button"
                 primary
-                className={ICON_BTN}
+                className={showPlayLabel ? `${ICON_BTN} pr-2` : ICON_BTN}
                 onClick={play}
                 /* Disabled once a cycle is already due and the form is pristine,
                    so a press visibly acknowledges itself: a second press could
@@ -1024,6 +1043,11 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
                 title={playName}
               >
                 {runsNow ? <Zap size={14} aria-hidden /> : <Play size={14} aria-hidden />}
+                {showPlayLabel && (
+                  <span data-testid="auto-nudge-play-label" aria-hidden className="text-xs">
+                    {i18nT('components.autoNudgePopover.nudge_now')}
+                  </span>
+                )}
                 {formDirty && (
                   <span data-testid="auto-nudge-play-dirty" aria-hidden className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-warn ring-1 ring-bg" />
                 )}

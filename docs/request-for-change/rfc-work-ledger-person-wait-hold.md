@@ -40,7 +40,7 @@ Non-goals:
 
 - Changing the quiet floor or the probe gate in `autonudge_service/gate.py`. The hold sits in front of them.
 - A notification when the hold starts. The conductor's own last turn is the one that reports the wait to the user.
-- Holding any loop other than a `work-ledger` watch.
+- Holding any loop other than a `work-ledger` watch on a ledger reading. A legacy `monitor_start` loop whose own agent declares it is waiting on a person (`monitor_update` `waiting_on_person`) takes the same hold fields by that declaration, with its own trigger and release; this hold's ledger trigger is unchanged.
 - Inferring a reason from the summary text.
 
 ## 3. Design

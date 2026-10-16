@@ -56,6 +56,7 @@ from kiro_crew.autonudge_service.timers import (
     _REARM_BACKOFF_SECS,
     _REARM_MAX_BACKOFF_SECS,
     _current_task_or_none,
+    _valid_stamp,
 )
 from kiro_crew.monitoring.models import MonitorOutcome
 
@@ -156,7 +157,14 @@ async def _timer(self: AutoNudgeService, loop: NudgeLoop, delay: float | None = 
     # The person-wait HOLD, ahead of both bounds: a work-ledger watch whose open items
     # all wait on a person, unchanged since its last delivered turn, has nothing to
     # read. Held, it fires no turn, takes no floor turn (the gate below is never
-    # reached), and is neither extended nor stopped by a spent bound.
+    # reached), and is neither extended nor stopped by a spent bound. A hold the agent
+    # DECLARED (``declare_person_wait``) fires nothing either: its held tick reads the
+    # one pull request the loop names (``subject_reads.hold_tick``), so a merge or a
+    # close settles it, and only a person's return (``release_approval_hold``) or the
+    # agent's own release resumes it.
+    if loop.person_wait_declared and loop.waiting_on_person:
+        await hold_tick(self, loop)
+        return
     if await self._holds_for_person_wait(loop):
         return
     # Cycle cap reached?
@@ -832,8 +840,14 @@ async def _holds_for_person_wait(self: AutoNudgeService, loop: NudgeLoop) -> boo
     True when the tick is held and the caller must return.
     """
     # An approval-stalled loop already holds further down, arming nothing; this
-    # hold's interval re-arm must not wake it on a schedule.
-    if not loop.active or loop.approval_stalled or not self._observes_work_ledger(loop):
+    # hold's interval re-arm must not wake it on a schedule. A declared hold is the
+    # agent's, and the ledger neither holds nor releases it.
+    if (
+        not loop.active
+        or loop.approval_stalled
+        or loop.person_wait_declared
+        or not self._observes_work_ledger(loop)
+    ):
         self._ledger_tick_fp.pop(loop.id, None)
         return False
     fp = await asyncio.get_running_loop().run_in_executor(
@@ -876,7 +890,9 @@ async def _holds_for_person_wait(self: AutoNudgeService, loop: NudgeLoop) -> boo
     return False
 
 
-async def _commit_person_wait(svc: AutoNudgeService, loop: NudgeLoop, *, held: bool) -> bool:
+async def _commit_person_wait(
+    svc: AutoNudgeService, loop: NudgeLoop, *, held: bool, declared: bool = False
+) -> bool:
     """Write the person-wait hold's start (*held*) or its release, durably. Blocking-free.
 
     The release hands the held time back to ``created_ts``, as the approval hold
@@ -885,16 +901,32 @@ async def _commit_person_wait(svc: AutoNudgeService, loop: NudgeLoop, *, held: b
     loop. A stored start that is not a finite positive number (a hand-edited row)
     credits nothing rather than raising. True once the write landed; on a refused
     write every field is restored and False is returned.
+
+    *declared* records the hold as the agent's own (``person_wait_declared``); a
+    release always clears that mark. A hold that is already on keeps its start, so a
+    declaration over a ledger hold credits the whole wait once. A declaration while
+    an approval hold is on writes nothing and returns True: that hold already waits
+    for the same person, and the two never overlap.
     """
     async with svc._lock:
+        if (
+            svc._loops.get(loop.id) is not loop
+            or not loop.active
+            or is_structured_monitor_loop(loop)
+        ):
+            return False
+        if held and declared and loop.approval_stalled:
+            return True
         # Staged on a copy and written first: the live loop -- which the REST row, the
         # inspect reading and the state frame read without the lock -- takes the new
         # fields only once the store has them, as ``release_approval_hold`` does.
         now = time.time()
         previous = loop.created_ts
         span = 0.0
+        kept = held and loop.waiting_on_person and _valid_stamp(loop.waiting_on_person_at, now)
         if held:
-            new = (True, now, loop.created_ts)
+            since = loop.waiting_on_person_at if kept else now
+            new = (True, since, loop.created_ts, bool(declared or loop.person_wait_declared))
         else:
             since = loop.waiting_on_person_at
             created = loop.created_ts
@@ -902,25 +934,33 @@ async def _commit_person_wait(svc: AutoNudgeService, loop: NudgeLoop, *, held: b
             # clock; ``created_ts`` keeps the wall span, which is what a restart reads.
             _, span = hold_span(loop, PERSON_WAIT_HOLD, since, now)
             if (
-                isinstance(since, (int, float))
-                and not isinstance(since, bool)
-                and 0 < since <= now
+                _valid_stamp(since, now)
                 and isinstance(created, (int, float))
                 and not isinstance(created, bool)
                 and created > 0
             ):
                 created = created + (now - since)
-            new = (False, 0.0, created)
+            new = (False, 0.0, created, False)
 
         def _apply() -> None:
-            loop.waiting_on_person, loop.waiting_on_person_at, loop.created_ts = new
-            if held:
+            (
+                loop.waiting_on_person,
+                loop.waiting_on_person_at,
+                loop.created_ts,
+                loop.person_wait_declared,
+            ) = new
+            if held and not kept:
                 note_hold_start(loop, PERSON_WAIT_HOLD, now)
-            else:
+            elif not held:
                 credit_held_runtime(loop, previous, span)
 
         staged = deepcopy(loop)
-        staged.waiting_on_person, staged.waiting_on_person_at, staged.created_ts = new
+        (
+            staged.waiting_on_person,
+            staged.waiting_on_person_at,
+            staged.created_ts,
+            staged.person_wait_declared,
+        ) = new
         try:
             await svc._write_monitor_snapshot_locked(
                 svc._monitor_snapshot_with_replacement(loop, staged)

@@ -24,7 +24,10 @@ CONFIG = ROOT / "src" / "kiro_crew" / "config"
 # so the section's bytes still count against the budget after moving into
 # `context_assembly/sections.py`. The `{{MAX_SUBAGENTS}}` and `{{WIDGET_BLOCK}}`
 # slots are still counted as their raw tokens.
-PROMPT_BYTE_CEILINGS = {"prompt.md": 40_850}
+# The budget includes the `waiting_on_person` rule under `monitor_update`: a declared
+# wait has no timeout, so the prompt states when one may be declared before an agent
+# reaches the tool's own description.
+PROMPT_BYTE_CEILINGS = {"prompt.md": 41_150}
 _COMPUTER_USE_TOKEN = "{{COMPUTER_USE_BLOCK}}"
 
 

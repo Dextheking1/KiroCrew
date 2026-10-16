@@ -852,6 +852,17 @@ def schemas(*, names_only: bool = False) -> list[dict[str, Any]]:
                             "loop's current subject alone"
                         ),
                     },
+                    "waiting_on_person": {
+                        "type": "boolean",
+                        "description": (
+                            "Legacy loops only: true declares you are waiting on the user, "
+                            "only once you have asked them a question in this chat and can "
+                            "do nothing until they answer (it has no timeout); the loop "
+                            "holds without spending cycles or budget until they reply in "
+                            "this chat, answer an approval or press Nudge now. "
+                            "false releases it"
+                        ),
+                    },
                 },
             },
         },

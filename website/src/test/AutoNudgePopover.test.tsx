@@ -740,6 +740,33 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     expect(clearAction()).toBeNull()
   })
 
+  it('a loop whose agent declared it waits on you reads as held, not "Goal active", and asks for a reply in the chat below or a Nudge now press', () => {
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(status()!.textContent).toBe(
+      'Waiting on you · the agent asked you a question. Reply in the chat below, or press Nudge now to resume without answering.',
+    )
+    expect(status()!.className).toMatch(/\bbg-warn-subtle\b/)
+    // The title no longer says "Goal active" over a "Waiting on you" line beside a
+    // live Pause: a declared person-wait is held, so it reads as held -- matching
+    // the approval hold, whose title is already "Paused" while its status says why.
+    expect(title()).toBe('Paused')
+    expect(title()).not.toMatch(/Goal active/)
+  })
+
+  it('Nudge now shows its name beside the icon only while the agent declared it waits on you', () => {
+    const label = () => screen.queryByTestId('auto-nudge-play-label')
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(label()!.textContent).toBe(NUDGE_NOW)
+    // The accessible name is the button's own, unchanged by the visible text.
+    expect(byLabel(NUDGE_NOW)!).toContainElement(label())
+    cleanup()
+    for (const loop of [running(), running({ waiting_on_person: true }), running({ approval_stalled: true })]) {
+      renderWith(loop)
+      expect(label()).toBeNull()
+      cleanup()
+    }
+  })
+
   it('a running loop reads its countdown in the ok box and its cycle in the title; no loop has neither', () => {
     renderWith(running({ cycle_count: 2 }))
     expect(status()!.textContent).toMatch(/^Next cycle in .+$/)
@@ -852,6 +879,12 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     expect(byLabel(PAUSE)!).toBeEnabled()
     fireEvent.change(goalBox(), { target: { value: 'edited while due' } })
     expect(byLabel(SAVE_AND_NUDGE)!).toBeEnabled()
+  })
+
+  it('a declared person-wait past its deadline keeps Nudge now live: the press is how a person releases it', () => {
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, next_due_ts: 1 }) /* any deadline long past */)
+    expect(byLabel(NUDGE_NOW)!).toBeEnabled()
+    expect(byLabel(PAUSE)!).toBeEnabled()
   })
 
   it('NO LOOP: Play alone, named Start loop, creates and starts the loop from the form, fires nothing, hands the created record up and stays open', async () => {
