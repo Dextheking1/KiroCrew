@@ -6,19 +6,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from kiro_crew.slack import features
 from kiro_crew.slack.code_channels import binding as binding_mod
-from kiro_crew.slack.code_channels import hooks
-from kiro_crew.slack.code_channels import settings as cc_settings
-from kiro_crew.slack.code_channels import status
+from kiro_crew.slack.code_channels import hooks, status
 from kiro_crew.slack.code_channels.binding import (
     SessionSpec,
     create_bound_session,
-    folder_default_agent,
     mirror_post_thread,
     notify_turn_end,
     notify_turn_start,
@@ -41,7 +40,7 @@ def bound(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
     store.put_binding(BINDING)
     set_store(store)
     toggle = {"on": True}
-    cc_settings.note_granted_scopes([cc_settings.REQUIRED_SCOPE])
+    features.record_granted_scopes([features.REQUIRED_SCOPE[features.CODE_CHANNELS]])
     monkeypatch.setattr(
         binding_mod,
         "live_config",
@@ -49,7 +48,7 @@ def bound(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
     )
     yield toggle
     set_store(None)
-    cc_settings.reset_capability()
+    features.reset_capabilities()
 
 
 # ── Store ────────────────────────────────────────────────────────────────────
@@ -85,6 +84,101 @@ def test_unreadable_or_mismatched_store_reads_as_empty(tmp_path: Any, content: s
     path.write_text(content)
     store = CodeChannelStore(path)
     assert store.bindings() == [] and store.get_route("x") is None
+
+
+def test_routes_expire_and_are_capped(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kiro_crew.slack.code_channels import store as store_mod
+
+    monkeypatch.setattr(store_mod, "MAX_ROUTES", 3)
+    store = CodeChannelStore(tmp_path / "s.json")
+    now = time.time()
+    old = now - store_mod.ROUTE_TTL_SECS - 1
+    store.record_decision(Route("old", "C1", "1.0", decision="stay", created_at=old))
+    for i in range(4):
+        store.record_decision(Route(f"r{i}", "C1", f"{i}.0", decision="stay", created_at=now + i))
+    kept = {sid for sid in ("old", "r0", "r1", "r2", "r3") if store.get_route(sid)}
+    assert kept == {"r1", "r2", "r3"}  # expired dropped, then the oldest past the cap
+    assert len(json.loads((tmp_path / "s.json").read_text())["routes"]) == 3
+
+
+def test_update_binding_changes_named_fields_atomically_and_persists(tmp_path: Any) -> None:
+    store = CodeChannelStore(tmp_path / "s.json")
+    store.put_binding(BINDING)
+    updated = store.update_binding("C0CODE", wrapped_up_at=12.5, channel_name="fix-login")
+    assert updated is not None and updated.wrapped_up_at == 12.5
+    assert updated.session_key == BINDING.session_key  # untouched fields kept
+    reloaded = CodeChannelStore(tmp_path / "s.json").get_binding("C0CODE")
+    assert reloaded is not None and reloaded.channel_name == "fix-login"
+    assert reloaded.wrapped_up_at == 12.5 and reloaded.archived_at == 0.0
+    assert store.update_binding("C0NONE", archived_at=1.0) is None
+
+
+@pytest.mark.parametrize("bad", [{"channel_id": "C9"}, {"no_such_field": 1}])
+def test_update_binding_refuses_unknown_fields_and_the_key(tmp_path: Any, bad: dict) -> None:
+    store = CodeChannelStore(tmp_path / "s.json")
+    store.put_binding(BINDING)
+    with pytest.raises(TypeError):
+        store.update_binding("C0CODE", **bad)
+    assert store.get_binding("C0CODE") == CodeChannelStore(tmp_path / "s.json").get_binding(
+        "C0CODE"
+    )
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        lambda s: s.put_binding(
+            Binding(channel_id="C0NEW", team_id="T", session_key="k", anchor_ts="1.0")
+        ),
+        lambda s: s.update_binding("C0CODE", wrapped_up_at=1.0),
+        lambda s: s.drop_binding("C0CODE"),
+        lambda s: s.record_decision(Route("sid", "C1", "1.0", decision=ROUTE_CODE_CHANNEL)),
+    ],
+)
+def test_a_failed_write_raises_and_changes_nothing(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, write: Any
+) -> None:
+    from kiro_crew.slack.code_channels import store as store_mod
+
+    store = CodeChannelStore(tmp_path / "s.json")
+    store.put_binding(BINDING)
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store_mod, "atomic_write", boom)
+    with pytest.raises(store_mod.StoreWriteError):
+        write(store)
+    # Nothing was published: memory still matches the file.
+    assert store.get_binding("C0CODE") == _on_disk(store)
+    assert store.get_binding("C0NEW") is None and store.get_route("sid") is None
+
+
+def _on_disk(store: CodeChannelStore) -> Binding | None:
+    return CodeChannelStore(store.path).get_binding("C0CODE")
+
+
+def test_reads_are_lock_free_snapshots(tmp_path: Any) -> None:
+    store = CodeChannelStore(tmp_path / "s.json")
+    store.put_binding(BINDING)
+    with store._lock:  # a writer holding the lock never blocks a reader
+        assert store.get_binding("C0CODE") is not None
+        assert store.bindings()
+
+
+def test_a_record_written_before_the_new_fields_loads_unchanged(tmp_path: Any) -> None:
+    path = tmp_path / "s.json"
+    old = {
+        "channel_id": "C0CODE",
+        "team_id": "T1",
+        "session_key": "chat-1-1",
+        "anchor_ts": "300.000001",
+        "created_at": 5.0,
+    }
+    path.write_text(json.dumps({"bindings": {"C0CODE": old}}))
+    binding = CodeChannelStore(path).get_binding("C0CODE")
+    assert binding is not None and binding.session_key == "chat-1-1"
+    assert (binding.channel_name, binding.archived_at, binding.wrapped_up_at) == ("", 0.0, 0.0)
 
 
 def test_store_file_is_plain_json(tmp_path: Any) -> None:
@@ -148,7 +242,7 @@ async def test_a_failing_or_stalled_hook_never_breaks_the_turn(
         raise RuntimeError("subscriber bug")
 
     async def stall(_b: Binding, _e: hooks.TurnEvent) -> None:
-        await asyncio.sleep(10)
+        await asyncio.Event().wait()  # never set: only the hook timeout ends it
 
     async def after(_b: Binding, _e: hooks.TurnEvent) -> None:
         ran.append("after")
@@ -210,19 +304,6 @@ async def test_status_write_failure_is_swallowed(bound: dict[str, bool]) -> None
 # ── Session settings ─────────────────────────────────────────────────────────
 
 
-def test_folder_default_agent_walks_ancestors_and_survives_cycles() -> None:
-    folders = [
-        {"id": "a", "default_agent": "root-agent"},
-        {"id": "b", "parent_id": "a"},
-        {"id": "c", "parent_id": "b", "default_agent": " "},
-        {"id": "x", "parent_id": "y"},
-        {"id": "y", "parent_id": "x"},
-    ]
-    assert folder_default_agent(folders, "c") == "root-agent"
-    assert folder_default_agent(folders, "x") == ""
-    assert folder_default_agent(folders, "") == ""
-
-
 @pytest.mark.asyncio
 async def test_folder_project_dir_wins_over_the_origin_threads(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
@@ -233,11 +314,28 @@ async def test_folder_project_dir_wins_over_the_origin_threads(
         read_folders=_reader([{"id": "f1", "name": "F", "project_dir": str(project)}])
     )
     monkeypatch.setattr(binding_mod, "_origin_project", lambda ts: "/elsewhere")
-    cfg = SimpleNamespace(agent=SimpleNamespace(default_agent=""))
-    spec = await binding_mod.resolve_session_spec(
-        state, cfg, binding_mod.CodeChannelDefaults(folder="f1"), origin_thread_ts="1.0"
+    cfg = SimpleNamespace(
+        agent=SimpleNamespace(default_agent=""),
+        slack=SimpleNamespace(code_channel_defaults=SimpleNamespace(folder="f1")),
     )
+    spec = await binding_mod.resolve_session_spec(state, cfg, origin_thread_ts="1.0")
     assert spec.project_dir == str(project.resolve())
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_folder_project_falls_back_to_the_origin_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace(
+        read_folders=_reader([{"id": "f1", "name": "F", "project_dir": "/no/such/dir"}])
+    )
+    monkeypatch.setattr(binding_mod, "_origin_project", lambda ts: "/work/origin-repo")
+    cfg = SimpleNamespace(
+        agent=SimpleNamespace(default_agent=""),
+        slack=SimpleNamespace(code_channel_defaults=SimpleNamespace(folder="f1")),
+    )
+    spec = await binding_mod.resolve_session_spec(state, cfg, origin_thread_ts="1.0")
+    assert spec.folder_id == "f1" and spec.project_dir == "/work/origin-repo"
 
 
 def _reader(folders: list[dict[str, Any]]):
@@ -267,6 +365,8 @@ async def test_bound_session_is_filed_pinned_titled_persisted_and_linked(tmp_pat
     assert isinstance(slot.project, str)  # the dashboard default (may be "" in tests)
     # Slack replies in the channel find this slot through the anchor.
     assert state.get_linked_slot("300.000001") is slot
+    # The map write is the debounced, off-loop one, awaited before returning.
+    state.sessions.aflush.assert_awaited()
     from kiro_crew.dashboard.chat_utils_slots import slot_history_key
 
     meta = state.conversation_log.get_metadata(slot_history_key(slot))
