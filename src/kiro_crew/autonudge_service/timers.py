@@ -31,6 +31,7 @@ from kiro_crew.autonudge_service.model import (
     _START_FAILURE_STANDDOWN_AFTER,
     APPROVAL_HOLD,
     PERSON_WAIT_HOLD,
+    SUBJECT_READ_SECS,
     NudgeLoop,
     credit_held_runtime,
     hold_span,
@@ -824,6 +825,12 @@ def _arm_from_deadline(self: AutoNudgeService, loop: NudgeLoop) -> None:
             MONITOR_STATE_VERSION,
         )
         return
+    if loop.approval_stalled and not is_structured_monitor_loop(loop):
+        # A held loop's timer is its subject read (``subject_reads.hold_tick``), one
+        # read interval out whatever its deadline, from every arm: a turn ending, a
+        # deferred re-arm, a reconciler rescue. The release arms toward the deadline.
+        self._arm_timer(loop, delay=SUBJECT_READ_SECS)
+        return
     now = time.time()
     if loop.next_due_ts <= 0:
         loop.next_due_ts = now + loop.idle_secs
@@ -965,11 +972,9 @@ def _reconcile_once(self: AutoNudgeService) -> None:
             continue
         if loop.id in self._firing or loop.id in self._maintenance_quiescing:
             continue
-        if loop.approval_stalled and not is_structured_monitor_loop(loop):
-            # Paused for approval: no live timer is the intended state, and
-            # ``release_approval_hold`` re-arms it. Rescuing it here would only
-            # wake a tick that holds again, every pass, for as long as it waits.
-            continue
+        # A legacy loop paused for approval is NOT skipped: its held tick reads the
+        # subject and re-arms itself (``subject_reads.hold_tick``), so a held loop
+        # with no live timer has lost that read and is rescued like any other.
         monitor = loop.monitor
         if monitor is not None and monitor.version != MONITOR_STATE_VERSION:
             continue
