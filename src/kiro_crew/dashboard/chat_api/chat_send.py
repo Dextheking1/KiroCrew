@@ -718,6 +718,12 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         if _responsive_eligible and (not steer or not slot.turn_running):
             return await responsive_chat.accept(request, slot, message, user_meta)
 
+    # The session's own human typing into the dashboard: not an app, and not a
+    # loopback internal-secret caller (an MCP tool or a cron script), which
+    # carries no app claim but is automation. Only such a send skips the
+    # sub-agent hold below; automated sends keep waiting for the wave.
+    _from_composer = not request_app and request.get("internal_auth") is not True
+
     if slot.turn_running or slot._turn_admission_reserved:
         # Mid-turn steer: inject into the RUNNING turn instead of queueing for
         # the next turn. Gated on an explicit `steer` flag + a live, steer-capable
@@ -844,31 +850,32 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             # the delivery ended -- a receipt withheld there would lose the only
             # record that a decision was made at all.
             decision_strip=_auto_strip,
-            # A steer that fell through here (unavailable, or refused as a
-            # duplicate) still means "act now": released past the sub-agent hold
-            # when this turn ends. An `auto` send Jev chose to queue is a real
-            # queue and waits like one.
-            steer_intent=bool(steer) and not request_app and not _auto_queues,
+            # The composer's own human, whichever way the send went (Queue, a
+            # steer that fell through, or `auto` choosing to queue): Queue means
+            # after THIS turn, so the sub-agent hold releases it when the turn
+            # ends instead of parking it behind background children.
+            composer_send=_from_composer,
         )
         return web.json_response({"ok": True, "queued": True, "queue_id": qid})
 
-    # Queue a message typed while background sub-agents are still running for
-    # this slot. The slot.running queue path above covers the mid-turn case;
-    # this covers the idle case (spawn_run is fire-and-forget, so the main slot
-    # goes idle while children run). Without the hold, this message would start a
-    # main turn immediately and interleave with the [Subagent completion event]
-    # injections. Queue it instead (reusing the slot queue) — the queue drain
-    # releases it after the last sub-agent finishes (see chat_runner _hold_users).
-    # Opt-out: if the user explicitly chose steer mode, honour it — start a new
-    # turn immediately so the message is processed without waiting for children.
-    # An app on a session it does not own has no opt-out (`steer` is None there).
+    # Hold a message sent while background sub-agents are still running for this
+    # slot. The slot.running queue path above covers the mid-turn case; this
+    # covers the idle case (spawn_run is fire-and-forget, so the main slot goes
+    # idle while children run). Held, the message waits in the slot queue and the
+    # drain releases it after the last sub-agent finishes (see chat_runner
+    # _hold_users), so it cannot interleave with [Subagent completion event]
+    # injections. Only an automated send (an app, an MCP tool, a cron script) is
+    # held: the session's own human is never kept waiting on background work,
+    # whatever the composer's busy-send mode -- a completion that lands during
+    # their turn queues behind it as usual.
     _sub_key = effective_session_key(slot)
-    _held = subagents_hold_user_messages(state, _sub_key)
+    _children_hold = subagents_hold_user_messages(state, _sub_key)
+    _held = not _from_composer and _children_hold
     # Messages parked while a child was live stay parked once it is flagged
     # stalled (nothing starts a drain then). A send behind them joins the queue
     # and drains it, so it is answered after them rather than ahead of them.
     _behind_parked = bool(
-        not _held
+        not _children_hold
         and slot._queue
         and state.subagents is not None
         and state.subagents.running_agents_for(_sub_key)
