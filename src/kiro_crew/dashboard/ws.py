@@ -949,6 +949,11 @@ async def _serve_ws(
     # False and ``_send_ws_all`` keeps its deny-by-default behaviour.
     ws["_app"] = ws_app
     ws["_is_dashboard_user"] = request.get("is_dashboard_user", False)
+    # Shared Crew: the socket's trusted actor is the upgrade request's, as the
+    # auth middleware published it. Frames never name a principal.
+    from kiro_crew.shared_crew.identity import actor_of
+
+    ws["_shared_crew_actor"] = actor_of(request)
     ws["_allowed_events"] = allowed_events
     # Presence is bound to the actor the auth middleware verified for this
     # upgrade request; an activity frame never names who sent it.

@@ -1,10 +1,8 @@
 """Shared Crew session attribution: creator, message author, persistence.
 
 Driven through the real slot, the real metadata codec, the real full save and
-the real session catalog. ``_AttrSlot`` is the dashboard slot with room for the
-``_attribution`` attribute, which is how the slot class holds it once the
-integration lands the one-line slot declaration; every other behaviour is the
-real ``_ChatSlot``.
+the real session catalog. ``_AttrSlot`` is a plain subclass of the real
+``_ChatSlot``, which declares ``_attribution`` among its slots.
 """
 
 from __future__ import annotations
@@ -99,12 +97,12 @@ def test_first_message_stamps_only_a_slot_with_no_prior_user_turns():
     assert attr.slot_attribution(started) is None
 
 
-def test_a_slot_class_without_the_attribute_loses_only_the_label():
+def test_the_real_slot_class_holds_the_creator():
     slot = _ChatSlot("s-plain")
     stamped = attr.stamp_creator(slot, _actor(ALICE))
     assert stamped.creator == ALICE
-    assert attr.slot_attribution(slot) is None
-    assert attr.public_attribution_of_slot(slot)["availability"] == "legacy_missing"
+    assert attr.slot_attribution(slot) == stamped
+    assert attr.public_attribution_of_slot(slot)["availability"] == "recorded"
 
 
 def test_full_save_restart_readback_and_catalog_agree(state):

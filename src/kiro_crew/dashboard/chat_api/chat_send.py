@@ -236,7 +236,14 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         # enters, so every downstream user of `user_meta` -- the dispatch row, the
         # busy-slot queue entry, the sub-agent hold -- is covered by one gate
         # rather than each remembering.
-        user_meta = {k: v for k, v in user_meta.items() if k not in RESERVED_ROW_META_KEYS}
+        # The message author is the server's to name (see the stamp below).
+        from kiro_crew.shared_crew.contracts import MESSAGE_AUTHOR_META_KEY
+
+        user_meta = {
+            k: v
+            for k, v in user_meta.items()
+            if k not in RESERVED_ROW_META_KEYS and k != MESSAGE_AUTHOR_META_KEY
+        }
         # The whole-message quote is bounded HERE, once, for every path below:
         # the immediate row persists `user_meta` verbatim, so a bound applied
         # only where the queue paths read it would leave that row unbounded.
@@ -1070,7 +1077,30 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         # The queued path stamps the same actor on its entry, which the drain
         # unions onto the row; the title counter reads it off either row.
         _user_row_meta[TURN_ACTOR_META_KEY] = "app"
+    # Shared Crew attribution: the server names the author from the actor the
+    # auth middleware published, never from the body, and the first accepted
+    # message of a never-stamped slot records its creator. Function-local
+    # because this module's functions run on the chat_handlers facade globals.
+    from kiro_crew.shared_crew.attribution import stamp_creator_if_fresh, stamp_message_author
+    from kiro_crew.shared_crew.audit import schedule_action_audit
+    from kiro_crew.shared_crew.contracts import ActionOutcome, ActionType
+    from kiro_crew.shared_crew.identity import actor_of
+
+    _actor = actor_of(request)
+    stamp_message_author(_user_row_meta, _actor)
+    stamp_creator_if_fresh(
+        slot,
+        _actor,
+        prior_user_turns=sum(1 for m in slot.messages if m.get("role") == "user"),
+    )
     _user_row = slot.append("user", message, "msg msg-u", meta=_user_row_meta)
+    schedule_action_audit(
+        ActionType.MESSAGE,
+        session_key=slot.key,
+        initiator=_actor,
+        outcome=ActionOutcome.ACCEPTED,
+        target=str(_user_row.get("meta", {}).get("mid") or ""),
+    )
     _user_mid = _user_row.get("meta", {}).get("mid")
     if not may_configure or (ws_mode and user_meta and user_meta.get("sendId")):
         # Raw user content belongs on the per-client slot-authorized WS path.

@@ -475,7 +475,30 @@ async def api_ask_question_answer(request: web.Request) -> web.Response:
                 status=400,
             )
 
-    if not state.resolve_question(ask_id, answers, reason=reason):
+    # Shared Crew: the verified responder and this click's id ride into the
+    # resolution, so two collaborators answering at once settle it once.
+    from kiro_crew.shared_crew import decisions as shared_decisions
+
+    response_id, response_id_ok = shared_decisions.read_response_id(body)
+    if not response_id_ok:
+        return web.json_response(
+            {"error": "invalid response_id", "code": "invalid_response_id"}, status=400
+        )
+    if not state.resolve_question(
+        ask_id,
+        answers,
+        reason=reason,
+        responder=shared_decisions.request_principal(request),
+        response_id=response_id,
+    ):
+        settled = shared_decisions.lost_race_reply(
+            shared_decisions.decisions_for(state).classify(
+                shared_decisions.question_decision_id(ask_id), response_id
+            ),
+            response_id,
+        )
+        if settled is not None:
+            return shared_decisions.respond(settled)
         recorded_reason = state.recent_question_resolutions().get(ask_id)
         if recorded_reason:
             return web.json_response(

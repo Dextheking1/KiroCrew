@@ -2951,6 +2951,7 @@ class _ChatSlot:
         "_detail_render_lock",
         "_last_stop_reason",
         "_created_by",
+        "_attribution",
         "_created_by_sid",
         "_lineage_minted",
         "_revived_by",
@@ -3519,6 +3520,10 @@ class _ChatSlot:
         #: person's own tab, a fork, a restore. Read by
         #: ``DashboardState.creator_slot_count`` for ``MAX_SLOTS_PER_CREATOR``.
         self._created_by: str = ""
+        #: Shared Crew creator attribution (``shared_crew.attribution``): ``None``
+        #: until stamped or read back, then write-once. Persisted by the
+        #: metadata codec's ``attribution`` row.
+        self._attribution: Any = None
         #: The creator's ACP session id, FROZEN at mint (see ``session_control``).
         #: Read at the child's first turn to stamp ``parent_sid`` on the immutable
         #: ``session/opened`` crew log entry -- never re-read live, so a creator slot
@@ -7898,14 +7903,25 @@ class DashboardState:
         )
 
     def resolve_question(
-        self, ask_id: str, answers: dict[str, str] | None, *, reason: str | None = None
+        self,
+        ask_id: str,
+        answers: dict[str, str] | None,
+        *,
+        reason: str | None = None,
+        responder: Any = None,
+        response_id: str = "",
     ) -> bool:
         """Resolve one blocking question future if it is still pending.
 
         ``reason`` says why a ``None`` answer ended the wait (``dismissed``,
         ``composer``, ...); only a blocking MCP ask reports it back to the agent.
+        ``responder`` is the verified Shared Crew principal answering through the
+        dashboard; with it the resolution goes through the shared decision
+        registry (first valid response wins once).
         """
-        return _questions_for(self).resolve(self, ask_id, answers, reason=reason)
+        return _questions_for(self).resolve(
+            self, ask_id, answers, reason=reason, responder=responder, response_id=response_id
+        )
 
     async def open_agent_ask(
         self, ask_id: str, slot_key: str, session_key: str, questions: list[dict]

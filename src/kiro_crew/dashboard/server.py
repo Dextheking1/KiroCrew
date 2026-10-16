@@ -1803,6 +1803,18 @@ async def start_dashboard(
     # slices in the table's original sequence -- see that package's docstring.
     register_all(app)
 
+    async def _shared_crew_startup(_app: web.Application) -> None:
+        # Shared Crew: probe containment once at start, so hard-limit mode fails
+        # closed before the first runtime spawns (shared_crew.admission_gate).
+        from kiro_crew.shared_crew.admission_gate import startup_check
+
+        try:
+            await startup_check()
+        except Exception:  # noqa: BLE001 - a probe failure must not stop the gateway
+            logger.warning("shared crew: startup containment check failed", exc_info=True)
+
+    app.on_startup.append(_shared_crew_startup)
+
     # Register built-in apps (idempotent — surfaces baked-in features in App Store).
     # Runs on the executor: escalation cleanup can traverse/delete legacy app
     # dirs, which must not block the event loop during startup.

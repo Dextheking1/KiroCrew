@@ -1446,9 +1446,9 @@ class TestErrorCodes:
     def test_the_ratchet_can_actually_fail(self) -> None:
         """Self-check: a scan matching nothing would pass the assertion above vacuously.
 
-        36 = the 20 pinned after the owner-denial migration, the answer route's
-        ``answers_too_long``, one additional reason-bearing ``question_not_found``
-        response, plus fourteen coded response sites for the blocking MCP
+        37 = the 20 pinned after the owner-denial migration, the answer route's
+        ``answers_too_long`` and ``invalid_response_id``, one additional
+        reason-bearing ``question_not_found`` response, plus fourteen coded response sites for the blocking MCP
         ``ask_question`` routes. The five audited authorization denials construct
         their literal response at the call site while ``_denied`` only records the
         shared SEL event, so every refusal remains visible to the universal
@@ -1462,7 +1462,7 @@ class TestErrorCodes:
         ``handlers._shared._owner_denial_response``. The wire contract is unchanged.
         """
         coded = [f for f in self._findings() if f.bucket == "compliant"]
-        assert len(coded) == 36, f"scanner reached {len(coded)} coded sites, expected 36"
+        assert len(coded) == 37, f"scanner reached {len(coded)} coded sites, expected 37"
         assert all(f.code_value for f in coded)
 
     # -- POST /api/ask-question (the MCP tool's leg) --
