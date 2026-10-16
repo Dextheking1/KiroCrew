@@ -7,8 +7,8 @@ filed in the configured default folder (with the configured agent, model and
 reasoning effort), shows "Working..." in the channel while a turn runs, and
 answers there top-level -- no @mention needed. A one-message question is still
 answered in place. It runs when the ``slack.code_channels`` setting is on AND the
-install can run code channels (see :mod:`.settings`); otherwise the gateway
-behaves exactly as it does without this package.
+install can run code channels (``slack.features.code_channels_enabled``);
+otherwise the gateway behaves exactly as it does without this package.
 
 Modules
 -------
@@ -19,10 +19,9 @@ Modules
 ``creation``              eligibility, session ids, Slack's origin echo
 ``recognition``           is a channel a code channel, and ours?
 ``store``                 durable routes + bindings
-``binding``               the bound dashboard session; mirror bridges
+``binding``               the gate; the bound dashboard session; mirror bridges
 ``hooks`` / ``status``    turn hooks; the native status subscriber
 ``routing``               the seams ``slack/events.py`` calls
-``settings``              the toggle and the defaults
 ``workspace`` (package)   diff view / context bar (separate feature)
 ========================= ================================================
 

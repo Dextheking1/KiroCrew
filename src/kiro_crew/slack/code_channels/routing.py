@@ -33,7 +33,9 @@ from kiro_crew.slack.code_channels import recognition
 from kiro_crew.slack.code_channels.binding import (
     BindingUnavailable,
     bound_slot,
+    code_channels_on,
     create_bound_session,
+    live_config,
     resolve_session_spec,
 )
 from kiro_crew.slack.code_channels.classifier import MAX_CONTEXT_MESSAGES, classify
@@ -46,11 +48,6 @@ from kiro_crew.slack.code_channels.creation import (
 )
 from kiro_crew.slack.code_channels.models import ChannelInfo, CodeChannelApiError, CreateRequest
 from kiro_crew.slack.code_channels.recognition import ChannelKind
-from kiro_crew.slack.code_channels.settings import (
-    code_channel_defaults,
-    code_channels_on,
-    live_config,
-)
 from kiro_crew.slack.code_channels.store import (
     ROUTE_CODE_CHANNEL,
     Binding,
@@ -363,9 +360,7 @@ async def _bind_channel(
     if state is None:
         raise BindingUnavailable("no dashboard")
     cfg = live_config(orch)
-    spec = await resolve_session_spec(
-        state, cfg, code_channel_defaults(cfg), origin_thread_ts=origin_thread_ts
-    )
+    spec = await resolve_session_spec(state, cfg, origin_thread_ts=origin_thread_ts)
     anchor = await _post(orch, channel, _kickoff_text(title, state, spec.folder_id), None)
     if not anchor:
         raise BindingUnavailable("kickoff post failed")

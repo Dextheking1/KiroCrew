@@ -15,9 +15,9 @@ import pytest
 from slack_code_channels_helpers import OWNER, SELF_USER, Env, FakeState, make_env, mention
 
 from kiro_crew.config.loader import ACTIVATION_OFF
+from kiro_crew.slack import features
 from kiro_crew.slack.code_channels import binding as binding_mod
 from kiro_crew.slack.code_channels import routing
-from kiro_crew.slack.code_channels import settings as cc_settings
 from kiro_crew.slack.code_channels.classifier import RouteDecision
 from kiro_crew.slack.code_channels.creation import ORIGIN_CONTEXT_BLOCK_ID, session_id_for
 from kiro_crew.slack.code_channels.routing import Gate
@@ -180,7 +180,7 @@ async def test_feature_unavailable_degrades_to_an_in_place_answer(env: Env, code
 
 
 async def test_toggle_on_without_the_scope_makes_no_slack_call_and_no_decision(env: Env) -> None:
-    cc_settings.note_granted_scopes(["chat:write", "app_mentions:read"])
+    features.record_granted_scopes(["chat:write", "app_mentions:read"])
     assert await _open(env) is False
     _bind(env)
     result = await _gate(env, {**mention(channel="C0CODE"), "type": "message"})
@@ -199,8 +199,9 @@ async def test_first_feature_disabled_latches_code_channels_off_for_the_process(
     _bind(env)
     result = await _gate(env, {**mention(channel="C0CODE"), "type": "message"})
     assert result.gate is Gate.PASS
-    # A reconnect re-probes and clears the latch.
-    cc_settings.note_granted_scopes([cc_settings.REQUIRED_SCOPE])
+    # A reconnect re-probes from scratch (scope_probe clears the latch first).
+    features.clear_latch()
+    features.record_granted_scopes([features.REQUIRED_SCOPE[features.CODE_CHANNELS]])
     env.info("C0CODE")
     later = {**mention(channel="C0CODE", ts="1700000000.000300"), "type": "message"}
     assert (await _gate(env, later)).gate is Gate.DIRECTED
@@ -209,7 +210,7 @@ async def test_first_feature_disabled_latches_code_channels_off_for_the_process(
 async def test_a_per_user_refusal_does_not_latch(env: Env) -> None:
     env.api.responses["agents.conversations.create"] = _SlackError("user_not_enabled")
     assert await _open(env) is False
-    assert cc_settings.code_channels_on(env.cfg()) is True
+    assert features.code_channels_enabled(env.cfg()) is True
 
 
 async def test_toggle_off_makes_no_slack_call_and_no_decision(env: Env) -> None:
@@ -284,8 +285,8 @@ async def test_folder_default_agent_wins_over_slacks_and_folder_without_project(
     assert env.state is not None
     env.state.folders.extend(
         [
-            {"id": "parent", "name": "P", "default_agent": "parent-agent"},
-            {"id": "f1", "name": "Child", "parent_id": "parent"},
+            {"id": "parent", "name": "P"},
+            {"id": "f1", "name": "Child", "parent_id": "parent", "default_agent": "folder-agent"},
         ]
     )
     env.defaults = {"folder": "f1"}
@@ -293,7 +294,7 @@ async def test_folder_default_agent_wins_over_slacks_and_folder_without_project(
     env.api.responses["agents.conversations.create"] = {"ok": True, "channel_id": "C0CODE"}
     assert await _open(env) is True
     spec = env.created_sessions[0]["spec"]
-    assert spec.agent == "parent-agent"
+    assert spec.agent == "folder-agent"
     # The folder declares no project, so the origin thread's bound one is used.
     assert spec.project_dir == "/work/origin-repo"
 

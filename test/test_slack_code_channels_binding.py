@@ -11,14 +11,12 @@ from typing import Any
 
 import pytest
 
+from kiro_crew.slack import features
 from kiro_crew.slack.code_channels import binding as binding_mod
-from kiro_crew.slack.code_channels import hooks
-from kiro_crew.slack.code_channels import settings as cc_settings
-from kiro_crew.slack.code_channels import status
+from kiro_crew.slack.code_channels import hooks, status
 from kiro_crew.slack.code_channels.binding import (
     SessionSpec,
     create_bound_session,
-    folder_default_agent,
     mirror_post_thread,
     notify_turn_end,
     notify_turn_start,
@@ -41,7 +39,7 @@ def bound(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
     store.put_binding(BINDING)
     set_store(store)
     toggle = {"on": True}
-    cc_settings.note_granted_scopes([cc_settings.REQUIRED_SCOPE])
+    features.record_granted_scopes([features.REQUIRED_SCOPE[features.CODE_CHANNELS]])
     monkeypatch.setattr(
         binding_mod,
         "live_config",
@@ -49,7 +47,7 @@ def bound(tmp_path: Any, monkeypatch: pytest.MonkeyPatch):
     )
     yield toggle
     set_store(None)
-    cc_settings.reset_capability()
+    features.reset_capabilities()
 
 
 # ── Store ────────────────────────────────────────────────────────────────────
@@ -210,19 +208,6 @@ async def test_status_write_failure_is_swallowed(bound: dict[str, bool]) -> None
 # ── Session settings ─────────────────────────────────────────────────────────
 
 
-def test_folder_default_agent_walks_ancestors_and_survives_cycles() -> None:
-    folders = [
-        {"id": "a", "default_agent": "root-agent"},
-        {"id": "b", "parent_id": "a"},
-        {"id": "c", "parent_id": "b", "default_agent": " "},
-        {"id": "x", "parent_id": "y"},
-        {"id": "y", "parent_id": "x"},
-    ]
-    assert folder_default_agent(folders, "c") == "root-agent"
-    assert folder_default_agent(folders, "x") == ""
-    assert folder_default_agent(folders, "") == ""
-
-
 @pytest.mark.asyncio
 async def test_folder_project_dir_wins_over_the_origin_threads(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
@@ -233,11 +218,28 @@ async def test_folder_project_dir_wins_over_the_origin_threads(
         read_folders=_reader([{"id": "f1", "name": "F", "project_dir": str(project)}])
     )
     monkeypatch.setattr(binding_mod, "_origin_project", lambda ts: "/elsewhere")
-    cfg = SimpleNamespace(agent=SimpleNamespace(default_agent=""))
-    spec = await binding_mod.resolve_session_spec(
-        state, cfg, binding_mod.CodeChannelDefaults(folder="f1"), origin_thread_ts="1.0"
+    cfg = SimpleNamespace(
+        agent=SimpleNamespace(default_agent=""),
+        slack=SimpleNamespace(code_channel_defaults=SimpleNamespace(folder="f1")),
     )
+    spec = await binding_mod.resolve_session_spec(state, cfg, origin_thread_ts="1.0")
     assert spec.project_dir == str(project.resolve())
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_folder_project_falls_back_to_the_origin_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = SimpleNamespace(
+        read_folders=_reader([{"id": "f1", "name": "F", "project_dir": "/no/such/dir"}])
+    )
+    monkeypatch.setattr(binding_mod, "_origin_project", lambda ts: "/work/origin-repo")
+    cfg = SimpleNamespace(
+        agent=SimpleNamespace(default_agent=""),
+        slack=SimpleNamespace(code_channel_defaults=SimpleNamespace(folder="f1")),
+    )
+    spec = await binding_mod.resolve_session_spec(state, cfg, origin_thread_ts="1.0")
+    assert spec.folder_id == "f1" and spec.project_dir == "/work/origin-repo"
 
 
 def _reader(folders: list[dict[str, Any]]):
