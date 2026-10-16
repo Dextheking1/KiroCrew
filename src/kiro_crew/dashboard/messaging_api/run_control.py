@@ -551,7 +551,8 @@ async def _retry_failed_run(
                 execution = await asyncio.to_thread(read_run_execution, old.id)
             except (OSError, ValueError) as exc:
                 return web.json_response(
-                    {"error": f"memory_unavailable: {exc}", "code": "memory_unavailable"}, status=400
+                    {"error": f"memory_unavailable: {exc}", "code": "memory_unavailable"},
+                    status=400,
                 )
         # Same validated warm as the primary spawn handler. old.cwd was validated
         # at the ORIGINAL spawn, but the allowlist may have changed since (and a
