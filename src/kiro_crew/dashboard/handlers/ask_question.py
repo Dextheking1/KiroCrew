@@ -93,8 +93,8 @@ def _deny_app_token(request: web.Request, operation: str) -> web.Response | None
 
     Denying app tokens outright also removes the need to bind each pending
     ``ask_id`` to an originating app: with only dashboard-user tokens accepted,
-    the sole party that can answer is the single dashboard owner — the actor the
-    card is addressed to.
+    the parties that can answer are the owner and the Shared Crew collaborators
+    the card is addressed to (``_deny_non_collaborator``).
 
     Callers are the dashboard UI answering or dismissing a card, so no
     legitimate caller is an app.
@@ -162,6 +162,25 @@ def _deny_non_owner(request: web.Request, operation: str) -> web.Response | None
     # Deny decision made above; only the response label changes for a signed
     # pre-owner bootstrap subject (see stale_owner_session_response).
     return _owner_denial_response(request, "forbidden", "owner_only")
+
+
+def _deny_non_collaborator(request: web.Request, operation: str) -> web.Response | None:
+    """Require the owner or a Shared Crew collaborator. Returns 403 or None.
+
+    Reading, answering and dismissing a question card is a collaboration right:
+    every collaborator sees the card and the first valid answer wins through the
+    shared decision registry. ``collaborators.is_collaborator_request`` admits the
+    owner (``is_owner_dashboard_request``) and a dashboard session whose verified
+    actor a membership boundary admitted (an allowlisted tailnet login behind
+    serve, or an enterprise assertion). Every caller the owner gate refuses for
+    another reason, a Slack-allowlist dashboard token among them, is refused here
+    exactly as before.
+    """
+    from kiro_crew.shared_crew.collaborators import is_collaborator_request
+
+    if is_collaborator_request(request):
+        return None
+    return _deny_non_owner(request, operation)
 
 
 async def api_ask_question(request: web.Request) -> web.Response:
@@ -276,14 +295,14 @@ async def api_ask_question_pending(request: web.Request) -> web.Response:
       dismiss it (the client no longer knows the ``card_id``) — a stuck state
       that only sending a message could clear.
 
-    Owner-only on the same grounds as the other endpoints: the payload is the
-    question text addressed to the owner.
+    Open to the owner and every collaborator (``_deny_non_collaborator``): the
+    payload is the question text addressed to whoever shares the session.
     """
     state: DashboardState = request.app["state"]
     deny = _deny_app_token(request, "ask_question_pending")
     if deny is not None:
         return deny
-    deny = _deny_non_owner(request, "ask_question_pending")
+    deny = _deny_non_collaborator(request, "ask_question_pending")
     if deny is not None:
         return deny
     out: list[dict] = [
@@ -340,14 +359,14 @@ async def api_ask_question_dismiss(request: web.Request) -> web.Response:
     of that record; the answer half retires through the ordinary user message the
     card's submit sends.
 
-    Owner-only on the same grounds as the other endpoints: it mutates the
-    owner's own session status.
+    Open to the owner and every collaborator (``_deny_non_collaborator``): any of
+    them may retire a card they all see.
     """
     state: DashboardState = request.app["state"]
     deny = _deny_app_token(request, "ask_question_dismiss")
     if deny is not None:
         return deny
-    deny = _deny_non_owner(request, "ask_question_dismiss")
+    deny = _deny_non_collaborator(request, "ask_question_dismiss")
     if deny is not None:
         return deny
     try:
@@ -393,7 +412,7 @@ async def api_ask_question_answer(request: web.Request) -> web.Response:
     deny = _deny_app_token(request, "ask_question_answer")
     if deny is not None:
         return deny
-    deny = _deny_non_owner(request, "ask_question_answer")
+    deny = _deny_non_collaborator(request, "ask_question_answer")
     if deny is not None:
         return deny
     ask_id = request.match_info["ask_id"]

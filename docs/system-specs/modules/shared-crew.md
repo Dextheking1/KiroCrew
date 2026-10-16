@@ -475,9 +475,21 @@ before the registry sees a response. A client that sends `response_id` gets 409
 `already_resolved` with the decision on a lost race; a client that sends none keeps
 the existing 404. A wait that ends through a path with no verified responder closes
 the decision with an Unknown responder, and an unanswered one closes as `expired` or
-`withdrawn`. Approval decision frames ride `broadcast_ws` like approval frames;
-question decision frames go to owner sockets only, the audience the question card
-has. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
+`withdrawn`. Approval decision frames ride `broadcast_ws` like approval frames.
+
+An agent question belongs to every collaborator. `collaborators.is_collaborator_request`
+admits the owner (`is_owner_dashboard_request`) and a dashboard-user session whose
+verified actor is a person a membership boundary admitted: provenance
+`tailscale_serve` (allowlisted and pinned by the middleware) or `enterprise`. A
+direct tailnet peer, a Slack-allowlist dashboard token, an app token, an internal
+caller and Unknown are not collaborators and keep the owner gate's 403.
+`GET /api/ask-question/pending`, `POST /api/ask-question/{id}/answer` and
+`POST /api/ask-question/dismiss` accept every collaborator; opening a question
+(`POST /api/ask-question`) stays owner-only. The card frames (`question_card`,
+`question_card_resolved`) and the question decision frame go to the owner sockets
+and to every collaborator socket (`collaborators.broadcast_to_collaborators`, which
+reads the socket's `_shared_crew_actor`), the same audience the pending read has.
+Nothing else the owner set receives reaches a collaborator socket. `GET /api/shared-crew/presence` and `GET /api/shared-crew/decisions` (in
 `routes_collab`) answer the same state for a reconnecting tab.
 
 ## 6. Wire shapes

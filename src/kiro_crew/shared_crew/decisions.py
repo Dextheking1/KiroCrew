@@ -255,13 +255,17 @@ def broadcast_decision(state: Any, decision: SharedDecision) -> None:
     """Push the authoritative decision to the sockets that see its card. Never raises.
 
     An approval goes where approval frames go (``broadcast_ws``, slot scoped).
-    A question goes to owner sockets only, the same audience its card has, so a
-    decision frame never reveals a question to a socket the card is hidden from.
+    A question goes to the owner and every collaborator socket
+    (``collaborators.broadcast_to_collaborators``), the same audience its card
+    has, so a decision frame never reveals a question to a socket the card is
+    hidden from.
     """
+    from kiro_crew.shared_crew.collaborators import broadcast_to_collaborators
+
     frame = decision_frame(decision)
     try:
         if decision.kind is DecisionKind.QUESTION:
-            state.broadcast_ws_owners(frame["type"], frame)
+            broadcast_to_collaborators(state, frame["type"], frame)
         else:
             state.broadcast_ws(frame["type"], frame)
     except Exception:
