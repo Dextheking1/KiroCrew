@@ -82,6 +82,23 @@ def code_channels_enabled(cfg: Any) -> bool:
     return getattr(_slack_section(cfg), "code_channels", False) is True
 
 
+def manifest_features(cfg: Any) -> frozenset[str]:
+    """The Slack Code switches *cfg* turns on, as ``slack_manifest`` feature names.
+
+    The one bridge from config to the toggle-aware manifest: every emitter
+    (``kirocrew manifest``, ``GET /api/slack/manifest``, the settings page's
+    update panel) passes this to ``slack_manifest.render``.
+    """
+    from kiro_crew import slack_manifest
+
+    on: set[str] = set()
+    if agent_sessions_enabled(cfg):
+        on.add(slack_manifest.AGENT_SESSIONS)
+    if code_channels_enabled(cfg):
+        on.add(slack_manifest.CODE_CHANNELS)
+    return frozenset(on)
+
+
 def _opt_str(value: object) -> str | None:
     if not isinstance(value, str):
         return None
@@ -183,12 +200,14 @@ def resolve_code_channel_session(
     folder_id = str(folder.get("id")) if folder is not None else None
     folder_agent = _opt_str(folder.get("default_agent")) if folder is not None else None
 
+    slack_choice = _opt_str(slack_agent)
+    agent: str | None
     if defaults.agent:
         agent, agent_source = defaults.agent, "default"
     elif folder_agent:
         agent, agent_source = folder_agent, "folder"
-    elif _opt_str(slack_agent):
-        agent, agent_source = _opt_str(slack_agent), "slack"
+    elif slack_choice:
+        agent, agent_source = slack_choice, "slack"
     else:
         agent, agent_source = None, ""
 

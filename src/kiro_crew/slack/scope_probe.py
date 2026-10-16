@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Callable, Iterable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 if TYPE_CHECKING:
     from kiro_crew.slack.client import SlackClientOps
@@ -101,3 +102,205 @@ async def warn_unreadable_tracked_channels(
         except Exception:
             logger.debug("scope-probe notification failed", exc_info=True)
     return unreadable
+
+
+# ── Manifest drift: does the installed app carry what the switches need? ──
+
+#: The install carries every bot scope the rendered manifest asks for.
+STATUS_UP_TO_DATE = "up_to_date"
+#: At least one required bot scope is missing: update the app and reinstall.
+STATUS_NEEDS_UPDATE = "needs_update"
+#: Scopes are granted, but Slack answered ``feature_disabled``: the workspace
+#: does not have Slack code channels / agent sessions turned on.
+STATUS_FEATURE_DISABLED = "feature_disabled"
+#: Slack did not say which scopes the install holds (no ``x-oauth-scopes``
+#: header, a network failure, or an error other than a rejected token).
+STATUS_UNKNOWN = "unknown"
+#: No bot token is stored, so there is no install to compare against.
+STATUS_NOT_CONFIGURED = "not_configured"
+#: Slack rejected the stored bot token (``invalid_auth`` and friends).
+STATUS_TOKEN_REJECTED = "token_rejected"
+
+#: Errors that mean the stored bot token itself is no good.
+_TOKEN_ERRORS = frozenset(
+    {"invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired"}
+)
+
+#: A channel id no workspace issues (``C`` + zeros), used to ask
+#: ``agents.conversations.listViews`` whether the feature exists at all without
+#: touching any real conversation. A read; it can only fail.
+_NO_SUCH_CHANNEL = "C00000000000"
+
+#: Slack features the runtime has seen refused with ``feature_disabled`` this
+#: process (``"code_channels"`` / ``"agent_sessions"``). The runtime records them
+#: with :func:`note_feature_disabled`; the drift probe reports them.
+_FEATURE_DISABLED_SEEN: set[str] = set()
+
+
+def note_feature_disabled(feature: str) -> None:
+    """Record that Slack refused *feature* with ``feature_disabled`` at runtime."""
+    if feature:
+        _FEATURE_DISABLED_SEEN.add(feature)
+
+
+def clear_feature_disabled(feature: str | None = None) -> None:
+    """Forget a recorded refusal (all of them when *feature* is None)."""
+    if feature is None:
+        _FEATURE_DISABLED_SEEN.clear()
+    else:
+        _FEATURE_DISABLED_SEEN.discard(feature)
+
+
+def feature_disabled_seen() -> frozenset[str]:
+    """Features the runtime saw refused with ``feature_disabled``."""
+    return frozenset(_FEATURE_DISABLED_SEEN)
+
+
+def _slack_error(exc: BaseException) -> str:
+    """Slack's ``error`` code from a ``SlackApiError``-shaped exception, else ''."""
+    response = getattr(exc, "response", None)
+    try:
+        return str(response.get("error", "") or "") if response is not None else ""
+    except Exception:
+        return ""
+
+
+def _header(headers: Any, name: str) -> str | None:
+    """Case-insensitive header lookup over a dict or multidict; None if absent."""
+    if not headers:
+        return None
+    try:
+        items = headers.items()
+    except Exception:
+        return None
+    for key, value in items:
+        if str(key).lower() == name:
+            if isinstance(value, (list, tuple)):
+                value = ",".join(str(v) for v in value)
+            return str(value)
+    return None
+
+
+def parse_granted_scopes(headers: Any) -> frozenset[str] | None:
+    """The bot scopes Slack reports in ``x-oauth-scopes``; None when unreadable."""
+    raw = _header(headers, "x-oauth-scopes")
+    if raw is None:
+        return None
+    return frozenset(s.strip() for s in raw.split(",") if s.strip())
+
+
+@dataclass(frozen=True)
+class ManifestStatus:
+    """The installed app compared with the manifest the switches need."""
+
+    status: str
+    #: Required bot scopes the install does not hold.
+    missing_scopes: tuple[str, ...] = ()
+    #: Bot scopes the install holds that the current manifest no longer asks for.
+    extra_scopes: tuple[str, ...] = ()
+    #: Slack features answered ``feature_disabled`` (probe or runtime).
+    disabled_features: tuple[str, ...] = ()
+    #: The Slack app id, when Slack named it (for the App Manifest deep link).
+    app_id: str = ""
+    team_id: str = ""
+    #: Short machine reason for ``unknown`` / ``token_rejected``.
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "missing_scopes": list(self.missing_scopes),
+            "extra_scopes": list(self.extra_scopes),
+            "disabled_features": list(self.disabled_features),
+            "app_id": self.app_id,
+            "team_id": self.team_id,
+            "reason": self.reason,
+        }
+
+
+async def probe_manifest_status(
+    client: Any,
+    required_scopes: Iterable[str],
+    *,
+    known_scopes: Iterable[str] = (),
+    probe_code_channels: bool = False,
+) -> ManifestStatus:
+    """Compare the install behind *client* (a bot-token ``AsyncWebClient``) with
+    the manifest's *required_scopes*.
+
+    *known_scopes* is every scope any manifest variant can ask for: an extra
+    scope is reported only when it is one of those (a scope the user added to the
+    app themselves is theirs, not drift). With *probe_code_channels*, a
+    read-only ``agents.conversations.listViews`` on a channel id no workspace
+    issues tells "workspace not enabled" (``feature_disabled``) apart from
+    "enabled" (any other refusal). Never raises.
+    """
+    required = frozenset(required_scopes)
+    try:
+        auth = await client.auth_test()
+    except Exception as exc:
+        err = _slack_error(exc)
+        if err in _TOKEN_ERRORS:
+            return ManifestStatus(STATUS_TOKEN_REJECTED, reason=err)
+        return ManifestStatus(STATUS_UNKNOWN, reason=err or type(exc).__name__)
+
+    def _field(key: str) -> str:
+        try:
+            return str(auth.get(key, "") or "")
+        except Exception:
+            return ""
+
+    team_id = _field("team_id")
+    app_id = await _app_id(client, _field("bot_id"))
+    granted = parse_granted_scopes(getattr(auth, "headers", None))
+    if granted is None:
+        return ManifestStatus(
+            STATUS_UNKNOWN, app_id=app_id, team_id=team_id, reason="scopes_unreadable"
+        )
+    missing = tuple(sorted(required - granted))
+    extra = tuple(sorted((granted & frozenset(known_scopes)) - required))
+    disabled = set(feature_disabled_seen())
+    if probe_code_channels and "code_channels:manage" in granted:
+        if await _code_channels_refused(client):
+            disabled.add("code_channels")
+        else:
+            # A probe that now gets past the gate retires a stale runtime record.
+            disabled.discard("code_channels")
+            clear_feature_disabled("code_channels")
+    if missing:
+        status = STATUS_NEEDS_UPDATE
+    elif disabled:
+        status = STATUS_FEATURE_DISABLED
+    else:
+        status = STATUS_UP_TO_DATE
+    return ManifestStatus(
+        status,
+        missing_scopes=missing,
+        extra_scopes=extra,
+        disabled_features=tuple(sorted(disabled)),
+        app_id=app_id,
+        team_id=team_id,
+    )
+
+
+async def _app_id(client: Any, bot_id: str) -> str:
+    """The app id behind *bot_id* via ``bots.info`` (needs ``users:read``); '' on failure."""
+    if not bot_id:
+        return ""
+    try:
+        info = await client.bots_info(bot=bot_id)
+        bot = info.get("bot") or {}
+        return str(bot.get("app_id") or "")
+    except Exception:
+        return ""
+
+
+async def _code_channels_refused(client: Any) -> bool:
+    """True only when Slack answers the code-channel read with ``feature_disabled``."""
+    try:
+        await client.api_call(
+            "agents.conversations.listViews", params={"channel_id": _NO_SUCH_CHANNEL}
+        )
+    except Exception as exc:
+        return _slack_error(exc) == "feature_disabled"
+    return False
