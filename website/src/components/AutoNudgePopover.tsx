@@ -11,7 +11,7 @@ import { loadGoalDraft, saveGoalDraft, type GoalDraft } from '../utils/goalDraft
 import { DRAFT_SAVE_DEBOUNCE_MS } from '../utils/draftConstants'
 
 import { i18nT } from '../i18n/t'
-import { fmtTimeNumeric } from '../i18n/format'
+import { fmtTime, fmtTimeNumeric, fmtDateTime, toDate } from '../i18n/format'
 import { type AutoNudgeLoop, cycleText as loopCycleText, nextCycleText, judgeReading, judgeVerdictTime, loopFinished, PULL_REQUEST_WATCH_KINDS, AUTONUDGE_LOOPS_QUERY_KEY } from './autoNudgeLoop'
 export type { AutoNudgeLoop } from './autoNudgeLoop'
 
@@ -605,13 +605,42 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
         : loop?.monitor_outcome === 'success'
           ? { key: 'components.autoNudgePopover.done_pr_merged', check: true }
           : { key: 'components.autoNudgePopover.done_pr_closed', check: false }
+  /** While the loop's own agent DECLARED a person-wait that is still holding, the
+   *  backend carries the instant it ends (`person_wait_expires_at`, epoch secs):
+   *  the hold lifts after the earlier of 24h and the loop's remaining runtime
+   *  budget. The declared-hold status line names that instant so the wait does
+   *  not read as open-ended; '' when no declared hold is on or the backend
+   *  carried no expiry. The clock alone ("1:00 PM") has no subject and no day --
+   *  ambiguous once the end is not today -- so an end on another calendar day
+   *  carries its date too (`fmtDateTime`), and only a same-day end stays the bare
+   *  locale-aware clock the watches list uses. */
+  const personWaitEndsAt = (() => {
+    if (
+      loop?.person_wait_declared !== true ||
+      loop?.waiting_on_person !== true ||
+      (loop?.person_wait_expires_at ?? 0) <= 0
+    ) return ''
+    const ts = loop.person_wait_expires_at as number
+    const end = toDate(ts)
+    const now = new Date()
+    const sameDay =
+      !!end &&
+      end.getFullYear() === now.getFullYear() &&
+      end.getMonth() === now.getMonth() &&
+      end.getDate() === now.getDate()
+    return sameDay ? fmtTime(ts) : fmtDateTime(ts)
+  })()
   /** THE STATUS LINE under the title, independent of the controls: a running
    *  loop's countdown, why a finished one is done, or why a paused one is paused. */
   const statusText = loop
     ? heldForApproval
       ? i18nT('components.autoNudgePopover.paused_approval_hold')
       : waitingOnPerson
-        ? i18nT('components.autoNudgePopover.waiting_on_person_hold')
+        ? loop.person_wait_declared === true
+          ? personWaitEndsAt
+            ? `${i18nT('components.autoNudgePopover.waiting_on_person_declared_hold')} ${i18nT('components.autoNudgePopover.waiting_on_person_declared_ends', { time: personWaitEndsAt })}`
+            : i18nT('components.autoNudgePopover.waiting_on_person_declared_hold')
+          : i18nT('components.autoNudgePopover.waiting_on_person_hold')
         : loop.active
         ? countdownText
         : doneLine
@@ -626,21 +655,44 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
   const agentStopped =
     !!loop && !loop.active && (loop.stopped_reason === 'agent_stop' || loop.stopped_reason === 'autonudge_stop')
   const agentStopDetail = agentStopped ? (loop?.stopped_detail ?? '').trim() : ''
+  /** The loop's own agent declared a wait on the person (it asked a question and
+   *  fires nothing until the person acts). Detected the same way the status line
+   *  is; defined here because the title reads from it too. */
+  const declaredPersonWait = loop?.person_wait_declared === true && loop?.waiting_on_person === true
+  /** The declared hold was released by the clock, not the person: the loop
+   *  resumed (or stopped on its budget) when the wait expired with no reply and
+   *  no press. Shown as one muted line once the hold is no longer on; a `person`
+   *  or `agent` release WAS the person acting, so neither says anything here. */
+  const personWaitExpired = loop?.person_wait_release === 'expired' && loop?.waiting_on_person !== true
   /** The title names the state: the goal's cycle while running, Done once
-   *  finished, Paused otherwise, and the invitation when there is no loop. */
+   *  finished, Paused otherwise, and the invitation when there is no loop. A
+   *  declared person-wait is held, not running, so its title reads as held
+   *  rather than "Goal active" -- which otherwise sat over a "Waiting on you"
+   *  status line beside a live Pause and left the reader unsure whether the loop
+   *  was running or stopped. It gets its own "Waiting on you" title rather than
+   *  "Paused": nobody paused it, and "Paused" beside a live Pause button read as
+   *  contradictory. "Paused" stays for a loop a person paused or an approval held. */
   const titleText = !loop
     ? i18nT('components.autoNudgePopover.set_a_goal')
-    : runsNow
-      ? i18nT('components.autoNudgePopover.goal_active_cycle', { cycle: cycleText })
-      : finished
-        ? i18nT('components.autoNudgePopover.loop_done')
-        : i18nT('components.autoNudgePopover.loop_paused')
+    : declaredPersonWait
+      ? i18nT('components.autoNudgePopover.waiting_on_you_title')
+      : runsNow
+        ? i18nT('components.autoNudgePopover.goal_active_cycle', { cycle: cycleText })
+        : finished
+          ? i18nT('components.autoNudgePopover.loop_done')
+          : i18nT('components.autoNudgePopover.loop_paused')
+  /** The declared-wait status line tells the person to press Nudge now, so the
+   *  press is named on the button too, beside its icon; the accessible name is
+   *  `playName` either way. */
+  const showPlayLabel = runsNow && declaredPersonWait && !formDirty
   /** Whether a cycle is ALREADY armed to run. Derived from the same countdown
    *  the status line renders, so the button and the text can never disagree.
-   *  Never while held: its deadline has passed but nothing is armed, and the
-   *  press is how a person resumes it. */
+   *  Never while held for an approval or a declared person-wait: the deadline
+   *  has passed but nothing is armed, and the press is how a person releases it. */
   const cycleAlreadyDue =
-    !heldForApproval && countdownText === i18nT('components.autoNudgePopover.next_cycle_due')
+    !heldForApproval &&
+    !declaredPersonWait &&
+    countdownText === i18nT('components.autoNudgePopover.next_cycle_due')
   /** Help line under the goal textarea while it carries the raw kill-switch
    *  token; '' otherwise. See the JSX comment at the render site (#10458). */
   const stopFileHelp = message.includes(STOP_FILE_TOKEN)
@@ -740,6 +792,18 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
                 {i18nT('components.autoNudgePopover.stopped_agent_reason', { reason: agentStopDetail })}
               </span>
             )}
+          </p>
+        )}
+        {personWaitExpired && (
+          /* One muted line, not boxed: the declared hold lifted on the clock
+             with no reply and no press, so the loop resumed (or stopped on its
+             budget) on its own. Informational about the PAST wait, below
+             whatever the status box now says about the loop's current state. */
+          <p
+            data-testid="auto-nudge-person-wait-expired"
+            className="mb-2 text-[11px] leading-relaxed text-muted"
+          >
+            {i18nT('components.autoNudgePopover.person_wait_expired')}
           </p>
         )}
         {onSetUpBoundedMonitor ? (
@@ -1017,7 +1081,7 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
               <Btn
                 type="button"
                 primary
-                className={ICON_BTN}
+                className={showPlayLabel ? `${ICON_BTN} pr-2` : ICON_BTN}
                 onClick={play}
                 /* Disabled once a cycle is already due and the form is pristine,
                    so a press visibly acknowledges itself: a second press could
@@ -1030,6 +1094,11 @@ export default function AutoNudgePopover({ slotKey, loop, open, onOpenChange, on
                 title={playName}
               >
                 {runsNow ? <Zap size={14} aria-hidden /> : <Play size={14} aria-hidden />}
+                {showPlayLabel && (
+                  <span data-testid="auto-nudge-play-label" aria-hidden className="text-xs">
+                    {i18nT('components.autoNudgePopover.nudge_now')}
+                  </span>
+                )}
                 {formDirty && (
                   <span data-testid="auto-nudge-play-dirty" aria-hidden className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-warn ring-1 ring-bg" />
                 )}

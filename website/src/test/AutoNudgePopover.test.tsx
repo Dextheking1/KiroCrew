@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-libra
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import AutoNudgePopover, { STOP_FILE_TOKEN, type AutoNudgeLoop } from '../components/AutoNudgePopover'
 import { AUTONUDGE_LOOPS_QUERY_KEY } from '../components/autoNudgeLoop'
+import { fmtTime, fmtDate, fmtDateTime } from '../i18n/format'
 import { __resetForTests, loadGoalDraft, saveGoalDraft } from '../utils/goalDrafts'
 import { DRAFT_SAVE_DEBOUNCE_MS } from '../utils/draftConstants'
 
@@ -741,6 +742,87 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     expect(clearAction()).toBeNull()
   })
 
+  it('a loop whose agent declared it waits on you reads as "Waiting on you", not "Goal active", and asks for a reply in this chat or a Nudge now press', () => {
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(status()!.textContent).toBe(
+      'Waiting on you · the agent asked you a question. Reply in this chat, or press Nudge now to skip the question and continue.',
+    )
+    expect(status()!.className).toMatch(/\bbg-warn-subtle\b/)
+    // The title no longer says "Goal active" over a "Waiting on you" line, and no
+    // longer says "Paused" beside a live Pause button (which read as contradictory):
+    // a declared person-wait gets its own "Waiting on you" title.
+    expect(title()).toBe('Waiting on you')
+    expect(title()).not.toMatch(/Goal active/)
+    expect(title()).not.toMatch(/Paused/)
+  })
+
+  it('Nudge now shows its name beside the icon only while the agent declared it waits on you', () => {
+    const label = () => screen.queryByTestId('auto-nudge-play-label')
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(label()!.textContent).toBe(NUDGE_NOW)
+    // The accessible name is the button's own, unchanged by the visible text.
+    expect(byLabel(NUDGE_NOW)!).toContainElement(label())
+    cleanup()
+    for (const loop of [running(), running({ waiting_on_person: true }), running({ approval_stalled: true })]) {
+      renderWith(loop)
+      expect(label()).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('while a declared person-wait holds, the status line names when the wait ends, with the day when the end is not today', () => {
+    // A fixed clock, so "today" vs "another day" is deterministic rather than
+    // whatever day the suite runs on. The popover renders in the HOST timezone
+    // (format.ts pins none), so the end string is asserted via the same fmt* the
+    // component uses, never a hardcoded "1:00 PM".
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-19T12:00:00Z'))
+    // End tomorrow: the clock alone would be subjectless, so the date rides along.
+    const tomorrow = Math.floor(Date.UTC(2026, 9, 20, 13, 0, 0) / 1000)
+    const endsTomorrow = fmtDateTime(tomorrow)
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, person_wait_expires_at: tomorrow }))
+    expect(status()!.textContent).toBe(
+      'Waiting on you · the agent asked you a question. Reply in this chat, or press Nudge now to skip the question and continue.'
+      + ` Wait ends ${endsTomorrow}.`,
+    )
+    // It carries a date, not just a clock time: fmtDateTime differs from fmtTime.
+    expect(endsTomorrow).not.toBe(fmtTime(tomorrow))
+    expect(status()!.textContent).toContain(fmtDate(tomorrow))
+    expect(status()!.className).toMatch(/\bbg-warn-subtle\b/)
+    cleanup()
+    // An end LATER TODAY is the bare clock -- no date, because the day is not in doubt.
+    const laterToday = Math.floor(Date.UTC(2026, 9, 19, 20, 0, 0) / 1000)
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, person_wait_expires_at: laterToday }))
+    expect(status()!.textContent).toContain(`Wait ends ${fmtTime(laterToday)}.`)
+    cleanup()
+    // Declared hold with NO expiry carried: the line is unchanged, no " Wait ends".
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(status()!.textContent).not.toMatch(/Wait ends/)
+    cleanup()
+    // An expiry present on a hold that is NOT the agent's declaration (the
+    // work-ledger wait) does not take the declared-hold line or its end time.
+    renderWith(running({ waiting_on_person: true, person_wait_expires_at: tomorrow }))
+    expect(status()!.textContent).not.toMatch(/Wait ends/)
+  })
+
+  it('once a declared person-wait expired with no answer, one muted line says so; a person/agent release says nothing', () => {
+    const expired = () => screen.queryByTestId('auto-nudge-person-wait-expired')
+    renderWith(running({ person_wait_release: 'expired' }))
+    expect(expired()!.textContent).toBe('Your reply wait expired with no answer; the loop resumed.')
+    expect(expired()!.className).toMatch(/\btext-muted\b/)
+    cleanup()
+    // Still holding: the status line owns the message, the expired line stays off.
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, person_wait_release: 'expired' }))
+    expect(expired()).toBeNull()
+    cleanup()
+    // A person or agent release WAS someone acting, and no release at all: silent.
+    for (const release of ['person', 'agent', '', undefined]) {
+      renderWith(running({ person_wait_release: release as string | undefined }))
+      expect(expired()).toBeNull()
+      cleanup()
+    }
+  })
+
   it('a running loop reads its countdown in the ok box and its cycle in the title; no loop has neither', () => {
     renderWith(running({ cycle_count: 2 }))
     expect(status()!.textContent).toMatch(/^Next cycle in .+$/)
@@ -873,6 +955,12 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     cleanup()
     renderWith(paused({ stopped_reason: 'autonudge_stop' }))
     expect(rowNames()).toEqual([PAUSE, RESUME])
+  })
+
+  it('a declared person-wait past its deadline keeps Nudge now live: the press is how a person releases it', () => {
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, next_due_ts: 1 }) /* any deadline long past */)
+    expect(byLabel(NUDGE_NOW)!).toBeEnabled()
+    expect(byLabel(PAUSE)!).toBeEnabled()
   })
 
   it('NO LOOP: Play alone, named Start loop, creates and starts the loop from the form, fires nothing, hands the created record up and stays open', async () => {
