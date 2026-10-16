@@ -1558,29 +1558,20 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
     #
     # Kiro Crew's OWN publish path is unaffected: ``tailnet_serve._run`` spawns
     # ``tailscale`` through ``subprocess.run``, never through the hooks gate.
-    # Reads stay allowed (``status``, ``serve status``, ``funnel status``,
-    # ``drive list``, ``exit-node list``/``suggest``, ``netcheck``, ``ping``,
+    # Reads stay allowed (``status``, ``serve status``/``get-config``, ``funnel
+    # status``, ``drive list``, ``switch --list``, ``netcheck``, ``ping``,
     # ``whois``), so the status card and any tailnet doctor tooling still work.
-    # The flag-run idiom is the one the aws rows above use, so
-    # ``_linearize_deny_pattern`` keeps these ReDoS-safe: it rewrites the run
-    # into its linear-time equivalent BEFORE ``_DenyMatcher`` compiles it, and
-    # the rewrite is what executes.  Measured on the linearized forms, a
-    # 40-flag non-matching input costs 0.22 ms; the raw run costs seconds.  The
-    # linearization is doing the work, so these rows carry no quantifier of
-    # their own -- the same shape as every other flag-run row in this file.
-    #
-    # Every read carve-out below is ``\b``-anchored.  Without that anchor the
-    # lookahead spans a PREFIX rather than the word, so any subcommand merely
-    # STARTING with the read's name (``serve statusfoo``) escapes the rule --
-    # not exploitable against today's CLI, which has no such subcommand, but the
-    # carve-out is specified as "allow exactly the read" and an unanchored one
-    # does not say that.
+    # The patterns below are the rows' identity and a human-readable statement of
+    # intent; they never run.  Enforcement is ``exposure_floor`` (see
+    # ``_NETWORK_EXPOSURE_FLOOR_BY_ID``), which judges the argv the shell will
+    # run rather than the text, so a command that only NAMES a subcommand is not
+    # refused and shell grammar around a real invocation does not hide it.
     #
     # The boundary of this family is network EXPOSURE, not "every tailscale
-    # mutation".  ``drive share`` (a filesystem exposed over the tailnet) and
-    # ``exit-node connect`` (this node's traffic routed through another) are
-    # inside it; ``configure kubeconfig`` writes a local file and is outside it,
-    # deliberately.  A family that creeps past its own stated boundary is harder
+    # mutation", and only what WIDENS it.  ``drive share`` (a filesystem exposed
+    # over the tailnet) is inside it; ``down`` and ``exit-node`` (which narrow
+    # exposure or move egress) and ``configure kubeconfig`` (a local file) are
+    # outside it, deliberately.  A family that creeps past its own stated boundary is harder
     # to defend than a narrow one.
     DeniedCommandRule(
         id="network-exposure-tailscale-serve",
@@ -1590,20 +1581,20 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
         # --json`` -- the reads Kiro Crew's own status path and any doctor tool
         # use -- allowed; bare ``serve`` (a config dump) is over-blocked, which
         # is the safe direction for a row whose job is to refuse publishing.
-        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+serve(?!\\s+(?:status|--help|-h)\\b)\\b.*",
+        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+serve(?!\\s+(?:status|get-config)\\b)\\b.*",
         category="network-exposure",
         description=(
             "Blocks `tailscale serve` mutations, which publish or withdraw a handler on this "
             "machine's tailnet and would widen the agent's own network exposure outside the "
-            "governed, owner-only publish path. `tailscale serve status` (the read) stays "
-            "allowed. Scope: the direct command. Containment for tailnet exposure is the OS sandbox and the owner-only publish path."
+            "governed, owner-only publish path. `tailscale serve status` and `serve get-config` "
+            "(the reads) stay allowed. Scope: the direct command. Containment for tailnet exposure is the OS sandbox and the owner-only publish path."
         ),
     ),
     DeniedCommandRule(
         id="network-exposure-tailscale-funnel",
         # Funnel exposes a local service to the PUBLIC internet, which is
         # strictly worse than serve's tailnet-only reach.  Same status carve-out.
-        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+funnel(?!\\s+(?:status|--help|-h)\\b)\\b.*",
+        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+funnel(?!\\s+status\\b)\\b.*",
         category="network-exposure",
         description=(
             "Blocks `tailscale funnel`, which exposes a local service to the PUBLIC internet. "
@@ -1613,15 +1604,8 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
     ),
     DeniedCommandRule(
         id="network-exposure-tailscale-node-mutate",
-        # Node-state and identity mutations: ``up``/``set`` can enable an SSH
-        # server; ``down`` is ``up``'s inverse and takes this node OFF the
-        # tailnet, which is the same exposure STATE the ``drive`` and
-        # ``exit-node`` rows govern in both directions. It also has a cost the
-        # others do not: ``publish()`` puts the operator's dashboard on the
-        # tailnet, so an agent that runs ``down`` severs the operator's own
-        # control path and cannot restore it, because ``up`` is denied to it.
-        # There is no read spelling of ``down``, so it needs no carve-out.
-        # server (``--ssh``), advertise this node as an exit node or subnet
+        # Node-state and identity mutations that WIDEN exposure: ``up``/``set`` can
+        # enable an SSH server (``--ssh``), advertise this node as an exit node or subnet
         # router, or accept routes; ``login``/``logout``/``switch`` change which
         # tailnet -- and therefore which ACLs -- this node is on; ``cert``
         # provisions the TLS certificate an HTTPS ``serve`` depends on; ``web``
@@ -1631,8 +1615,8 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
         # verb.  ``--listen`` puts that surface on a non-loopback address.  None
         # of these has a read spelling, so there is no carve-out here.
         #
-        # This row ENUMERATES its verbs while the ``drive`` and ``exit-node``
-        # rows below deny by default behind a read carve-out, so a subcommand
+        # This row ENUMERATES its verbs while the ``drive`` row below denies by
+        # default behind a read carve-out, so a subcommand
         # tailscale ships later arrives denied there and unnoticed here.  That
         # asymmetry is deliberate for now: inverting this row means owning an
         # allowlist of every read the CLI has (``status``, ``netcheck``,
@@ -1643,11 +1627,11 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
         # separately from the rows themselves.
         pattern=(
             ".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*"
-            "\\s+(?:up|down|set|login|logout|switch|cert|web)(?!\\s+(?:--list|--help|-h)\\b)\\b.*"
+            "\\s+(?:up|set|login|logout|switch|cert|web)(?!\\s+--list\\b)\\b.*"
         ),
         category="network-exposure",
         description=(
-            "Blocks `tailscale up`, `down`, `set`, `login`, `logout`, `switch`, `cert`, and `web` — "
+            "Blocks `tailscale up`, `set`, `login`, `logout`, `switch`, `cert`, and `web` — "
             "node-state and identity mutations that can enable an SSH server, advertise this "
             "node as an exit node or subnet router, change which tailnet it is on, provision a "
             "serve certificate, or start a listener serving the node-configuration UI. Read "
@@ -1664,7 +1648,7 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
         # widening.  The carve-out is a deny-by-default lookahead rather than an
         # enumeration of the mutating verbs, so a subcommand tailscale adds later
         # arrives denied instead of arriving unnoticed.
-        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+drive(?!\\s+(?:list|--help|-h)\\b)\\b.*",
+        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+drive(?!\\s+list\\b)\\b.*",
         category="network-exposure",
         description=(
             "Blocks `tailscale drive` mutations (`share`, `rename`, `unshare`), which expose a "
@@ -1688,7 +1672,7 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
         # not verifiable against a live CLI from where this was written, and a
         # guessed carve-out refuses an ordinary read rather than admitting an
         # exposure. Naming ``cp`` cannot do that.
-        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+file\\s+cp(?!\\s+(?:--help|-h)\\b)\\b.*",
+        pattern=".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*\\s+file\\s+cp\\b.*",
         category="network-exposure",
         description=(
             "Blocks `tailscale file cp`, which pushes a host file to another node on the tailnet "
@@ -1696,23 +1680,6 @@ BUILTIN_DENIED_RULES: list[DeniedCommandRule] = [
             "rule sees it. Reads such as `tailscale file get` stay allowed. Scope: the direct "
             "command. Containment for tailnet exposure is the OS sandbox and the owner-only "
             "publish path."
-        ),
-    ),
-    DeniedCommandRule(
-        id="network-exposure-tailscale-exit-node",
-        # ``exit-node connect`` routes this node's traffic through another node,
-        # changing where the agent's own egress appears from; ``disconnect``
-        # changes it back.  Both are exposure-state mutations the operator owns.
-        # ``list`` and ``suggest`` only report, so both are carved out.
-        pattern=(
-            ".*tailscale(?:\\.exe)?(?:\\s+--?[a-z-]+(?:[= ]\\S+)?)*"
-            "\\s+exit-node(?!\\s+(?:list|suggest|--help|-h)\\b)\\b.*"
-        ),
-        category="network-exposure",
-        description=(
-            "Blocks `tailscale exit-node connect` and `disconnect`, which route this machine's "
-            "traffic through another tailnet node and change where its egress appears from. "
-            "`tailscale exit-node list` and `suggest` (the reads) stay allowed. Scope: the direct command. Containment for tailnet exposure is the OS sandbox and the owner-only publish path."
         ),
     ),
 ]
@@ -1849,6 +1816,23 @@ _SELF_PROTECTION_FLOOR_BY_ID: dict[str, str] = {
     r.id: r.pattern for r in BUILTIN_DENIED_RULES if r.id in _SELF_PROTECTION_FLOOR_RULE_IDS
 }
 _SELF_PROTECTION_FLOOR_PATTERNS: frozenset[str] = frozenset(_SELF_PROTECTION_FLOOR_BY_ID.values())
+
+# ── Network-exposure rows are enforced ONLY by the argv floor ──
+# Same arrangement as git-publish: the rows stay in the catalog as the UI toggle
+# and the golden identity, ``is_denied`` removes their patterns from the regex tier,
+# and ``exposure_floor._tailscale_exposure_rule`` decides, gated per row. A pattern
+# matched as text either refuses a command that only NAMES a subcommand (a grep, a
+# commit message) or, anchored, misses shell grammar it did not model; the floor
+# reads the argv the shell will run instead.
+_NETWORK_EXPOSURE_FLOOR_BY_ID: dict[str, str] = {
+    r.id: r.pattern for r in BUILTIN_DENIED_RULES if r.category == "network-exposure"
+}
+_NETWORK_EXPOSURE_FLOOR_PATTERNS: frozenset[str] = frozenset(_NETWORK_EXPOSURE_FLOOR_BY_ID.values())
+_NETWORK_EXPOSURE_FLOOR_NOTE = (
+    "Matched structurally on the command's argv, not by the pattern text above: "
+    "tailscale is the argv's own program and its leading subcommand changes this "
+    "machine's network exposure."
+)
 
 # The self-management SUBCOMMAND floors named in this set -- restart, update, file-delivery
 # approve, gateway restart, cloud <destructive> -- have NO catalog row and NO opt-out.  A regex
