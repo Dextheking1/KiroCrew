@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-libra
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import AutoNudgePopover, { STOP_FILE_TOKEN, type AutoNudgeLoop } from '../components/AutoNudgePopover'
 import { AUTONUDGE_LOOPS_QUERY_KEY } from '../components/autoNudgeLoop'
+import { fmtTime, fmtRelative } from '../i18n/format'
 import { __resetForTests, loadGoalDraft, saveGoalDraft } from '../utils/goalDrafts'
 import { DRAFT_SAVE_DEBOUNCE_MS } from '../utils/draftConstants'
 
@@ -741,6 +742,130 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     expect(clearAction()).toBeNull()
   })
 
+  it('a loop whose agent declared it waits on you reads as "Waiting on you", not "Goal active", and asks for a reply in this chat or a Nudge now press', () => {
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(status()!.textContent).toBe(
+      'Waiting on you · the agent asked you a question. Reply in this chat, or press Nudge now to skip the question and continue.',
+    )
+    expect(status()!.className).toMatch(/\bbg-warn-subtle\b/)
+    // The title no longer says "Goal active" over a "Waiting on you" line, and no
+    // longer says "Paused" beside a live Pause button (which read as contradictory):
+    // a declared person-wait gets its own "Waiting on you" title.
+    expect(title()).toBe('Waiting on you')
+    expect(title()).not.toMatch(/Goal active/)
+    expect(title()).not.toMatch(/Paused/)
+  })
+
+  it('Nudge now shows its name beside the icon only while the agent declared it waits on you', () => {
+    const label = () => screen.queryByTestId('auto-nudge-play-label')
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(label()!.textContent).toBe(NUDGE_NOW)
+    // The accessible name is the button's own, unchanged by the visible text.
+    expect(byLabel(NUDGE_NOW)!).toContainElement(label())
+    cleanup()
+    for (const loop of [running(), running({ waiting_on_person: true }), running({ approval_stalled: true })]) {
+      renderWith(loop)
+      expect(label()).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('while a declared person-wait holds, the status line shows the time left plus the wall-clock, tagging the next day and never a year', () => {
+    // A fixed clock so the branch (same day vs the next) is deterministic. The
+    // popover renders in the HOST timezone (format.ts pins none), so the end
+    // string is asserted via the same fmt* the component uses, never a hardcoded
+    // "1:00 PM".
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-19T12:00:00Z'))
+    const HOLD = 'Waiting on you · the agent asked you a question. Reply in this chat, or press Nudge now to skip the question and continue.'
+    // Mirror of the component's personWaitEndsAt, so the assertion tracks the
+    // real formatter rather than a clock the host timezone would shift.
+    const endsAt = (ts: number) => {
+      const end = new Date(ts * 1000)
+      const now = new Date()
+      const sameDay = end.getFullYear() === now.getFullYear()
+        && end.getMonth() === now.getMonth() && end.getDate() === now.getDate()
+      const relative = fmtRelative(ts)
+      const clock = fmtTime(ts)
+      if (sameDay) return `${relative} (${clock})`
+      const nowMid = new Date(now); nowMid.setHours(0, 0, 0, 0)
+      const endMid = new Date(end); endMid.setHours(0, 0, 0, 0)
+      return `${relative} (${clock} ${fmtRelative(endMid, { now: nowMid, unit: 'day' })})`
+    }
+
+    // Minutes away: time left leads, the clock rides in parentheses, no year.
+    const inMinutes = Math.floor(Date.now() / 1000) + 25 * 60
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, person_wait_expires_at: inMinutes }))
+    expect(status()!.textContent).toBe(`${HOLD} Wait ends ${endsAt(inMinutes)}.`)
+    expect(status()!.textContent).toContain(fmtRelative(inMinutes))
+    expect(status()!.textContent).toContain(`(${fmtTime(inMinutes)}`)
+    expect(status()!.textContent).not.toMatch(/\b20\d{2}\b/)
+    expect(status()!.className).toMatch(/\bbg-warn-subtle\b/)
+    cleanup()
+
+    // Hours away, same day.
+    const inHours = Math.floor(Date.now() / 1000) + 6 * 3600
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, person_wait_expires_at: inHours }))
+    expect(status()!.textContent).toBe(`${HOLD} Wait ends ${endsAt(inHours)}.`)
+    expect(status()!.textContent).toContain(fmtRelative(inHours))
+    cleanup()
+
+    // Crossing midnight: built as 01:00 on the next LOCAL day so the branch fires
+    // in any timezone. The clock is tagged with the relative day, still no year.
+    const nextDay = new Date(); nextDay.setDate(nextDay.getDate() + 1); nextDay.setHours(1, 0, 0, 0)
+    const crossMidnight = Math.floor(nextDay.getTime() / 1000)
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, person_wait_expires_at: crossMidnight }))
+    expect(status()!.textContent).toBe(`${HOLD} Wait ends ${endsAt(crossMidnight)}.`)
+    const nowMid = new Date(); nowMid.setHours(0, 0, 0, 0)
+    const endMid = new Date(nextDay); endMid.setHours(0, 0, 0, 0)
+    expect(status()!.textContent).toContain(fmtRelative(endMid, { now: nowMid, unit: 'day' }))
+    expect(status()!.textContent).not.toMatch(/\b20\d{2}\b/)
+    cleanup()
+
+    // Declared hold with NO expiry carried: the line is unchanged, no " Wait ends".
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true }))
+    expect(status()!.textContent).not.toMatch(/Wait ends/)
+    cleanup()
+    // An expiry present on a hold that is NOT the agent's declaration (the
+    // work-ledger wait) does not take the declared-hold line or its end time.
+    renderWith(running({ waiting_on_person: true, person_wait_expires_at: inHours }))
+    expect(status()!.textContent).not.toMatch(/Wait ends/)
+  })
+
+  it('a paused loop still carrying a declared person-wait does not title itself "Waiting on you"', () => {
+    // Pausing leaves person_wait_declared/waiting_on_person set on the record;
+    // the title must follow loop.active, not the stale declaration.
+    renderWith(paused({ stopped_reason: 'manual', waiting_on_person: true, person_wait_declared: true }))
+    expect(title()).toBe('Paused')
+    expect(title()).not.toMatch(/Waiting on you/)
+    // The status line reads as a plain pause, not the declared-hold invitation.
+    expect(status()!.textContent).toBe('Paused · you paused it')
+    expect(status()!.textContent).not.toMatch(/Wait ends/)
+  })
+
+  it('once a declared person-wait expired with no answer, one muted line says so; a person/agent release says nothing', () => {
+    const expired = () => screen.queryByTestId('auto-nudge-person-wait-expired')
+    renderWith(running({ person_wait_release: 'expired' }))
+    expect(expired()!.textContent).toBe('Your reply wait expired with no answer; the loop resumed.')
+    expect(expired()!.className).toMatch(/\btext-muted\b/)
+    cleanup()
+    // Inactive: the wait expired at the end of the runtime budget, which STOPPED
+    // the loop, so the line drops the now-false "the loop resumed" claim.
+    renderWith(paused({ stopped_reason: 'runtime_budget', person_wait_release: 'expired' }))
+    expect(expired()!.textContent).toBe('Your reply wait expired with no answer.')
+    cleanup()
+    // Still holding: the status line owns the message, the expired line stays off.
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, person_wait_release: 'expired' }))
+    expect(expired()).toBeNull()
+    cleanup()
+    // A person or agent release WAS someone acting, and no release at all: silent.
+    for (const release of ['person', 'agent', '', undefined]) {
+      renderWith(running({ person_wait_release: release as string | undefined }))
+      expect(expired()).toBeNull()
+      cleanup()
+    }
+  })
+
   it('a running loop reads its countdown in the ok box and its cycle in the title; no loop has neither', () => {
     renderWith(running({ cycle_count: 2 }))
     expect(status()!.textContent).toMatch(/^Next cycle in .+$/)
@@ -871,6 +996,12 @@ describe('AutoNudgePopover status line and Pause | Play controls', () => {
     cleanup()
     renderWith(paused({ stopped_reason: 'autonudge_stop' }))
     expect(rowNames()).toEqual([PAUSE, RESUME])
+  })
+
+  it('a declared person-wait past its deadline keeps Nudge now live: the press is how a person releases it', () => {
+    renderWith(running({ waiting_on_person: true, person_wait_declared: true, next_due_ts: 1 }) /* any deadline long past */)
+    expect(byLabel(NUDGE_NOW)!).toBeEnabled()
+    expect(byLabel(PAUSE)!).toBeEnabled()
   })
 
   it('NO LOOP: Play alone, named Start loop, creates and starts the loop from the form, fires nothing, hands the created record up and stays open', async () => {
