@@ -92,22 +92,31 @@ async def test_origin_copy_landing_before_the_binding_is_dropped_not_adopted(env
 
 
 async def test_message_during_creation_waits_for_the_binding_instead_of_adopting(
-    env: Env,
+    env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     event = mention()
+    create_started = asyncio.Event()
     release = asyncio.Event()
+    waiting = asyncio.Event()
     real_call = env.api.api_call
+    real_wait = routing._wait_for_creation
 
     async def api_call(method: str, **kwargs: Any) -> Any:
         if method == "agents.conversations.create":
             env.api.calls.append((method, kwargs.get("json") or {}))
+            create_started.set()
             await release.wait()
             return {"ok": True, "channel_id": "C0CODE"}
         return await real_call(method, **kwargs)
 
+    async def wait_for_creation(evt: dict[str, Any], info: Any) -> None:
+        waiting.set()  # dispatch reached the creation wait
+        await real_wait(evt, info)
+
     env.slack._web.api_call = api_call  # type: ignore[method-assign]
+    monkeypatch.setattr(routing, "_wait_for_creation", wait_for_creation)
     opening = asyncio.ensure_future(routing.maybe_open_code_channel(env.orch, event, CLEAN, OWNER))
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(create_started.wait(), timeout=5)
     env.info("C0CODE", origin=("C0ORIGIN", event["ts"]))
     user_msg = {**_msg("400.2", "also X"), "team": "T1"}
     result = await _gate(env, user_msg)
@@ -122,9 +131,10 @@ async def test_message_during_creation_waits_for_the_binding_instead_of_adopting
             was_mention=False,
         )
     )
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(waiting.wait(), timeout=5)
     release.set()
-    assert await opening is True and await routed is True
+    assert await asyncio.wait_for(opening, timeout=5) is True
+    assert await asyncio.wait_for(routed, timeout=5) is True
     assert len(env.created_sessions) == 1  # one session, not an adopted second one
     binding = env.store.get_binding("C0CODE")
     assert binding is not None and binding.created_by_us
@@ -206,3 +216,16 @@ async def test_seed_context_is_fenced_redacted_and_screened(env: Env) -> None:
     assert "[SLACK THREAD REPLIES — UNTRUSTED DATA]" in seed
     assert token not in seed
     assert injected not in seed
+
+
+async def test_an_unsaved_route_answers_in_place_instead_of_risking_a_duplicate(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kiro_crew.slack.code_channels import store as store_mod
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store_mod, "atomic_write", boom)
+    assert await routing.maybe_open_code_channel(env.orch, mention(), CLEAN, OWNER) is False
+    assert _created(env) == [] and env.routed == []

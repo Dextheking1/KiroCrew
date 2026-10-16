@@ -33,7 +33,9 @@ from kiro_crew.slack.code_channels import recognition
 from kiro_crew.slack.code_channels.binding import (
     BindingUnavailable,
     bound_slot,
+    code_channels_on,
     create_bound_session,
+    live_config,
     resolve_session_spec,
 )
 from kiro_crew.slack.code_channels.classifier import MAX_CONTEXT_MESSAGES, classify
@@ -46,15 +48,11 @@ from kiro_crew.slack.code_channels.creation import (
 )
 from kiro_crew.slack.code_channels.models import ChannelInfo, CodeChannelApiError, CreateRequest
 from kiro_crew.slack.code_channels.recognition import ChannelKind
-from kiro_crew.slack.code_channels.settings import (
-    code_channel_defaults,
-    code_channels_on,
-    live_config,
-)
 from kiro_crew.slack.code_channels.store import (
     ROUTE_CODE_CHANNEL,
     Binding,
     Route,
+    StoreWriteError,
     store,
 )
 
@@ -227,7 +225,10 @@ async def _inbound_gate(
         if binding is not None and kind in (ChannelKind.ORDINARY, ChannelKind.OTHER_AGENT):
             # Slack does not list us as this channel's agent: stop answering here.
             logger.info("code channel %s is not assigned to us; unbinding", channel)
-            await asyncio.to_thread(store().drop_binding, channel)
+            try:
+                await asyncio.to_thread(store().drop_binding, channel)
+            except StoreWriteError:
+                logger.warning("code channel %s: unbind not saved; retried next message", channel)
             _audit(
                 sender_id, "slack.code_channel.unbind", "denied", f"channel={channel}", kind.value
             )
@@ -349,12 +350,15 @@ async def _bind_channel(
     origin_ts: str,
     origin_thread_ts: str,
     created_by_us: bool,
+    channel_name: str = "",
     replace: bool = False,
 ) -> Binding:
     """Post the kickoff, create the dashboard session and record the binding.
 
     Callers hold :func:`_bind_lock`. Without *replace* the first binding wins:
-    one already stored is returned and nothing new is created.
+    one already stored is returned and nothing new is created. With it, the
+    channel's own facts (its name, wrap-up and archive stamps) carry over to the
+    new binding; only the session changes.
     """
     existing = store().get_binding(channel)
     if existing is not None and not replace:
@@ -363,9 +367,7 @@ async def _bind_channel(
     if state is None:
         raise BindingUnavailable("no dashboard")
     cfg = live_config(orch)
-    spec = await resolve_session_spec(
-        state, cfg, code_channel_defaults(cfg), origin_thread_ts=origin_thread_ts
-    )
+    spec = await resolve_session_spec(state, cfg, origin_thread_ts=origin_thread_ts)
     anchor = await _post(orch, channel, _kickoff_text(title, state, spec.folder_id), None)
     if not anchor:
         raise BindingUnavailable("kickoff post failed")
@@ -382,6 +384,9 @@ async def _bind_channel(
         origin_ts=origin_ts,
         created_by_us=created_by_us,
         title=title,
+        channel_name=channel_name or (existing.channel_name if existing else ""),
+        archived_at=existing.archived_at if existing else 0.0,
+        wrapped_up_at=existing.wrapped_up_at if existing else 0.0,
     )
     write = store().replace_binding if replace else store().put_binding
     return await asyncio.to_thread(write, binding)
@@ -449,6 +454,7 @@ async def _dispatch_directed(
                     origin_ts=info.origin_ts if info else "",
                     origin_thread_ts="",
                     created_by_us=False,
+                    channel_name=info.name if info else "",
                 )
                 _audit(sender_id, "slack.code_channel.adopt", "allowed", f"channel={channel}")
             elif bound_slot(_dashboard_state(), binding) is None:
@@ -571,18 +577,23 @@ async def maybe_open_code_channel(
     if route is None or not route.decision:
         context = await _thread_context(orch, channel, thread_ts, msg_ts)
         decision = await classify(getattr(orch, "sessions", None), clean_text, context)
-        route = await asyncio.to_thread(
-            store().record_decision,
-            Route(
-                session_id=session_id,
-                origin_channel_id=channel,
-                origin_ts=msg_ts,
-                team_id=team_id,
-                decision=decision.route,
-                title=decision.title,
-                created_at=time.time(),
-            ),
-        )
+        try:
+            route = await asyncio.to_thread(
+                store().record_decision,
+                Route(
+                    session_id=session_id,
+                    origin_channel_id=channel,
+                    origin_ts=msg_ts,
+                    team_id=team_id,
+                    decision=decision.route,
+                    title=decision.title,
+                    created_at=time.time(),
+                ),
+            )
+        except StoreWriteError:
+            # Without a saved route a retried event could open a second channel.
+            logger.warning("code channel route not saved; answering in place")
+            return False
     if route.decision != ROUTE_CODE_CHANNEL:
         return False
     if route.channel_id and store().get_binding(route.channel_id) is not None:
@@ -616,7 +627,12 @@ async def maybe_open_code_channel(
         _audit(
             sender_id, "slack.code_channel.create", "allowed", f"{resources} channel={new_channel}"
         )
-        await asyncio.to_thread(store().record_destination, session_id, new_channel)
+        try:
+            await asyncio.to_thread(store().record_destination, session_id, new_channel)
+        except StoreWriteError:
+            # Slack's create is idempotent per session_id, so a retry still
+            # finds this channel; only the shortcut past it is lost.
+            logger.warning("code channel %s: destination not saved", new_channel)
         try:
             async with _bind_lock(new_channel):
                 binding = await _bind_channel(
@@ -628,6 +644,7 @@ async def maybe_open_code_channel(
                     origin_ts=msg_ts,
                     origin_thread_ts=thread_ts or msg_ts,
                     created_by_us=True,
+                    channel_name=request.name,
                 )
         except Exception:
             logger.exception(
