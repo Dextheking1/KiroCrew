@@ -84,6 +84,7 @@ const UNMAPPED_PANELS: Record<string, string> = {
   'McpManagementLaunchReview.tsx': "McpManagement.tsx's launch review and refused-row panels, on the standalone Developer page — a settings deep link would be dead",
   'MobileLoginCard.tsx': 'mint-a-sign-in-link action card; the link it returns is a one-time credential, not a persistent setting',
   'OptionalSdkCard.tsx': 'read-only install-command card the Feishu, Teams and WhatsApp panels mount when their optional SDK is missing; zero controls, only a copy button',
+  'PeoplePanel.tsx': 'read-only list of who has used this Crew and where access is managed; no setting and no control writes a config path',
   'PostureDisclosure.tsx': "read-only disclosure rows for SecurityPanel's posture section (manual entry security.live-security-posture)",
   'ReleasesPanel.tsx': 'read-only changelog viewer, zero persistent settings',
   'ReportProblemCard.tsx': 'feedback action card, no settings',

@@ -1,4 +1,6 @@
 import { useMemo } from 'react'
+import { SessionCollabStrip } from '../shared-crew/SessionCollabStrip'
+import { composerTypingSignal } from '../shared-crew/typingSignal'
 import { AnimatePresence } from 'framer-motion'
 
 import ErrorNotice from '../../../components/ErrorNotice'
@@ -52,6 +54,7 @@ export function useComposerAboveBand({
     return (
     <>
       <VoicePlaybackBar />
+      <SessionCollabStrip sessionKey={activeSlot} typing={composerTypingSignal} />
       {/* Session-control failures surface HERE, beside the chips they
           are about, rather than on the chat. Both hooks fail closed —
           a failed `/api/apps` renders no chips, a failed status probe

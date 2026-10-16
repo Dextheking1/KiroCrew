@@ -194,7 +194,9 @@ const API_KEY_ORDER = [
   'researchKnowledgeStatus', 'researchToArtifact', 'researchReportStatus', 'researchReport',
   'researchDelete', 'invokeFileMenuItem', 'artifactTeardown', 'publishProviders',
   'publishArtifactToCoreProvider', 'publishToProvider', 'deploySites', 'tipsNext', 'tipsStatus',
-  'tipsFeedback',
+  'tipsFeedback', 'sharedCrewCapabilities', 'sharedCrewSessions', 'sharedCrewPeople', 'sharedCrewViewer',
+  'sharedCrewCapacity', 'sharedCrewWork', 'sharedCrewPresence', 'sharedCrewDecisions',
+  'sharedCrewCancelWork',
 ]
 
 const NESTED_KEY_ORDER: Record<string, string[]> = {

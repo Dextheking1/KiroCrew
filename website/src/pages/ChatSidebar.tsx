@@ -9,7 +9,9 @@ import { useStore } from 'react-redux'
 import { useAppDispatch, useAppSelector } from '../store'
 import type { RootState } from '../store'
 import { useConnected } from '../hooks/useConnected'
-import { fetchHistory, deleteHistorySession, switchSlot } from '../store/chatSlice'
+import { fetchHistory, deleteHistorySession, switchSlot, resumeFromHistory } from '../store/chatSlice'
+import { CreatorFilterBar, CreatorFilteredSessions, useCreatorFilterAvailable } from './chat-sidebar/CreatorFilter'
+import type { CreatorFilter } from '../api/sharedCrew'
 import { api } from '../api/client'
 import { computeRecentRank, clampTintCount } from '../utils/recencyTint'
 import { useDndSensors } from '../hooks/useDndSensors'
@@ -277,6 +279,11 @@ function ChatSidebar({
   } = useSessionStatusFilters({ unreadSlots, activeFilters, filtersPaused, enableFilter, localSlots, disableFilter })
   const creatingSlot = useAppSelector(s => s.chat.creatingSlot)
   const connected = useConnected()
+  // Shared Crew creator filter: server-side, so a non-All value swaps the lanes
+  // for the server's filtered page instead of hiding rows already loaded.
+  const creatorFilterAvailable = useCreatorFilterAvailable()
+  const [creatorFilter, setCreatorFilter] = useState<CreatorFilter>('all')
+  const creatorFilterOn = creatorFilterAvailable && creatorFilter !== 'all'
   // An offline refusal stops being true once the gateway is back, so retire it on
   // the disconnected -> connected transition only.
   const wasConnected = useRef(connected)
@@ -840,6 +847,7 @@ function ChatSidebar({
           edge (8 + 1px border) — the same as its 9px gap to the top edge
           (1px border + mt-0.5 + 6px of the h-10 row around the h-7 button). */}
       {renderSidebarHeader(scope)}
+      {creatorFilterAvailable && <CreatorFilterBar value={creatorFilter} onChange={setCreatorFilter} />}
 
       {/* Split View (session grid) has no entry here on purpose: this sidebar is a
        *  navigation surface, and the grid's own affordances live next to the
@@ -883,6 +891,16 @@ function ChatSidebar({
       {/* The floating dock (components/ListDock): the glass search capsule, the
           filter chips and the list-level notices hover over the lanes, and
           every lane's scroller pads its top by the dock's live height. */}
+      {creatorFilterOn ? (
+        <CreatorFilteredSessions
+          key={`${creatorFilter}\u0000${slotFilter.trim()}`}
+          creator={creatorFilter}
+          q={slotFilter}
+          connected={connected}
+          onOpen={(key, title) => { void dispatch(resumeFromHistory({ key, title })) }}
+          onClear={() => setCreatorFilter('all')}
+        />
+      ) : (
       <ListDock {...renderSearchDock(scope)}>
       <LayoutGroup id="chat-slots">
         {conductorLaneActive ? (
@@ -896,6 +914,7 @@ function ChatSidebar({
         )}
       </LayoutGroup>
       </ListDock>
+      )}
 
       {/* Drag-move confirmation + undo. Deliberately a SIBLING of the lanes and
           a sibling ABOVE the separator, so it never covers the row that just

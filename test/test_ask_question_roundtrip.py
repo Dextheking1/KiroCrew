@@ -103,12 +103,19 @@ async def test_broadcasts_question_card_then_resolved() -> None:
         st.request_question("a2", "chat-7", _questions(), timeout=5),
     )
     kinds = [k for k, _ in st.broadcasts]  # type: ignore[attr-defined]
-    assert kinds == ["question_card", "question_card_resolved"]
+    # The shared decision frames (pending, then resolved) ride the same owner
+    # channel as the card, between the card and its retirement.
+    assert kinds == [
+        "question_card",
+        "shared_crew.decision",
+        "shared_crew.decision",
+        "question_card_resolved",
+    ]
     card = st.broadcasts[0][1]  # type: ignore[attr-defined]
     assert card["ask_id"] == "a2"
     assert card["slot"] == "chat-7"
     # The resolved event carries identity and outcome for every other window.
-    assert st.broadcasts[1][1] == {"ask_id": "a2", "reason": "answered"}  # type: ignore[attr-defined]
+    assert st.broadcasts[-1][1] == {"ask_id": "a2", "reason": "answered"}  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -941,13 +948,18 @@ async def test_question_events_go_only_to_owner_sockets() -> None:
             break
         await asyncio.sleep(0)
 
-    assert [k for k, _ in st.broadcasts] == ["question_card"]
+    assert [k for k, _ in st.broadcasts] == ["question_card", "shared_crew.decision"]
     # The all-clients channel must stay untouched for both events.
     assert st.broadcasts_all == []  # type: ignore[attr-defined]
 
     st.resolve_question("ask-own", None)
     assert await task is None
-    assert [k for k, _ in st.broadcasts] == ["question_card", "question_card_resolved"]
+    assert [k for k, _ in st.broadcasts] == [
+        "question_card",
+        "shared_crew.decision",
+        "shared_crew.decision",
+        "question_card_resolved",
+    ]
     assert st.broadcasts_all == []  # type: ignore[attr-defined]
 
 

@@ -1,4 +1,6 @@
 import { useRef, useEffect, useCallback, type MutableRefObject, type Dispatch, type SetStateAction, type RefObject } from 'react'
+import { refusalMessage } from '../shared-crew/overloadCopy'
+import type { CapacityResponse } from '../../../api/sharedCrew'
 import type { UseMessageQuote } from '../../../chat-core/composer/useMessageQuote'
 import { store, type AppDispatch } from '../../../store'
 import type { ChatMessage, ChatSlot } from '../../../types'
@@ -741,11 +743,15 @@ export function useComposerSend({
       // FRAMED like the steer's refusal (and ChatEmbed's): a raw backend reason
       // ("slot agent mismatch") reads as the agent erroring mid-work, not as
       // "your request never went out".
+      // A Shared Crew limit names whose limit it is and what to do next; the
+      // draft is restored below either way.
+      const limitCopy = refusalMessage(receipt.body as { code?: unknown; capacity?: CapacityResponse })
       failLocalTurn({
         role: 'error',
-        content: receipt.reason
-          ? i18nT('pages.chatPage.send_failed_with_error', { error: receipt.reason })
-          : i18nT('pages.chatPage.send_failed'),
+        content: limitCopy
+          ?? (receipt.reason
+            ? i18nT('pages.chatPage.send_failed_with_error', { error: receipt.reason })
+            : i18nT('pages.chatPage.send_failed')),
         cls: '',
       })
       // The server explicitly accepted neither (`ok` nor `queued`), so nothing

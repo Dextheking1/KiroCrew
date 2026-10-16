@@ -44,6 +44,7 @@ import { CrewOfflineContext } from './CrewGroups'
 import { useSlotTitleGenerating } from '../../hooks/slotTitleGeneration'
 import { DisclosureChevron, isOpenInTabModifierClick } from './chrome'
 import { SessionSourceChips } from './SessionSourceChips'
+import { SessionCreatorByline } from './SessionCreatorByline'
 
 /**
  * Session-row type scale, quantized to a 4px baseline grid.
@@ -1320,6 +1321,8 @@ export const SessionRow = memo(function SessionRow({ view, actions }: SessionRow
                 *  rare agent switch, and the repo's animation invariant is
                 *  framer-only (no new CSS @keyframes). */}
               <span key={agentName || 'empty'} title={agentDisplay || undefined} className={`truncate shrink-0 ${resolvedSlotTags.length > 0 || agentDiverged ? 'max-w-[50%]' : ''}`}>{agentDisplay || '\u00A0'}</span>
+              {/* Shared Crew creator: inline after the agent name, never a new line. */}
+              <SessionCreatorByline attribution={s.attribution} />
               {/* WHY this card is sitting above its folder's other rows, in a
                 *  word, beside the agent name that is the card's own first line.
                 *  The accent bar down its left edge groups the card with the
