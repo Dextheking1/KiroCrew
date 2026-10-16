@@ -124,7 +124,12 @@ whois cache and executor, and is read by neither the pin (a direct peer stays
 
 Loopback alone is not proof of a trusted proxy: a loopback request carrying any
 forwarding header (`origin.is_proxied_request`) is never the local operator, and
-its forwarded address is attributed only through the daemon. A
+its forwarded address is attributed only through the daemon, and only after the kernel
+proves the client end of the loopback socket belongs to `tailscaled`
+(`tailnet_proxy_proof.loopback_client_is_daemon`, Linux only; elsewhere the serve row
+never resolves and such a caller is Unknown). A process running as the gateway's own
+user is never that proof, so a local token holder adding `X-Forwarded-For` is Unknown,
+not the person it names. A
 `Tailscale-User-Login` header that disagrees with the daemon drops the
 attribution. A non-loopback peer that sends `X-Forwarded-For` is a proxy on
 another node and is Unknown. Funnel, other reverse proxies and unverifiable
