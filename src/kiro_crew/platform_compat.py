@@ -9386,6 +9386,22 @@ def _linux_proc_root(proc_root: "Path | None") -> "Path | None":
     return Path("/proc") if IS_LINUX else None
 
 
+def read_proc_cmdline(pid: int, *, proc_root: "Path | None" = None) -> bytes:
+    """*pid*'s raw ``/proc/<pid>/cmdline`` (NUL-separated argv), or ``b""``.
+
+    Linux only; ``b""`` when the file cannot be read or off Linux with no
+    fixture. Empty is inconclusive, never "no arguments". *proc_root*
+    substitutes a fixture process table on every host.
+    """
+    proc_root = _linux_proc_root(proc_root)
+    if proc_root is None:
+        return b""
+    try:
+        return (proc_root / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return b""
+
+
 def read_proc_stat(pid: int, *, proc_root: "Path | None" = None) -> "ProcStat | None":
     """*pid*'s ``/proc/<pid>/stat`` from ONE bytes read, or None. Linux only.
 
@@ -9730,16 +9746,28 @@ class SubtreeSample(NamedTuple):
     pss_kb: int = -1
 
 
-def _proc_pss_kb(pid: int) -> int:
-    """Proportional set size (KiB) of one *pid* from ``smaps_rollup``, or -1."""
+def read_proc_pss_kb(pid: int, *, proc_root: "Path | None" = None) -> int:
+    """Proportional set size (KiB) of one *pid* from ``smaps_rollup``, or -1.
+
+    Linux only; -1 when the file cannot be read or off Linux with no fixture.
+    *proc_root* substitutes a fixture process table on every host.
+    """
+    root = _linux_proc_root(proc_root)
+    if root is None:
+        return -1
     try:
-        with open(f"/proc/{pid}/smaps_rollup", encoding="ascii") as fh:
+        with open(f"{root}/{pid}/smaps_rollup", encoding="ascii") as fh:
             for line in fh:
                 if line.startswith("Pss:"):
                     return int(line.split()[1])
     except (OSError, ValueError, IndexError):
         pass
     return -1
+
+
+def _proc_pss_kb(pid: int) -> int:
+    """Proportional set size (KiB) of one *pid* from ``smaps_rollup``, or -1."""
+    return read_proc_pss_kb(pid)
 
 
 def proc_subtree_sample(
