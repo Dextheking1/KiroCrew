@@ -9,6 +9,7 @@ from typing import Any
 
 from kiro_crew.safety_override import safety_override, yolo_policy_permits
 from kiro_crew.session_lifecycle import STOP_DECLINED_ESCALATION_SECS
+from kiro_crew.shared_crew.attribution import public_attribution_of_slot
 
 
 def summary_rows(slot: Any) -> list[Any]:
@@ -507,4 +508,7 @@ class SlotProjection:
             # a join that trusted the claim alone would nest a session under
             # whoever a transcript happened to name.
             "lineage_minted": bool(getattr(slot, "_lineage_minted", False)),
+            # Shared Crew creator (``shared_crew.attribution``), public shape:
+            # no issuer or subject. Legacy and unstamped slots read as Unknown.
+            "attribution": public_attribution_of_slot(slot),
         }

@@ -43,25 +43,69 @@ named component from `Principal.system`), and `unknown`.
 
 ### Derivation
 
-The server derives the principal once per request, after `token_auth_middleware`
-accepts it, and publishes an `ActorContext` under `request[ACTOR_REQUEST_KEY]`. The
-browser never names itself: a principal is never read from a body, query, header or
-display name, and `from_dict` exists only to read records this server wrote.
+`identity.publish_actor` derives the principal once per request, after
+`token_auth_middleware` admitted it and before the handler, and publishes an
+`ActorContext` under `request[ACTOR_REQUEST_KEY]`. Handlers read it with
+`identity.actor_of` (`viewer_principal` for the principal); a request with no
+published actor reads as Unknown, never as the operator. The WebSocket upgrade
+passes through the same middleware, so a socket's actor is the upgrade request's.
+The browser never names itself: a principal is never read from a body, query,
+header or display name, and `from_dict` exists only to read records this server
+wrote.
+
+Evidence, strongest first (`identity.derive_principal`):
 
 | Request | Principal | Provenance |
 |---|---|---|
-| Loopback peer, forwarded by local `tailscale serve`, resolved by `tailnet.resolve_forwarded_peer` | `human` keyed by tailnet login; `machine` keyed by node for a tagged node | `tailscale_serve` |
-| Tailnet peer connecting to the gateway's tailnet address directly, resolved by daemon `whois` of the socket address | as above | `tailscale_direct` |
-| Loopback peer with no forwarded chain | the local operator, keyed by the token subject | `local_operator` |
+| An app identity (an app token, or an internal caller the middleware derived an app for) | `system`, component `app:<name>` | `internal` |
+| The internal loopback secret (kiro-cli, MCP, doctor) | `system`, component `internal` | `internal` |
+| Loopback peer forwarded by local `tailscale serve`, resolved and allowlisted by `tailnet.resolve_forwarded_peer` | `human` keyed by tailnet login; `machine` keyed by node for a tagged node | `tailscale_serve` |
+| Tailnet peer connecting to the gateway's tailnet address directly, no forwarding header, resolved by daemon `whois` of the socket address (`tailnet.resolve_direct_peer`) | as above | `tailscale_direct` |
+| Loopback socket with no forwarding header at all | `human`, the local operator, keyed by the token subject | `local_operator` |
 | Anything else auth admitted | `Principal.unknown()` | `none` |
 
-Supported topologies are exactly the two tailnet rows. Loopback alone is not proof of
-a trusted proxy: the forwarded address is attributed only through the daemon, and a
-`Tailscale-User-Login` header that disagrees with the daemon drops the attribution.
-Funnel, other reverse proxies and unverifiable forwarding headers resolve to Unknown.
+A tailnet principal's subject is the lowercased daemon login under provider
+`tailscale` and issuer `tailnet`; a tagged node's is `node:<name>`, because every
+tagged node reports the login `tagged-devices`. The display snapshot is the login
+(or node name) as the daemon reported it, so a rename never changes the id.
+
+Supported topologies: exactly the two tailnet rows, and both require the existing
+identity-trust opt-in (`dashboard.tailscale.trust_identity` with a non-empty
+`allowed_logins`, i.e. `TailnetTrust.enforces_identity`). Without it no daemon
+lookup runs and tailnet callers are Unknown. The serve row reuses the
+middleware's existing resolution, allowlist deny and pin unchanged. The direct
+row is attribution only: its lookup runs after the auth decision, shares the
+whois cache and executor, and is read by neither the pin (a direct peer stays
+`ip:`-pinned) nor the allowlist, so it cannot admit or refuse a request.
+
+Loopback alone is not proof of a trusted proxy: a loopback request carrying any
+forwarding header (`origin.is_proxied_request`) is never the local operator, and
+its forwarded address is attributed only through the daemon. A
+`Tailscale-User-Login` header that disagrees with the daemon drops the
+attribution. A non-loopback peer that sends `X-Forwarded-For` is a proxy on
+another node and is Unknown. Funnel, other reverse proxies and unverifiable
+forwarding headers resolve to Unknown.
+
+Failure never changes access. Derivation runs only on an admitted request, and
+an exception anywhere in it publishes Unknown. A request auth refused publishes
+nothing.
 
 `ActorContext.auth` is a copy of what the middleware decided, kept for audit. It is
-not a second decision.
+not a second decision. `correlation_id` is the client's `X-Correlation-Id` when it
+is a short plain token, else the server's `request_id`.
+
+### Observed collaborators
+
+`people` keeps a bounded in-memory record (`MAX_OBSERVED` principals, LRU) of the
+human and machine principals seen on authorized requests, with first and last
+sighting and a device count (a digest per node, at most `MAX_DEVICES`). Unknown
+and system principals are not recorded. `GET /api/shared-crew/people` merges that
+with the creators recorded on persisted sessions. Each row names its `sources`
+(`observed`, `session_creator`), so an observation is never presented as
+membership; `directory.state` is `unavailable` because this build has no
+authoritative assigned-user directory. Per-person `usage` is `null`, and
+`usage_available` false, until the admission layer registers a reader
+(`people.register_usage_source`).
 
 ## 3. Session attribution and records
 
@@ -70,22 +114,76 @@ not a second decision.
 names the creating slot key. It is write-once: `keep_creator` returns the stored value
 whenever one exists, so a later message by someone else never changes the creator.
 
+The slot holds it on `_attribution` (`attribution.slot_attribution`).
+`attribution.stamp_creator` records the creating actor where a session is
+created; `stamp_creator_if_fresh` records the sender of the first accepted user
+message of a slot no creation path stamped, and only when the slot holds no user
+turn yet. The metadata codec's `attribution` row writes it on both save forms and
+reads it back on every hydration purpose. No writer lists the key as owned, so a
+save that does not write it carries the stored value through
+`history.carry_unowned_metadata`, and the whole line is replaced atomically by the
+existing full save.
+
 A session with no `attribution` key reads as `legacy_missing` with an Unknown creator.
-Nothing back-fills it, least of all from the current viewer. Attribution was on but no
-principal could be established reads as `unattributed`. A damaged attribution object
-reads as legacy, because authorization never reads it and a damaged record may only
-lose its label.
+It stays legacy: the codec never writes a legacy value back, no stamp replaces it,
+and nothing back-fills it, least of all from the current viewer. Attribution was on
+but no principal could be established reads as `unattributed`. A damaged attribution
+object, or a torn metadata line, reads as legacy, because authorization never reads
+it and a damaged record may only lose its label. Keys inside the attribution object
+this build does not know are kept (`extra`) and written back.
+
+The metadata line is a file an agent's own tools can write, like `created_by`.
+The creator is therefore a label for discovery, never an input to an access
+decision.
+
+Browser-bound copies use `attribution.public_attribution`: availability, creation
+time and `Principal.to_public_dict` (id, kind, display; no issuer or subject).
+The slot payload (`slot_projection`) and every session catalog row
+(`history_search.SessionCatalogProjection.list_sessions`) carry it as
+`attribution`.
 
 A message's author rides in the message `meta` under `MESSAGE_AUTHOR_META_KEY`
-(`author`), stamped when the server accepts the message.
+(`author`), in the public principal shape, stamped by the server when it accepts
+the message (`attribution.stamp_message_author`). A client-supplied `author` key is
+discarded at ingress and overwritten at the stamp. A message written before
+authors reads as Unknown (`attribution.message_author`).
+
+### Session list query
+
+`session_query.query_sessions` runs over the whole persisted catalog: machine
+transcripts are dropped, then the search (`q`, case-insensitive over title and
+key) and the creator filter, then the page is cut. Order is newest `modified`
+first with a key digest as the tiebreak. The cursor is a keyset position, so one
+walk never returns a row twice; a session modified during a walk moves to the top
+and appears on the next walk. `total_matching` counts every session passing the
+search and the filter. `hidden_by_filter` counts the sessions passing the search
+that the creator filter excluded. The list covers persisted sessions; a slot
+that has never been saved is not in it. The route answers only the dashboard
+user, and refuses an app token or an internal caller with 403, so it reaches no
+session the existing list does not.
+
+### Audit
 
 `ActionRecord` audits a consequential shared action: session create, message,
 approval, question answer, steer, cancel, retry and control actions. It names the
 initiator, the responder where one exists, the runtime reference, the outcome and a
-causal link. It carries ids, never prompt text or credentials. Audit rides the
-existing crew log; there is no second audit store. When the audit append is refused,
-the action still applies and its response says it was not audited. A refused audit
-must not wedge a turn, and it must not be reported as recorded.
+causal link. It carries ids, never prompt text or credentials.
+
+`audit.record_action` writes it to the existing tamper-evident security event log
+(`kiro_crew.sel`) as one `shared_crew_action` event: `caller_identity` is the
+initiator's principal id, `operation` is `shared_crew.<action_type>`, `resources`
+is the target, `request_id` the correlation id, and `metadata` holds the action
+ids and a reduced principal (id, kind, provenance, login). That log's HMAC chain,
+size rotation and age retention bound it; there is no second audit store.
+
+The write is the log's fail-closed `critical` mode, off the event loop, bounded by
+`AUDIT_TIMEOUT_SECONDS`. `record_action` returns whether the record is confirmed.
+When it is not, the action still applies and its response says it was not
+audited (`audited: false`). A refused audit must not wedge a turn, and it must not
+be reported as recorded. An action whose own durable row already names its actor
+(a message row carries its author) is audited with `schedule_action_audit`,
+which does not make the caller wait and makes no audit claim in the response; a
+failed write is logged.
 
 ## 4. Admission and accepted work
 

@@ -81,6 +81,7 @@ from kiro_crew.dashboard.slot_queue_repository import (
 from kiro_crew.dashboard.state import _MAX_DISMISSED_SOURCE_LINKS
 from kiro_crew.memory_stores import named_store_or_empty
 from kiro_crew.messaging.link import is_channel_session_key
+from kiro_crew.shared_crew import attribution as shared_crew_attribution
 from kiro_crew.validation import ARTIFACT_SLUG_RE, normalize_theme_consent_sha
 
 if TYPE_CHECKING:
@@ -775,6 +776,17 @@ def _read_created_by(r: _Read) -> None:
         r.slot._created_by = str(r.meta["created_by"])
 
 
+def _read_attribution(r: _Read) -> None:
+    # Shared Crew creator attribution. A line with no key reads as legacy and
+    # stays legacy, so a later stamp can never invent a creator for it.
+    shared_crew_attribution.restore_from_metadata(r.slot, r.meta)
+
+
+def _attribution_value(slot: Any, folds: SaveFolds) -> object:
+    value = shared_crew_attribution.metadata_value(slot)
+    return OMIT if value is None else value
+
+
 def _read_folder_id(r: _Read) -> None:
     folder_id = r.meta.get("folder_id")
     if not folder_id:
@@ -1205,6 +1217,16 @@ FIELDS: tuple[Field, ...] = (
             "it after the build when lineage corroborates"
         ),
     ),
+    # Shared Crew session creator. Write-once: the slot holds the first value
+    # stamped or read (``shared_crew.attribution``), and no writer owns the key,
+    # so a save that does not write it carries the stored value unchanged.
+    Field(
+        "attribution",
+        _ALL,
+        line=_attribution_value,
+        merge=_attribution_value,
+        read=_read_attribution,
+    ),
     Field(
         "folder_id",
         _ALL,
@@ -1508,6 +1530,7 @@ LINE_ORDER: tuple[str, ...] = (
     "app",
     "origin",
     "created_by",
+    "attribution",
     "artifact",
     "pinned",
     "mutes_opened",
@@ -1560,6 +1583,7 @@ MERGE_ORDER: tuple[str, ...] = (
     "app",
     "origin",
     "created_by",
+    "attribution",
     "linked_session_key",
     "channel_origin",
     "forked_from",
