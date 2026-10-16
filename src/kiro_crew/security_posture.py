@@ -1773,6 +1773,26 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
         "redactor is handed in by the route rather than chosen here, so the module "
         "applies the gateway's own redactor and cannot substitute a weaker one.",
     ),
+    (
+        "A Slack code-channel route decision",
+        "slack/code_channels/classifier.py",
+        "The person's Slack request and the recent thread messages placed in the "
+        "stay-or-open classifier's model prompt. Each string passes the "
+        "exfiltration-URL then the credential redactor before it enters model context.",
+    ),
+    (
+        "Slack code-channel API diagnostics",
+        "slack/code_channels/client.py",
+        "Exception and warning text from the agents.conversations / conversations.info "
+        "calls, written to the gateway log. Runs only the credential redactor.",
+    ),
+    (
+        "A Slack code channel's first-turn receipt",
+        "slack/code_channels/routing.py",
+        "The routed request, redacted the same way the linked-thread route writes it "
+        "into the session transcript (exfiltration URLs, then credentials), so the "
+        "receipt check matches the stored row and never handles the raw text.",
+    ),
 )
 
 # Modules that call a redactor but are NOT an output egress boundary, so they do
