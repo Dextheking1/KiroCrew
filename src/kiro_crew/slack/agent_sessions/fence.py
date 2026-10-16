@@ -25,7 +25,7 @@ from __future__ import annotations
 import contextvars
 import functools
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
 from typing import Any, ParamSpec, TypeAlias, TypeVar
 
@@ -97,7 +97,9 @@ def exit_turn(reset: _Reset) -> None:
     _CURRENT.reset(reset)
 
 
-def fenced_turn(fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+def fenced_turn(
+    fn: Callable[_P, Coroutine[Any, Any, _R]],
+) -> Callable[_P, Coroutine[Any, Any, _R]]:
     """Run a Slack turn entry point inside its own :class:`TurnScope`.
 
     For ``handle_message_transport``, whose leading positional shape is

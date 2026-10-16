@@ -203,7 +203,7 @@ def _is_ours(orch: GatewayOrchestrator, channel: str, thread_ts: str | None, key
         return True
     # The thread index outlives a restart, which empties the two maps above while
     # Slack may still show this thread as working.
-    return bool(thread_ts) and sessions.get_session_for_thread(thread_ts) is not None
+    return thread_ts is not None and sessions.get_session_for_thread(thread_ts) is not None
 
 
 async def handle_stopped(orch: GatewayOrchestrator, event: dict) -> str | None:
@@ -246,7 +246,10 @@ async def handle_stopped(orch: GatewayOrchestrator, event: dict) -> str | None:
         # Nothing of this bot's runs there: no stop, and no setStatus, which would
         # create a session in a thread the bot never answered.
         _audit(
-            user, "slack.agent_session_stopped", "no_session", resources=f"{channel}:{thread_ts or ''}"
+            user,
+            "slack.agent_session_stopped",
+            "no_session",
+            resources=f"{channel}:{thread_ts or ''}",
         )
         return "not_ours"
     router_key, session_key, flat = keys
@@ -256,9 +259,7 @@ async def handle_stopped(orch: GatewayOrchestrator, event: dict) -> str | None:
     # A repeat press inside the window, while the session's own compaction still
     # holds it, is the forcing second press the decline promised (the rule
     # ``!stop`` and the Stop buttons follow).
-    force = consume_stop_declined(session_key, user) and compaction_in_flight(
-        sessions, session_key
-    )
+    force = consume_stop_declined(session_key, user) and compaction_in_flight(sessions, session_key)
     outcome: str
     if compaction_in_flight(sessions, session_key) and not force:
         outcome = "compacting"
