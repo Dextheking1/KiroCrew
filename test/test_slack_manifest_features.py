@@ -8,6 +8,7 @@ deep link of every combination exactly -- and nothing that mixes combinations.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from urllib.parse import quote
 
@@ -50,6 +51,10 @@ class TestRendering:
         text = slack_manifest.stripped_template()
         for marker in ("agent_view", "code_channels", "assistant:write", "agent_session"):
             assert marker not in text
+        # Byte-pinned: the digest of the payload before the manifest became
+        # toggle-aware. A change here changes every default install's deep link.
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        assert digest == "bca5f538a73e541d77d4b00dbc5a39b48b499baa514358b3474010c36c984d11"
 
     def test_unknown_feature_names_are_ignored(self) -> None:
         assert slack_manifest.render("x", features={"bogus"}) == slack_manifest.render("x")

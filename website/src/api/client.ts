@@ -243,6 +243,10 @@ export type {
 export type {
   SlackConfigData,
   SlackConfigSave,
+  SlackCodeChannelDefaults,
+  SlackCodeChannelEffective,
+  SlackManifestChange,
+  SlackManifestStatus,
   DiscordConfigData,
   TelegramConfigData,
   DiscordConfigSave,
