@@ -96,6 +96,7 @@ from kiro_crew.autonudge_service.model import (  # noqa: F401 -- re-exported
     _START_FAILURE_BACKOFF_AFTER,
     _START_FAILURE_STANDDOWN_AFTER,
     _TERMINAL_BOUND_REASONS,
+    AGENT_STOP_REASON,
     APPROVAL_STALL_REASON,
     AUTONUDGE_STOP_REASON,
     CONSECUTIVE_FAILURE_REASON,
@@ -174,6 +175,7 @@ from kiro_crew.monitoring.github_provider_errors import (  # noqa: F401 -- re-ex
 )
 from kiro_crew.monitoring.limits import validate_runtime_secs  # noqa: F401 -- re-exported
 from kiro_crew.monitoring.models import (  # noqa: F401 -- re-exported
+    MAX_MONITOR_STOP_REASON_CHARS,
     MONITOR_BUSY_RETRY_SECS,
     MONITOR_COMPLETION_EVIDENCE_TIMEOUT_SECS,
     MONITOR_STATE_VERSION,
@@ -922,6 +924,11 @@ class AutoNudgeService:
         # after a restart, start() re-arms every active loop anyway.
         self._reconcile_candidates: set[str] = set()
         self._observers: list[Callable[[str, NudgeLoop | None], None]] = []
+        # ``update`` observers receive the post-mutation loop, so active=False alone
+        # cannot distinguish a real stop from a later edit of the stopped row. Keep
+        # the exact edge only for the synchronous observer call; it is neither stored
+        # nor exposed as a new event name that every subscriber would have to learn.
+        self._observer_activity_transitions: dict[str, tuple[bool, bool]] = {}
         self._lock = asyncio.Lock()
 
     @property
@@ -1060,6 +1067,15 @@ class AutoNudgeService:
                     "blocked",
                 ):
                     loop_values["subject_outcome"] = ""
+                # Model-authored and agent-writable on disk: cleaned the way every
+                # write cleans it (``autonudge_stop_log.clean_stop_detail``). A value
+                # the clean changed is written back clean.
+                if "stopped_detail" in loop_values:
+                    raw_detail = loop_values["stopped_detail"]
+                    detail = autonudge_stop_log.clean_stop_detail(raw_detail)
+                    if detail != raw_detail:
+                        self._store_dirty = True
+                    loop_values["stopped_detail"] = detail
                 # The judge fields come out of the same agent-writable store, so they
                 # are normalised HERE rather than at each read site, for the reason
                 # ``gate`` is: a stored ``"judge": "yes"`` would otherwise reach a
@@ -1676,6 +1692,27 @@ class AutoNudgeService:
         self._write_state(self._serialize_state())
 
     # ── Observer hook (for WS broadcasts) ──
+
+    def _emit_activity_update(self, loop: NudgeLoop, *, was_active: bool) -> None:
+        """Emit ``updated`` with its active-state edge visible to observers.
+
+        The event name stays ``updated`` for dashboard and third-party subscribers.
+        The side channel exists only while callbacks run synchronously, so a later
+        update cannot inherit an earlier edge and duplicate a patrol transition.
+        """
+        prior = self._observer_activity_transitions.get(loop.id)
+        self._observer_activity_transitions[loop.id] = (was_active, loop.active)
+        try:
+            self._emit("updated", loop)
+        finally:
+            if prior is None:
+                self._observer_activity_transitions.pop(loop.id, None)
+            else:
+                self._observer_activity_transitions[loop.id] = prior
+
+    def _activity_transition_for_observer(self, loop_id: str) -> tuple[bool, bool] | None:
+        """Return the active-state edge for the synchronous ``updated`` callback."""
+        return self._observer_activity_transitions.get(loop_id)
 
     def subscribe(self, cb: Callable[[str, NudgeLoop | None], None]) -> None:
         self._observers.append(cb)
