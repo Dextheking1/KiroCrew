@@ -1747,7 +1747,7 @@ class ChannelTurns:
         grant = None if guest else self._approvals.grant
         effective_decider = decider if asker.can_prompt else None
         session_key = asker.session_key
-        return await self._run(
+        return await self._run_admitted(
             asker,
             text,
             renderer,
@@ -1860,7 +1860,7 @@ class ChannelTurns:
         except Exception:
             logger.debug("%s: success audit failed", channel, exc_info=True)
 
-    async def _run(
+    async def _run_admitted(
         self,
         asker: Asker,
         text: str,
@@ -1869,7 +1869,7 @@ class ChannelTurns:
     ) -> TurnOutcome:
         """Run one turn through Shared Crew fair admission (``shared_crew.turn_gate``).
 
-        With admission off this is :meth:`_run_unadmitted`. A refused inbound
+        With admission off this is :meth:`_run`. A refused inbound
         turn tells its sender the Crew is at capacity; a refused wake answers
         BUSY, so it retries its durable claim.
         """
@@ -1887,7 +1887,7 @@ class ChannelTurns:
             session_key=asker.session_key,
             text=text,
             automation=monitor is not None,
-            run=lambda: self._run_unadmitted(asker, text, source, **kwargs),
+            run=lambda: self._run(asker, text, source, **kwargs),
             refused=_refused,
         )
 
@@ -1905,7 +1905,7 @@ class ChannelTurns:
         except Exception:  # noqa: BLE001 -- the note is best effort
             logger.debug("%s capacity note failed", self.channel, exc_info=True)
 
-    async def _run_unadmitted(
+    async def _run(
         self,
         asker: Asker,
         text: str,
@@ -2714,7 +2714,7 @@ async def drive_turn(turn: ChannelTurn, *, sessions: Any, ctx_builder: Any) -> N
         surface=turn.after_persist,
         restricted=_restricted,
     )
-    await turns._run(
+    await turns._run_admitted(
         Asker(
             turn.session_key,
             turn.conversation_id,

@@ -28,37 +28,6 @@ from .store_vocab import TaskStoreUnavailable, _typed_read
 if TYPE_CHECKING:
     from .store import TaskStore
 
-#: DDL for the table, applied by ``migrate.apply_schema`` on every open. Additive:
-#: an older build that does not know the table leaves it untouched, so a rollback
-#: keeps accepted-work records.
-WORK_SCHEMA = (
-    """
-    CREATE TABLE IF NOT EXISTS accepted_work (
-      work_id TEXT PRIMARY KEY,
-      scope TEXT NOT NULL,
-      budget_key TEXT NOT NULL,
-      session_key TEXT NOT NULL,
-      state TEXT NOT NULL,
-      revision INTEGER NOT NULL,
-      accepted_at REAL NOT NULL,
-      updated_at REAL NOT NULL,
-      record_json TEXT NOT NULL,
-      payload_json TEXT
-    )
-    """,
-    "CREATE UNIQUE INDEX IF NOT EXISTS accepted_work_scope ON accepted_work(scope)",
-    "CREATE INDEX IF NOT EXISTS accepted_work_state ON accepted_work(state, accepted_at)",
-    "CREATE INDEX IF NOT EXISTS accepted_work_budget ON accepted_work(budget_key, state)",
-    "CREATE INDEX IF NOT EXISTS accepted_work_session ON accepted_work(session_key, state)",
-    """
-    CREATE TABLE IF NOT EXISTS principal_storage (
-      budget_key TEXT PRIMARY KEY,
-      bytes INTEGER NOT NULL,
-      updated_at REAL NOT NULL
-    )
-    """,
-)
-
 
 @dataclass(frozen=True)
 class WorkRow:
@@ -270,7 +239,6 @@ def storage_bytes(self: TaskStore, budget_key: str) -> int:
 
 
 __all__ = [
-    "WORK_SCHEMA",
     "storage_bytes",
     "storage_charge",
     "WorkRow",

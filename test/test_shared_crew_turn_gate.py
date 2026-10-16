@@ -33,6 +33,7 @@ from kiro_crew.shared_crew.work_store import WorkStore
 from kiro_crew.taskq import lanes
 from kiro_crew.taskq.store import TaskStore
 from kiro_crew.testing.clock import ManualClock
+from kiro_crew.testing.wait import await_until
 
 ALICE = tailnet_principal("alice@example.com", "laptop.tail.ts.net", Provenance.TAILSCALE_SERVE)
 BOB = tailnet_principal("bob@example.com", "phone.tail.ts.net", Provenance.TAILSCALE_SERVE)
@@ -155,7 +156,7 @@ async def test_drained_turn_is_charged_to_its_author_and_queues_at_the_limit(ser
     principal, _crew = service.scheduler.usage(ALICE.id)
     assert (principal.active, principal.queued) == (1, 1)
     release.set()
-    await asyncio.wait_for(asyncio.gather(first, second), 10)
+    await await_until(asyncio.gather(first, second))
     assert order == ["a1:start", "a1:end", "a2:start", "a2:end"]
 
 
@@ -171,11 +172,11 @@ async def test_admitted_work_is_not_admitted_twice_and_children_face_admission(s
         # A task this turn creates (the queue drain's next entry) must face
         # admission itself rather than inherit the parent's admitted work.
         task = asyncio.create_task(turn_gate.gate_turn(_STATE, _Slot("c"), "next", {}, child))
-        await asyncio.wait_for(task, 10)
+        await await_until(task)
 
     with turn_gate.mark_admitted("w-parent"):
         outer = asyncio.create_task(turn_gate.gate_turn(_STATE, _Slot("p"), "hi", {}, parent))
-    await asyncio.wait_for(outer, 10)
+    await await_until(outer)
     assert seen == ["consumed", "child"]
     # Only the child was admitted: the parent ran inside its own admitted work.
     _principal, crew = service.scheduler.usage(Principal.unknown().id)

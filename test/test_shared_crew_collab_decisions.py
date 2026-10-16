@@ -44,6 +44,7 @@ from kiro_crew.shared_crew.decisions import (
     state_approval_decision_id,
     turn_initiator,
 )
+from kiro_crew.testing.wait import await_until
 
 
 def _person(login: str, name: str) -> Principal:
@@ -268,7 +269,7 @@ async def test_two_collaborators_race_and_exactly_one_wins(state):
             asyncio.create_task(click(carol, "r-carol", "rejected")),
         ]
         gate.set()
-        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+        results = await await_until(asyncio.gather(*tasks))
 
     statuses = sorted(status for status, _ in results)
     assert statuses == [200, 409]
@@ -395,7 +396,7 @@ async def test_state_level_approval_records_responder_and_system_initiator(state
         )
         body = await resp.json()
     assert resp.status == 200
-    assert await asyncio.wait_for(task, timeout=5) is True
+    assert await await_until(task) is True
     decided = decisions_for(state).get(state_approval_decision_id("rid-7"))
     assert decided.state is DecisionState.RESOLVED
     assert decided.responder == BOB
@@ -438,7 +439,7 @@ async def test_question_first_answer_wins_and_names_responder(state):
     lost = QuestionCoordinator.resolve(
         state, "ask-1", {"Q?": "no"}, responder=CAROL, response_id="r-carol"
     )
-    answers = await asyncio.wait_for(task, timeout=5)
+    answers = await await_until(task)
 
     assert won is True and lost is False
     assert answers == {"Q?": "yes"}

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import threading
 from typing import Any
@@ -18,6 +17,7 @@ from kiro_crew.shared_crew.contracts import (
     Transport,
 )
 from kiro_crew.shared_crew.identity import tailnet_principal
+from kiro_crew.testing.wait import await_until
 
 ALICE = tailnet_principal("alice@example.com", "a", Provenance.TAILSCALE_SERVE)
 BOB = tailnet_principal("bob@example.com", "b", Provenance.TAILSCALE_DIRECT)
@@ -120,7 +120,7 @@ async def test_scheduled_audit_runs_without_blocking_its_caller(monkeypatch):
     assert rec is not None and rec.action_type is ActionType.MESSAGE
     assert not written, "the caller returns before the write"
     (task,) = list(audit._pending_audits)
-    assert await asyncio.wait_for(task, timeout=5) is True
+    assert await await_until(task) is True
     assert written[0].metadata["action_id"] == rec.action_id
 
 

@@ -27,6 +27,7 @@ from kiro_crew.shared_crew.contracts import (
     Transport,
     principal_id_for,
 )
+from kiro_crew.testing.wait import await_until
 
 
 def _person(login: str, name: str) -> Principal:
@@ -101,7 +102,7 @@ async def test_approvals_route_two_collaborators_one_winner(state):
             asyncio.create_task(click(carol, "reject", "r-carol")),
         ]
         gate.set()
-        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+        results = await await_until(asyncio.gather(*tasks))
         retry = await bob.post("/api/approvals/rid-1/approve", json={"response_id": "r-bob"})
         retry_status = retry.status
     assert sorted(s for s, _ in results) == [200, 409]

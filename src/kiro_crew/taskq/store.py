@@ -88,6 +88,7 @@ from .store_vocab import (
     _typed_read,
 )
 from .store_waits import _SQL_WAITING  # noqa: F401
+from .store_work import WorkRow  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

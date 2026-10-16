@@ -37,8 +37,7 @@ from kiro_crew.shared_crew.admission import (
     StaleRevision,
 )
 from kiro_crew.shared_crew.codec import ContractError
-from kiro_crew.taskq.store import TaskStore
-from kiro_crew.taskq.store_work import WorkRow
+from kiro_crew.taskq.store import TaskStore, WorkRow
 
 #: Largest stored replay payload, in bytes of JSON. A larger one is not stored,
 #: so the work cannot be relaunched after a restart and ends ``cancelled``.
