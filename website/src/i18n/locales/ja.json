@@ -428,7 +428,9 @@
       "uploading_files": "ファイルをアップロード中…",
       "stop_restarts_session": "「停止」を押すとセッションが再起動します。チャット履歴は残りますが、進行中の作業とキュー内のメッセージは破棄されます。",
       "stop_did_not_go_through": "その停止は完了しませんでした。",
-      "untitled_session_title": "新しいセッション"
+      "untitled_session_title": "新しいセッション",
+      "untitled_existing_session_title": "無題のセッション",
+      "loading_session_title": "セッションを読み込み中…"
     },
     "chatMessageList": {
       "copied": "コピーしました！",
@@ -6277,6 +6279,7 @@
       "approve_sub_agent": "サブエージェントを承認：{{name}}",
       "attach_files": "ファイルを添付",
       "cancel_upload": "アップロードをキャンセル",
+      "cancel_n_uploads_other": "{{count}} 件のアップロードをキャンセル",
       "send_waits_for_upload": "添付ファイルの完了を待っています",
       "editor_unavailable_standard_input": "拡張エディターを読み込めなかったため、標準入力が有効になっています。下書きは変更されていません。",
       "branch": "ブランチ：{{branch}}",
@@ -9923,7 +9926,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "マイクが見つかりません。接続するか、設定で別のデバイスを選択してください。"
     },
     "theme": {
-      "high_contrast": "🔆 高コントラスト"
+      "high_contrast": "🔆 高コントラスト",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "ジョブのキャンセルに失敗しました",
@@ -11118,7 +11122,7 @@
         "agent_loads_only_its_own_mcp_servers": "エージェント「{{name}}」は自身の MCP サーバーのみを読み込みます。",
         "disabled": "無効",
         "load_failed": "MCP サーバーを読み込めませんでした",
-        "mcp_servers_count": "MCP サーバー ({{count}}/{{total}})",
+        "mcp_servers_count": "MCP サーバー（{{count}}/{{total}} 有効）",
         "mode_load_failed": "Tool Search モードを読み取れませんでした。既定値を表示しています",
         "none_loaded": "読み込みなし",
         "session_mcp_servers": "セッションの MCP サーバー"
@@ -11353,6 +11357,9 @@
         "low_memory_no_figures_limit": "開始待ち — 空きメモリが不足しています。続行するにはメモリを空けてください。メモリ不足が {{limit}} 続くと、開始されません",
         "low_memory_no_figures_no_limit": "開始待ち — 空きメモリが不足しています。続行するにはメモリを空けてください。待機時間の上限はありません",
         "low_memory_no_limit": "開始待ち — {{required}} の空きメモリが必要です（現在の空き {{available}}）。続行するにはメモリを空けてください。待機時間の上限はありません",
+        "low_memory_unknown": "開始待ち — 空きメモリが不明です。ゲートウェイが自身の cgroup のメモリ使用量（memory.current / memory.usage_in_bytes）を読み取れません。続行するには、ゲートウェイにそのファイルの読み取り権限を付与してください",
+        "low_memory_unknown_limit": "開始待ち — 空きメモリが不明です。ゲートウェイが自身の cgroup のメモリ使用量（memory.current / memory.usage_in_bytes）を読み取れません。続行するには、ゲートウェイにそのファイルの読み取り権限を付与してください。不明な状態が {{limit}} 続くと、開始されません",
+        "low_memory_unknown_no_limit": "開始待ち — 空きメモリが不明です。ゲートウェイが自身の cgroup のメモリ使用量（memory.current / memory.usage_in_bytes）を読み取れません。続行するには、ゲートウェイにそのファイルの読み取り権限を付与してください。待機時間の上限はありません",
         "memory_pressure": "開始待ち — macOS がメモリプレッシャーを報告しています。ほかのアプリを閉じると下がります",
         "memory_pressure_limit": "開始待ち — macOS がメモリプレッシャーを報告しています。ほかのアプリを閉じると下がります。メモリ不足が {{limit}} 続くと、開始されません",
         "memory_pressure_no_limit": "開始待ち — macOS がメモリプレッシャーを報告しています。ほかのアプリを閉じると下がります。待機時間の上限はありません"
@@ -11945,6 +11952,11 @@
       "could_not_delete_cron_store_busy": "「{{title}}」を削除できませんでした。Cron ストアがビジー状態のため、所有する Cron ジョブを確認できませんでした。しばらくしてからもう一度お試しください。",
       "could_not_delete_cron_store_unreadable": "「{{title}}」を削除できませんでした。Cron ストアを読み取れなかったため、所有する Cron ジョブを確認できませんでした。Cron ストアを修復してから、もう一度削除してください。",
       "could_not_delete_this_session": "「{{title}}」を削除できませんでした。",
+      "could_not_delete_closed_sessions": "以前のセッションを削除できませんでした。もう一度試すには「クリア」を押してください。",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "以前のセッションを削除できませんでした。Cron ストアを読み取れなかったため、それらの Cron ジョブを確認できませんでした。Cron ストアを修復してから、もう一度削除してください。",
+      "closed_sessions_not_deleted_other": "以前のセッション {{count}} 件が削除されませんでした。",
+      "older_sessions_deleted_count_other": "{{count}} 件は削除されました。",
+      "retry_delete_all": "再試行するには、もう一度「クリア」を押してください。",
       "could_not_open_this_session": "「{{title}}」を開けませんでした。もう一度お試しください。",
       "could_not_regenerate": "再生成できませんでした",
       "could_not_set_the_agent_default_model": "エージェントのデフォルトモデルを設定できませんでした",

@@ -30,6 +30,7 @@ from kiro_crew.dashboard.state import DashboardState, _ChatSlot
 from kiro_crew.execution_context import ExecutionContext, MemoryStoreRef
 from kiro_crew.session import FirstTurnState
 from kiro_crew.start_priority import StartPriority
+from kiro_crew.testing.wait import await_until, until_parked
 
 
 @pytest.fixture(autouse=True)
@@ -745,11 +746,7 @@ class TestSpeculativeGetOrCreate:
         # Speculative creator still holds the semaphore (release() not called
         # yet) — an arriving real claimant will block on acquire.
         waiter = asyncio.ensure_future(mgr.get_or_create(key))
-        for _ in range(50):
-            if mgr._sessions[key].semaphore.locked():
-                break
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.02)  # let the waiter park inside acquire()
+        await until_parked(mgr._sessions[key].semaphore)
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiter
@@ -811,6 +808,12 @@ class TestProjectSetWiring:
         state = MagicMock(spec=DashboardState)
         state._slots = {slot.key: slot}
         state.push_slots_update = MagicMock()
+        # The arm guard probes the live session before arming the
+        # deferred reset; sessions is an instance attr spec= does not
+        # synthesize. A live provider makes the arm condition hold, so this
+        # test still exercises the eager-spawn wiring it is about.
+        state.sessions = MagicMock()
+        state.sessions.get_provider = MagicMock(return_value=object())
         app = web.Application()
         app["state"] = state
         app.router.add_post("/api/chat/slots/{slot}/project", api_chat_slot_project)
@@ -1791,7 +1794,7 @@ class TestPrewarmAdmission:
 
         async def _hang(key, **_kwargs):
             started.set()
-            await asyncio.wait_for(finish.wait(), timeout=10)
+            await await_until(finish)
 
         state.sessions.get_or_create = AsyncMock(side_effect=_hang)
         with (
@@ -1800,17 +1803,16 @@ class TestPrewarmAdmission:
         ):
             task = asyncio.create_task(_eager_spawn(state, slot))
             try:
-                try:
-                    await asyncio.wait_for(started.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    pytest.fail("eager spawn did not reach get_or_create")
+                await await_until(started, what="eager spawn did not reach get_or_create")
                 assert len(chat_runner._armed_prefetches) == 1, "no reservation held during spawn"
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(task, timeout=5)
+                    await await_until(task)
             finally:
                 task.cancel()
-                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5)
+                await await_until(
+                    asyncio.ensure_future(asyncio.gather(task, return_exceptions=True))
+                )
         assert chat_runner._armed_prefetches == {}
 
     @pytest.mark.asyncio

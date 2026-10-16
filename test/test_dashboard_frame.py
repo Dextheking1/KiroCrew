@@ -35,6 +35,46 @@ class TestThePageContract:
             dashboard_frame.validate_page(skeleton)
         assert caught.value.code == "page_has_skeleton"
 
+    @pytest.mark.parametrize(
+        "page",
+        [
+            '<div>x</div><script>var s="<body class=x>";</script>',
+            '<p>chart</p><style>p::before{content:"<html"}</style>',
+            '<script>var a="<head>",b="<!doctype html>";</script><p>ok</p>',
+        ],
+    )
+    def test_a_skeleton_looking_string_inside_a_raw_text_element_is_allowed(
+        self, page: str
+    ) -> None:
+        """A ``<script>``/``<style>`` element's content is text, not markup -- so
+        the ``"<body"`` that minified ECharts carries in a string literal is a
+        string, and the page that inlines it is still a single inert body."""
+        assert dashboard_frame.validate_page(page) == len(page.encode("utf-8"))
+
+    @pytest.mark.parametrize(
+        "page",
+        [
+            "<div>x</div><script>var a=1;</script><body>",
+            "<p>x</p><style>b{}</style><html>",
+            '<script>var s="<!--";</script><body>',
+        ],
+    )
+    def test_a_real_skeleton_tag_after_a_raw_text_element_is_still_refused(self, page: str) -> None:
+        """Skipping a script's content must not blind the scan to a real document
+        tag that follows the closing tag. The ``<!--`` case pins that a comment
+        start inside a script does not run on past ``</script>`` to hide a later
+        ``<body>``."""
+        with pytest.raises(dashboard_frame.PageError) as caught:
+            dashboard_frame.validate_page(page)
+        assert caught.value.code == "page_has_skeleton"
+
+    def test_an_unterminated_raw_text_element_grants_no_cover(self) -> None:
+        """Fail-safe: an unclosed ``<script>`` must not swallow a real document
+        tag. When the boundary is in doubt we refuse rather than under-refuse."""
+        with pytest.raises(dashboard_frame.PageError) as caught:
+            dashboard_frame.validate_page('<script>var s="<body>"')
+        assert caught.value.code == "page_has_skeleton"
+
     def test_the_cap_is_measured_in_bytes_not_characters(self) -> None:
         page = "<p>" + "\u00e9" * (dashboard_frame.MAX_PAGE_BYTES // 2)
         assert len(page) < dashboard_frame.MAX_PAGE_BYTES

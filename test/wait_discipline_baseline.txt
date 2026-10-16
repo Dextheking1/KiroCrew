@@ -6,6 +6,7 @@
 # `python test/test_wait_discipline_ratchet.py --write-baseline` lowers every line to
 # its real count and drops files that are gone; it never raises or adds an entry.
 # `... --move OLD NEW` carries a line to a renamed file's path.
+ 1 app_backend_helpers.py
  2 chat_test_helpers.py
  1 e2e/scenarios/conftest.py
  4 e2e/test_gateway_boot_matrix.py
@@ -23,24 +24,17 @@
  1 metrics/test_provider_otlp_destinations.py
  1 overload_fakes.py
  1 slack_handler_helpers.py
+ 1 slot_close_recreation_race_helpers.py
  2 spawn_test_helpers.py
- 6 test_acp_client.py
  1 test_acp_client_compaction.py
  1 test_acp_client_stale_turn.py
- 5 test_acp_frame_record.py
- 5 test_acp_frame_record_provider_safety.py
  4 test_acp_refactor_facade.py
-12 test_acp_refactor_runtime_start.py
- 8 test_acp_refactor_transport_framing.py
  3 test_acp_register_before_send.py
-10 test_acp_runtime_exit_watcher.py
  4 test_acp_runtime_failed_start_reap.py
- 7 test_acp_sandbox_init_classification.py
  3 test_acp_session_handle_abandoned_turn.py
  1 test_acp_session_handle_stream_command.py
  1 test_acp_set_mode_projection_fallback.py
  4 test_acp_set_mode_projection_race.py
- 8 test_acp_spawn_offload.py
  4 test_acp_stale_recovery.py
  2 test_acp_turn_lock.py
  1 test_acp_turn_state_parity.py
@@ -53,7 +47,6 @@
  2 test_ai_pr_watchers_coverage.py
  2 test_ai_runner_coverage.py
  2 test_api_agent_config_put_succeeds.py
- 1 test_app_backend.py
  3 test_app_dev_mode.py
  1 test_app_manager.py
  6 test_app_route_trust_gate.py
@@ -64,19 +57,17 @@
  1 test_apps_backend_coverage.py
  2 test_apps_registry_coverage_characterization.py
  2 test_apps_routes_coverage.py
- 2 test_apps_worker_slots.py
  1 test_artifacts_refactor_store_contract.py
  5 test_auto_research_campaign_contract.py
  3 test_auto_research_handlers_coverage.py
  1 test_auto_research_onloop_db.py
 13 test_autonudge.py
  2 test_autonudge_reconciler.py
- 2 test_autonudge_refactor_contract.py
  4 test_autonudge_remove_offload_425.py
  4 test_aws_control_backup.py
  1 test_aws_control_backup_job.py
  2 test_aws_control_routes.py
- 2 test_browser_cli_install.py
+ 2 test_browser_cli_install_run_control.py
  4 test_browser_cli_view.py
  5 test_browser_command_bus.py
  1 test_browser_install_job.py
@@ -112,10 +103,7 @@
  2 test_config_save_locking.py
  1 test_config_savers_locked_write.py
  1 test_connections_l1_smoke.py
-12 test_connections_mint.py
  2 test_connections_premint.py
- 8 test_connections_warm_mint_composition_contract.py
-11 test_connections_warm_rearm.py
  1 test_conpty_exit_status.py
  1 test_context_bar_reopen.py
  1 test_context_composition_contract.py
@@ -165,12 +153,11 @@
  7 test_dev_fleet_server_coverage.py
  8 test_devfleet_prune_shutdown_drain.py
  1 test_diag_threads.py
- 2 test_discord.py
  3 test_discord_approval_press_race_13539.py
+ 2 test_discord_dispatcher.py
  2 test_discord_sessions.py
  2 test_e2e_ci_scheduling.py
  1 test_e2e_smoke.py
- 5 test_eager_spawn.py
  5 test_embedding_rebuild_generation.py
  1 test_embedding_rebuild_process.py
  2 test_embeddings.py
@@ -183,8 +170,6 @@
  2 test_feishu_client.py
  4 test_fork_reconciles_after_flush.py
  1 test_gateway_lock_diagnosis.py
- 8 test_gatewayd_more_coverage.py
-10 test_gatewayd_self_exit.py
  2 test_handlers_memory_coverage.py
  1 test_handlers_taskrunner_coverage.py
  1 test_hang_resilience_metrics.py
@@ -214,18 +199,17 @@
  3 test_kas_manual_compact.py
  2 test_kas_mcp_sign_in.py
  4 test_kas_session_teardown.py
- 1 test_kiro_prerequisite_agent_specs.py
  3 test_kiro_prerequisite_handlers.py
  1 test_kiro_prerequisite_readiness_state.py
  2 test_kiro_prerequisite_supervisor.py
  1 test_kiro_probe_spawn_off_loop.py
- 2 test_knowledge.py
  1 test_knowledge_add_source.py
  2 test_knowledge_agent_sync_off_loop.py
  2 test_knowledge_cross_thread.py
  3 test_knowledge_handlers_coverage.py
  7 test_knowledge_handlers_off_loop.py
  1 test_knowledge_ingest_magic_byte.py
+ 2 test_knowledge_store_sources.py
  1 test_knowledge_sync_local_file.py
  3 test_lessons_context_embedding_deadline.py
  1 test_listener_guard.py
@@ -239,22 +223,13 @@
  1 test_mcp_caller.py
  1 test_mcp_cron_security.py
  1 test_mcp_discovery.py
- 7 test_mcp_gateway_adopted_daemon_repair.py
- 8 test_mcp_gateway_backend_coverage.py
- 5 test_mcp_gateway_backend_record.py
  3 test_mcp_gateway_bluegreen.py
- 8 test_mcp_gateway_daemon_composition_contract.py
  1 test_mcp_gateway_daemon_control.py
- 5 test_mcp_gateway_daemon_lifecycle.py
  1 test_mcp_gateway_exclusive_backend.py
  1 test_mcp_gateway_liveness_verdict.py
- 6 test_mcp_gateway_pool_integ.py
  1 test_mcp_gateway_recaller.py
  1 test_mcp_gateway_session_inject.py
- 6 test_mcp_gateway_spawn_gate.py
- 7 test_mcp_gateway_stub_admission_fallback.py
  3 test_mcp_gateway_stub_recaller.py
-14 test_mcp_gateway_stub_session_token.py
  4 test_mcp_gateway_transport.py
  1 test_mcp_launch_approval.py
  1 test_mcp_preflight.py
@@ -293,7 +268,6 @@
  1 test_papyrus_latex.py
  6 test_pathres_loop_starvation.py
  1 test_pid_lifecycle_process_sweeps.py
-13 test_pid_lifecycle_provider_tree.py
  2 test_plan_mode.py
 11 test_platform_compat.py
  3 test_platform_log_append.py
@@ -319,8 +293,6 @@
  9 test_resume_publishes_hydrated_slot.py
  4 test_run_tests_reap.py
  5 test_runloop_integration.py
-13 test_runtime_cleanup_regression.py
-15 test_runtime_ownership_founding.py
  1 test_runtime_start_gate_headroom.py
  3 test_safe_read_file_bytes_descriptor.py
  1 test_sandbox_argv.py
@@ -376,7 +348,6 @@
  1 test_slack_home_tab.py
  1 test_slack_sessions_view.py
 13 test_slack_thread_override_slots.py
- 1 test_slot_close_recreation_race.py
  1 test_slot_create_default_agent.py
  3 test_slot_ownership_checkpoint.py
  5 test_slot_patch_frames.py
@@ -386,11 +357,9 @@
  6 test_snapshot_memory_stores.py
  1 test_source_providers.py
  1 test_spawn_admission_verdict_census.py
-12 test_spawn_approval_channel_delivery_2381.py
  1 test_spawn_approval_channel_governance_13491.py
  1 test_spawn_approval_mid_wait_deny_13559.py
  1 test_spawn_exec_shim.py
-12 test_spawn_followup.py
  4 test_spawn_reasoning_effort.py
  3 test_spawn_release_queued.py
  6 test_ssh_tunnel_manager_cov80.py
@@ -403,28 +372,19 @@
  3 test_stt_session.py
  4 test_stub_bridge_liveness.py
  4 test_stub_broker_reconnect.py
- 7 test_stub_reconnect_queued_calls.py
  2 test_stub_writer_death.py
- 5 test_subagent.py
  4 test_subagent_config_hot_reload.py
  1 test_subagent_coverage.py
- 6 test_subagent_delivery_ttl_anchor.py
  1 test_subagent_error_detail.py
  3 test_subagent_memory_bounds_concurrency.py
- 5 test_subagent_memory_wake.py
  1 test_subagent_no_tool_calls_note.py
  3 test_subagent_owed_tombstones.py
  1 test_subagent_panel_durable_replay.py
  3 test_subagent_provenance_write.py
-15 test_subagent_queue_max_wait.py
  2 test_subagent_queued_visibility.py
- 5 test_subagent_reap_attribution.py
-10 test_subagent_reap_race.py
  1 test_subagent_release_off_loop.py
- 9 test_subagent_scale.py
  1 test_subagent_sizing.py
  1 test_subagent_stall_activity_scope.py
-11 test_subagent_startup_pressure.py
  1 test_subagent_tool_approval_crew_log.py
  1 test_subagent_turn_identity.py
 12 test_subprocess_pool.py
@@ -472,7 +432,8 @@
  1 test_windows_job_limits.py
  2 test_windows_tree_reap.py
  8 test_work_ledger_board_lock.py
- 7 test_work_ledger_projection.py
+ 1 test_work_ledger_projection.py
+ 6 test_work_ledger_projection_rebuild_guards.py
  1 test_workflow_agent_spawn_governance.py
  2 test_workflow_execution_capture_async.py
  4 test_workflow_memory_backend_reset.py

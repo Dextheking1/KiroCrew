@@ -456,7 +456,9 @@
       "uploading_files": "Enviando arquivos…",
       "stop_restarts_session": "Parar vai reiniciar esta sessão: o histórico do chat fica, mas o trabalho em andamento e as mensagens na fila são descartados.",
       "stop_did_not_go_through": "Essa parada não foi concluída.",
-      "untitled_session_title": "Nova sessão"
+      "untitled_session_title": "Nova sessão",
+      "untitled_existing_session_title": "Sessão sem título",
+      "loading_session_title": "Carregando sessão…"
     },
     "chatMessageList": {
       "copied": "Copiado!",
@@ -6495,6 +6497,9 @@
       "approve_sub_agent": "Aprovar subagente: {{name}}",
       "attach_files": "Anexar arquivos",
       "cancel_upload": "Cancelar envio",
+      "cancel_n_uploads_one": "Cancelar {{count}} envio",
+      "cancel_n_uploads_many": "Cancelar {{count}} envios",
+      "cancel_n_uploads_other": "Cancelar {{count}} envios",
       "send_waits_for_upload": "Aguardando o fim do anexo",
       "editor_unavailable_standard_input": "O editor aprimorado não pôde ser carregado, então a entrada padrão está ativa. Seu rascunho permanece inalterado.",
       "branch": "Branch: {{branch}}",
@@ -10207,7 +10212,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "Nenhum microfone encontrado. Conecte um ou escolha outro dispositivo em Configurações."
     },
     "theme": {
-      "high_contrast": "🔆 Alto contraste"
+      "high_contrast": "🔆 Alto contraste",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "Falha ao cancelar o job",
@@ -11442,7 +11448,7 @@
         "agent_loads_only_its_own_mcp_servers": "O agente \"{{name}}\" carrega apenas os próprios servidores MCP.",
         "disabled": "desativado",
         "load_failed": "Não foi possível carregar os servidores MCP",
-        "mcp_servers_count": "Servidores MCP ({{count}}/{{total}})",
+        "mcp_servers_count": "Servidores MCP ({{count}}/{{total}} ativados)",
         "mode_load_failed": "Não foi possível ler o modo Tool Search; mostrando o padrão",
         "none_loaded": "Nenhum carregado",
         "session_mcp_servers": "Servidores MCP da sessão"
@@ -11683,6 +11689,9 @@
         "low_memory_no_figures_limit": "aguardando para iniciar — memória livre insuficiente; libere memória para continuar; eles nunca iniciam se a memória continuar insuficiente por {{limit}}",
         "low_memory_no_figures_no_limit": "aguardando para iniciar — memória livre insuficiente; libere memória para continuar; eles esperam sem limite de tempo",
         "low_memory_no_limit": "aguardando para iniciar — precisa de {{required}} de memória livre, {{available}} livres agora; libere memória para continuar; eles esperam sem limite de tempo",
+        "low_memory_unknown": "aguardando para iniciar — memória livre desconhecida: o gateway não consegue ler o uso de memória do seu cgroup (memory.current / memory.usage_in_bytes); dê ao gateway acesso de leitura a esse arquivo para continuar",
+        "low_memory_unknown_limit": "aguardando para iniciar — memória livre desconhecida: o gateway não consegue ler o uso de memória do seu cgroup (memory.current / memory.usage_in_bytes); dê ao gateway acesso de leitura a esse arquivo para continuar; eles nunca iniciam se ela continuar desconhecida por {{limit}}",
+        "low_memory_unknown_no_limit": "aguardando para iniciar — memória livre desconhecida: o gateway não consegue ler o uso de memória do seu cgroup (memory.current / memory.usage_in_bytes); dê ao gateway acesso de leitura a esse arquivo para continuar; eles esperam sem limite de tempo",
         "memory_pressure": "aguardando para iniciar — o macOS relata pressão de memória; feche outros apps para reduzi-la",
         "memory_pressure_limit": "aguardando para iniciar — o macOS relata pressão de memória; feche outros apps para reduzi-la; eles nunca iniciam se a memória continuar insuficiente por {{limit}}",
         "memory_pressure_no_limit": "aguardando para iniciar — o macOS relata pressão de memória; feche outros apps para reduzi-la; eles esperam sem limite de tempo"
@@ -12305,6 +12314,15 @@
       "could_not_delete_cron_store_busy": "Não foi possível excluir \"{{title}}\": o armazenamento de cron está ocupado, então não foi possível verificar suas tarefas cron. Tente novamente em instantes.",
       "could_not_delete_cron_store_unreadable": "Não foi possível excluir \"{{title}}\": não foi possível ler o armazenamento de cron, então não foi possível verificar suas tarefas cron. Repare o armazenamento de cron e exclua novamente.",
       "could_not_delete_this_session": "Não foi possível excluir \"{{title}}\".",
+      "could_not_delete_closed_sessions": "Não foi possível excluir as sessões antigas. Pressione “Limpar” para tentar novamente.",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "Não foi possível excluir as sessões antigas: não foi possível ler o armazenamento de cron, então não foi possível verificar suas tarefas cron. Repare o armazenamento de cron e exclua novamente.",
+      "closed_sessions_not_deleted_many": "{{count}} sessões antigas não foram excluídas.",
+      "closed_sessions_not_deleted_one": "{{count}} sessão antiga não foi excluída.",
+      "closed_sessions_not_deleted_other": "{{count}} sessões antigas não foram excluídas.",
+      "older_sessions_deleted_count_one": "{{count}} foi excluída.",
+      "older_sessions_deleted_count_many": "{{count}} foram excluídas.",
+      "older_sessions_deleted_count_other": "{{count}} foram excluídas.",
+      "retry_delete_all": "Para tentar novamente, pressione “Limpar” de novo.",
       "could_not_open_this_session": "Não foi possível abrir \"{{title}}\". Tente novamente.",
       "could_not_regenerate": "Não foi possível gerar novamente",
       "could_not_set_the_agent_default_model": "Não foi possível definir o modelo padrão do agente",

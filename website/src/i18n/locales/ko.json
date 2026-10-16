@@ -428,7 +428,9 @@
       "uploading_files": "파일 업로드 중…",
       "stop_restarts_session": "중지를 누르면 이 세션이 재시작됩니다. 채팅 기록은 남지만 진행 중인 작업과 대기 중인 메시지는 삭제됩니다.",
       "stop_did_not_go_through": "그 중지는 처리되지 않았습니다.",
-      "untitled_session_title": "새 세션"
+      "untitled_session_title": "새 세션",
+      "untitled_existing_session_title": "제목 없는 세션",
+      "loading_session_title": "세션을 불러오는 중…"
     },
     "chatMessageList": {
       "copied": "복사했습니다!",
@@ -6277,6 +6279,7 @@
       "approve_sub_agent": "하위 에이전트 승인: {{name}}",
       "attach_files": "파일 첨부",
       "cancel_upload": "업로드 취소",
+      "cancel_n_uploads_other": "업로드 {{count}}개 취소",
       "send_waits_for_upload": "첨부 파일이 끝나기를 기다리는 중",
       "editor_unavailable_standard_input": "향상된 편집기를 불러올 수 없어 표준 입력이 활성화되었습니다. 초안은 변경되지 않았습니다.",
       "branch": "브랜치: {{branch}}",
@@ -9923,7 +9926,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "마이크를 찾을 수 없습니다. 마이크를 연결하거나 설정에서 다른 장치를 선택하세요."
     },
     "theme": {
-      "high_contrast": "🔆 고대비"
+      "high_contrast": "🔆 고대비",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "작업을 취소하지 못했습니다",
@@ -11118,7 +11122,7 @@
         "agent_loads_only_its_own_mcp_servers": "에이전트 ‘{{name}}’은(는) 자신의 MCP 서버만 불러옵니다.",
         "disabled": "사용 안 함",
         "load_failed": "MCP 서버를 불러올 수 없습니다",
-        "mcp_servers_count": "MCP 서버 ({{count}}/{{total}})",
+        "mcp_servers_count": "MCP 서버 ({{count}}/{{total}} 활성화됨)",
         "mode_load_failed": "Tool Search 모드를 읽을 수 없어 기본값을 표시합니다",
         "none_loaded": "불러온 항목 없음",
         "session_mcp_servers": "세션 MCP 서버"
@@ -11353,6 +11357,9 @@
         "low_memory_no_figures_limit": "시작 대기 중 — 여유 메모리가 부족합니다. 계속하려면 메모리를 확보하세요. 메모리 부족이 {{limit}} 동안 계속되면 시작되지 않습니다",
         "low_memory_no_figures_no_limit": "시작 대기 중 — 여유 메모리가 부족합니다. 계속하려면 메모리를 확보하세요. 대기 시간 제한은 없습니다",
         "low_memory_no_limit": "시작 대기 중 — 여유 메모리 {{required}} 필요, 현재 {{available}} 여유. 계속하려면 메모리를 확보하세요. 대기 시간 제한은 없습니다",
+        "low_memory_unknown": "시작 대기 중 — 여유 메모리를 알 수 없습니다. 게이트웨이가 자신의 cgroup 메모리 사용량(memory.current / memory.usage_in_bytes)을 읽을 수 없습니다. 계속하려면 게이트웨이에 해당 파일의 읽기 권한을 부여하세요",
+        "low_memory_unknown_limit": "시작 대기 중 — 여유 메모리를 알 수 없습니다. 게이트웨이가 자신의 cgroup 메모리 사용량(memory.current / memory.usage_in_bytes)을 읽을 수 없습니다. 계속하려면 게이트웨이에 해당 파일의 읽기 권한을 부여하세요. 이 상태가 {{limit}} 동안 계속되면 시작되지 않습니다",
+        "low_memory_unknown_no_limit": "시작 대기 중 — 여유 메모리를 알 수 없습니다. 게이트웨이가 자신의 cgroup 메모리 사용량(memory.current / memory.usage_in_bytes)을 읽을 수 없습니다. 계속하려면 게이트웨이에 해당 파일의 읽기 권한을 부여하세요. 대기 시간 제한은 없습니다",
         "memory_pressure": "시작 대기 중 — macOS가 메모리 압박을 보고하고 있습니다. 다른 앱을 닫으면 줄어듭니다",
         "memory_pressure_limit": "시작 대기 중 — macOS가 메모리 압박을 보고하고 있습니다. 다른 앱을 닫으면 줄어듭니다. 메모리 부족이 {{limit}} 동안 계속되면 시작되지 않습니다",
         "memory_pressure_no_limit": "시작 대기 중 — macOS가 메모리 압박을 보고하고 있습니다. 다른 앱을 닫으면 줄어듭니다. 대기 시간 제한은 없습니다"
@@ -11945,6 +11952,11 @@
       "could_not_delete_cron_store_busy": "‘{{title}}’을(를) 삭제하지 못했습니다. cron 저장소가 사용 중이어서 이 세션이 소유한 cron 작업을 확인할 수 없었습니다. 잠시 후 다시 시도해 주세요.",
       "could_not_delete_cron_store_unreadable": "‘{{title}}’을(를) 삭제하지 못했습니다. cron 저장소를 읽을 수 없어 이 세션이 소유한 cron 작업을 확인할 수 없었습니다. cron 저장소를 복구한 다음 다시 삭제하세요.",
       "could_not_delete_this_session": "‘{{title}}’을(를) 삭제하지 못했습니다.",
+      "could_not_delete_closed_sessions": "이전 세션을 삭제하지 못했습니다. 다시 시도하려면 '지우기'를 누르세요.",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "이전 세션을 삭제하지 못했습니다. cron 저장소를 읽을 수 없어 이 세션들이 소유한 cron 작업을 확인할 수 없었습니다. cron 저장소를 복구한 뒤 다시 삭제하세요.",
+      "closed_sessions_not_deleted_other": "이전 세션 {{count}}개가 삭제되지 않았습니다.",
+      "older_sessions_deleted_count_other": "{{count}}개는 삭제되었습니다.",
+      "retry_delete_all": "다시 시도하려면 '지우기'를 다시 누르세요.",
       "could_not_open_this_session": "‘{{title}}’을(를) 열지 못했습니다. 다시 시도해 주세요.",
       "could_not_regenerate": "다시 생성할 수 없습니다",
       "could_not_set_the_agent_default_model": "에이전트의 기본 모델을 설정할 수 없습니다",

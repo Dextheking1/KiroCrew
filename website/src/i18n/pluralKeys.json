@@ -101,6 +101,7 @@
   "components.artifactPanel.comment",
   "components.autoNudgePopover.judge_verdict",
   "components.autoNudgePopover.judge_verdict_untimed",
+  "components.chatInput.cancel_n_uploads",
   "components.chatInput.spawn_awaiting",
   "components.chatInput.spawn_pending",
   "components.commentOverlay.comment",
@@ -278,5 +279,7 @@
   "commandCenter.crewMain.subagent_tiny",
   "commandCenter.crewMain.tokens",
   "commandCenter.crewMain.approvals_open",
-  "components.fileRenderers.json_string_show_all"
+  "components.fileRenderers.json_string_show_all",
+  "pages.chatPage.closed_sessions_not_deleted",
+  "pages.chatPage.older_sessions_deleted_count"
 ]

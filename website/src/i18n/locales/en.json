@@ -66,7 +66,9 @@
       "streaming": "streaming",
       "attachments_not_allowed": "This app doesn't accept files. Attach them in {{page}} instead.",
       "uploading_files": "Uploading files…",
-      "untitled_session_title": "New session"
+      "untitled_session_title": "New session",
+      "untitled_existing_session_title": "Untitled session",
+      "loading_session_title": "Loading session…"
     },
     "chatMessageList": {
       "open_path": "Open {{path}}"
@@ -6693,6 +6695,9 @@
         "low_memory_no_figures_limit": "waiting to start — not enough free memory; free up memory to continue; they never start if memory stays short for {{limit}}",
         "low_memory_no_figures_no_limit": "waiting to start — not enough free memory; free up memory to continue; they wait with no time limit",
         "low_memory_no_limit": "waiting to start — needs {{required}} of free memory, {{available}} free now; free up memory to continue; they wait with no time limit",
+        "low_memory_unknown": "waiting to start — free memory is unknown: the gateway can't read its cgroup memory usage (memory.current / memory.usage_in_bytes); give the gateway read access to that file to continue",
+        "low_memory_unknown_limit": "waiting to start — free memory is unknown: the gateway can't read its cgroup memory usage (memory.current / memory.usage_in_bytes); give the gateway read access to that file to continue; they never start if it stays unknown for {{limit}}",
+        "low_memory_unknown_no_limit": "waiting to start — free memory is unknown: the gateway can't read its cgroup memory usage (memory.current / memory.usage_in_bytes); give the gateway read access to that file to continue; they wait with no time limit",
         "memory_pressure": "waiting to start — macOS reports memory pressure; close other apps to ease it",
         "memory_pressure_limit": "waiting to start — macOS reports memory pressure; close other apps to ease it; they never start if memory stays short for {{limit}}",
         "memory_pressure_no_limit": "waiting to start — macOS reports memory pressure; close other apps to ease it; they wait with no time limit"
@@ -6806,6 +6811,9 @@
       "could_not_delete_cron_store_busy": "Could not delete \"{{title}}\": the cron store is busy, so its cron jobs could not be checked. Try again in a moment.",
       "could_not_delete_cron_store_unreadable": "Could not delete \"{{title}}\": the cron store could not be read, so its cron jobs could not be checked. Repair the cron store, then delete again.",
       "could_not_delete_this_session": "Could not delete \"{{title}}\".",
+      "could_not_delete_closed_sessions": "Could not delete the older sessions. Press Delete all to try again.",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "Could not delete the older sessions: the cron store could not be read, so their cron jobs could not be checked. Repair the cron store, then delete again.",
+      "retry_delete_all": "To retry, press Delete all again.",
       "could_not_open_this_session": "Couldn't open \"{{title}}\". Try again.",
       "could_not_regenerate": "Couldn't regenerate",
       "could_not_set_the_agent_default_model": "Could not set the agent's default model",

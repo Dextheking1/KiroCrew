@@ -428,7 +428,9 @@
       "uploading_files": "正在上传文件…",
       "stop_restarts_session": "点“停止”会重启会话：聊天记录会保留，但进行中的工作和排队的消息会被丢弃。",
       "stop_did_not_go_through": "刚才的停止没有成功。",
-      "untitled_session_title": "新会话"
+      "untitled_session_title": "新会话",
+      "untitled_existing_session_title": "未命名会话",
+      "loading_session_title": "正在加载会话…"
     },
     "chatMessageList": {
       "copied": "已复制！",
@@ -6277,6 +6279,7 @@
       "approve_sub_agent": "批准子代理：{{name}}",
       "attach_files": "附加文件",
       "cancel_upload": "取消上传",
+      "cancel_n_uploads_other": "取消 {{count}} 个上传",
       "send_waits_for_upload": "正在等待附件完成",
       "editor_unavailable_standard_input": "增强编辑器无法加载，已启用标准输入。你的草稿保持不变。",
       "branch": "分支：{{branch}}",
@@ -9923,7 +9926,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "未找到麦克风。连接一个麦克风，或在设置中选择其他设备。"
     },
     "theme": {
-      "high_contrast": "🔆 高对比度"
+      "high_contrast": "🔆 高对比度",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "取消任务失败",
@@ -11118,7 +11122,7 @@
         "agent_loads_only_its_own_mcp_servers": "代理“{{name}}”仅加载自己的 MCP 服务器。",
         "disabled": "已禁用",
         "load_failed": "无法加载 MCP 服务器",
-        "mcp_servers_count": "MCP 服务器（{{count}}/{{total}}）",
+        "mcp_servers_count": "MCP 服务器（{{count}}/{{total}} 已启用）",
         "mode_load_failed": "无法读取 Tool Search 模式，当前显示的是默认值",
         "none_loaded": "未加载任何项",
         "session_mcp_servers": "会话 MCP 服务器"
@@ -11353,6 +11357,9 @@
         "low_memory_no_figures_limit": "等待开始 — 可用内存不足；请释放内存以继续；若内存持续不足 {{limit}}，将不会启动",
         "low_memory_no_figures_no_limit": "等待开始 — 可用内存不足；请释放内存以继续；等待没有时间上限",
         "low_memory_no_limit": "等待开始 — 需要 {{required}} 可用内存，当前可用 {{available}}；请释放内存以继续；等待没有时间上限",
+        "low_memory_unknown": "等待开始 — 可用内存未知：gateway 无法读取其 cgroup 内存用量（memory.current / memory.usage_in_bytes）；请为 gateway 授予该文件的读取权限以继续",
+        "low_memory_unknown_limit": "等待开始 — 可用内存未知：gateway 无法读取其 cgroup 内存用量（memory.current / memory.usage_in_bytes）；请为 gateway 授予该文件的读取权限以继续；若持续未知 {{limit}}，将不会启动",
+        "low_memory_unknown_no_limit": "等待开始 — 可用内存未知：gateway 无法读取其 cgroup 内存用量（memory.current / memory.usage_in_bytes）；请为 gateway 授予该文件的读取权限以继续；等待没有时间上限",
         "memory_pressure": "等待开始 — macOS 报告内存压力；关闭其他应用可缓解",
         "memory_pressure_limit": "等待开始 — macOS 报告内存压力；关闭其他应用可缓解；若内存持续不足 {{limit}}，将不会启动",
         "memory_pressure_no_limit": "等待开始 — macOS 报告内存压力；关闭其他应用可缓解；等待没有时间上限"
@@ -11945,6 +11952,11 @@
       "could_not_delete_cron_store_busy": "无法删除“{{title}}”：定时任务存储正忙，无法检查它拥有的定时任务。请稍后重试。",
       "could_not_delete_cron_store_unreadable": "无法删除“{{title}}”：无法读取定时任务存储，无法检查它拥有的定时任务。请先修复定时任务存储，然后再删除。",
       "could_not_delete_this_session": "无法删除“{{title}}”。",
+      "could_not_delete_closed_sessions": "无法删除较早的会话。请点击“清除”重试。",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "无法删除较早的会话：无法读取定时任务存储，无法检查它们拥有的定时任务。请修复定时任务存储后再删除。",
+      "closed_sessions_not_deleted_other": "{{count}} 个较早的会话未删除。",
+      "older_sessions_deleted_count_other": "{{count}} 个已删除。",
+      "retry_delete_all": "如需重试，请再次点击“清除”。",
       "could_not_open_this_session": "无法打开\"{{title}}\"。请重试。",
       "could_not_regenerate": "无法重新生成",
       "could_not_set_the_agent_default_model": "无法设置代理的默认模型",

@@ -963,6 +963,10 @@ crewmate and an app's `ensure_team`. Crews created before this rule keep the
 binding they have; deleting a crew leaves its workspace, like its memory store,
 on disk and in `workspaces`. The workspace is the crew's own data directory; it
 does not become the `project` of the crew's sessions.
+A template has no workspace of its own, so a worker template a crew opens with
+`session_create` (`agent="kirocrew-worker"`) inherits the crew's workspace along
+with its store; naming another crew bound elsewhere stays refused
+(`agent_workspace_mismatch`, see session-control.md's refusal table).
 The first crewmate (config key `mate`, `agent_files.ASSISTANT_MEMBER_NAME`,
 shown as Mate while its `display_name` is empty) is an ordinary crewmate. Every
 install, fresh or upgraded, creates it once (`agent_materialization/first_crewmate.create_first_crewmate_once`,
@@ -2625,7 +2629,22 @@ user must see or act on stay: `user`, `error`, `file`, `mcp_oauth`,
 `permission` (pending native and background-spawn approvals remain actionable),
 question cards, change cards, the stop card (a `system` row of kind
 `stop_event`, the record of the person's own Stop press, which breaks a run like
-an error row), and the live `streaming` row. Runtime `notice` rows and
+an error row), and the live `streaming` row. One `tool` row is drawn too: the
+`spawn_run` launch (`isSpawnRunTool`: a tool row whose persisted output carries
+the "Spawned N subagent(s)." header), rendered as the same live
+`SubagentRunCard` the chat page draws through `transcriptRenderers`'
+`subagent_run_tool` entry, reading the member slot's sub-agent state
+(`selectSlotSubagents`) so its counts and per-worker state update in place as
+workers run and return. Delegated work outlives the crewmate's own turn: it
+says "on it", ends its turn, and the workers run for minutes with no typing
+bubble or caption under the last bubble (`CrewmateLiveActivity` mounts only
+while the crewmate's own turn is live), so without the card the chat is
+perfectly still and reads as frozen. The card is a row the person sees, so it
+is a run boundary like an error row (`isRunTransparent` returns false for it):
+the reply after it opens a new run. Every other tool row — the launch's own ✅
+sibling, `nothing_to_do`, a bare `spawn_run` call with no launch output — stays
+hidden, and the `[Subagent completion event]` envelope stays hidden too (the
+card's counters already show the return). Runtime `notice` rows and
 compaction status cards are hidden rather than removed from history. When the
 filter leaves NOTHING to draw although the transcript is not empty (a patroller
 that has never spoken), the pane's empty hint is the crewmate's — "<name> hasn't
@@ -3179,7 +3198,7 @@ Parent-change and impact previews use the server's redacted projection.
 | `test/test_open_slots_persistence.py` (`test_restore_carries_the_agent_selection_namespace`) | A template-picked slot restores as a template pick; an unknown persisted kind reads as name-only |
 | `test/test_select_crew.py` | Roster excludes the default crew (triggers or not) and every triggerless crew, carries `default_agent` plus guidance; an entry and a `route_crew` match or `unavailable` entry carry `display_name` only when it differs from the key; a named crew returns its bindings; an unknown name returns `error` plus `available`, each key followed by its differing label; the schema accepts spaces and dots in a crew name |
 | `test/test_crew_reasoning_effort.py` | Per-crew effort reaches a crew dispatch |
-| `test/test_members.py`, `test/test_members_dm_thread.py` | Slug validation and containment, activity recording and dedupe, DM-binding canonicality, rules and briefing reads, briefing endpoint |
+| `test/test_members.py`, `test/test_members_dm_thread.py`, `test/test_members_dm_thread_activity_and_briefing.py` | Slug validation and containment, activity recording and dedupe, DM-binding canonicality, rules and briefing reads, briefing endpoint |
 | `test/test_chat_send_agent_model_default.py` | The crew model default a new session starts on |
 | `website/src/components/chat/crewmateBubbles.test.ts` | What a crewmate's chat draws (machinery dropped, speech and user-facing rows kept, same array back when nothing is dropped) and the run rule (first/middle/last, single, breaks on a user row and a pending approval but not on a long silence, reads through a resolved approval and an untimestamped streaming row, corners on the left side only); a queued message drawn where it was sent, the requeued twin, undrawn queued rows and injected (cron / app) queued rows dropped; when a send is still awaiting a reply |
 | `website/src/test/ChatPane.crewSteerLandsNow.test.tsx` | A crewmate's responsive Send end to end, including one stable bubble through a queued receipt in either order with its push, a later reply drawn below a queued message and the drain keeping order and node, and the typing bubble from Send until a reply, a refusal or the answering turn's silent end |

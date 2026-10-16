@@ -2709,7 +2709,7 @@ jobs:
               -f details_url="$GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID" \
               -f "output[title]=${scope_prefix}Security Scope Review — $TITLE" \
               -f "output[summary]=$summary" \
-              -f "output[text]=$lane_text" >/dev/null 2>&1; then
+              -f "output[text]=$lane_text" >/dev/null; then
               exit 0
             fi
             sleep 5

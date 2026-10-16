@@ -456,7 +456,9 @@
       "uploading_files": "Envoi des fichiers…",
       "stop_restarts_session": "Arrêter redémarrera cette session : l’historique du chat reste, mais le travail en cours et les messages en file d’attente sont abandonnés.",
       "stop_did_not_go_through": "Cet arrêt n’a pas abouti.",
-      "untitled_session_title": "Nouvelle session"
+      "untitled_session_title": "Nouvelle session",
+      "untitled_existing_session_title": "Session sans titre",
+      "loading_session_title": "Chargement de la session…"
     },
     "chatMessageList": {
       "copied": "Copié !",
@@ -6495,6 +6497,9 @@
       "approve_sub_agent": "Approuver le sous-agent : {{name}}",
       "attach_files": "Joindre des fichiers",
       "cancel_upload": "Annuler l'envoi",
+      "cancel_n_uploads_one": "Annuler {{count}} envoi",
+      "cancel_n_uploads_many": "Annuler {{count}} envois",
+      "cancel_n_uploads_other": "Annuler {{count}} envois",
       "send_waits_for_upload": "En attente de la fin de la pièce jointe",
       "editor_unavailable_standard_input": "L'éditeur amélioré n'a pas pu se charger, la saisie standard est donc active. Votre brouillon reste inchangé.",
       "branch": "Branche : {{branch}}",
@@ -10207,7 +10212,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "Aucun microphone trouvé. Connectez-en un ou choisissez un autre périphérique dans les Paramètres."
     },
     "theme": {
-      "high_contrast": "🔆 Contraste élevé"
+      "high_contrast": "🔆 Contraste élevé",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "Échec de l’annulation de la tâche",
@@ -11442,7 +11448,7 @@
         "agent_loads_only_its_own_mcp_servers": "L’agent « {{name}} » ne charge que ses propres serveurs MCP.",
         "disabled": "désactivé",
         "load_failed": "Impossible de charger les serveurs MCP",
-        "mcp_servers_count": "Serveurs MCP ({{count}}/{{total}})",
+        "mcp_servers_count": "Serveurs MCP ({{count}}/{{total}} activés)",
         "mode_load_failed": "Impossible de lire le mode Tool Search ; valeur par défaut affichée",
         "none_loaded": "Aucun chargé",
         "session_mcp_servers": "Serveurs MCP de la session"
@@ -11683,6 +11689,9 @@
         "low_memory_no_figures_limit": "en attente de démarrage — mémoire libre insuffisante ; libère de la mémoire pour continuer ; ils ne démarrent jamais si la mémoire reste insuffisante pendant {{limit}}",
         "low_memory_no_figures_no_limit": "en attente de démarrage — mémoire libre insuffisante ; libère de la mémoire pour continuer ; ils attendent sans limite de temps",
         "low_memory_no_limit": "en attente de démarrage — nécessite {{required}} de mémoire libre, {{available}} libres actuellement ; libère de la mémoire pour continuer ; ils attendent sans limite de temps",
+        "low_memory_unknown": "en attente de démarrage — mémoire libre inconnue : le gateway ne peut pas lire l’utilisation mémoire de son cgroup (memory.current / memory.usage_in_bytes) ; donne au gateway l’accès en lecture à ce fichier pour continuer",
+        "low_memory_unknown_limit": "en attente de démarrage — mémoire libre inconnue : le gateway ne peut pas lire l’utilisation mémoire de son cgroup (memory.current / memory.usage_in_bytes) ; donne au gateway l’accès en lecture à ce fichier pour continuer ; ils ne démarrent jamais si elle reste inconnue pendant {{limit}}",
+        "low_memory_unknown_no_limit": "en attente de démarrage — mémoire libre inconnue : le gateway ne peut pas lire l’utilisation mémoire de son cgroup (memory.current / memory.usage_in_bytes) ; donne au gateway l’accès en lecture à ce fichier pour continuer ; ils attendent sans limite de temps",
         "memory_pressure": "en attente de démarrage — macOS signale une pression mémoire ; ferme d’autres apps pour la réduire",
         "memory_pressure_limit": "en attente de démarrage — macOS signale une pression mémoire ; ferme d’autres apps pour la réduire ; ils ne démarrent jamais si la mémoire reste insuffisante pendant {{limit}}",
         "memory_pressure_no_limit": "en attente de démarrage — macOS signale une pression mémoire ; ferme d’autres apps pour la réduire ; ils attendent sans limite de temps"
@@ -12305,6 +12314,15 @@
       "could_not_delete_cron_store_busy": "Impossible de supprimer « {{title}} » : le stockage cron est occupé, ses tâches cron n’ont donc pas pu être vérifiées. Réessayez dans un instant.",
       "could_not_delete_cron_store_unreadable": "Impossible de supprimer « {{title}} » : le stockage cron n’a pas pu être lu, ses tâches cron n’ont donc pas pu être vérifiées. Réparez le stockage cron, puis supprimez à nouveau.",
       "could_not_delete_this_session": "Impossible de supprimer « {{title}} ».",
+      "could_not_delete_closed_sessions": "Impossible de supprimer les sessions plus anciennes. Appuie sur « Effacer » pour réessayer.",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "Impossible de supprimer les sessions plus anciennes : le stockage cron n’a pas pu être lu, leurs tâches cron n’ont donc pas pu être vérifiées. Répare le stockage cron, puis supprime à nouveau.",
+      "closed_sessions_not_deleted_many": "{{count}} sessions plus anciennes n'ont pas été supprimées.",
+      "closed_sessions_not_deleted_one": "{{count}} session plus ancienne n'a pas été supprimée.",
+      "closed_sessions_not_deleted_other": "{{count}} sessions plus anciennes n'ont pas été supprimées.",
+      "older_sessions_deleted_count_one": "{{count}} a été supprimée.",
+      "older_sessions_deleted_count_many": "{{count}} ont été supprimées.",
+      "older_sessions_deleted_count_other": "{{count}} ont été supprimées.",
+      "retry_delete_all": "Pour réessayer, appuie à nouveau sur « Effacer ».",
       "could_not_open_this_session": "« {{title}} » n'a pas pu être ouvert. Réessayez.",
       "could_not_regenerate": "Impossible de régénérer",
       "could_not_set_the_agent_default_model": "Impossible de définir le modèle par défaut de l’agent",

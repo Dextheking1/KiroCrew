@@ -16,7 +16,6 @@ import pytest
 from kiro_crew import platform_compat
 from kiro_crew.acp.session_handle import WatchdogSettings
 from kiro_crew.start_priority import PrioritySemaphore, StartPriority
-from kiro_crew.testing.wait import async_wait_until
 
 
 @pytest.fixture(autouse=True)
@@ -199,10 +198,11 @@ class TestFillWarmPool:
         # cannot be cancelled -- so sibling tests holding those threads (a real
         # `taskkill` or descendant scan on Windows, a wedged PTY close) make
         # this kill queue behind them for as long as they run. A private
-        # executor owns the capacity this assertion depends on, so the only
-        # wait left is for the dispatched call to reach its worker thread: a
-        # signal under a lost-run bound, not a bet on the shared pool's spare
-        # capacity.
+        # executor owns the capacity this assertion depends on; draining it with
+        # shutdown(wait=True) also guarantees the worker thread has returned and
+        # call_args is recorded before the assertion reads it. unittest.mock
+        # increments call_count before writing call_args, so waiting on
+        # call_count alone is a data race on any scheduler.
         with (
             ThreadPoolExecutor(max_workers=1) as private_executor,
             patch("kiro_crew.session._sync_kill_provider") as mock_kill,
@@ -210,10 +210,7 @@ class TestFillWarmPool:
         ):
             with pytest.raises(asyncio.CancelledError):
                 await mgr._fill_warm_pool()
-            await async_wait_until(
-                lambda: mock_kill.call_count,
-                describe=lambda: f"hard kill not dispatched; calls={mock_kill.mock_calls!r}",
-            )
+            await asyncio.to_thread(private_executor.shutdown, wait=True)
             mock_kill.assert_called_once_with(provider)
         assert mgr._warm_pool.qsize() == 0
 

@@ -470,7 +470,9 @@
       "uploading_files": "Загрузка файлов…",
       "stop_restarts_session": "«Остановить» перезапустит сессию: история чата останется, но текущая работа и сообщения в очереди будут отброшены.",
       "stop_did_not_go_through": "Эта остановка не прошла.",
-      "untitled_session_title": "Новый сеанс"
+      "untitled_session_title": "Новый сеанс",
+      "untitled_existing_session_title": "Сеанс без названия",
+      "loading_session_title": "Загрузка сеанса…"
     },
     "chatMessageList": {
       "copied": "Скопировано!",
@@ -6604,6 +6606,10 @@
       "approve_sub_agent": "Одобрить субагента: {{name}}",
       "attach_files": "Прикрепить файлы",
       "cancel_upload": "Отменить загрузку",
+      "cancel_n_uploads_one": "Отменить {{count}} загрузку",
+      "cancel_n_uploads_few": "Отменить {{count}} загрузки",
+      "cancel_n_uploads_many": "Отменить {{count}} загрузок",
+      "cancel_n_uploads_other": "Отменить {{count}} загрузки",
       "send_waits_for_upload": "Ожидание завершения вложения",
       "editor_unavailable_standard_input": "Не удалось загрузить улучшенный редактор, поэтому активен стандартный ввод. Ваш черновик не изменён.",
       "branch": "Ветка: {{branch}}",
@@ -10349,7 +10355,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "Микрофон не найден. Подключи его или выбери другое устройство в настройках."
     },
     "theme": {
-      "high_contrast": "🔆 Высокий контраст"
+      "high_contrast": "🔆 Высокий контраст",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "Не удалось отменить задание",
@@ -11604,7 +11611,7 @@
         "agent_loads_only_its_own_mcp_servers": "Агент «{{name}}» загружает только свои серверы MCP.",
         "disabled": "отключено",
         "load_failed": "Не удалось загрузить серверы MCP",
-        "mcp_servers_count": "Серверы MCP ({{count}}/{{total}})",
+        "mcp_servers_count": "MCP-серверы ({{count}}/{{total}} включено)",
         "mode_load_failed": "Не удалось прочитать режим Tool Search; показано значение по умолчанию",
         "none_loaded": "Не загружено",
         "session_mcp_servers": "Серверы MCP сессии"
@@ -11848,6 +11855,9 @@
         "low_memory_no_figures_limit": "ожидание запуска — недостаточно свободной памяти; освободи память, чтобы продолжить; они так и не запустятся, если памяти не хватает {{limit}}",
         "low_memory_no_figures_no_limit": "ожидание запуска — недостаточно свободной памяти; освободи память, чтобы продолжить; они ждут без ограничения по времени",
         "low_memory_no_limit": "ожидание запуска — требуется {{required}} свободной памяти, сейчас свободно {{available}}; освободи память, чтобы продолжить; они ждут без ограничения по времени",
+        "low_memory_unknown": "ожидание запуска — объём свободной памяти неизвестен: gateway не может прочитать использование памяти своей cgroup (memory.current / memory.usage_in_bytes); дай gateway доступ на чтение к этому файлу, чтобы продолжить",
+        "low_memory_unknown_limit": "ожидание запуска — объём свободной памяти неизвестен: gateway не может прочитать использование памяти своей cgroup (memory.current / memory.usage_in_bytes); дай gateway доступ на чтение к этому файлу, чтобы продолжить; они так и не запустятся, если он останется неизвестным {{limit}}",
+        "low_memory_unknown_no_limit": "ожидание запуска — объём свободной памяти неизвестен: gateway не может прочитать использование памяти своей cgroup (memory.current / memory.usage_in_bytes); дай gateway доступ на чтение к этому файлу, чтобы продолжить; они ждут без ограничения по времени",
         "memory_pressure": "ожидание запуска — macOS сообщает о нагрузке на память; закрой другие приложения, чтобы снизить её",
         "memory_pressure_limit": "ожидание запуска — macOS сообщает о нагрузке на память; закрой другие приложения, чтобы снизить её; они так и не запустятся, если памяти не хватает {{limit}}",
         "memory_pressure_no_limit": "ожидание запуска — macOS сообщает о нагрузке на память; закрой другие приложения, чтобы снизить её; они ждут без ограничения по времени"
@@ -12485,6 +12495,17 @@
       "could_not_delete_cron_store_busy": "Не удалось удалить «{{title}}»: хранилище cron занято, поэтому не удалось проверить её cron-задачи. Попробуйте снова через минуту.",
       "could_not_delete_cron_store_unreadable": "Не удалось удалить «{{title}}»: не удалось прочитать хранилище cron, поэтому не удалось проверить её cron-задачи. Исправьте хранилище cron, затем удалите снова.",
       "could_not_delete_this_session": "Не удалось удалить «{{title}}».",
+      "could_not_delete_closed_sessions": "Не удалось удалить более старые сессии. Нажми «Очистить», чтобы попробовать снова.",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "Не удалось удалить более старые сессии: хранилище cron не удалось прочитать, поэтому не удалось проверить их cron-задачи. Восстанови хранилище cron, затем удали снова.",
+      "closed_sessions_not_deleted_few": "{{count}} более старые сессии не удалены.",
+      "closed_sessions_not_deleted_many": "{{count}} более старых сессий не удалено.",
+      "closed_sessions_not_deleted_one": "{{count}} более старая сессия не удалена.",
+      "closed_sessions_not_deleted_other": "{{count}} более старых сессий не удалено.",
+      "older_sessions_deleted_count_one": "{{count}} удалена.",
+      "older_sessions_deleted_count_few": "{{count}} удалены.",
+      "older_sessions_deleted_count_many": "{{count}} удалено.",
+      "older_sessions_deleted_count_other": "{{count}} удалено.",
+      "retry_delete_all": "Чтобы повторить попытку, снова нажми «Очистить».",
       "could_not_open_this_session": "Не удалось открыть «{{title}}». Попробуйте снова.",
       "could_not_regenerate": "Не удалось сгенерировать заново",
       "could_not_set_the_agent_default_model": "Не удалось назначить модель по умолчанию для агента",

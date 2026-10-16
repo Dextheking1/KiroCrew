@@ -10,12 +10,19 @@ document is the behaviour and the one-way doors.
 
 ## Embedded chat title
 
-A framed `ChatEmbed` with no title displays the localized "New session" label,
-never its internal slot key as visible text. This also applies to a resumed
-untitled conversation: the label is a fallback, not a claim about its age.
-The next settled title poll replaces that label on the same mounted header.
+A framed `ChatEmbed` with no title displays a localized label, never its
+internal slot key as visible text. Until the slot's first page arrives the label
+reads "Loading session…" (muted, `aria-busy`), so a titled conversation is never
+called new while it loads, and the transcript's "Session ready" line waits for
+that page too. A loaded page with no history reads "New session". A page with
+history (rows on the page or older rows beyond it), or a failed first read,
+reads the age-neutral "Untitled session", so a session that gets its first
+message before its title reads "Untitled session" until the title arrives.
+A settled title poll replaces any of these labels on the same mounted header,
+and a slot change shows the loading label until the new slot's first read.
 The slot key remains the header's hover title for debugging; `frameless` embeds
-have no title strip. `ChatEmbed.test.tsx` covers fresh and resumed title updates.
+have no title strip. `ChatEmbed.title.test.tsx` covers the delayed first read,
+fresh and resumed untitled pages, later title arrival and a slot change.
 
 ## Scoped frontend HTTP transport
 
@@ -3566,7 +3573,7 @@ names `apps/backend.py::_start_app_backend_body`, `test_spawn_audit.py` names
 `apps/backend.py::_resolve_nvm_path`, and `test_app_off_contract.py`,
 `test_dev_fleet_app.py`, `test_frontend_edition_build.py`,
 `test_sandbox_dev_fleet_live_target.py`, `test_app_bridges.py` and
-`test_app_backend.py` read the spawn's record constructions and environment in the
+`test_app_backend_spawn_env.py` read the spawn's record constructions and environment in the
 facade's source -- including what must NOT be there, so every record construction and
 none of the texts they forbid lives in an owner either. `_pid_alive` stays there because `test_windows_kill_probe_audit.py`
 reads it by path. Four owner call sites reach those residents at call time through

@@ -2071,7 +2071,7 @@ run, and each named a class the floor did not yet close.
   names when it happens to run (`TestInboundReplayResolvesItsSpoolWhenScheduled` pins
   it). When you add a detached task, resolve every environment-derived input where the
   task is scheduled, or give the tests a handle to await.
-- **What a closed loop leaves behind runs after the pins are gone.** pytest-asyncio 0.20
+- **What a closed loop leaves behind runs after the pins are gone.** pytest-asyncio 0.21
   ends a test's loop with a bare `loop.close()`. Two things survive that: a task the
   code under test detached and the test never awaited — destroyed with the loop, its
   coroutine gets `GeneratorExit` at garbage collection, so its `finally` blocks run
@@ -3235,7 +3235,7 @@ went red, or the fix lands in the wrong file and the leak stays.
   `FileNotFoundError` before git runs, which every caller reads off `returncode`, so that
   descriptor is deliberately left. One production change: `browser_cli/install.py`'s
   staged node launcher now runs from the managed leaf its docstring already promised, and
-  `test_browser_cli_install.py` pins the `cwd` it is handed.
+  `test_browser_cli_install_gateway_command.py` pins the `cwd` it is handed.
 - **`fd_leak` at +3 per unclosed SQLite handle, and why refcounting never reclaims it.**
   On CPython 3.11+ every `sqlite3.Connection` is a self-cycle through its `lru_cache`
   statement cache, so an unreferenced connection holds `db` + `-wal` + `-shm` until the
@@ -3266,7 +3266,7 @@ went red, or the fix lands in the wrong file and the leak stays.
   `ContextBuilder`s request the conftest's opt-in `close_skills_loaders` from a one-line
   module autouse fixture, and managers get `manager.close()` before `sessions.close_all()`.
   The one descriptor the probe still sees
-  is pytest-asyncio 0.20.3's replacement loop: +3, one at a time, reclaimed at the next
+  is pytest-asyncio 0.21.2's replacement loop: +3, one at a time, reclaimed at the next
   test's setup -- a float, not a leak, and never the thing to chase.
 - **A cancelled inline reap is a backend nobody owns.** `mcp_gateway/daemon/connection.py`'s stub
   disconnect teardown awaited `orphan.shutdown()` inline; daemon teardown cancels those
@@ -3793,7 +3793,7 @@ assertion for the host fact it depends on before reading the test for a bug.
   its branch in the failure instead of `assert 409 == 200`.
 What was flagged and read before being left alone. `slow`/`heavy_cpu` was dominated by the
 first mechanism above; the rest were the suite's own budgets (`test_2000_submissions_...`
-85-110 s under its `timeout(900)` marker, the two `test_members_dm_thread` thousand-event
+85-110 s under its `timeout(900)` marker, the two `test_members_dm_thread_activity_and_briefing` thousand-event
 reads at ~99 s). `env_leak` was again the session-scoped temp-root fixture's arm and undo
 read against a worker's first and last test. `host_write` was the bytecode mirror and the
 hypothesis database, `test_computer_use_launch.py`'s deliberate real-install-directory
@@ -4578,7 +4578,7 @@ A refused write raises `CrewLedgerNotRecorded`, a refused read raises `OSError`,
 best-effort reader quietly answers the empty record (`assert '' == 'fold me'`). It
 reached unrelated PRs on Windows and Linux shards through sync helpers that cannot see
 their caller is async (`_item`, `_work`, `_seed_item` in the issue-radar tests) and
-through direct reads in `test_discord.py`, `test_session_ledger.py` and
+through direct reads in `test_discord_mirroring.py`, `test_session_ledger.py` and
 `test_work_ledger_projection.py`; 0 in 400 local runs, so only a held-lock probe
 reproduces it. It came back through a read the pin did not list: `_folded()` in
 `test_spawn_approval_crew_log.py` opened the log with `CrewLog.open` and read it with

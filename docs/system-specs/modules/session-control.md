@@ -811,6 +811,7 @@ that is out of bounds is visible after the fact even though nothing happened.
 | Caller is channel-linked (`linked_session_key` set) | 403 | The exfiltration direction: a linked caller's conversation IS a channel thread, so a read would hand a private dashboard transcript to that channel's readers. `CHANNEL_AGENT_BLOCKED_TOOLS` keys on the agent identity; a linked slot is a second route to the same surface. **Two exceptions:** a `cron:<job_id>` link, which names the job's own run transcript and republishes to nobody; and a 1:1 DM whose only human is the configured owner (`owner_dm_refusal` answering `""`) — see "Owner-DM channel callers" below |
 | Caller's own session is no longer open | 403 | Nothing to attribute the operation to |
 | Caller changed workspace while a creation was in flight | 403 | Creation resolves the workspace's project directory off-loop, so it suspends between authorizing the caller and allocating the slot. Both decisions that read the caller's workspace -- the memory boundary the child inherits, and whether the answering agent is bound to that workspace -- are invalidated by a move, and re-deciding the binding here is not available: it needs a config load, which must not run on the event loop |
+| Agent that would answer is bound to another workspace | 403 | `agent_workspace_mismatch`. The child runs in the caller's workspace, so an agent whose own binding names a different one would carry that workspace's memory into it. Checked on whatever answers, an omitted agent included (it resolves to the default template). **One inheritance:** an explicitly named TEMPLATE (`ResolvedBindings.selection_kind == "template"`, a passthrough or the default template, never a `config.agents` row) passes when the caller has an execution record and is the crew member whose own declared workspace (`config.workspaces`) is the caller slot's workspace (`_caller_member_workspace`). A template has no workspace binding -- `resolve_agent_bindings` files every template session under `default_workspace` -- and the template arm already binds the child to the caller's own store, so the child runs on the caller's workspace, project directory and store, under the template persona. Without it every crew member created on its own `member-<slug>` workspace (#19230) was refused `agent_workspace_mismatch` for `agent="kirocrew-worker"`, while members created before #19230 (workspace `default`) were not. Still refused: a crew MEMBER bound elsewhere (its store would cross), a caller with no record (the child would fall to the default store), and any non-member caller, whose template child has no store of its own in that workspace |
 | Named agent does not resolve to a configured one | 403 | The resolver falls back to the default agent, which passes the workspace check because it is the caller's own default -- so no boundary is crossed, but the created session would store and advertise a name that is not what answers. `ResolvedBindings.requested_resolved` states that contract for callers that store the requested name. Refused rather than rewritten to the effective agent: nothing exists yet, so a corrected name costs one retry, whereas an existing slot keeps its stored name verbatim so a momentarily stale resolution cannot permanently rebind it |
 | Caller may not bind a child to the selected member's private store | 403 | `memory_delegation_denied`; one check, on the route every branch of agent resolution has already produced, before slot allocation. Two admissions: the store is the caller's OWN, which requires this process's vouched identity and the caller's durable record to agree, or the caller's delegation lineage is not fenced (`_delegation_lineage_fenced`: an owner-rooted chain is admitted; a cron-, channel- or member-rooted chain, or a broken one, is fenced). Same-store workers remain allowed; unfenced global callers retain member assignment. See "A created worker receives one execution identity" |
 | Caller changes history key, agent or memory store during creation | 400 | `caller_memory_changed`; the live caller must still match the identity checked before awaited preparation |
@@ -1762,7 +1763,7 @@ marker being the runner's own; and that a turn whose only call is `create_sessio
 records its audience at the creator gate; and that a Telegram allow-list entry that
 is not a positive integer (a group id, zero, text) is never attested as a DM peer,
 so a tab mirrored to such a conversation stays refused with the real transport. The crew-log
-opener is pinned in `test/test_discord.py` and `test/test_telegram.py`: a DM turn
+opener is pinned in `test/test_discord_mirroring.py` and `test/test_telegram.py`: a DM turn
 followed by a `work_ledger_record` write against the real writer lands, and the
 resumed-session path opens nothing.
 
@@ -2208,12 +2209,16 @@ goes to its owner, and the owners import each other lowest layer first, in this 
   the spawn record a created or forked child gets.
 - `src/kiro_crew/dashboard/session_control_parts/session_tree.py`: `session_fork`,
   `session_adopt` and `session_release`, and the tree-mutation lock and append fence.
-- `src/kiro_crew/dashboard/session_control_parts/session_status.py`: the read limits; the
-  read verbs themselves are still in the facade.
+- `src/kiro_crew/dashboard/session_control_parts/session_messaging.py`: `session_send` and
+  `session_broadcast`, the provenance envelope, and the steer deliveries a cancelled
+  sender leaves behind.
+- `src/kiro_crew/dashboard/session_control_parts/session_status.py`: the read verbs: the
+  status roster of the sessions a caller created, a target's transcript tail and its
+  cached summary, and their limits.
+- `src/kiro_crew/dashboard/session_control_parts/session_revive.py`: listing the revivable
+  history and `session_revive`.
 
-The facade itself still holds `session_send` and `session_broadcast`, the read verbs
-(`session_status`, `session_read`, `session_summary`) and archived-session revival and
-listing.
+The facade itself holds no verb: its docstring, its logger and the mirror.
 
 ## What is deliberately not here
 

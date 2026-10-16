@@ -98,6 +98,7 @@ export default function ChatPane({
   crewmate,
   crewmateGreeting,
   onOpenCrewWorkLog,
+  onOpenSubagents,
   threads,
   onSessionOpen,
   sessions,
@@ -448,7 +449,7 @@ export default function ChatPane({
   const { switchError, setSwitchError } = pickerActions
 
   const {
-    uploadError, setUploadError, uploadHint, setUploadHint, sendHeld, uploadCancellable, uploadMutation,
+    uploadError, setUploadError, uploadHint, setUploadHint, sendHeld, uploadCount, uploadMutation,
     cancelUpload, uploadFiles, dragOver, dropTargetProps,
   } = useChatPaneUploads({ slotKey, dispatch, slotKeyRef, mountedRef, setInput, dashCfg, dashCfgError })
 
@@ -509,7 +510,7 @@ export default function ChatPane({
     // picker inserts it, relative to that project.
     project: () => paneSlot?.project,
   })
-  const { listMessages, renderers } = useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, sessions, activeSession, messages, foldBefore, resume })
+  const { listMessages, renderers } = useChatPaneRenderers({ slotKey, busyMode, onFileOpen, crewmate, crewmateTranscript, onSessionOpen, onOpenSubagents, sessions, activeSession, messages, foldBefore, resume })
 
   // The composer dock floats over the bottom of the scroller (ChatPage's
   // layout, shared measurement): `dockH` is what the scroller pays below its
@@ -1036,7 +1037,8 @@ export default function ChatPane({
           // addresses it by name rather than the product ("Message Kiro Crew…").
           placeholder={crewmate ? i18nT('components.chatInput.message_placeholder', { bot: crewmate.label || crewmate.name }) : undefined}
           onUploadFiles={uploadFiles}
-          onCancelUpload={uploadCancellable ? cancelUpload : undefined}
+          onCancelUpload={uploadCount > 0 ? cancelUpload : undefined}
+          uploadCount={uploadCount}
           pendingFiles={pendingFiles}
           pendingDirs={pendingDirs}
           pendingQuote={messageQuote.pendingQuote}

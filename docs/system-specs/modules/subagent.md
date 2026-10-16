@@ -376,9 +376,14 @@ so every later admission charges a row at the price it was admitted at:
   bucket (`_cost_bucket`, `_dedicated_start_price_gb`): the bucket's learned
   settled RSS once it has three readings, capped at
   `_SETTLED_PROJECTION_CEILING_GB`, else `_UNLEARNED_DEDICATED_START_GB`; never
-  below `agent.subagent_cost_gb`. The cap exists because a bucket priced out of
-  admission runs no dedicated starts and so never relearns: a few mis-measured
-  readings would otherwise lock it out for good. A non-finite learned figure is
+  below `agent.subagent_cost_gb`. The cap and the reading horizon exist because a
+  bucket priced out of admission runs no dedicated starts and so never relearns:
+  the cap bounds how far a few mis-measured readings raise the bar, and a bucket
+  whose newest reading is older than `SETTLED_SAMPLE_MAX_AGE_SECS` (7 days) stops
+  counting, so a figure learned under a heavier roster expires on its own and the
+  bucket falls back to the unlearned price. A bucket with any reading inside the
+  horizon keeps its whole window. A stamp that is not a finite number or lies in
+  the future never shows a bucket recent. A non-finite learned figure is
   ignored. These are internal admission prices with no config key of their own.
 - **Shared.** A start that will take a session on its parent's runtime launches
   no kiro-cli process, but it does launch the agent's MCP servers: kiro-cli
@@ -462,8 +467,13 @@ dedicated run whose own children share its runtime, whose tree holds their
 per-session servers. `_record_cost` writes it as the cost record's `settled_gb`
 beside the whole-run peak `mem_gb`, which the auto cap still reads unchanged. The
 admission side reads the per-bucket p90 of dedicated `settled_gb` (at least three
-readings) from `_learned_settled_gb`, which the reaper refreshes off the loop at
-start and after every sweep; the gate never opens the cost log. A start is never
+readings, the newest no older than `SETTLED_SAMPLE_MAX_AGE_SECS`) from
+`_learned_settled_gb`, which the reaper refreshes off the loop at start, after a
+sweep in which a run recorded a settled reading, and otherwise every
+`_SETTLED_REREAD_SECS` (one hour), since readings age out with no new run; the
+gate never opens the cost log. An incomplete or failed read keeps the figures it
+could not confirm only while the map rests on a read younger than the horizon;
+past it the map is rebuilt from what the read saw. A start is never
 priced at the whole-run peak or a whole-tree p90: a run's peak RSS is its whole
 process subtree, test suites, builds and MCP servers it launched included, and
 pricing the next start at that held ordinary spawns at 10 GB+ on a laptop.
@@ -1144,6 +1154,9 @@ made; no gate reads it back. Two consumers:
 - The advisory `subagent_queued` lifecycle event (`_emit_queue_depth`) carries
   `reason` and, for the low-memory kind, `available_gb` /
   `required_gb` beside `queued`; the memory-pressure kind carries no figures.
+  A low-memory wait on an unreadable cgroup usage file carries
+  `cause: cgroup_usage_unreadable` and no `available_gb` (the 0 that usage
+  contributes is not an amount), and the chip says free memory is unknown.
   Both memory kinds also carry `max_wait_secs`, the live
   `agent.subagent_queue_max_wait_secs` read as the frame is published
   through `taskq_memory_wait_bound_secs` (the reader the sweep and the
@@ -4209,7 +4222,10 @@ The mechanism is one extra window plus one env value, applied at three seams:
   `subagent_manager/run.py`, which adds `shared_scratch` to the `get_or_create`
   kwargs (and which is also the signal that skips the warm pool —
   `pool_decision = "bypass_shared_scratch"` — because a pooled child's mounts were
-  fixed when it was pre-spawned with no parent); a shared-session subagent needs
+  fixed when it was pre-spawned with no parent; the
+  `kirocrew.session.pool.decision` counter reports it under its own `outcome`, so
+  the warm hits it costs can be read against the other bypass reasons
+  ([metrics](metrics.md)); a shared-session subagent needs
   nothing, it already runs in the parent's process. The `_bg` runtime's
   replacement in `session_background.get_bg_session` inherits its predecessor's
   `work_scratch_dir`, recorded on `BackgroundRuntimeState.inherited_scratch` from

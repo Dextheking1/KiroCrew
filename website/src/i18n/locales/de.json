@@ -442,7 +442,9 @@
       "uploading_files": "Dateien werden hochgeladen…",
       "stop_restarts_session": "Stopp startet diese Sitzung neu: Der Chatverlauf bleibt, laufende Arbeit und Nachrichten in der Warteschlange werden verworfen.",
       "stop_did_not_go_through": "Dieser Stopp ist nicht durchgegangen.",
-      "untitled_session_title": "Neue Sitzung"
+      "untitled_session_title": "Neue Sitzung",
+      "untitled_existing_session_title": "Unbenannte Sitzung",
+      "loading_session_title": "Sitzung wird geladen…"
     },
     "chatMessageList": {
       "copied": "Kopiert!",
@@ -6386,6 +6388,8 @@
       "approve_sub_agent": "Subagent genehmigen: {{name}}",
       "attach_files": "Dateien anhängen",
       "cancel_upload": "Upload abbrechen",
+      "cancel_n_uploads_one": "{{count}} Upload abbrechen",
+      "cancel_n_uploads_other": "{{count}} Uploads abbrechen",
       "send_waits_for_upload": "Warten auf den Abschluss des Anhangs",
       "editor_unavailable_standard_input": "Der erweiterte Editor konnte nicht geladen werden, daher ist die Standardeingabe aktiv. Ihr Entwurf bleibt unverändert.",
       "branch": "Branch: {{branch}}",
@@ -10065,7 +10069,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "Kein Mikrofon gefunden. Schließe eines an oder wähle in den Einstellungen ein anderes Gerät aus."
     },
     "theme": {
-      "high_contrast": "🔆 Hoher Kontrast"
+      "high_contrast": "🔆 Hoher Kontrast",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "Job konnte nicht abgebrochen werden",
@@ -11280,7 +11285,7 @@
         "agent_loads_only_its_own_mcp_servers": "Der Agent „{{name}}“ lädt nur seine eigenen MCP-Server.",
         "disabled": "deaktiviert",
         "load_failed": "MCP-Server konnten nicht geladen werden",
-        "mcp_servers_count": "MCP-Server ({{count}}/{{total}})",
+        "mcp_servers_count": "MCP-Server ({{count}}/{{total}} aktiviert)",
         "mode_load_failed": "Tool-Search-Modus konnte nicht gelesen werden; Standard wird angezeigt",
         "none_loaded": "Keine geladen",
         "session_mcp_servers": "MCP-Server der Sitzung"
@@ -11518,6 +11523,9 @@
         "low_memory_no_figures_limit": "wartet auf den Start — nicht genug freier Speicher; gib Speicher frei, um fortzufahren; sie starten nie, wenn der Speicher {{limit}} lang knapp bleibt",
         "low_memory_no_figures_no_limit": "wartet auf den Start — nicht genug freier Speicher; gib Speicher frei, um fortzufahren; sie warten ohne Zeitlimit",
         "low_memory_no_limit": "wartet auf den Start — benötigt {{required}} freien Speicher, aktuell {{available}} frei; gib Speicher frei, um fortzufahren; sie warten ohne Zeitlimit",
+        "low_memory_unknown": "wartet auf den Start — freier Speicher unbekannt: Das Gateway kann die Speichernutzung seiner cgroup (memory.current / memory.usage_in_bytes) nicht lesen; gib dem Gateway Lesezugriff auf diese Datei, um fortzufahren",
+        "low_memory_unknown_limit": "wartet auf den Start — freier Speicher unbekannt: Das Gateway kann die Speichernutzung seiner cgroup (memory.current / memory.usage_in_bytes) nicht lesen; gib dem Gateway Lesezugriff auf diese Datei, um fortzufahren; sie starten nie, wenn er {{limit}} lang unbekannt bleibt",
+        "low_memory_unknown_no_limit": "wartet auf den Start — freier Speicher unbekannt: Das Gateway kann die Speichernutzung seiner cgroup (memory.current / memory.usage_in_bytes) nicht lesen; gib dem Gateway Lesezugriff auf diese Datei, um fortzufahren; sie warten ohne Zeitlimit",
         "memory_pressure": "wartet auf den Start — macOS meldet Speicherdruck; schließe andere Apps, um ihn zu senken",
         "memory_pressure_limit": "wartet auf den Start — macOS meldet Speicherdruck; schließe andere Apps, um ihn zu senken; sie starten nie, wenn der Speicher {{limit}} lang knapp bleibt",
         "memory_pressure_no_limit": "wartet auf den Start — macOS meldet Speicherdruck; schließe andere Apps, um ihn zu senken; sie warten ohne Zeitlimit"
@@ -12125,6 +12133,13 @@
       "could_not_delete_cron_store_busy": "„{{title}}“ konnte nicht gelöscht werden: Der Cron-Speicher ist belegt, deshalb konnten die Cron-Jobs dieser Sitzung nicht geprüft werden. Versuche es gleich noch einmal.",
       "could_not_delete_cron_store_unreadable": "„{{title}}“ konnte nicht gelöscht werden: Der Cron-Speicher konnte nicht gelesen werden, deshalb konnten die Cron-Jobs dieser Sitzung nicht geprüft werden. Repariere den Cron-Speicher und lösche dann erneut.",
       "could_not_delete_this_session": "„{{title}}“ konnte nicht gelöscht werden.",
+      "could_not_delete_closed_sessions": "Die älteren Sitzungen konnten nicht gelöscht werden. Drücke „Leeren“, um es noch einmal zu versuchen.",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "Die älteren Sitzungen konnten nicht gelöscht werden: Der Cron-Speicher konnte nicht gelesen werden, deshalb konnten ihre Cron-Jobs nicht geprüft werden. Repariere den Cron-Speicher und lösche dann erneut.",
+      "closed_sessions_not_deleted_one": "{{count}} ältere Sitzung wurde nicht gelöscht.",
+      "closed_sessions_not_deleted_other": "{{count}} ältere Sitzungen wurden nicht gelöscht.",
+      "older_sessions_deleted_count_one": "{{count}} wurde gelöscht.",
+      "older_sessions_deleted_count_other": "{{count}} wurden gelöscht.",
+      "retry_delete_all": "Für einen neuen Versuch drücke noch einmal „Leeren“.",
       "could_not_open_this_session": "„{{title}}“ konnte nicht geöffnet werden. Versuche es erneut.",
       "could_not_regenerate": "Neu erstellen fehlgeschlagen",
       "could_not_set_the_agent_default_model": "Standardmodell des Agenten konnte nicht festgelegt werden",

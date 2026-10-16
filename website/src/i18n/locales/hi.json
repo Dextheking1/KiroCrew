@@ -442,7 +442,9 @@
       "uploading_files": "फ़ाइलें अपलोड हो रही हैं…",
       "stop_restarts_session": "रोकें दबाने पर सेशन रीस्टार्ट होगा: चैट इतिहास रहेगा, लेकिन चल रहा काम और कतार में लगे मैसेज हटा दिए जाएँगे।",
       "stop_did_not_go_through": "वह रोकना नहीं हो पाया।",
-      "untitled_session_title": "नया सेशन"
+      "untitled_session_title": "नया सेशन",
+      "untitled_existing_session_title": "बिना शीर्षक का सेशन",
+      "loading_session_title": "सेशन लोड हो रहा है…"
     },
     "chatMessageList": {
       "copied": "कॉपी किया गया!",
@@ -6386,6 +6388,8 @@
       "approve_sub_agent": "सब-एजेंट को मंज़ूरी दो: {{name}}",
       "attach_files": "फ़ाइलें अटैच करें",
       "cancel_upload": "अपलोड रद्द करो",
+      "cancel_n_uploads_one": "{{count}} अपलोड रद्द करो",
+      "cancel_n_uploads_other": "{{count}} अपलोड रद्द करो",
       "send_waits_for_upload": "अटैचमेंट पूरा होने का इंतज़ार",
       "editor_unavailable_standard_input": "उन्नत संपादक लोड नहीं हो सका, इसलिए मानक इनपुट सक्रिय है। तुम्हारा ड्राफ़्ट अपरिवर्तित है।",
       "branch": "ब्रांच: {{branch}}",
@@ -10065,7 +10069,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "कोई माइक्रोफ़ोन नहीं मिला। एक कनेक्ट करें या सेटिंग में कोई दूसरा डिवाइस चुनें।"
     },
     "theme": {
-      "high_contrast": "🔆 हाई कॉन्ट्रास्ट"
+      "high_contrast": "🔆 हाई कॉन्ट्रास्ट",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "जॉब रद्द करने में विफल",
@@ -11280,7 +11285,7 @@
         "agent_loads_only_its_own_mcp_servers": "एजेंट \"{{name}}\" सिर्फ़ अपने ही MCP सर्वर लोड करता है।",
         "disabled": "अक्षम",
         "load_failed": "MCP सर्वर लोड नहीं हो सके",
-        "mcp_servers_count": "MCP सर्वर ({{count}}/{{total}})",
+        "mcp_servers_count": "MCP सर्वर ({{count}}/{{total}} सक्षम)",
         "mode_load_failed": "Tool Search मोड नहीं पढ़ा जा सका; डिफ़ॉल्ट दिखाया जा रहा है",
         "none_loaded": "कोई लोड नहीं",
         "session_mcp_servers": "सत्र MCP सर्वर"
@@ -11518,6 +11523,9 @@
         "low_memory_no_figures_limit": "शुरू होने की प्रतीक्षा — पर्याप्त खाली मेमोरी नहीं है; जारी रखने के लिए मेमोरी खाली करो; अगर मेमोरी {{limit}} तक कम रही, तो ये कभी शुरू नहीं होंगे",
         "low_memory_no_figures_no_limit": "शुरू होने की प्रतीक्षा — पर्याप्त खाली मेमोरी नहीं है; जारी रखने के लिए मेमोरी खाली करो; ये बिना समय सीमा के इंतज़ार करेंगे",
         "low_memory_no_limit": "शुरू होने की प्रतीक्षा — {{required}} खाली मेमोरी चाहिए, अभी {{available}} खाली है; जारी रखने के लिए मेमोरी खाली करो; ये बिना समय सीमा के इंतज़ार करेंगे",
+        "low_memory_unknown": "शुरू होने की प्रतीक्षा — खाली मेमोरी अज्ञात है: gateway अपने cgroup का मेमोरी उपयोग (memory.current / memory.usage_in_bytes) नहीं पढ़ पा रहा; जारी रखने के लिए gateway को उस फ़ाइल को पढ़ने की अनुमति दो",
+        "low_memory_unknown_limit": "शुरू होने की प्रतीक्षा — खाली मेमोरी अज्ञात है: gateway अपने cgroup का मेमोरी उपयोग (memory.current / memory.usage_in_bytes) नहीं पढ़ पा रहा; जारी रखने के लिए gateway को उस फ़ाइल को पढ़ने की अनुमति दो; अगर यह {{limit}} तक अज्ञात रही, तो ये कभी शुरू नहीं होंगे",
+        "low_memory_unknown_no_limit": "शुरू होने की प्रतीक्षा — खाली मेमोरी अज्ञात है: gateway अपने cgroup का मेमोरी उपयोग (memory.current / memory.usage_in_bytes) नहीं पढ़ पा रहा; जारी रखने के लिए gateway को उस फ़ाइल को पढ़ने की अनुमति दो; ये बिना समय सीमा के इंतज़ार करेंगे",
         "memory_pressure": "शुरू होने की प्रतीक्षा — macOS मेमोरी दबाव बता रहा है; इसे कम करने के लिए दूसरे ऐप बंद करो",
         "memory_pressure_limit": "शुरू होने की प्रतीक्षा — macOS मेमोरी दबाव बता रहा है; इसे कम करने के लिए दूसरे ऐप बंद करो; अगर मेमोरी {{limit}} तक कम रही, तो ये कभी शुरू नहीं होंगे",
         "memory_pressure_no_limit": "शुरू होने की प्रतीक्षा — macOS मेमोरी दबाव बता रहा है; इसे कम करने के लिए दूसरे ऐप बंद करो; ये बिना समय सीमा के इंतज़ार करेंगे"
@@ -12125,6 +12133,13 @@
       "could_not_delete_cron_store_busy": "\"{{title}}\" हटाया नहीं जा सका: Cron स्टोर व्यस्त है, इसलिए इसके Cron जॉब जाँचे नहीं जा सके। थोड़ी देर में दोबारा कोशिश करें।",
       "could_not_delete_cron_store_unreadable": "\"{{title}}\" हटाया नहीं जा सका: Cron स्टोर पढ़ा नहीं जा सका, इसलिए इसके Cron जॉब जाँचे नहीं जा सके। Cron स्टोर ठीक करें, फिर दोबारा हटाएँ।",
       "could_not_delete_this_session": "\"{{title}}\" हटाया नहीं जा सका।",
+      "could_not_delete_closed_sessions": "पुराने सत्र हटाए नहीं जा सके। फिर से कोशिश करने के लिए सब हटाने वाला बटन दबाओ।",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "पुराने सत्र हटाए नहीं जा सके: Cron स्टोर पढ़ा नहीं जा सका, इसलिए उनके Cron जॉब जाँचे नहीं जा सके। Cron स्टोर ठीक करो, फिर दोबारा हटाओ।",
+      "closed_sessions_not_deleted_one": "{{count}} पुराना सत्र हटाया नहीं गया।",
+      "closed_sessions_not_deleted_other": "{{count}} पुराने सत्र हटाए नहीं गए।",
+      "older_sessions_deleted_count_one": "{{count}} हटाया गया।",
+      "older_sessions_deleted_count_other": "{{count}} हटाए गए।",
+      "retry_delete_all": "फिर से कोशिश करने के लिए सब हटाने वाला बटन दोबारा दबाओ।",
       "could_not_open_this_session": "\"{{title}}\" नहीं खोला जा सका। दोबारा कोशिश करें।",
       "could_not_regenerate": "पुनः नहीं बना सके",
       "could_not_set_the_agent_default_model": "एजेंट का डिफ़ॉल्ट मॉडल सेट नहीं हो सका",

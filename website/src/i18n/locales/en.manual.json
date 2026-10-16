@@ -2166,6 +2166,8 @@
     },
     "chatInput": {
       "cancel_upload": "Cancel upload",
+      "cancel_n_uploads_one": "Cancel {{count}} upload",
+      "cancel_n_uploads_other": "Cancel {{count}} uploads",
       "send_waits_for_upload": "Waiting for the attachment to finish",
       "auto_jev": "Auto (Jev)",
       "auto_jev_desc": "Let Jev choose: act now, or run after",
@@ -4475,7 +4477,8 @@
       "unknown": "Unknown"
     },
     "theme": {
-      "high_contrast": "🔆 High Contrast"
+      "high_contrast": "🔆 High Contrast",
+      "nu_disco": "🪩 Nu Disco"
     },
     "usePanelTabs": {
       "artifacts": "Artifacts",
@@ -4983,7 +4986,7 @@
       "mcpInfoButton": {
         "agent_loads_only_its_own_mcp_servers": "Agent \"{{name}}\" loads only its own MCP servers.",
         "load_failed": "Couldn't load the MCP servers",
-        "mcp_servers_count": "MCP Servers ({{count}}/{{total}})",
+        "mcp_servers_count": "MCP Servers ({{count}}/{{total}} enabled)",
         "mode_load_failed": "Couldn't read the Tool Search mode; showing the default"
       },
       "mcpOAuthBanner": {
@@ -5705,6 +5708,10 @@
       "open_older_sessions": "Open Older Sessions",
       "tabs_were_not_restored_one": "{{count}} tab that was open before the restart was not restored.",
       "tabs_were_not_restored_other": "{{count}} tabs that were open before the restart were not restored.",
+      "closed_sessions_not_deleted_one": "{{count}} older session was not deleted.",
+      "closed_sessions_not_deleted_other": "{{count}} older sessions were not deleted.",
+      "older_sessions_deleted_count_one": "{{count}} was deleted.",
+      "older_sessions_deleted_count_other": "{{count}} were deleted.",
       "dismiss_until_next_visit": "Dismiss until next visit",
       "could_not_check_restored_tabs": "Could not check whether every tab was restored after the last restart.",
       "could_not_start_fresh_session": "Couldn't start a fresh session",

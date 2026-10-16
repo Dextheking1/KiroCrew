@@ -527,8 +527,6 @@ test/test_frontend_dist_resolve.py
 test/test_frontend_edition_build.py
 test/test_frontmatter.py
 test/test_gateway_appkit_endpoints.py
-test/test_gatewayd_more_coverage.py
-test/test_gatewayd_self_exit.py
 test/test_gitlab_client_coverage.py
 test/test_governance_policy_viewer.py
 test/test_handler_cron_list.py
@@ -606,16 +604,13 @@ test/test_mcp_cron_list_compact.py
 test/test_mcp_cron_orphan_validation.py
 test/test_mcp_cron_persistent_session.py
 test/test_mcp_gateway_apps_spool.py
-test/test_mcp_gateway_backend_coverage.py
 test/test_mcp_gateway_claim.py
 test/test_mcp_gateway_cluster_fixes.py
 test/test_mcp_gateway_control_plane.py
 test/test_mcp_gateway_exclusive_backend.py
 test/test_mcp_gateway_image_budget.py
 test/test_mcp_gateway_oversize.py
-test/test_mcp_gateway_pool_integ.py
 test/test_mcp_gateway_shutdown_and_env.py
-test/test_mcp_gateway_stub_admission_fallback.py
 test/test_mcp_gateway_stub_optin.py
 test/test_mcp_gateway_stub_paths.py
 test/test_mcp_gateway_stub_poolable_ack.py
@@ -806,7 +801,6 @@ test/test_stt_stream_cov80.py
 test/test_stub_bridge_liveness.py
 test/test_stuck_turn_watchdog.py
 test/test_subagent_cost.py
-test/test_subagent_reap_race.py
 test/test_subagent_stall.py
 test/test_subquestion_queue.py
 test/test_sweep_stale_permissions.py

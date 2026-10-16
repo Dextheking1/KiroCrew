@@ -551,7 +551,7 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "Session control read",
-        "dashboard/session_control.py",
+        "dashboard/session_control_parts/session_status.py",
         "Another session's transcript tail and its cached intent summary, served by "
         "`GET /api/session-control/read` and `GET /api/session-control/summary` to "
         "the calling agent. Conversation "
@@ -858,19 +858,19 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "Auto-skill update merge prompt",
-        "history_consolidation.py",
+        "history_consolidation_skills.py",
         "The existing live skill body is redacted before it enters the model prompt "
         "that merges a proposed update, and the model's merged output is scanned again.",
     ),
     (
         "Auto-skill pending candidate staging",
-        "history_consolidation.py",
+        "history_consolidation_skills.py",
         "LLM-authored descriptions, triggers, procedures, and generated scripts are "
         "redacted before SkillsLoader writes a pending create or update candidate.",
     ),
     (
         "Auto-skill direct publication",
-        "history_consolidation.py",
+        "history_consolidation_skills.py",
         "LLM-authored descriptions, triggers, and procedures are redacted before "
         "immediate live skill creation or direct refinement through SkillsLoader.",
     ),
@@ -2229,7 +2229,7 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         "dashboard/chat_api/slot_note.py",
         "dashboard/chat_api/slot_settings.py",
         # Owners composed into dashboard/session_control.py, their redactor calls
-        # moved verbatim out of the module the "Session control read" sink names.
+        # moved verbatim out of dashboard/session_control.py.
         # The refusal factory scrubs the target and reason it writes to the audit
         # record; the model switch and the create verb refuse a model name their
         # redaction would change; and the model a pending pick reports, and the
@@ -2604,6 +2604,10 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         "apps/builtins/code_review_sage/sage_lib/pipeline.py",
         "apps/builtins/code_review_sage/sage_lib/report.py",
         "apps/builtins/code_review_sage/sage_lib/review_driver.py",
+        # Split out of `review_driver` unchanged: it scrubs the worker-written
+        # record's validation and persist errors before the driver surfaces them.
+        # Same classification as `review_driver`.
+        "apps/builtins/code_review_sage/sage_lib/worker_response.py",
         # `store` DEFINES this app's redactor (`redact_text`) so every reader in the
         # app can scrub, not just the posting path; `discovery` calls it when reading
         # the worker-writable pinned-repo file before the sidebar renders it. Both

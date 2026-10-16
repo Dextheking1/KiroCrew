@@ -442,7 +442,9 @@
       "uploading_files": "ফাইল আপলোড হচ্ছে…",
       "stop_restarts_session": "থামান চাপলে সেশন রিস্টার্ট হবে: চ্যাটের ইতিহাস থাকবে, কিন্তু চলমান কাজ আর অপেক্ষমাণ মেসেজ বাদ যাবে।",
       "stop_did_not_go_through": "ওই থামানোটা কাজ করেনি।",
-      "untitled_session_title": "নতুন সেশন"
+      "untitled_session_title": "নতুন সেশন",
+      "untitled_existing_session_title": "শিরোনামহীন সেশন",
+      "loading_session_title": "সেশন লোড হচ্ছে…"
     },
     "chatMessageList": {
       "copied": "কপি হয়েছে!",
@@ -6386,6 +6388,8 @@
       "approve_sub_agent": "সাব-এজেন্ট অনুমোদন করো: {{name}}",
       "attach_files": "ফাইল সংযুক্ত করুন",
       "cancel_upload": "আপলোড বাতিল করো",
+      "cancel_n_uploads_one": "{{count}}টি আপলোড বাতিল করো",
+      "cancel_n_uploads_other": "{{count}}টি আপলোড বাতিল করো",
       "send_waits_for_upload": "সংযুক্তি শেষ হওয়ার অপেক্ষায়",
       "editor_unavailable_standard_input": "উন্নত সম্পাদকটি লোড হতে পারেনি, তাই স্ট্যান্ডার্ড ইনপুট সক্রিয় রয়েছে। আপনার খসড়া অপরিবর্তিত আছে।",
       "branch": "ব্রাঞ্চ: {{branch}}",
@@ -10065,7 +10069,8 @@
       "no_microphone_found_connect_one_or_pick_a_differ": "কোনো মাইক্রোফোন পাওয়া যায়নি। একটা কানেক্ট করো, বা সেটিংয়ে অন্য ডিভাইস বেছে নাও।"
     },
     "theme": {
-      "high_contrast": "🔆 উচ্চ কনট্রাস্ট"
+      "high_contrast": "🔆 উচ্চ কনট্রাস্ট",
+      "nu_disco": "🪩 Nu Disco"
     },
     "useCronActions": {
       "failed_to_cancel_job": "জব বাতিল করা যায়নি",
@@ -11280,7 +11285,7 @@
         "agent_loads_only_its_own_mcp_servers": "\"{{name}}\" এজেন্ট শুধু নিজের MCP সার্ভারগুলোই লোড করে।",
         "disabled": "নিষ্ক্রিয়",
         "load_failed": "MCP সার্ভার লোড করা যায়নি",
-        "mcp_servers_count": "MCP সার্ভার ({{count}}/{{total}})",
+        "mcp_servers_count": "MCP সার্ভার ({{count}}/{{total}} সক্রিয়)",
         "mode_load_failed": "Tool Search মোড পড়া যায়নি; ডিফল্ট দেখানো হচ্ছে",
         "none_loaded": "কিছুই লোড হয়নি",
         "session_mcp_servers": "সেশনের MCP সার্ভার"
@@ -11518,6 +11523,9 @@
         "low_memory_no_figures_limit": "শুরু হওয়ার অপেক্ষায় — পর্যাপ্ত ফাঁকা মেমোরি নেই; চালিয়ে যেতে মেমোরি খালি করো; মেমোরি {{limit}} ধরে কম থাকলে এগুলো কখনও শুরু হবে না",
         "low_memory_no_figures_no_limit": "শুরু হওয়ার অপেক্ষায় — পর্যাপ্ত ফাঁকা মেমোরি নেই; চালিয়ে যেতে মেমোরি খালি করো; এগুলো সময়সীমা ছাড়াই অপেক্ষা করবে",
         "low_memory_no_limit": "শুরু হওয়ার অপেক্ষায় — {{required}} ফাঁকা মেমোরি প্রয়োজন, এখন {{available}} ফাঁকা; চালিয়ে যেতে মেমোরি খালি করো; এগুলো সময়সীমা ছাড়াই অপেক্ষা করবে",
+        "low_memory_unknown": "শুরু হওয়ার অপেক্ষায় — ফাঁকা মেমোরি অজানা: gateway তার cgroup-এর মেমোরি ব্যবহার (memory.current / memory.usage_in_bytes) পড়তে পারছে না; চালিয়ে যেতে gateway-কে ওই ফাইল পড়ার অনুমতি দাও",
+        "low_memory_unknown_limit": "শুরু হওয়ার অপেক্ষায় — ফাঁকা মেমোরি অজানা: gateway তার cgroup-এর মেমোরি ব্যবহার (memory.current / memory.usage_in_bytes) পড়তে পারছে না; চালিয়ে যেতে gateway-কে ওই ফাইল পড়ার অনুমতি দাও; এটি {{limit}} ধরে অজানা থাকলে এগুলো কখনও শুরু হবে না",
+        "low_memory_unknown_no_limit": "শুরু হওয়ার অপেক্ষায় — ফাঁকা মেমোরি অজানা: gateway তার cgroup-এর মেমোরি ব্যবহার (memory.current / memory.usage_in_bytes) পড়তে পারছে না; চালিয়ে যেতে gateway-কে ওই ফাইল পড়ার অনুমতি দাও; এগুলো সময়সীমা ছাড়াই অপেক্ষা করবে",
         "memory_pressure": "শুরু হওয়ার অপেক্ষায় — macOS মেমোরির চাপ জানাচ্ছে; চাপ কমাতে অন্য অ্যাপ বন্ধ করো",
         "memory_pressure_limit": "শুরু হওয়ার অপেক্ষায় — macOS মেমোরির চাপ জানাচ্ছে; চাপ কমাতে অন্য অ্যাপ বন্ধ করো; মেমোরি {{limit}} ধরে কম থাকলে এগুলো কখনও শুরু হবে না",
         "memory_pressure_no_limit": "শুরু হওয়ার অপেক্ষায় — macOS মেমোরির চাপ জানাচ্ছে; চাপ কমাতে অন্য অ্যাপ বন্ধ করো; এগুলো সময়সীমা ছাড়াই অপেক্ষা করবে"
@@ -12125,6 +12133,13 @@
       "could_not_delete_cron_store_busy": "\"{{title}}\" মুছে ফেলা যায়নি: Cron স্টোর ব্যস্ত, তাই এর Cron জবগুলি পরীক্ষা করা যায়নি। কিছুক্ষণ পরে আবার চেষ্টা করুন।",
       "could_not_delete_cron_store_unreadable": "\"{{title}}\" মুছে ফেলা যায়নি: Cron স্টোর পড়া যায়নি, তাই এর Cron জবগুলি পরীক্ষা করা যায়নি। Cron স্টোর মেরামত করুন, তারপর আবার মুছুন।",
       "could_not_delete_this_session": "\"{{title}}\" মুছে ফেলা যায়নি।",
+      "could_not_delete_closed_sessions": "পুরোনো সেশনগুলি মুছে ফেলা যায়নি। আবার চেষ্টা করতে সব মুছে ফেলার বোতামটি চাপো।",
+      "could_not_delete_closed_sessions_cron_store_unreadable": "পুরোনো সেশনগুলি মুছে ফেলা যায়নি: Cron স্টোর পড়া যায়নি, তাই সেগুলির Cron জবগুলি পরীক্ষা করা যায়নি। Cron স্টোর মেরামত করো, তারপর আবার মুছে ফেলো।",
+      "closed_sessions_not_deleted_one": "{{count}}টি পুরোনো সেশন মুছে ফেলা হয়নি।",
+      "closed_sessions_not_deleted_other": "{{count}}টি পুরোনো সেশন মুছে ফেলা হয়নি।",
+      "older_sessions_deleted_count_one": "{{count}}টি মুছে ফেলা হয়েছে।",
+      "older_sessions_deleted_count_other": "{{count}}টি মুছে ফেলা হয়েছে।",
+      "retry_delete_all": "আবার চেষ্টা করতে সব মুছে ফেলার বোতামটি আবার চাপো।",
       "could_not_open_this_session": "\"{{title}}\" খোলা যায়নি। আবার চেষ্টা করুন।",
       "could_not_regenerate": "পুনরায় তৈরি করা যায়নি",
       "could_not_set_the_agent_default_model": "এজেন্টের ডিফল্ট মডেল সেট করা যায়নি",
