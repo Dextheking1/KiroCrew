@@ -462,6 +462,13 @@ is never answered with an eviction of someone else's entry. Disconnect and expir
 push a fresh `shared_crew.presence` frame for every session they changed; the
 socket's status tick sweeps stale entries.
 
+In the browser, typing is reported from the composer's user-edit handler
+(`typingSignal.useComposerEditWithTyping`, which ChatInput calls only for the
+user's own edits), not from the draft store: the store keeps one identity and a
+session switch writes it too. The collab strip's `usePresenceReporter` listens to
+that content-free signal and sends `typing`, then `viewing` after
+`TYPING_HOLD_MS` without a keystroke.
+
 A shared decision (`collab.SharedDecision`) is a tool approval or agent question that
 every collaborator sees and any one may answer. `classify_response` decides a response
 under the resolver's lock: the first response to see `pending` wins, a retry with the

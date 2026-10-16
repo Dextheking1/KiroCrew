@@ -45,7 +45,7 @@ import ChatEmptyState from './chat/page/ChatEmptyState'
 import ChatTitleOverlay from './chat/page/ChatTitleOverlay'
 import ChatTranscriptView from './chat/page/ChatTranscriptView'
 import ComposerDockView from './chat/page/ComposerDockView'
-import { noteComposerInput } from './chat/shared-crew/typingSignal'
+import { useComposerEditWithTyping } from './chat/shared-crew/typingSignal'
 import ChatSidePanels from './chat/page/ChatSidePanels'
 import { slotBusySteer } from '../components/chat-input/busySend'
 import { useSessionAutomation } from './chat/page/sessionAutomation'
@@ -364,13 +364,6 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   }, [])
 
   const pendingDirs = useStagedFolderRefs(composerDraft)
-  // Shared Crew typing presence: a change happened, never what it was. A draft
-  // swapped in by a session switch (or the first render) is not typing.
-  const typingSlotRef = useRef<string | null | undefined>(undefined)
-  useEffect(() => {
-    if (typingSlotRef.current !== activeSlot) { typingSlotRef.current = activeSlot; return }
-    noteComposerInput()
-  }, [composerDraft, activeSlot])
   // Live persistence of every staged resource, then the composer-key advance,
   // in that order (see useStagedDraftPersistence).
   useStagedDraftPersistence({ activeSlot, composerSlotRef, stores: draftStores, staging })
@@ -599,10 +592,12 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   const {
     followUpOptions, followUpSourceKey, followUpMulti,
     followUpPicked, followUpPickedRef, toggleFollowUpOption,
-    composerRootChange, composerUserEdit,
+    composerRootChange, composerUserEdit: followUpUserEdit,
   } = useFollowUpChips({
     messages, isStreaming, pendingQuestion, activeSlot, inputRef, setInput, prefillEdited, setPrefillEdited,
   })
+  // Shared Crew typing presence: the user's own edit happened, never what it was.
+  const composerUserEdit = useComposerEditWithTyping(followUpUserEdit)
   const {
     dashCfg, splitFeatureEnabled, linkPreviewsOn, socialShareOn, jevAutoConsented, connectionsUiOn, openActivePopout, focusActivePopout, returnSelfToMain, activePoppedOut, planTaskId,
   } = usePageFlags({
