@@ -223,9 +223,21 @@ def decision_frame(decision: SharedDecision) -> dict[str, Any]:
     }
 
 
-def work_frame(work: AcceptedWork) -> dict[str, Any]:
-    """The whole-value frame for one accepted work item's current state."""
-    return {"type": FRAME_WORK, "schema_version": SCHEMA_VERSION, "work": work.to_public_dict()}
+def work_frame(work: AcceptedWork, *, slot_key: str = "") -> dict[str, Any]:
+    """The whole-value frame for one accepted work item's current state.
+
+    *slot_key* names the dashboard tab showing the work's session (a chat
+    session's key is ``dashboard:<slot>``, the tab's is ``<slot>``), so the
+    browser files the item under the key its work list reads.
+    """
+    frame: dict[str, Any] = {
+        "type": FRAME_WORK,
+        "schema_version": SCHEMA_VERSION,
+        "work": work.to_public_dict(),
+    }
+    if slot_key:
+        frame["slot_key"] = slot_key
+    return frame
 
 
 def capacity_frame(capacity: CapacityResponse) -> dict[str, Any]:

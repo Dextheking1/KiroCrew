@@ -37,10 +37,14 @@ export function applySharedCrewFrame(queryClient: QueryClient, data: unknown): v
     case 'shared_crew.work': {
       const work = frame.work
       if (!work?.work_id) return
-      queryClient.setQueryData<WorkListResponse | null>(sharedCrewKeys.work(work.session_key), prev => ({
-        ...(prev ?? {}),
-        items: mergeWork(prev?.items ?? [], work),
-      }))
+      // The chat reads its work list by tab key; the record names its session.
+      const keys = new Set([work.session_key, frame.slot_key].filter((k): k is string => !!k))
+      for (const key of keys) {
+        queryClient.setQueryData<WorkListResponse | null>(sharedCrewKeys.work(key), prev => ({
+          ...(prev ?? {}),
+          items: mergeWork(prev?.items ?? [], work),
+        }))
+      }
       return
     }
     case 'shared_crew.decision': {

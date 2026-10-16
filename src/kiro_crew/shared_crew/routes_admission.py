@@ -15,7 +15,9 @@ Shapes:
     the starvation bound).
 ``GET /api/shared-crew/work?session_key=<key>``
     ``{"items": [AcceptedWork.to_public_dict(), ...]}`` for that session, or for
-    the viewer's own work when ``session_key`` is absent.
+    the viewer's own work when ``session_key`` is absent. The key may be the
+    session key or the dashboard tab's slot key (what the chat holds): a slot
+    key is read as the session its turns run on.
 ``POST /api/shared-crew/work/{work_id}/cancel`` ``{"expected_revision": int}``
     200 with the next public record; 404 ``not_found``; 409 ``stale_revision``
     or ``invalid_transition`` with ``current``.
@@ -65,6 +67,25 @@ async def api_capacity(request: web.Request) -> web.Response:
     return web.json_response(body)
 
 
+def work_session_keys(state: Any, key: str) -> list[str]:
+    """The stored session keys a work-list *key* names: itself, plus a slot's session.
+
+    Chat work is keyed by the session its turns run on (``dashboard:<slot>``,
+    or a channel key for a channel-born tab) while the chat addresses the tab
+    by its slot key. Reads in-memory state only.
+    """
+    from kiro_crew.dashboard.chat_utils import _history_key_for, effective_session_key
+
+    keys = [key]
+    slots = getattr(state, "_slots", None)
+    slot = slots.get(key) if isinstance(slots, dict) else None
+    if slot is not None:
+        keys.append(effective_session_key(slot))
+    elif ":" not in key:
+        keys.append(_history_key_for(key))
+    return list(dict.fromkeys(k for k in keys if k))
+
+
 async def api_work(request: web.Request) -> web.Response:
     service = await admission_gate.current_service()
     session_key = request.query.get("session_key") or None
@@ -72,8 +93,14 @@ async def api_work(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "session_key too long", "code": "invalid_filter"}, status=400
         )
-    budget = None if session_key else admission_gate.actor_budget(request)
-    items = await service.list_work(session_key=session_key, budget_key=budget)
+    if session_key is None:
+        items = await service.list_work(budget_key=admission_gate.actor_budget(request))
+    else:
+        found: dict[str, Any] = {}
+        for key in work_session_keys(request.app.get("state"), session_key):
+            for work in await service.list_work(session_key=key):
+                found.setdefault(work.work_id, work)
+        items = sorted(found.values(), key=lambda w: (w.accepted_at, w.work_id))
     return web.json_response({"items": [w.to_public_dict() for w in items]})
 
 
@@ -115,4 +142,4 @@ def register(app: web.Application) -> None:
     app.router.add_post(CANCEL_PATH, api_work_cancel)
 
 
-__all__ = ["CANCEL_PATH", "CAPACITY_PATH", "WORK_PATH", "register"]
+__all__ = ["CANCEL_PATH", "CAPACITY_PATH", "WORK_PATH", "register", "work_session_keys"]

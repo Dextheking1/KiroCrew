@@ -220,7 +220,8 @@ export interface SharedDecision {
 
 export type SharedCrewServerFrame =
   | { type: 'shared_crew.presence'; schema_version: number; session_key: string; entries: PresenceEntry[] }
-  | { type: 'shared_crew.work'; schema_version: number; work: AcceptedWork }
+  /** `slot_key`: the dashboard tab showing the work's session, when one does. */
+  | { type: 'shared_crew.work'; schema_version: number; work: AcceptedWork; slot_key?: string }
   | { type: 'shared_crew.decision'; schema_version: number; decision: SharedDecision }
   | { type: 'shared_crew.capacity'; schema_version: number; capacity: CapacityResponse }
 

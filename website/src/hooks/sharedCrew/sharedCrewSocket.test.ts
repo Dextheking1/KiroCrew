@@ -23,6 +23,14 @@ describe('shared crew frames', () => {
     expect(items?.[0].state).toBe('running')
   })
 
+  it('files a chat work frame under the tab key the work list reads', () => {
+    const qc = new QueryClient()
+    const chat = { ...work(1, 'queued'), session_key: 'dashboard:tab-1' }
+    applySharedCrewFrame(qc, { ...frame(chat), slot_key: 'tab-1' })
+    expect(qc.getQueryData<WorkListResponse>(sharedCrewKeys.work('tab-1'))?.items[0].state).toBe('queued')
+    expect(qc.getQueryData<WorkListResponse>(sharedCrewKeys.work('dashboard:tab-1'))?.items).toHaveLength(1)
+  })
+
   it('an HTTP read that lands before a newer frame is overtaken, not kept', () => {
     const qc = new QueryClient()
     qc.setQueryData<WorkListResponse>(sharedCrewKeys.work('s1'), { items: [work(1, 'queued')] })

@@ -1809,7 +1809,7 @@ async def start_dashboard(
         from kiro_crew.shared_crew import wiring
         from kiro_crew.shared_crew.admission_gate import startup_check
 
-        wiring.install()
+        wiring.install(state)
         try:
             await startup_check()
         except Exception:  # noqa: BLE001 - a probe failure must not stop the gateway

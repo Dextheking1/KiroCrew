@@ -21,6 +21,7 @@ cannot both move one record and an illegal transition never reaches disk.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from dataclasses import replace
@@ -39,6 +40,8 @@ from kiro_crew.shared_crew.admission import (
 from kiro_crew.shared_crew.codec import ContractError
 from kiro_crew.taskq.store import TaskStore, WorkRow
 
+logger = logging.getLogger(__name__)
+
 #: Largest stored replay payload, in bytes of JSON. A larger one is not stored,
 #: so the work cannot be relaunched after a restart and ends ``cancelled``.
 MAX_PAYLOAD_BYTES = 256 * 1024
@@ -52,6 +55,26 @@ class IdempotencyConflict(ContractError):
             ReasonCode.IDEMPOTENCY_CONFLICT.value, "idempotency_key", "key reused for other work"
         )
         self.current = current
+
+
+#: Called on the event loop with every record a store wrote; see :func:`set_change_listener`.
+_CHANGE_LISTENER: Callable[[AcceptedWork], None] | None = None
+
+
+def set_change_listener(listener: Callable[[AcceptedWork], None] | None) -> None:
+    """Hear every accepted or advanced record (gateway wiring pushes it to tabs). None removes."""
+    global _CHANGE_LISTENER
+    _CHANGE_LISTENER = listener
+
+
+def _changed(work: AcceptedWork) -> None:
+    listener = _CHANGE_LISTENER
+    if listener is None:
+        return
+    try:
+        listener(work)
+    except Exception:  # noqa: BLE001 -- a listener never fails the write it heard
+        logger.debug("shared crew: work change listener failed", exc_info=True)
 
 
 def new_work_id() -> str:
@@ -148,6 +171,8 @@ class WorkStore:
             extra=extra,
             work_id=work_id,
         )
+        if result[1]:
+            _changed(result[0])
         return result
 
     def advance_sync(
@@ -202,6 +227,7 @@ class WorkStore:
             extra=extra,
             deadline_at=deadline_at,
         )
+        _changed(result)
         return result
 
     def purge_sync(self, *, now: float | None = None) -> int:
@@ -270,4 +296,10 @@ class WorkStore:
         return result
 
 
-__all__ = ["IdempotencyConflict", "MAX_PAYLOAD_BYTES", "WorkStore", "new_work_id"]
+__all__ = [
+    "IdempotencyConflict",
+    "MAX_PAYLOAD_BYTES",
+    "WorkStore",
+    "new_work_id",
+    "set_change_listener",
+]
