@@ -151,6 +151,11 @@ security. Fix, commit and push only within the user's authorization.
   scans and duties that act despite silence, such as chasing a missing reviewer
   or tracking a moving base. `max_cycles` counts DELIVERED turns, including
   quiet-floor deliveries and fallbacks, not just useful changes.
+- A `gate=false` loop naming one PR by full URL still reads its mergeability
+  every five minutes while it sleeps, and runs its cycle early the first time a
+  head turns conflicting or `BEHIND`, so a long interval does not delay a
+  re-sync. A loop held for an unanswered approval keeps reading too: a PR that
+  merges or closes during the hold ends the loop with the usual notice.
 - A short `banner` keeps a long instruction out of stored transcript rows while
   the model receives it whole. Dashboard only; channel loops refuse it with 400.
   `monitor_update(banner="")` clears it.

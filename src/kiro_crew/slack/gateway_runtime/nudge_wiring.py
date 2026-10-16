@@ -253,13 +253,18 @@ async def _init_autonudge(self: GatewayOrchestrator) -> None:
                 # the same redaction as the structured record below -- every
                 # writer checks a kind against the registry, but a state file
                 # edited by hand is read back as written.
+                # An ungated loop settled while held has no monitor; its
+                # ``subject_outcome`` is the same fact about a pull request.
                 "monitor_outcome": (
                     loop.monitor.outcome.value
                     if loop.monitor is not None and loop.monitor.outcome is not None
-                    else ""
+                    else loop.subject_outcome if loop.monitor is None else ""
                 ),
                 "monitor_kind": (
-                    _redact_monitor_value(loop.monitor.kind) if loop.monitor is not None else ""
+                    _redact_monitor_value(loop.monitor.kind)
+                    if loop.monitor is not None
+                    # ``probes.GH_PR``: only a pull-request read records one.
+                    else "gh-pr" if loop.subject_outcome else ""
                 ),
                 # An ACTIVE loop holding for an unanswered approval; the
                 # popover words it as paused.
@@ -674,24 +679,30 @@ async def _init_autonudge(self: GatewayOrchestrator) -> None:
 
 
 def _notify_nudge_held(self: GatewayOrchestrator, loop: NudgeLoop) -> bool:
-    """Tell the user once that a loop is paused for an unanswered approval.
+    """Tell the user that a loop is paused for an unanswered approval.
 
-    Sent when the hold is recorded, never per tick: a held loop fires
-    nothing, so this is the one place a person away from the session learns
-    that it is waiting for them, and what resumes it. Same meta and channel
-    rules as :meth:`_notify_nudge_expired`, and best-effort for the same
-    reason (it runs inside ``_emit``'s observer loop).
+    Sent when the hold is recorded, and again each time the hold has gone
+    ``HOLD_REANNOUNCE_SECS`` unanswered (``subject_reads``), never per tick: a
+    held loop fires nothing, so this is the one place a person away from the
+    session learns that it is waiting for them, and what resumes it. Same meta
+    and channel rules as :meth:`_notify_nudge_expired`, and best-effort for the
+    same reason (it runs inside ``_emit``'s observer loop).
     """
     if not self.dashboard_state:
         return False
     try:
         key = loop.slot_key
         meta = None if is_channel_key(key) else self._notif_meta(f"dashboard:{key}")
-        title = "Monitoring loop paused — a tool approval went unanswered"
+        held_hours = int((time.time() - (loop.approval_stalled_at or time.time())) // 3600)
+        if held_hours >= 1:
+            title = "Monitoring loop still paused — a tool approval is unanswered"
+            lead = f"The loop has been paused for {held_hours}h at cycle {loop.cycle_count}"
+        else:
+            title = "Monitoring loop paused — a tool approval went unanswered"
+            lead = f"The loop is paused at cycle {loop.cycle_count}"
         body = (
-            f"The loop is paused at cycle {loop.cycle_count} and spends no "
-            "cycles or time budget while it waits. Press Play in its goal "
-            "popover on the dashboard to resume it."
+            f"{lead} and spends no cycles or time budget while it waits. Press "
+            "Play in its goal popover on the dashboard to resume it."
         )
         if not is_channel_key(key):
             body += " Sending any message in that chat resumes it too."
@@ -906,7 +917,11 @@ def _notify_nudge_expired(self: GatewayOrchestrator, loop: NudgeLoop) -> bool:
             )
         elif terminal:
             settled = getattr(loop.monitor, "outcome", None) if loop.monitor else None
-            decided = getattr(settled, "value", settled) or owed
+            decided = (
+                getattr(settled, "value", settled)
+                or str(getattr(loop, "subject_outcome", "") or "")
+                or owed
+            )
             if decided == "success":
                 title = "Monitoring loop finished — what it was watching is done"
                 body = (
