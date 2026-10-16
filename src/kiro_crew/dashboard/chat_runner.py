@@ -3527,6 +3527,12 @@ def schedule_eager_spawn(
         cfg = live.snapshot()
         if cfg is None or not cfg.session.eager_spawn:
             return None
+        # Shared Crew: with fair admission on, a runtime starts only inside an
+        # admitted turn, so creating sessions cannot start unbounded processes.
+        from kiro_crew.shared_crew.turn_gate import admission_active
+
+        if admission_active():
+            return None
     except Exception:
         return None
     if _eager_spawn_held_off(slot):
@@ -5280,7 +5286,7 @@ async def _start_next_queued_turn(
     # A merged row's text is every entry's, so the row keeps an address only
     # when every consumed entry carries that same address; otherwise the union's
     # last writer would be quoted another sender's words.
-    for _address_key in (CHANNEL_RECIPIENT_META_KEY, SEND_ORIGIN_META_KEY):
+    for _address_key in (CHANNEL_RECIPIENT_META_KEY, SEND_ORIGIN_META_KEY, "author"):
         _addresses = [
             (
                 (item.get("meta") or {}).get(_address_key)
@@ -5501,11 +5507,18 @@ async def _start_next_queued_turn(
                 if isinstance(_loop_id, str) and _loop_id:
                     _run_kwargs["_directive_loop_id"] = _loop_id
                 break
-    task = spawn_guarded_turn(
-        state,
-        slot,
-        _run_chat(state, slot, next_msg, **_run_kwargs),
-    )
+    # Shared Crew: the drained turn is charged to the person who queued it, read
+    # from the server-stamped author on the entries. Entries restored from disk
+    # or written by different people name no one, so the turn falls to the
+    # bounded Unknown or automation budget (shared_crew.turn_gate).
+    from kiro_crew.shared_crew.turn_gate import initiated_by, queued_initiator
+
+    with initiated_by(queued_initiator(consumed)):
+        task = spawn_guarded_turn(
+            state,
+            slot,
+            _run_chat(state, slot, next_msg, **_run_kwargs),
+        )
     slot.task = task
     if _settleable:
         # Open the retention clock on the result files this row promises — but
@@ -6180,7 +6193,17 @@ def _hands_off_queue_on_exit(
         closing = False
         setup_failed = False
         try:
-            await fn(state, slot, turn_exit, *args, **kwargs)
+            # Shared Crew fair admission for a turn no admitted work started
+            # (shared_crew.turn_gate); a pass-through when admission is off.
+            from kiro_crew.shared_crew.turn_gate import gate_turn
+
+            await gate_turn(
+                state,
+                slot,
+                args[0] if args else "",
+                kwargs,
+                lambda: fn(state, slot, turn_exit, *args, **kwargs),
+            )
         except GeneratorExit:
             closing = True
             raise

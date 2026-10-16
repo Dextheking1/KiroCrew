@@ -227,7 +227,7 @@ _BASE_OWNERS: dict[str, tuple[str, ...]] = {
 #: SHA-256 of the sorted ``"<name> <kind> <signature>"`` lines of every name in
 #: ``_BASE_OWNERS``, captured from the one-module file before the split: each moved
 #: name keeps the kind and signature it had there.
-_BASE_SHAPE_DIGEST = "140f95078d00ee2c3b73e500e5ec24d015d4dd307d18a5cf2efbbf232c4dfc3d"
+_BASE_SHAPE_DIGEST = "4ce28a536937a3ec8312417831b599364e5f856a5878e31b95ff3c90ff5baf4b"
 
 
 #: Helpers the split of ``api_send_message`` added to the send owner: the body it

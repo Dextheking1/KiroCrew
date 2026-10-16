@@ -1806,8 +1806,10 @@ async def start_dashboard(
     async def _shared_crew_startup(_app: web.Application) -> None:
         # Shared Crew: probe containment once at start, so hard-limit mode fails
         # closed before the first runtime spawns (shared_crew.admission_gate).
+        from kiro_crew.shared_crew import wiring
         from kiro_crew.shared_crew.admission_gate import startup_check
 
+        wiring.install()
         try:
             await startup_check()
         except Exception:  # noqa: BLE001 - a probe failure must not stop the gateway

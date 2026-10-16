@@ -835,6 +835,11 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         # The attachment lists (`meta.files` / `meta.dirs`) ride the same way:
         # the renderer resolves `[attached_file N]` markers against them, and a
         # drained row without them truncates a spaced path at its first space.
+        # The server-derived author rides the entry to the drain, which writes
+        # it on the row and charges the drained turn to that person.
+        from kiro_crew.shared_crew.attribution import author_meta as _author_meta
+        from kiro_crew.shared_crew.identity import actor_of as _queued_actor_of
+
         qid = queue_for_next_turn(
             state,
             slot,
@@ -861,6 +866,7 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             # when this turn ends. An `auto` send Jev chose to queue is a real
             # queue and waits like one.
             steer_intent=bool(steer) and not request_app and not _auto_queues,
+            author=None if request_app else _author_meta(_queued_actor_of(request)),
         )
         return web.json_response({"ok": True, "queued": True, "queue_id": qid})
 

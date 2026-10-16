@@ -776,7 +776,10 @@ class AdmissionService:
                 live.work = current
             raise AdmissionEnded(live.work) from None
         self.bind_session(live.work.session_key, live.work.budget_key, work_id)
-        inner = _containment.create_task_in_scope(coro, live.work.budget_key)
+        from kiro_crew.shared_crew.turn_gate import mark_admitted
+
+        with mark_admitted(work_id):
+            inner = _containment.create_task_in_scope(coro, live.work.budget_key)
         live.cancel_cb = inner.cancel
         outcome: OperationState = S.COMPLETED
         try:
@@ -1268,6 +1271,11 @@ def install_service(service: AdmissionService | None) -> None:
     )
 
 
+def installed_service() -> AdmissionService | None:
+    """The installed service without building one; None before first use. No I/O."""
+    return _SERVICE
+
+
 def _load_limits() -> EffectiveLimits:
     from kiro_crew.acp.runtime_start import _resolve_session_start_concurrency
     from kiro_crew.config.sections_shared_crew import effective_limits, load_shared_crew_config
@@ -1471,6 +1479,7 @@ __all__ = [
     "current_service",
     "idempotency_key_of",
     "install_service",
+    "installed_service",
     "principal_of",
     "recorded_principal",
     "request_digest",

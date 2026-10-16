@@ -26,9 +26,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/shared-crew/people", routes_identity.api_shared_crew_people)
     app.router.add_get("/api/shared-crew/capacity", routes_admission.api_capacity)
     app.router.add_get("/api/shared-crew/work", routes_admission.api_work)
-    app.router.add_post(
-        "/api/shared-crew/work/{work_id}/cancel", routes_admission.api_work_cancel
-    )
+    app.router.add_post("/api/shared-crew/work/{work_id}/cancel", routes_admission.api_work_cancel)
     app.router.add_get("/api/shared-crew/presence", routes_collab.api_shared_crew_presence)
     app.router.add_get("/api/shared-crew/decisions", routes_collab.api_shared_crew_decisions)
     app.router.add_get(

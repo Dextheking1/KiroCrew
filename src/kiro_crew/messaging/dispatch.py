@@ -1865,6 +1865,51 @@ class ChannelTurns:
         asker: Asker,
         text: str,
         source: RendererSource,
+        **kwargs: Any,
+    ) -> TurnOutcome:
+        """Run one turn through Shared Crew fair admission (``shared_crew.turn_gate``).
+
+        With admission off this is :meth:`_run_unadmitted`. A refused inbound
+        turn tells its sender the Crew is at capacity; a refused wake answers
+        BUSY, so it retries its durable claim.
+        """
+        from kiro_crew.shared_crew.turn_gate import run_channel_turn
+
+        monitor = kwargs.get("monitor")
+
+        async def _refused(reason: Any) -> TurnOutcome:
+            if monitor is not None:
+                return self._outcome(Verdict.BUSY, monitor)
+            await self._note_capacity_refusal(source, kwargs.get("is_muted"), reason)
+            return self._outcome(Verdict.BUSY, None)
+
+        return await run_channel_turn(
+            session_key=asker.session_key,
+            text=text,
+            automation=monitor is not None,
+            run=lambda: self._run_unadmitted(asker, text, source, **kwargs),
+            refused=_refused,
+        )
+
+    async def _note_capacity_refusal(
+        self, source: RendererSource, is_muted: Callable[[], bool] | None, reason: Any
+    ) -> None:
+        if is_muted is not None and is_muted():
+            return
+        from kiro_crew.shared_crew.turn_gate import capacity_note
+
+        try:
+            renderer: Any = source if isinstance(source, Renderer) else await source(False)
+            await renderer.on_text_chunk(capacity_note(reason))
+            await renderer.on_done()
+        except Exception:  # noqa: BLE001 -- the note is best effort
+            logger.debug("%s capacity note failed", self.channel, exc_info=True)
+
+    async def _run_unadmitted(
+        self,
+        asker: Asker,
+        text: str,
+        source: RendererSource,
         *,
         approval_mode: str,
         decider: Any,
