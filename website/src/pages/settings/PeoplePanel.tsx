@@ -6,12 +6,16 @@
  *  sign-in in front of it, not here: Tailscale users are managed in Tailscale,
  *  and an enterprise Crew points to its console only when its capabilities say
  *  one is configured. There is no add, remove, role or admin control, and no
- *  management URL is ever taken from a peer or from config. */
+ *  management URL is ever taken from a peer or from config.
+ *
+ *  While no shared-access path is configured the whole surface is one setup
+ *  empty state (`SharedAccessSetup`) instead. */
 import { ExternalLink, Users } from 'lucide-react'
 import { SettingsCard, SettingsSection } from '../../components/settings'
 import { Badge, ContentSkeleton, EmptyState } from '../../components/ui'
 import ErrorNotice from '../../components/ErrorNotice'
-import { capabilityUsable, membershipPointer, principalInitials, principalName, type PeopleRow, type PeopleSource } from '../../api/sharedCrewUi'
+import { capabilityUsable, membershipPointer, principalInitials, principalName, sharedAccessConfigured, type PeopleRow, type PeopleSource } from '../../api/sharedCrewUi'
+import { SharedAccessSetup } from './SharedAccessSetup'
 import { useSharedCrewCapabilities, useSharedCrewPeople } from '../../hooks/sharedCrew/useSharedCrew'
 import { fmtDateTime, fmtNumber } from '../../i18n/format'
 import { i18nT } from '../../i18n/t'
@@ -67,6 +71,7 @@ export function PeoplePanel() {
   if (people.isError) {
     return <ErrorNotice message={people.error instanceof Error ? people.error.message : i18nT('sharedCrew.people_failed')} askAgent testId="people-error" />
   }
+  if (!sharedAccessConfigured(capabilities)) return <SharedAccessSetup capabilities={capabilities} />
   const data = people.data
   if (!data || !capabilityUsable(capabilities.attribution)) {
     return (

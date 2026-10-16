@@ -19,6 +19,8 @@ import {
   type ReasonCode,
   type SessionAttribution,
   type SessionPage,
+  type SetupPath,
+  type SetupPathCapability,
   type SharedCrewCapabilities,
   type SharedDecision,
 } from './sharedCrew'
@@ -150,6 +152,43 @@ export function messageAuthor(meta: Record<string, unknown> | undefined): Public
       captured_at: typeof a.display?.captured_at === 'number' ? a.display.captured_at : null,
     },
   }
+}
+
+/** The id of a session's default owner: its recorded creator, or the viewer
+ *  when the session has no known creator (a legacy session). Empty when
+ *  neither is known yet. */
+export function sessionOwnerId(attribution: SessionAttribution | null | undefined, viewerId: string | null | undefined): string {
+  const creator = attribution?.creator
+  if (creator && !isUnknownPrincipal(creator)) return creator.id
+  return viewerId ?? ''
+}
+
+/** The sender a user message is labelled with, or `null` for no label. The
+ *  session's default owner needs no label; any other participant, an Unknown
+ *  author included, is named. Nothing is labelled until the owner is known. */
+export function bylineFor(author: PublicPrincipal | null, ownerId: string): PublicPrincipal | null {
+  if (!author || !ownerId) return null
+  return author.id === ownerId ? null : author
+}
+
+/** The setup paths, in the order the People surface offers them. */
+export const SETUP_PATH_ORDER: readonly SetupPath[] = ['tailscale', 'kiro_login', 'systems_manager']
+
+/** Each setup path's availability; an older gateway that omits them reads as none. */
+export function setupPathStates(capabilities: SharedCrewCapabilities): Record<SetupPath, SetupPathCapability> {
+  const fallback: SetupPathCapability = { state: 'unavailable', reason: 'not_in_this_build' }
+  const raw = capabilities.setup_paths
+  return {
+    tailscale: raw?.tailscale ?? { state: 'unavailable', reason: 'not_configured' },
+    kiro_login: raw?.kiro_login ?? fallback,
+    systems_manager: raw?.systems_manager ?? fallback,
+  }
+}
+
+/** True once any setup path is available, so the Crew has a shared-access path. */
+export function sharedAccessConfigured(capabilities: SharedCrewCapabilities): boolean {
+  const states = setupPathStates(capabilities)
+  return SETUP_PATH_ORDER.some(path => states[path].state === 'available')
 }
 
 /** What a work item looks like on screen (spec section 7). */

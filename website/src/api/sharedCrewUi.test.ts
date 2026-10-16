@@ -8,6 +8,11 @@ import {
   mergeDecision,
   mergeWork,
   messageAuthor,
+  bylineFor,
+  sessionOwnerId,
+  setupPathStates,
+  sharedAccessConfigured,
+  ALL_UNAVAILABLE,
   principalInitials,
   principalName,
   workCancellable,
@@ -120,5 +125,57 @@ describe('limits', () => {
     expect(membershipPointer('console')).toBe('console')
     expect(membershipPointer('')).toBeNull()
     expect(membershipPointer('https://evil.example/' as never)).toBeNull()
+  })
+})
+
+describe('message bylines', () => {
+  const person = (id: string, kind: 'human' | 'unknown' = 'human') => ({ id, kind, display: { name: id, login: '', captured_at: null } })
+  const attribution = (id: string, kind: 'human' | 'unknown' = 'human') => ({ creator: person(id, kind), availability: 'recorded' as const, created_at: 1 })
+
+  it('the creator is the default owner and needs no label', () => {
+    const owner = sessionOwnerId(attribution('p_creator'), 'p_viewer')
+    expect(owner).toBe('p_creator')
+    expect(bylineFor(person('p_creator'), owner)).toBeNull()
+  })
+
+  it('names every other participant, the viewer included', () => {
+    const owner = sessionOwnerId(attribution('p_creator'), 'p_viewer')
+    expect(bylineFor(person('p_bob'), owner)?.id).toBe('p_bob')
+    expect(bylineFor(person('p_viewer'), owner)?.id).toBe('p_viewer')
+  })
+
+  it('a legacy session with no known creator falls back to the viewer', () => {
+    expect(sessionOwnerId(null, 'p_viewer')).toBe('p_viewer')
+    expect(sessionOwnerId(attribution('unknown', 'unknown'), 'p_viewer')).toBe('p_viewer')
+    expect(bylineFor(person('p_viewer'), 'p_viewer')).toBeNull()
+  })
+
+  it('an Unknown author stays Unknown and is labelled', () => {
+    expect(bylineFor(person('unknown', 'unknown'), 'p_creator')?.kind).toBe('unknown')
+  })
+
+  it('labels nothing until the owner is known', () => {
+    expect(bylineFor(person('p_bob'), '')).toBeNull()
+    expect(bylineFor(null, 'p_creator')).toBeNull()
+  })
+})
+
+describe('shared-access setup paths', () => {
+  it('an older gateway reads as no path configured', () => {
+    expect(sharedAccessConfigured(ALL_UNAVAILABLE)).toBe(false)
+    expect(setupPathStates(ALL_UNAVAILABLE).kiro_login.reason).toBe('not_in_this_build')
+  })
+
+  it('any available path counts as configured; degraded does not', () => {
+    const paths = (tailscale: 'available' | 'degraded') => ({
+      ...ALL_UNAVAILABLE,
+      setup_paths: {
+        tailscale: { state: tailscale, reason: '' as const },
+        kiro_login: { state: 'unavailable' as const, reason: 'not_in_this_build' as const },
+        systems_manager: { state: 'unavailable' as const, reason: 'not_in_this_build' as const },
+      },
+    })
+    expect(sharedAccessConfigured(paths('available'))).toBe(true)
+    expect(sharedAccessConfigured(paths('degraded'))).toBe(false)
   })
 })

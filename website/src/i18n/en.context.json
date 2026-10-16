@@ -758,6 +758,20 @@
     "components.welcomeView.suggestion_daily_reminder": "Starter card on the empty chat's welcome screen; clicking it puts this text in the message box as the user's own request to the assistant, asking it to set up a reminder that repeats every day (a note the assistant sends on a schedule, not a calendar event).",
     "components.welcomeView.suggestion_review_changes": "Starter card on the welcome screen whose text becomes the user's message asking the assistant to look over the edits the user most recently made to their own code or files; 'changes' means those edits, not product updates or release notes.",
     "components.welcomeView.suggestion_what_next": "Starter card on the welcome screen whose text becomes the user's own question to the assistant about which task the user should pick up next; keep it a question in the user's voice, ending with the language's question mark.",
-    "sharedCrew.you": "Badge beside the viewer's own row in the People list: marks the person reading the screen."
+    "sharedCrew.you": "Badge beside the viewer's own row in the People list: marks the person reading the screen.",
+    "sharedCrew.setup_title": "Heading of the People settings empty state shown while the Crew has no way for teammates to connect yet.",
+    "sharedCrew.setup_body": "Body under the shared-access setup heading: explains that the user picks a connection method and that nobody else can join until one is set up.",
+    "sharedCrew.setup_list_label": "Accessible name of the list of setup methods in the shared-access setup empty state.",
+    "sharedCrew.setup_tailscale": "Product name of the Tailscale setup method. Keep the brand name untranslated.",
+    "sharedCrew.setup_tailscale_body": "One-line description of connecting teammates through Tailscale.",
+    "sharedCrew.setup_kiro_login": "Name of the setup method where teammates sign in with Kiro. Keep \"Kiro\" untranslated.",
+    "sharedCrew.setup_kiro_login_body": "One-line description of the Kiro login setup method.",
+    "sharedCrew.setup_systems_manager": "Product name of the AWS Systems Manager setup method. Keep the brand name untranslated.",
+    "sharedCrew.setup_systems_manager_body": "One-line description of connecting through AWS Systems Manager sessions.",
+    "sharedCrew.setup_status_available": "Status badge on a setup method the gateway reports as ready to use.",
+    "sharedCrew.setup_status_degraded": "Status badge on a setup method that is turned on but cannot currently be reached.",
+    "sharedCrew.setup_status_not_set_up": "Status badge on a setup method that exists in this build but is not configured.",
+    "sharedCrew.setup_status_not_in_build": "Status badge on a setup method this build of the app does not include.",
+    "sharedCrew.setup_guide_link": "Link to the documentation guide for one setup method; {{name}} is the method name."
   }
 }

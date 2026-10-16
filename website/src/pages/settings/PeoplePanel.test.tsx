@@ -22,9 +22,19 @@ function mount() {
 
 beforeEach(() => vi.clearAllMocks())
 
+/** A Crew with the tailnet path set up, so the People list itself renders. */
+const SHARED = {
+  ...ALL_UNAVAILABLE,
+  setup_paths: {
+    tailscale: { state: 'available' as const, reason: '' as const },
+    kiro_login: { state: 'unavailable' as const, reason: 'not_in_this_build' as const },
+    systems_manager: { state: 'unavailable' as const, reason: 'not_in_this_build' as const },
+  },
+}
+
 describe('PeoplePanel', () => {
   it('lists observed people apart from the directory, with sources and usage, read-only', async () => {
-    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available', membership_link: 'tailscale_admin' })
+    caps.mockResolvedValue({ ...SHARED, attribution: 'available', membership_link: 'tailscale_admin' })
     people.mockResolvedValue({
       schema_version: 1, directory: { state: 'unavailable' }, usage_available: true,
       people: [row('p_a', 'Alice', { is_viewer: true }), row('p_b', 'Bob', { sources: ['session_creator'], last_seen_at: null })],
@@ -44,7 +54,7 @@ describe('PeoplePanel', () => {
   })
 
   it('shows the console pointer only when the capability names it', async () => {
-    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available', membership_link: 'console' })
+    caps.mockResolvedValue({ ...SHARED, attribution: 'available', membership_link: 'console' })
     people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })
     mount()
     expect(await screen.findByTestId('console-pointer')).toBeInTheDocument()
@@ -53,9 +63,64 @@ describe('PeoplePanel', () => {
   })
 
   it('degrades when the Crew does not attribute', async () => {
-    caps.mockResolvedValue(null)
+    caps.mockResolvedValue({ ...SHARED })
     people.mockResolvedValue(null)
     mount()
     expect(await screen.findByTestId('people-unavailable')).toBeInTheDocument()
+  })
+
+  it('shows one setup empty state when no shared-access path is configured', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })
+    mount()
+    expect(await screen.findByTestId('shared-access-setup')).toBeInTheDocument()
+    expect(screen.queryByTestId('people-panel')).toBeNull()
+    expect(screen.getByText('Set up shared team access')).toBeInTheDocument()
+    expect(screen.getByTestId('setup-path-tailscale-status').textContent).toBe('Not set up')
+    expect(screen.getByTestId('setup-path-kiro_login-status').textContent).toBe('Not available in this build')
+    expect(screen.getByTestId('setup-path-systems_manager-status').textContent).toBe('Not available in this build')
+    // Guidance only: no control that does nothing, and links only to existing guides.
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    expect(screen.getByTestId('setup-path-tailscale-guide')).toHaveAttribute('href', expect.stringContaining('docs/guides/remote-and-mobile.md#share-one-crew-with-teammates'))
+    expect(screen.getByTestId('setup-path-systems_manager-guide')).toHaveAttribute('href', expect.stringContaining('docs/guides/cloud-instance-ssm-vs-ssh.md'))
+    expect(screen.queryByTestId('setup-path-kiro_login-guide')).toBeNull()
+  })
+
+  it('shows the same setup state on an older gateway and when the gateway is unreachable', async () => {
+    caps.mockResolvedValue(null)
+    people.mockResolvedValue(null)
+    mount()
+    expect(await screen.findByTestId('shared-access-setup')).toBeInTheDocument()
+  })
+
+  it('names each path with the availability the capabilities report', async () => {
+    caps.mockResolvedValue({
+      ...ALL_UNAVAILABLE,
+      setup_paths: {
+        tailscale: { state: 'degraded', reason: 'tailnet_unreachable' },
+        kiro_login: { state: 'unavailable', reason: 'not_in_this_build' },
+        systems_manager: { state: 'unavailable', reason: 'not_in_this_build' },
+      },
+    })
+    people.mockResolvedValue(null)
+    mount()
+    expect(await screen.findByTestId('setup-path-tailscale')).toHaveAttribute('data-state', 'degraded')
+    expect(screen.getByTestId('setup-path-tailscale-status').textContent).toBe('On, but not reachable')
+  })
+
+  it('leaves the setup state once a capability source reports a path available', async () => {
+    caps.mockResolvedValue({
+      ...ALL_UNAVAILABLE,
+      attribution: 'available',
+      setup_paths: {
+        tailscale: { state: 'unavailable', reason: 'not_configured' },
+        kiro_login: { state: 'available', reason: '' },
+        systems_manager: { state: 'unavailable', reason: 'not_in_this_build' },
+      },
+    })
+    people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })
+    mount()
+    expect(await screen.findByTestId('people-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('shared-access-setup')).toBeNull()
   })
 })

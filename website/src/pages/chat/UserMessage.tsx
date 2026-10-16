@@ -562,8 +562,8 @@ const UserMessage = memo(function UserMessage({ content, meta, timestamp, timest
               exclusive to backend-confirmed injection (#7997). Rendering in the
               badge's slot keeps the pending -> consumed / requeued hand-off a
               content change in one place rather than a layout jump. */}
-          {/* Shared Crew: who sent this, when it was someone other than the viewer. */}
-          <MessageByline meta={meta} />
+          {/* Shared Crew: who sent this, when it was someone other than the session's owner. */}
+          <MessageByline meta={meta} slotKey={slotKey} />
           {pendingSend && (
             /* The plain send's counterpart to the steer line below: same slot,
                same muted weight, same pulse for a wait still open (a late echo
