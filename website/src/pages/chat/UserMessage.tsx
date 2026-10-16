@@ -1,4 +1,5 @@
 import { memo, useState, useRef, useEffect, useCallback, type ReactNode } from 'react'
+import { MessageByline } from './shared-crew/MessageByline'
 import { motion } from 'framer-motion'
 import { Pencil, Send, Copy, Check, Link2, MessageSquare, Target, Pin, PinOff, X, Clock, Quote, MoreHorizontal } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -561,6 +562,8 @@ const UserMessage = memo(function UserMessage({ content, meta, timestamp, timest
               exclusive to backend-confirmed injection (#7997). Rendering in the
               badge's slot keeps the pending -> consumed / requeued hand-off a
               content change in one place rather than a layout jump. */}
+          {/* Shared Crew: who sent this, when it was someone other than the viewer. */}
+          <MessageByline meta={meta} />
           {pendingSend && (
             /* The plain send's counterpart to the steer line below: same slot,
                same muted weight, same pulse for a wait still open (a late echo

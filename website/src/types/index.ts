@@ -1,3 +1,5 @@
+import type { SessionAttribution } from '../api/sharedCrew'
+
 export interface StatusData {
   uptime: string
   start_time?: number
@@ -1258,6 +1260,8 @@ export interface ChatSlot extends TurnIdentityFields {
    * (written at birth, rehydrated), so it is the one link from a crew member's
    * DM thread to the worker sessions it drives — the Crew Members drawer
    * filters the live slots on it. */
+  /** Shared Crew creator (`shared_crew.attribution`), public shape. Display only. */
+  attribution?: SessionAttribution | null
   created_by?: string
   /** Whether THIS gateway process stamped `created_by` at mint, rather than
    * rehydrating it from the transcript. `created_by` is restored from a metadata
