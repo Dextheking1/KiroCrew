@@ -32,6 +32,7 @@ from kiro_crew.history_index import (
     fold_texts,
 )
 from kiro_crew.jsonl_util import bounded_records
+from kiro_crew.shared_crew.attribution import public_attribution_from_meta
 
 if TYPE_CHECKING:
     from kiro_crew.history import ConversationLog
@@ -1392,6 +1393,7 @@ class SessionCatalogProjection:
                 meta["memory_mode"] = d.get("memory_mode", "persistent")
                 if d.get("folder_id"):
                     meta["folder_id"] = d["folder_id"]
+                meta["attribution"] = public_attribution_from_meta(d)
             else:
                 # Read only the first line for metadata
                 try:
@@ -1409,6 +1411,7 @@ class SessionCatalogProjection:
                             meta["memory_mode"] = d.get("memory_mode", "persistent")
                             if d.get("folder_id"):
                                 meta["folder_id"] = d["folder_id"]
+                            meta["attribution"] = public_attribution_from_meta(d)
                             # Guarded publish — discard the fill if a write
                             # invalidated this key inside the stat → read
                             # window (see the generation snapshot above).
@@ -1435,6 +1438,9 @@ class SessionCatalogProjection:
                     pass
             # Ensure memory_mode is always present (old sessions lack it)
             meta.setdefault("memory_mode", "persistent")
+            # A session with no readable metadata line has no creator: Unknown.
+            if "attribution" not in meta:
+                meta["attribution"] = public_attribution_from_meta(None)
             # Extract first user message as title fallback
             if "title" not in meta:
                 msg_cached = self._log._msg_cache.get(key)
