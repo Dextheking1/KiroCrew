@@ -30,7 +30,7 @@ type Draft = {
   session_folder: string
   /** Open a Slack thread in the owner's bot DM for every new dashboard session on its first message. */
   auto_link_sessions: boolean
-  /** Slack Code: agent sessions, code channels and the code-channel defaults. */
+  /** Slack Code: the registered switches and the code-channel defaults. */
   code: SlackCodeDraft
 }
 
@@ -252,7 +252,10 @@ export function SlackPanel() {
       // The manifest renders for the saved Slack Code switches, so a save can
       // change it and what the installed app is compared against.
       qc.invalidateQueries({ queryKey: ['slack-manifest'] })
-      qc.invalidateQueries({ queryKey: ['slack-manifest-status'] })
+      // The status read records the install's scopes; the capability lines come
+      // from the config query, so read it once more after the status settles.
+      void qc.invalidateQueries({ queryKey: ['slack-manifest-status'] })
+        .then(() => qc.invalidateQueries({ queryKey: ['slack-config'] }))
     },
   })
 
@@ -395,9 +398,23 @@ export function SlackPanel() {
         </SettingsCard>
       </SettingsSection>
 
+      {/* ── Slack Code: switches, code-channel defaults, manifest update ──
+          Right below the tokens, above the rest of the configuration: turning
+          a switch on is followed by updating the Slack app, and both happen
+          in this one card, with the page's own save inside it. */}
+      <SlackCodeSection
+        data={data}
+        draft={draft.code}
+        onChange={patch => setDraft(d => (d ? { ...d, code: { ...d.code, ...patch } } : d))}
+        readOnly={ro}
+        manifestText={manifestQ.data?.manifest}
+        onSave={handleSave}
+        saving={saveMut.isPending}
+      />
+
       {/* ── Identity & access ── */}
       <SettingsSection title={i18nT('pages.settings.slackPanel.identity_access')}>
-        <SettingsCard index={2}>
+        <SettingsCard index={3}>
           <SettingsInput
             label={i18nT('pages.settings.slackPanel.owner_slack_member_id')}
             description={i18nT('pages.settings.slackPanel.the_one_member_who_can_always_interact_with_the')}
@@ -420,7 +437,7 @@ export function SlackPanel() {
 
       {/* ── Behavior ── */}
       <SettingsSection title={i18nT('pages.settings.slackPanel.behavior')}>
-        <SettingsCard index={3}>
+        <SettingsCard index={4}>
           <SettingsInput
             label={i18nT('pages.settings.slackPanel.slash_command')}
             description={i18nT('pages.settings.slackPanel.trigger_word_for_the_slack_slash_command_without')}
@@ -493,15 +510,6 @@ export function SlackPanel() {
           </div>
         </SettingsCard>
       </SettingsSection>
-
-      {/* ── Slack Code: agent sessions, code channels, manifest update ── */}
-      <SlackCodeSection
-        data={data}
-        draft={draft.code}
-        onChange={patch => setDraft(d => (d ? { ...d, code: { ...d.code, ...patch } } : d))}
-        readOnly={ro}
-        manifestText={manifestQ.data?.manifest}
-      />
 
       {/* ── Save (hidden on read-only remote sessions) ── */}
       {!ro && <div className="flex items-center gap-3 mt-1 mb-4">
