@@ -32,6 +32,7 @@ from .model import (
     SIDE_EFFECT_UNKNOWN,
     TaskRecord,
 )
+from .store_work import WORK_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,8 @@ _SCHEMA = (
     "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_id, state)",
     # Per-lane dispatch heads (fairness lanes).
     "CREATE INDEX IF NOT EXISTS tasks_lane ON tasks(lane, state, next_run_at, created_at)",
+    # Accepted-work admission rows (``store_work``). Additive, so the version stays.
+    *WORK_SCHEMA,
 )
 
 

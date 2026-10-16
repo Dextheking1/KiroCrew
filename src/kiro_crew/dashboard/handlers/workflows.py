@@ -477,6 +477,20 @@ def _opt_int(value: Any) -> Optional[int]:
     return value
 
 
+async def _admit_workflow_run(request: web.Request, svc: Any) -> Any:
+    """Fair admission (Shared Crew) for a workflow run: it starts now or is refused."""
+    from kiro_crew.shared_crew.admission import OperationKind
+    from kiro_crew.shared_crew.admission_entry import admit_background_run, workflow_probe
+
+    return await admit_background_run(
+        request,
+        operation=OperationKind.WORKFLOW,
+        session_key=request.headers.get("X-Session-Key", "") or "workflow",
+        probe=workflow_probe(svc),
+        cancel=svc.cancel,
+    )
+
+
 async def api_workflow_run(request: web.Request) -> web.Response:
     """POST /api/workflows/run — launch a background run, return its run_id."""
     # Owner identity is a property of a dashboard-user request: ``app == ""`` is
@@ -511,20 +525,31 @@ async def api_workflow_run(request: web.Request) -> web.Response:
     refusal = await _private_memory_refusal(request, "workflow.run")
     if refusal is not None:
         return refusal
+    from kiro_crew.shared_crew.containment import principal_scope
+
+    run_admission = await _admit_workflow_run(request, svc)
+    if run_admission.rejected:
+        return run_admission.refusal_response()
     try:
-        out = await svc.start(
-            source,
-            name=body.get("name", "") or "",
-            args=body.get("args") if isinstance(body.get("args"), dict) else {},
-            author=request.headers.get("X-Session-Key", ""),
-            session_key=request.headers.get("X-Session-Key", ""),
-            expected_store=request.get("workflow_expected_store"),
-            budget_total=budget_total,
-            timeout_secs=_opt_int(body.get("timeout_secs")),
-        )
+        with principal_scope(None if run_admission.work is None else run_admission.work.budget_key):
+            out = await svc.start(
+                source,
+                name=body.get("name", "") or "",
+                args=body.get("args") if isinstance(body.get("args"), dict) else {},
+                author=request.headers.get("X-Session-Key", ""),
+                session_key=request.headers.get("X-Session-Key", ""),
+                expected_store=request.get("workflow_expected_store"),
+                budget_total=budget_total,
+                timeout_secs=_opt_int(body.get("timeout_secs")),
+            )
     except Exception:
         logger.exception("workflow run failed")
+        await run_admission.abandon()
         return _error("could not start workflow", "workflow_run_failed", 500)
+    if "run_id" in out:
+        await run_admission.attach_child(str(out["run_id"]))
+    else:
+        await run_admission.abandon()
     status = 200 if "run_id" in out else 400
     return web.json_response(_redact_obj(out), status=status)
 

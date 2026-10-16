@@ -466,6 +466,24 @@ async def api_taskrunner_start(request: web.Request) -> web.Response:
             {"error": TASK_RUNNER_DISABLED_MESSAGE, "code": "app_disabled"}, status=409
         )
 
+    # Fair admission (Shared Crew): a background run starts now or is refused,
+    # before the inline spec is written so a refusal leaves nothing behind.
+    from kiro_crew.shared_crew.admission import OperationKind
+    from kiro_crew.shared_crew.admission_entry import admit_background_run, taskrunner_probe
+    from kiro_crew.shared_crew.containment import principal_scope
+
+    runner = state.task_runner
+    run_admission = await admit_background_run(
+        request,
+        operation=OperationKind.TASK,
+        session_key=origin,
+        probe=taskrunner_probe(runner),
+        cancel=lambda task_id: runner.cancel(task_id, exact=True),
+    )
+    if run_admission.rejected:
+        return run_admission.refusal_response()
+    run_principal = None if run_admission.work is None else run_admission.work.budget_key
+
     # Handle inline spec content
     created_spec: Path | None = None
     inline_content: str | None = None
@@ -498,18 +516,20 @@ async def api_taskrunner_start(request: web.Request) -> web.Response:
         auto_approve = await _gate_auto_approve(
             request, body.get("auto_approve") is True, claimed_source, endpoint="start"
         )
-        task_id = await state.task_runner.start_background(
-            spec_path,
-            agent=agent,
-            name=task_name,
-            source=source,
-            workspace_dir=workspace_dir,
-            auto_approve=auto_approve,
-            session_key=origin,
-            execution_context=execution,
-            **({"input_content": inline_content} if inline_content is not None else {}),
-        )
+        with principal_scope(run_principal):
+            task_id = await state.task_runner.start_background(
+                spec_path,
+                agent=agent,
+                name=task_name,
+                source=source,
+                workspace_dir=workspace_dir,
+                auto_approve=auto_approve,
+                session_key=origin,
+                execution_context=execution,
+                **({"input_content": inline_content} if inline_content is not None else {}),
+            )
     except BaseException as exc:
+        await run_admission.abandon()
         # The handler owns the temp file ONLY when it created it AND no run
         # retains it: a rejected start must not strand TASK_*.md orphans in
         # the work dir, an external spec the caller passed by path must never
@@ -541,6 +561,7 @@ async def api_taskrunner_start(request: web.Request) -> web.Response:
         if isinstance(exc, WorkflowInitializing):
             return web.json_response({"error": str(exc), "code": exc.code}, status=503)
         return web.json_response({"error": str(exc)}, status=400)
+    await run_admission.attach_child(str(task_id), session_key=origin)
     return web.json_response({"ok": True, "spec": spec_path, "task_id": task_id})
 
 
