@@ -622,6 +622,22 @@ def _fresh_update_ownership(_floor_monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_inherited_admission_service(_floor_monkeypatch):
+    """Start every test without a Shared Crew admission service another test built.
+
+    ``admission_gate`` keeps the gateway's service process-wide. A chat send a
+    test drives builds one, and a later test in the same worker would then run
+    every turn through it, config re-reads included. Rebound only when the
+    module is already imported; the inherited value is restored at teardown.
+    """
+    gate = sys.modules.get("kiro_crew.shared_crew.admission_gate")
+    if gate is not None:
+        _floor_monkeypatch.setattr(gate, "_SERVICE", None)
+        _floor_monkeypatch.setattr(gate, "_SERVICE_LOOP", None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _small_default_host(_floor_monkeypatch):
     """Size every ``"auto"`` start limit from a fixed small host, not this machine.
 
