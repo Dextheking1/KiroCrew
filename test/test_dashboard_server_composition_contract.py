@@ -1382,9 +1382,9 @@ def test_the_whole_census_holds_the_known_rebinds_and_an_owner_s_definitions() -
 #: layer and the factory that built it. The order is a security contract: latency is
 #: outermost, the deny-audit boundary is outer to every barrier that can refuse, the
 #: SEL request audit is inner to them, the per-slot ownership checkpoint is inner to
-#: token auth and the audit record, and the workflow and crewmate-prune gates and the
-#: change-card hook (innermost, after auth has classified the caller) are appended
-#: after the explicit list.
+#: token auth and the audit record, and the workflow and crewmate-prune gates, the
+#: Shared Crew enterprise grant and budget gate and the change-card hook (innermost,
+#: after auth has classified the caller) are appended after the explicit list.
 _DASHBOARD_CHAIN = (
     ("route_latency_middleware", "make_route_latency_middleware.<locals>."),
     ("deny_audit_middleware", "_make_deny_audit_middleware.<locals>."),
@@ -1399,6 +1399,7 @@ _DASHBOARD_CHAIN = (
     ("spa_fallback", "_install_dashboard_middlewares.<locals>."),
     ("_workflow_ready", "_register_workflow_lifecycle.<locals>."),
     ("_crewmate_prune_gate", "_register_crewmate_prune_gate.<locals>."),
+    ("enterprise_gate_middleware", "make_enterprise_gate_middleware.<locals>."),
     ("_change_card_hook", "_register_change_card_hook.<locals>."),
 )
 _API_CHAIN = (
