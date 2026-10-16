@@ -97,8 +97,9 @@ async def ensure_slot_recorded(state: Any, slot: Any) -> bool:
     """Write a never-saved session's metadata line before its work is accepted.
 
     Accepted work is durable at once while a new session's first save is
-    deferred, so a crash in between left a work record naming a session that
-    no longer existed. A session that already has a line is left as it is.
+    deferred; writing the line first means a crash in between cannot leave a
+    work record naming a session that is gone. A session that already has a
+    line is left as it is.
     Off-loop write; True when the session has a line afterwards.
     """
     log = getattr(state, "conversation_log", None)
