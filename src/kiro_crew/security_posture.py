@@ -1773,6 +1773,8 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
         "redactor is handed in by the route rather than chosen here, so the module "
         "applies the gateway's own redactor and cannot substitute a weaker one.",
     ),
+    ("Slack code-channel classifier", "slack/code_channels/classifier.py", "Its model prompt."),
+    ("Slack code-channel diagnostics", "slack/code_channels/client.py", "Logs; credentials only."),
 )
 
 # Modules that call a redactor but are NOT an output egress boundary, so they do
@@ -1838,6 +1840,8 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # Capture-side as well: redacts thread replies as they are READ from
         # Slack, for the model's fenced thread-replies block. No output of its own.
         "slack/thread_replies.py",
+        # Compares a request with its redacted transcript row; emits nothing.
+        "slack/code_channels/routing.py",
         # Gate-side audit hygiene: the tool gate clips and redacts the tool labels
         # and refusal reason of each permission decision before writing them to
         # the SEL audit log. That is a local audit record, not an output bound for
