@@ -1369,6 +1369,23 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
         "Message text rendered into Block Kit payloads (Home Tab, session views).",
     ),
     (
+        "Slack code-channel context bar",
+        "slack/code_channels/workspace/context_bar.py",
+        "Repo, branch, PR and CI labels posted to a code channel's context bar via "
+        "agents.conversations.setProperties. Each label goes through "
+        "redact_via_context before posting, and a link is dropped unless "
+        "redaction leaves it unchanged.",
+    ),
+    (
+        "Slack code-channel diff view",
+        "slack/code_channels/workspace/service.py",
+        "The channel worktree's git diff (tracked and untracked files) and its "
+        "base/branch labels posted to the code tab via "
+        "agents.conversations.setView. The body is redacted through "
+        "redact_via_context BEFORE it is sized and cut to the 1 MB cap, so the "
+        "cap cannot split a credential into an unmatchable prefix.",
+    ),
+    (
         "File cards broadcast to the browser",
         "dashboard/handlers/files.py",
         "The file-card JSON pushed over the chat WebSocket is redacted before "
