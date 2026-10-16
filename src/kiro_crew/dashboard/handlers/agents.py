@@ -1356,8 +1356,8 @@ def own_models_backend(backend: str, configured: str) -> str | None:
 def _live_on(state: Any, backend: str, crew: str) -> Any:
     """A live provider on *backend*, *crew*'s own session's first, then the newest.
 
-    The levels a pair-id harness advertises can follow the model a session runs, and the
-    crew's own session is the likeliest to run the crew's. Newest first, as
+    The levels these harnesses advertise can follow the model a session runs (goose's do,
+    per model), and the crew's own session is the likeliest to run the crew's. Newest first, as
     ``core._advertised_evidence_provider`` reads: an older session still holds what its
     build said at its own ``session/new``.
     """
@@ -1387,33 +1387,40 @@ def harness_effort(
     nothing there instead, for a caller that judges the model itself: the crew editor
     follows the pick the user is making, which a saved model would contradict.
 
-    Where the harness carries it in a session option (pi) or splits a model pair onto one
-    (codex), only that harness's build can say, and with no live session on it
+    Where the harness carries it in a session option (goose, pi) or splits a model pair
+    onto one (codex), only that harness's build can say, and with no live session on it
     ``effort_supported`` is ``None``: unknown, not unsupported.
 
-    A live session there, even one of *crew*'s own, is evidence of the BUILD alone --
-    whether it advertises the effort option, and at which levels -- because its own
-    ``supports_effort`` judges the model IT runs, which a slot pick can make another than
-    *model*: a pair-id harness (codex) would otherwise report that pick as this harness
-    taking no effort, and tell the crew to clear a pin that works. So *model* answers for
-    the pair, as the live gate does.
+    A live session there runs a model of its own, which a slot pick or another crew can
+    make other than *model*, and on these harnesses the levels it advertises follow that
+    model. So it answers a definite ``False`` only for what no model changes: its build
+    advertises no effort option. An option that offers ``off`` alone (goose: this model
+    takes no level), or no level at all, is that session's model speaking, so the answer
+    stays ``None`` and the caller's model judges. A pair-id harness (codex) reads ``None``
+    on any advertised level for the same reason: the pick that session runs is not the pin.
     """
     if backend in ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION | ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS:
         live = _live_on(state, backend, crew)
         if live is None:
             return {"effort_supported": None, "effort_levels": []}
-        levels = [
-            level
-            for level in live.get_valid_effort_levels()
-            if isinstance(level, str) and level in get_reasoning_effort_values()
-        ]
-        supported: bool | None = bool(levels)
-        if backend in ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS:
-            if model_answers:
-                supported = supported and model_supports_effort(model)
-            elif supported:
-                supported = None
-        levels = levels if supported is not False else []
+        advertised = [lvl for lvl in live.get_valid_effort_levels() if isinstance(lvl, str)]
+        # A real session registers its own levels (goose's ``off``) into the shared
+        # vocabulary, so the vocabulary filter alone cannot tell an off-only option apart.
+        levels = [lvl for lvl in advertised if lvl in get_reasoning_effort_values()]
+        supported: bool | None
+        pair_ids = backend in ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS
+        if pair_ids:
+            supported = None if levels else False
+        elif not live.supports_effort():
+            # The live gate's False is either "no option" (no levels) or "off only".
+            supported = None if advertised else False
+        elif any(lvl != "off" for lvl in levels):
+            supported = True
+        else:
+            supported = None
+        if supported is False or (supported is None and not pair_ids):
+            # Levels an unknown answer would carry are that other session's model's.
+            levels = []
     elif not model_answers or model is None:
         return {}
     else:

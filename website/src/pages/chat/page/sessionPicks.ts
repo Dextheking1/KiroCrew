@@ -224,6 +224,9 @@ export function useSessionChoices({
       // depend on the coalesced slots rebroadcast to see its own pick.
       // performAgentSlotSwitch mirrors exactly what the response names.
       await performAgentSlotSwitch(activeSlot, agentName, dispatch, kind)
+      // The cold effort answer was judged on the previous crew's model; without
+      // this it holds until the next poll, up to 30 s once the poll backs off.
+      void queryClient.invalidateQueries({ queryKey: ['slot-selection-capabilities', activeSlot] })
     } catch (error) {
       // Closing the picker is the call sites' job and already happens
       // synchronously alongside this call, so a failure surfaces as the shared
@@ -231,11 +234,11 @@ export function useSessionChoices({
       dispatch(setAgentSwitchNotice(agentSwitchFailureMessage(error)))
     }
     // The setPending* setters are useState setters, so they are stable and cost
-    // nothing to list. `installedAgents`, `provider` and `queryClient` are
-    // deliberately absent: this body reads none of them, and `installedAgents` is
+    // nothing to list, as is `queryClient`. `installedAgents` and `provider` are
+    // deliberately absent: this body reads neither, and `installedAgents` is
     // a fresh array on every agents refetch, so naming it would rebuild the
     // callback — and every picker holding it — for no behavioral gain.
-  }, [activeSlot, dispatch, setPendingAgent, setPendingModel])
+  }, [activeSlot, dispatch, queryClient, setPendingAgent, setPendingModel])
   const switchModel = useCallback(async (modelName: string) => {
     // 'auto' is stored VERBATIM, not collapsed to ''. Both resolve to the same
     // provider behaviour server-side, but '' is also the "never chosen" state,

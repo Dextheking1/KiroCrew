@@ -454,13 +454,15 @@ its own once the cache refreshes with a list that carries it.
   missing session answers `known: false`. Where the level rides the model
   (kiro-cli, claude), it resolves the slot's or crew's effective model so an
   inheriting crew thread still has its effort control before its first turn.
-  The cold answer refreshes every two seconds, and a model switch invalidates
-  it immediately. Where the harness carries a session option (pi)
-  or a model pair (codex), a live session on that harness answers for its BUILD
-  alone: whether it advertises the option and which registered levels it takes.
+  The cold answer refreshes every two seconds for its first five reads, then every
+  30 seconds, and a model or agent switch invalidates it immediately. Where the
+  harness carries a session option (goose, pi) or a model pair (codex), a live
+  session on that harness runs a model of its own, and its levels can follow that
+  model. It reports a definite `false` only when its build advertises no effort
+  option. An option offering `off` alone, or no level, reports `null` with no
+  levels: that is the other session's model speaking (goose does this per model).
   A pair-id harness with the option reports `effort_supported: null` and keeps
-  those levels, so each picker judges its current model; one without the option
-  reports `false`. With no live session on that harness `null` means unknown,
+  those levels, so each picker judges its current model. With no live session on that harness `null` means unknown,
   and the current model supplies the provisional answer. On `false` the effort
   control is absent and the shortcut says the session takes no effort.
   `resolved-model` gives the crew editor the same build answer for pi and Codex,

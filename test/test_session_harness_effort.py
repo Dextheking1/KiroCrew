@@ -18,7 +18,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from chat_test_helpers import pin_harness_choice
 
-from kiro_crew.acp_backends import ACP_BACKEND_CODEX, ACP_BACKEND_PI
+from kiro_crew.acp_backends import ACP_BACKEND_CODEX, ACP_BACKEND_GOOSE, ACP_BACKEND_PI
 from kiro_crew.agent_sdk.capabilities import capabilities_for
 from kiro_crew.dashboard import chat_handlers
 from kiro_crew.dashboard.chat_handlers import api_chat_slot_selection_capabilities
@@ -275,3 +275,88 @@ async def test_the_crew_editor_offers_only_the_levels_a_crew_pin_can_save():
     body = await _resolved(member="pi", state=state)
 
     assert body["effort_levels"] == ["low", "medium", "high", "xhigh"]
+
+
+# ── goose: another session's per-model answer is not the harness's ──
+
+
+def _goose(tmp_path, effort_option: dict | None) -> AcpProvider:
+    """A real goose session whose config options went through its own sync.
+
+    ``_sync_effort_levels`` registers what the session advertises (goose's ``off``)
+    into the process-wide vocabulary, as a production session does on every store.
+    """
+    live = AcpProvider(acp_backend=ACP_BACKEND_GOOSE, work_dir=tmp_path)
+    live._client._model = "goose-model-without-thinking"
+    options: list[dict] = [{"id": "model", "options": []}]
+    if effort_option is not None:
+        options.append(effort_option)
+    live._client._acp_config_options = options
+    live._client._sync_effort_levels()
+    return live
+
+
+def _goose_state(live: AcpProvider, slot: _ChatSlot):
+    """*live* belongs to another crew: no slot of *slot*'s crew maps onto it."""
+    sessions = SimpleNamespace(active_providers=lambda: [live], get_provider=lambda _key: None)
+    return SimpleNamespace(sessions=sessions, _slots={slot.key: slot})
+
+
+_OFF_ONLY = {"id": "thinking_effort", "options": [{"value": "off"}]}
+_NO_LEVELS = {"id": "thinking_effort", "options": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", [_OFF_ONLY, _NO_LEVELS], ids=["off-only", "no-levels"])
+async def test_no_goose_sessions_model_answers_for_a_crews_pin(tmp_path, monkeypatch, option):
+    """An off-only or empty option is the other session's model speaking, not goose's build."""
+    live = _goose(tmp_path, option)
+    if option is _OFF_ONLY:
+        assert live.supports_effort() is False
+        assert "off" in chat_handlers.get_reasoning_effort_values()
+    cold = _ChatSlot("member-writer", agent="writer")
+
+    body = await _resolved(member="goose", state=_goose_state(live, cold), model="goose-thinker")
+    _config(monkeypatch, member="goose")
+    caps = await _caps(_goose_state(live, cold), cold.key)
+
+    for answer in (caps, body):
+        assert answer["effort_supported"] is None
+        assert answer["effort_levels"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_goose_build_without_its_effort_option_takes_no_effort(tmp_path, monkeypatch):
+    """No model changes whether the build advertises the option, so that stays definite."""
+    live = _goose(tmp_path, None)
+    cold = _ChatSlot("member-writer", agent="writer")
+
+    body = await _resolved(member="goose", state=_goose_state(live, cold))
+    _config(monkeypatch, member="goose")
+    caps = await _caps(_goose_state(live, cold), cold.key)
+
+    for answer in (caps, body):
+        assert answer["effort_supported"] is False
+        assert answer["effort_levels"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_crew_pin_never_offers_a_level_a_real_goose_session_registered(
+    tmp_path, monkeypatch
+):
+    """``off`` reaches the runtime vocabulary through a real sync; a pin cannot store it."""
+    option = {
+        "id": "thinking_effort",
+        "options": [{"value": "off"}, {"value": "low"}, {"value": "high"}],
+    }
+    live = _goose(tmp_path, option)
+    cold = _ChatSlot("member-writer", agent="writer")
+
+    body = await _resolved(member="goose", state=_goose_state(live, cold))
+    _config(monkeypatch, member="goose")
+    caps = await _caps(_goose_state(live, cold), cold.key)
+
+    assert caps["effort_supported"] is True
+    assert caps["effort_levels"] == ["off", "low", "high"]
+    assert body["effort_supported"] is True
+    assert body["effort_levels"] == ["low", "high"]

@@ -212,12 +212,14 @@ export function useChatPanePickerActions({ slotKey, paneSlot, dispatch, queryCli
       // on the coalesced slots rebroadcast to see its own pick.
       // performAgentSlotSwitch mirrors exactly what the response names.
       await performAgentSlotSwitch(slotKey, name, dispatch, kind)
+      // The cold effort answer was judged on the previous crew's model.
+      void queryClient.invalidateQueries({ queryKey: ['slot-selection-capabilities', slotKey] })
     } catch (e) {
       const msg = agentSwitchFailureMessage(e)
       dispatch(setAgentSwitchNotice(msg))
       setSwitchError(msg)
     }
-  }, [dispatch, slotKey])
+  }, [dispatch, queryClient, slotKey])
   const switchModel = useCallback(async (name: string) => {
     setSwitchError('')
     try {
