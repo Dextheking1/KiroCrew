@@ -152,14 +152,132 @@ scheduler cannot back one.
 
 ### Fairness
 
-The scheduling algorithm, its cost assumptions and its starvation bound are owned by
-the admission module and documented in this section when it lands. Its constraints are
-fixed now: limits apply at principal and Crew scope on every entry point; queues are
-bounded per principal; the scheduler is fair across eligible principals and keeps
-order within a session; a queued prompt never becomes a steering command; unknown
-callers share one bounded bucket; automation charges its `Principal.system` owner. The
-existing lane scheduler in `subagent_manager.admission` is the mechanism to extend,
-not replace.
+Owner: `shared_crew.scheduler` (pure; one lock, so a race at the limit admits exactly
+as many as there are slots) behind `shared_crew.admission_gate.AdmissionService`.
+
+Two work classes. A ROOT (chat turn, task run, workflow run, cron run) is admitted
+while its principal holds fewer than `principal_active` and the Crew fewer than
+`crew_active` root slots; otherwise it waits in its principal's FIFO, bounded by
+`principal_queue` and `crew_queue`, and a submission past either is refused
+`principal_queue_full` / `crew_queue_full`. A CHILD (subagent) never queues here:
+the durable task queue is its queue, so the gate bounds what a principal and the
+Crew have outstanding (`principal_children`, `crew_children`) and refuses past it.
+Background runs (task runner, workflows) cannot wait in a request, so they start
+now or are refused with the active-limit reason.
+
+Across principals the scheduler is deficit round robin. Principals with queued roots
+sit in a ring; a visit adds the quantum (1) to the principal's deficit and admits
+while the deficit covers the head ticket's weight (1) and both scopes have room. A
+principal blocked by its own limit is skipped with its deficit reset, so no credit
+is banked while ineligible. Within one principal the queue is FIFO, so order within
+a session is kept. The subagent pump's existing lane round-robin becomes per person
+too: `taskq.lanes.set_lane_resolver` maps a root session to `principal:<id>` while
+admission is on.
+
+Starvation bound: with `P` principals holding eligible queued work, a continuously
+eligible principal is admitted within `(P - 1) * (quantum + max_weight - 1)`
+admissions of others, which is `P - 1` with the defaults. Every admitted root ends
+within its run deadline, so the wall-clock wait is at most
+`ceil(P / crew_active)` root deadlines; work that would wait past `queue_expiry`
+expires `queue_expired`, reported, never hidden.
+
+Who is charged. The initiator, read from `request[ACTOR_REQUEST_KEY]`
+(`admission_gate.actor_budget`); never the session creator. Every caller without a
+principal is `p_unknown`, one shared bucket. A child inherits the budget and root of
+the work running in its parent session (`budget_for_session`), so a collaborator
+steering or spawning inside someone else's turn charges that turn's initiator. Cron
+and loopback automation with no recorded initiator charge `Principal.system("automation")`,
+which has the same limits as anyone.
+
+### Accepted work, revalidation and recovery
+
+`shared_crew.work_store` keeps each `AcceptedWork` as one `accepted_work` row in
+`tasks.db` (`taskq.store_work`, created by `taskq.migrate`; additive, so the schema
+version stays and an older build leaves the table in place). The row is committed
+before the caller hears `admitted` or `queued`. Idempotency is the unique `scope`
+column; a replay returns the stored record and a replayed handle never runs twice.
+Terminal rows are purged after `IDEMPOTENCY_TTL_SECONDS`.
+
+`Admission.run` waits for a slot, then revalidates right before starting: queue
+expiry, `policy_version` (a change to `admission_enabled`, `hard_limits` or
+`containment_enabled` since acceptance is `policy_changed`), the hard-limit probe,
+and the entry point's own check (a chat slot must still be live). `running` is
+written before the work launches, so `admitted` proves it never started. A queued
+chat turn holds the slot reservation; while it waits a later send on that slot
+cannot steer into it (`admission_entry.admission_pending`) and queues instead, so a
+queued prompt is never delivered as a steer.
+
+Deadlines: `root_deadline_seconds` for roots, `child_deadline_seconds` for children
+and background runs, enforced by `AdmissionService.tick` (once a second): it cancels
+the work and records `cancelled` with `run_deadline`. A root's slot is released only
+after its own task ended and every child it started settled; a child's slot only
+after its owner (subagent manager, task runner, workflow registry) reports it
+terminal.
+
+On the first admission of a process, `ensure_ready` reconciles every non-terminal row
+before admitting anything:
+
+| Found | Becomes | Capacity |
+|---|---|---|
+| `queued`, `admitted` | `reconciling`, then `queued` and relaunched when a relauncher is registered for its operation and payload, else `cancelled` with `extra.reconcile_detail = host_restarted_before_start` | held only if requeued |
+| `running`, `cancelling` with no unit of its own | `reconciling` -> `unknown_outcome` (`cancelled` if a cancel was asked) | released once proven stopped |
+| `running` with a live scope unit | `reconciling` until `systemctl is-active` says stopped | held |
+| child or probed background run | `reconciling`; its owner reconciles the run and the probe settles the row | held |
+
+Nothing that may have run is replayed. No relauncher is registered for chat turns in
+this build, so a chat turn queued across a restart ends `cancelled`; its user row is
+in the transcript to resend.
+
+### Containment
+
+Owner: `shared_crew.containment`, reusing `sandbox_cgroup` and `sandbox_slice`.
+Each principal's runtimes start in `kirocrew-agents-<instance>-p<sha256(id)[:12]>.slice`,
+a child of the instance slice, sized by `systemctl --user set-property --runtime`
+(`principal_cpu_quota_percent`, `principal_memory_max_mb`, `principal_tasks_max`); the
+instance slice gets `crew_cpu_quota_percent`. `sandbox_slice.cgroup_scope_argv` picks
+the principal slice from the `principal_scope` context the gate sets around admitted
+work and around subagent run tasks. A shared session's runtime is one process, so it
+stays in the slice of the initiator whose turn started it; later turns by others are
+bounded by admission counts, not that slice.
+
+The guarantee is `best_effort` and is reported that way: the kernel enforces the
+CPU, memory and pids ceilings for cooperative or buggy work, but every runtime runs as
+the gateway's uid, which can reach the user bus and the delegated subtree, so
+adversarial escape is not closed (`adversarial_escape_closed: false`). IO is not
+delegated on the supported profile and is `unavailable`. Disk is `app_accounting`:
+`shared_crew.accounting` charges accepted request bytes per principal to the durable
+`principal_storage` ledger and refuses past `principal_storage_mb` with
+`storage_limit`; it is not a filesystem quota.
+
+`hard_limits` turns any missing prerequisite (`not_linux`, `systemd_run_untrusted`,
+`systemctl_untrusted`, `no_user_session`, `user_bus_unreachable`, `not_cgroup_v2`,
+`controllers_not_delegated`, `controllers_unreadable`) into `containment_unavailable`
+(503) at admission, and `runtime_start` refuses every runtime spawn and `session/new`
+with `ContainmentUnavailable` (the backstop for entry points that do not reach the
+gate). With it off the gate admits and the capacity answer says what holds.
+
+### Defaults and API
+
+`dashboard.shared_crew` (`config.sections_shared_crew`), bounded at parse and resolved
+by `effective_limits`: `admission_enabled` false (the single-operator default; nothing
+is recorded and every entry point behaves as before), `principal_concurrency` 4,
+`principal_child_limit` 8, `principal_queue_depth` 16, `crew_concurrency` 0 (the
+session start gate's automatic width), `crew_child_limit` 0 (twice the Crew width),
+`crew_queue_depth` 64, `queue_expiry_seconds` 300, `root_deadline_seconds` 1800,
+`child_deadline_seconds` 600, `max_request_bytes` 4 MiB, `session_creates_per_minute`
+30, `principal_storage_mb` 2048, `containment_enabled` true, `hard_limits` false,
+`principal_cpu_quota_percent` 800, `principal_memory_max_mb` 24576,
+`principal_tasks_max` 8192, `crew_cpu_quota_percent` 2400. These are proof-of-concept
+test targets measured on one host, not product commitments.
+
+`GET /api/shared-crew/capacity` answers `CapacityResponse` plus `effective` (every
+resolved limit), `containment` (`ContainmentReport.to_dict`) and `fairness`.
+`GET /api/shared-crew/work?session_key=` lists public records (the viewer's own without
+`session_key`). `POST /api/shared-crew/work/{id}/cancel {expected_revision}` cancels a
+queued or admitted record at once and moves running work to `cancelling`; a stale
+revision or a terminal record is 409 with `current`. A chat send answers 202 with
+`admission` when queued (WS mode) or carries `X-Shared-Crew-Work` /
+`X-Shared-Crew-Work-State` headers (SSE mode).
 
 ## 5. Collaboration
 

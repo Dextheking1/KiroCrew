@@ -757,7 +757,12 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             if slot.task is not _turn_before:
                 _auto_queues = False
                 _auto_strip = None
-        if steer and not request_app and not _auto_queues:
+        # A turn still waiting for fair admission has not started: steering it would
+        # deliver this text outside admission, so the send queues instead.
+        from kiro_crew.shared_crew.admission_entry import admission_pending
+
+        _admission_pending = admission_pending(slot.key)
+        if steer and not request_app and not _auto_queues and not _admission_pending:
             # Client-minted send correlation id (the same `meta.sendId`
             # convention the plain send path persists): thread it through the
             # steer so the persisted row and the steer_push echo can be matched
@@ -950,6 +955,23 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
     refusal = relay_archive_refusal(slot)
     if refusal is not None:
         return refusal
+
+    # Fair admission (Shared Crew), charged to the initiator and decided before the
+    # user row is recorded, so a refusal leaves nothing behind. The reservation
+    # holds the slot across the await: a concurrent send queues behind this one.
+    from kiro_crew.shared_crew import admission_entry
+
+    _prior_reserved = slot._turn_admission_reserved
+    slot._turn_admission_reserved = True
+    try:
+        turn_admission = await admission_entry.admit_chat_turn(
+            request, session_key=effective_session_key(slot), slot_key=slot.key, message=message
+        )
+    finally:
+        slot._turn_admission_reserved = _prior_reserved
+    if turn_admission.rejected:
+        slot._has_reader = False
+        return turn_admission.refusal_response()
 
     # No per-message browse marker: browsing is a capability, not a per-turn
     # gate. The agent drives a browser by running `playwright-cli` shell
@@ -1161,11 +1183,16 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             _turn_kwargs["_attachments"] = _accepted_attachments
             # Typed form for the refusal replay: keeps ``dirs`` entries as folders.
             _turn_kwargs["_attachment_meta"] = _accepted_attachment_meta
-        task = spawn_guarded_turn(
-            state,
-            slot,
-            state.run_background_turn(slot, _run_chat(state, slot, message, **_turn_kwargs)),
-        )
+        _turn = state.run_background_turn(slot, _run_chat(state, slot, message, **_turn_kwargs))
+        if not turn_admission.passthrough:
+            _turn = admission_entry.admitted_chat_turn(
+                slot.key,
+                turn_admission,
+                _turn,
+                still_live=lambda: slot_is_live(state, slot),
+                on_ended=state.push_slots_update,
+            )
+        task = spawn_guarded_turn(state, slot, _turn)
         slot.task = task
     finally:
         if _reserve_turn_admission:
@@ -1182,9 +1209,15 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         _receipt: dict[str, Any] = {"ok": True, "slot": slot.key}
         if _user_mid:
             _receipt["mid"] = _user_mid
+        _admission_receipt = admission_entry.admission_receipt(turn_admission)
+        if _admission_receipt is not None:
+            _receipt["admission"] = _admission_receipt
+            if turn_admission.queued:
+                return web.json_response(_receipt, status=202)
         return web.json_response(_receipt)
 
     resp = web.StreamResponse()
+    resp.headers.update(admission_entry.admission_headers(turn_admission))
     resp.content_type = "text/event-stream"
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"
