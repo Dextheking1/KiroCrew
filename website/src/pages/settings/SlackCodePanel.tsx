@@ -1,7 +1,7 @@
 /**
- * Settings → Slack → Slack Code: the agent-sessions and code-channels switches,
- * the code-channel defaults (folder / agent / model / effort), and the
- * "Update your Slack app" panel.
+ * Settings → Slack → Slack Code: the registered Slack Code switches (today
+ * Code channels; see `slackCodeSwitches`), the code-channel defaults (folder /
+ * agent / model / effort), and the "Update your Slack app" panel.
  *
  * The draft lives in `SlackPanel` (one Save for the whole page); this module
  * owns the shape of the Slack Code slice of it, how it is read from the GET and
@@ -13,22 +13,22 @@ import { AlertTriangle, Bot, CheckCircle2, Folder, FolderGit2, Info } from 'luci
 import { SettingsSection, SettingsCard, SettingsToggle } from '../../components/settings'
 import SimpleSelect from '../../components/SimpleSelect'
 import ErrorNotice from '../../components/ErrorNotice'
-import { useConfirm } from '../../components/ConfirmDialog'
-import { api, type SlackCapability, type SlackConfigData, type SlackConfigSave } from '../../api/client'
+import { api, type SlackCapability, type SlackCodeSwitchKey, type SlackConfigData, type SlackConfigSave } from '../../api/client'
 import type { ChatFolder } from '../../types'
 import { orderFoldersWithPaths } from '../../utils/folderTree'
 import { useFolderSortMode } from '../../hooks/useFolderSortMode'
-import { useAvailableModels } from '../../hooks/useAvailableModels'
+import { useAvailableModelsQuery } from '../../hooks/useAvailableModels'
 import { EFFORT_LEVELS, effortLabel } from '../../lib/effort'
-import { Field, INHERIT_MODEL, ModelField } from '../KiroCrewAgentsPageFields'
+import { Field, INHERIT_MODEL, ModelField } from '../KiroCrewAgentsPage'
 import { i18nT } from '../../i18n/t'
 import { compareText } from '../../i18n/format'
-import { SlackManifestUpdate } from './SlackManifestUpdate'
+import { SlackManifestUpdate, useSlackManifestStatus } from './SlackManifestUpdate'
+import { SLACK_CODE_SWITCHES } from './slackCodeSwitches'
 
 /** The Slack Code slice of the Slack settings draft. '' = not set. */
 export interface SlackCodeDraft {
-  agent_sessions: boolean
-  code_channels: boolean
+  /** Every registered switch, as the draft has it. */
+  switches: Record<SlackCodeSwitchKey, boolean>
   folder: string
   agent: string
   /** INHERIT_MODEL ('auto') = keep the agent's own model. */
@@ -39,8 +39,7 @@ export interface SlackCodeDraft {
 export function slackCodeDraftFrom(c: SlackConfigData): SlackCodeDraft {
   const d = c.code_channel_defaults
   return {
-    agent_sessions: !!c.agent_sessions,
-    code_channels: !!c.code_channels,
+    switches: Object.fromEntries(SLACK_CODE_SWITCHES.map(k => [k, !!c[k]])) as Record<SlackCodeSwitchKey, boolean>,
     folder: d?.folder ?? '',
     agent: d?.agent ?? '',
     model: d?.model ?? INHERIT_MODEL,
@@ -54,8 +53,9 @@ export function slackCodeDraftFrom(c: SlackConfigData): SlackCodeDraft {
  *  picker sends null, which clears the stored value. */
 export function slackCodePayload(d: SlackCodeDraft, saved: SlackCodeDraft): Partial<SlackConfigSave> {
   const out: Partial<SlackConfigSave> = {}
-  if (d.agent_sessions !== saved.agent_sessions) out.agent_sessions = d.agent_sessions
-  if (d.code_channels !== saved.code_channels) out.code_channels = d.code_channels
+  for (const k of SLACK_CODE_SWITCHES) {
+    if (d.switches[k] !== saved.switches[k]) out[k] = d.switches[k]
+  }
   const wire = (x: SlackCodeDraft) => ({
     folder: x.folder || null,
     agent: x.agent || null,
@@ -103,8 +103,11 @@ const CAPABILITY_KEY: Record<string, string> = {
 
 /** Whether a SAVED toggle is actually running: it also needs the installed app
  *  to hold the feature's scope, and Slack not to have refused it. Until then
- *  Slack behaves exactly as with the toggle off, and this line says why. */
-function CapabilityLine({ capability }: { capability?: SlackCapability }) {
+ *  Slack behaves exactly as with the toggle off, and this line says why.
+ *  *tokenRejected*: the install check below found the saved bot token
+ *  rejected, which is why the scopes were never read; say that here too, so
+ *  the two lines do not disagree. */
+function CapabilityLine({ capability, tokenRejected }: { capability?: SlackCapability; tokenRejected?: boolean }) {
   if (!capability) return null
   if (capability.available) {
     return (
@@ -113,7 +116,9 @@ function CapabilityLine({ capability }: { capability?: SlackCapability }) {
       </div>
     )
   }
-  const key = CAPABILITY_KEY[capability.reason] ?? CAPABILITY_KEY.scopes_unknown
+  const key = tokenRejected && capability.reason === 'scopes_unknown'
+    ? 'pages.settings.slackPanel.slackCode.cap_token_rejected'
+    : CAPABILITY_KEY[capability.reason] ?? CAPABILITY_KEY.scopes_unknown
   return (
     <div className="flex items-start gap-1.5 text-[12px] text-warn mt-1" data-testid="slack-capability" data-available="false" data-reason={capability.reason}>
       <AlertTriangle size={12} className="flex-none mt-0.5" /> <span>{i18nT(key, { scope: capability.scope })}</span>
@@ -121,15 +126,18 @@ function CapabilityLine({ capability }: { capability?: SlackCapability }) {
   )
 }
 
-export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText }: {
+export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText, onSave, saving }: {
   data: SlackConfigData
   draft: SlackCodeDraft
   onChange: (patch: Partial<SlackCodeDraft>) => void
   readOnly: boolean
   /** The manifest the SAVED switches render (GET /api/slack/manifest). */
   manifestText: string | undefined
+  /** The page's own save (one save for the whole Slack page), offered in the
+   *  update panel while a switch change is unsaved. */
+  onSave: () => void
+  saving: boolean
 }) {
-  const { confirm, confirmDialog } = useConfirm()
   const { data: foldersData, isError: foldersFailed } = useQuery<ChatFolder[]>({
     queryKey: ['chat-folders'],
     queryFn: () => api.chatFolders(),
@@ -141,7 +149,9 @@ export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText
     queryKey: ['agents-installed'],
     queryFn: () => api.agentsInstalled(),
   })
-  const models = useAvailableModels()
+  const modelsQ = useAvailableModelsQuery()
+  const models = modelsQ.data
+  const modelsFailed = modelsQ.isError || modelsQ.isDegraded
   const { mode: sortMode } = useFolderSortMode()
 
   const folderOptions = useMemo(() => {
@@ -168,7 +178,11 @@ export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText
   // recomputed here for an unsaved folder/agent pick so the preview follows
   // the pickers before Save.
   const eff = data.code_channel_effective
-  const pickedFolder = folders.find(f => f.id === draft.folder) ?? null
+  // A saved folder the server no longer finds resolves as no folder, so the
+  // preview never shows a folder, project or agent that will not apply.
+  const savedFolderMissing = (data.code_channel_warnings ?? []).includes('folder_missing')
+    && draft.folder === (data.code_channel_defaults?.folder ?? '')
+  const pickedFolder = savedFolderMissing ? null : folders.find(f => f.id === draft.folder) ?? null
   const folderPath = folderOptions.labels[folderOptions.values.indexOf(draft.folder)] ?? ''
   const folderProject = useMemo(() => {
     const byId = new Map(folders.map(f => [f.id, f]))
@@ -187,144 +201,125 @@ export function SlackCodeSection({ data, draft, onChange, readOnly, manifestText
     : pickedFolder?.default_agent
       ? [pickedFolder.default_agent, 'folder']
       : slackAgent ? [slackAgent, 'slack'] : ['', '']
-  const savedFolderMissing = (data.code_channel_warnings ?? []).includes('folder_missing')
-    && draft.folder === (data.code_channel_defaults?.folder ?? '')
   const savedAgentMissing = (data.code_channel_warnings ?? []).includes('agent_missing')
     && draft.agent === (data.code_channel_defaults?.agent ?? '')
+  const tokenRejected = useSlackManifestStatus().data?.install?.status === 'token_rejected'
 
-  const enableAgentSessions = async (on: boolean) => {
-    if (!on) { onChange({ agent_sessions: false }); return }
-    const ok = await confirm({
-      title: i18nT('pages.settings.slackPanel.slackCode.agent_sessions_confirm_title'),
-      body: (
-        <div className="flex flex-col gap-2 text-[13px]">
-          <p className="m-0">{i18nT('pages.settings.slackPanel.slackCode.agent_sessions_confirm_body')}</p>
-          <p className="m-0 text-warn">{i18nT('pages.settings.slackPanel.slackCode.agent_sessions_irreversible')}</p>
-        </div>
-      ),
-      confirmLabel: i18nT('pages.settings.slackPanel.slackCode.agent_sessions_confirm_ok'),
-      danger: false,
-      primary: true,
-    })
-    if (ok) onChange({ agent_sessions: true })
-  }
 
   return (
     <SettingsSection title={i18nT('pages.settings.slackPanel.slackCode.section')}>
-      <SettingsCard index={4}>
-        <p className="text-[12px] text-muted m-0 mb-2">{i18nT('pages.settings.slackPanel.slackCode.intro')}</p>
+      <SettingsCard index={2}>
+        {/* Framed, unlike the page's other borderless cards: it is the one
+            section whose switches change the Slack app itself. */}
+        <div className="rounded-lg border border-border p-4" data-testid="slack-code-section">
+          <p className="text-[12px] text-muted m-0 mb-2">{i18nT('pages.settings.slackPanel.slackCode.intro')}</p>
 
-        {/* ── Agent sessions ── */}
-        <SettingsToggle
-          label={i18nT('pages.settings.slackPanel.slackCode.agent_sessions')}
-          description={i18nT('pages.settings.slackPanel.slackCode.agent_sessions_desc')}
-          checked={draft.agent_sessions}
-          onChange={v => { void enableAgentSessions(v) }}
-          disabled={readOnly}
-          configKey="slack.agent_sessions"
-        />
-        <div className="flex items-start gap-2 rounded-md border border-border bg-bg-elevated px-3 py-2 mt-1">
-          <AlertTriangle size={13} className="text-warn flex-none mt-0.5" />
-          <span className="text-[12px] text-muted">{i18nT('pages.settings.slackPanel.slackCode.agent_sessions_irreversible')}</span>
-        </div>
-        {data.agent_sessions && <CapabilityLine capability={data.agent_sessions_capability} />}
-
-        {/* ── Code channels ── */}
-        <div className="border-t border-border mt-4 pt-4">
-          <SettingsToggle
-            label={i18nT('pages.settings.slackPanel.slackCode.code_channels')}
-            description={i18nT('pages.settings.slackPanel.slackCode.code_channels_desc')}
-            checked={draft.code_channels}
-            onChange={v => onChange({ code_channels: v })}
-            disabled={readOnly}
-            configKey="slack.code_channels"
-          />
-          {data.code_channels && <CapabilityLine capability={data.code_channels_capability} />}
-        </div>
-
-        {draft.code_channels && (
-          <div className="mt-4 rounded-lg border border-border bg-bg-elevated p-4 flex flex-col gap-4" data-testid="slack-code-defaults">
+          {/* ── Switches, one row each, in registry order. The Agent sessions
+              row (#21422) is the first, above Code channels. ── */}
+          <div className="flex flex-col gap-4" data-testid="slack-code-switches">
+            {/* ── Code channels ── */}
             <div>
-              <div className="text-[13px] font-semibold text-text">{i18nT('pages.settings.slackPanel.slackCode.defaults_title')}</div>
-              <div className="text-[12px] text-muted mt-0.5">{i18nT('pages.settings.slackPanel.slackCode.defaults_desc')}</div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label={i18nT('pages.settings.slackPanel.slackCode.folder')} hint={i18nT('pages.settings.slackPanel.slackCode.folder_hint')}>
-                <SimpleSelect
-                  options={folderOptions.values}
-                  optionLabels={folderOptions.labels}
-                  value={draft.folder}
-                  onChange={v => onChange({ folder: v })}
-                  clearLabel={i18nT('pages.settings.slackPanel.slackCode.folder_none')}
-                  disabled={readOnly}
-                  aria-label={i18nT('pages.settings.slackPanel.slackCode.folder')}
-                />
-              </Field>
-              <Field label={i18nT('pages.settings.slackPanel.slackCode.agent')} hint={i18nT('pages.settings.slackPanel.slackCode.agent_hint')}>
-                <SimpleSelect
-                  options={agentOptions}
-                  value={draft.agent}
-                  onChange={v => onChange({ agent: v })}
-                  clearLabel={i18nT('pages.settings.slackPanel.slackCode.agent_none')}
-                  disabled={readOnly}
-                  aria-label={i18nT('pages.settings.slackPanel.slackCode.agent')}
-                />
-              </Field>
-              <ModelField options={modelOptions} value={draft.model} onChange={v => onChange({ model: v })} hint={i18nT('pages.settings.slackPanel.slackCode.model_hint')} />
-              <Field label={i18nT('pages.kiroCrewAgentsPage.reasoning_effort')} hint={i18nT('pages.settings.slackPanel.slackCode.effort_hint')}>
-                <SimpleSelect
-                  options={[...EFFORT_LEVELS]}
-                  optionLabels={EFFORT_LEVELS.map(l => (l === '' ? i18nT('pages.kiroCrewAgentsPage.inherited') : effortLabel(l)))}
-                  value={draft.effort}
-                  onChange={v => onChange({ effort: v })}
-                  disabled={readOnly}
-                  aria-label={i18nT('pages.kiroCrewAgentsPage.edit_reasoning_effort')}
-                />
-              </Field>
-            </div>
-
-            {/* No hand-off for any of these three: they sit beside the unsaved
-                Slack draft (the pickers above, the token fields and owner id
-                further up), and the hand-off navigates away, which would
-                discard it. The fix for each is on this card: reload the lists,
-                or pick another folder or agent. */}
-            {(foldersFailed || agentsFailed) && (
-              <ErrorNotice variant="inline" message={i18nT('pages.settings.slackPanel.slackCode.options_unavailable')} />
-            )}
-            {savedFolderMissing && (
-              <ErrorNotice variant="inline" message={i18nT('pages.settings.slackPanel.slackCode.folder_missing')} />
-            )}
-            {savedAgentMissing && (
-              <ErrorNotice variant="inline" message={i18nT('pages.settings.slackPanel.slackCode.agent_missing', { agent: draft.agent })} />
-            )}
-
-            {/* What a new code channel will actually run with. */}
-            <div className="rounded-md border border-border bg-bg px-3 py-2.5 flex flex-col gap-1.5" data-testid="slack-code-preview">
-              <div className="text-[11px] uppercase tracking-wider text-muted font-medium">{i18nT('pages.settings.slackPanel.slackCode.preview_title')}</div>
-              <PreviewRow icon={<Folder size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_folder')}
-                value={folderPath || i18nT('pages.settings.slackPanel.slackCode.preview_unfiled')} />
-              <PreviewRow icon={<FolderGit2 size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_project')}
-                value={folderProject || i18nT('pages.settings.slackPanel.slackCode.preview_project_origin')}
-                source={folderProject ? sourceLabel('folder') : sourceLabel('origin')} />
-              <PreviewRow icon={<Bot size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_agent')}
-                value={agent || i18nT('pages.settings.slackPanel.slackCode.preview_agent_builtin')}
-                source={sourceLabel(agentSource)} />
-              <PreviewRow icon={<Bot size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_model')}
-                value={[
-                  draft.model && draft.model !== INHERIT_MODEL ? draft.model : i18nT('pages.settings.slackPanel.slackCode.preview_agent_own'),
-                  draft.effort ? effortLabel(draft.effort) : '',
-                ].filter(Boolean).join(' · ')} />
-            </div>
-            <div className="flex items-start gap-2 text-[12px] text-muted">
-              <Info size={12} className="flex-none mt-0.5" />
-              <span>{i18nT('pages.settings.slackPanel.slackCode.resolution_order')}</span>
+              <SettingsToggle
+                label={i18nT('pages.settings.slackPanel.slackCode.code_channels')}
+                description={i18nT('pages.settings.slackPanel.slackCode.code_channels_desc')}
+                checked={draft.switches.code_channels}
+                onChange={v => onChange({ switches: { ...draft.switches, code_channels: v } })}
+                disabled={readOnly}
+                configKey="slack.code_channels"
+              />
+              {data.code_channels && <CapabilityLine capability={data.code_channels_capability} tokenRejected={tokenRejected} />}
             </div>
           </div>
-        )}
 
-        <SlackManifestUpdate data={data} draft={draft} manifestText={manifestText} />
+          {draft.switches.code_channels && (
+            <div className="mt-4 rounded-lg border border-border bg-bg-elevated p-4 flex flex-col gap-4" data-testid="slack-code-defaults">
+              <div>
+                <div className="text-[13px] font-semibold text-text">{i18nT('pages.settings.slackPanel.slackCode.defaults_title')}</div>
+                <div className="text-[12px] text-muted mt-0.5">{i18nT('pages.settings.slackPanel.slackCode.defaults_desc')}</div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label={i18nT('pages.settings.slackPanel.slackCode.folder')} hint={i18nT('pages.settings.slackPanel.slackCode.folder_hint')}>
+                  <SimpleSelect
+                    options={folderOptions.values}
+                    optionLabels={folderOptions.labels}
+                    value={savedFolderMissing ? '' : draft.folder}
+                    onChange={v => onChange({ folder: v })}
+                    clearLabel={i18nT('pages.settings.slackPanel.slackCode.folder_none')}
+                    disabled={readOnly}
+                    aria-label={i18nT('pages.settings.slackPanel.slackCode.folder')}
+                  />
+                </Field>
+                <Field label={i18nT('pages.settings.slackPanel.slackCode.agent')} hint={i18nT('pages.settings.slackPanel.slackCode.agent_hint')}>
+                  <SimpleSelect
+                    options={agentOptions}
+                    value={draft.agent}
+                    onChange={v => onChange({ agent: v })}
+                    clearLabel={i18nT('pages.settings.slackPanel.slackCode.agent_none')}
+                    disabled={readOnly}
+                    aria-label={i18nT('pages.settings.slackPanel.slackCode.agent')}
+                  />
+                </Field>
+                <ModelField options={modelOptions} value={draft.model} onChange={v => onChange({ model: v })} disabled={readOnly} hint={i18nT('pages.settings.slackPanel.slackCode.model_hint')} />
+                <Field label={i18nT('pages.kiroCrewAgentsPage.reasoning_effort')} hint={i18nT('pages.settings.slackPanel.slackCode.effort_hint')}>
+                  <SimpleSelect
+                    options={[...EFFORT_LEVELS]}
+                    optionLabels={EFFORT_LEVELS.map(l => (l === '' ? i18nT('pages.kiroCrewAgentsPage.inherited') : effortLabel(l)))}
+                    value={draft.effort}
+                    onChange={v => onChange({ effort: v })}
+                    disabled={readOnly}
+                    aria-label={i18nT('pages.kiroCrewAgentsPage.edit_reasoning_effort')}
+                  />
+                </Field>
+              </div>
+
+              {/* No hand-off for any of these: they sit beside the unsaved
+                  Slack draft (the pickers above, the token fields and owner id
+                  further up), and the hand-off navigates away, which would
+                  discard it. The fix for each is on this card: reload the lists,
+                  or pick another folder or agent. */}
+              {modelsFailed && (
+                <ErrorNotice variant="inline" message={i18nT('pages.settings.slackPanel.slackCode.models_unavailable')} />
+              )}
+              {(foldersFailed || agentsFailed) && (
+                <ErrorNotice variant="inline" message={i18nT('pages.settings.slackPanel.slackCode.options_unavailable')} />
+              )}
+              {savedFolderMissing && (
+                <ErrorNotice variant="inline" message={i18nT('pages.settings.slackPanel.slackCode.folder_missing')} />
+              )}
+              {savedAgentMissing && (
+                <ErrorNotice variant="inline" message={i18nT('pages.settings.slackPanel.slackCode.agent_missing', { agent: draft.agent })} />
+              )}
+
+              {/* What a new code channel will actually run with. */}
+              <div className="rounded-md border border-border bg-bg px-3 py-2.5 flex flex-col gap-1.5" data-testid="slack-code-preview">
+                <div className="text-[11px] uppercase tracking-wider text-muted font-medium">{i18nT('pages.settings.slackPanel.slackCode.preview_title')}</div>
+                <PreviewRow icon={<Folder size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_folder')}
+                  value={(!savedFolderMissing && folderPath) || i18nT('pages.settings.slackPanel.slackCode.preview_unfiled')} />
+                <PreviewRow icon={<FolderGit2 size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_project')}
+                  value={folderProject || i18nT('pages.settings.slackPanel.slackCode.preview_project_origin')}
+                  source={folderProject ? sourceLabel('folder') : sourceLabel('origin')} />
+                <PreviewRow icon={<Bot size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_agent')}
+                  value={agent || i18nT('pages.settings.slackPanel.slackCode.preview_agent_builtin')}
+                  source={sourceLabel(agentSource)} />
+                <PreviewRow icon={<Bot size={12} />} label={i18nT('pages.settings.slackPanel.slackCode.preview_model')}
+                  value={[
+                    draft.model && draft.model !== INHERIT_MODEL ? draft.model : i18nT('pages.settings.slackPanel.slackCode.preview_agent_own'),
+                    draft.effort ? effortLabel(draft.effort) : '',
+                  ].filter(Boolean).join(' · ')} />
+              </div>
+              <div className="flex items-start gap-2 text-[12px] text-muted">
+                <Info size={12} className="flex-none mt-0.5" />
+                <ul className="m-0 p-0 list-none flex flex-col gap-0.5">
+                  <li>{i18nT('pages.settings.slackPanel.slackCode.resolution_agent')}</li>
+                  <li>{i18nT('pages.settings.slackPanel.slackCode.resolution_project')}</li>
+                </ul>
+              </div>
+            </div>
+          )}
+
+          <SlackManifestUpdate data={data} draft={draft} manifestText={manifestText} onSave={readOnly ? undefined : onSave} saving={saving} />
+        </div>
       </SettingsCard>
-      {confirmDialog}
     </SettingsSection>
   )
 }

@@ -23,7 +23,7 @@ import kiro_crew.dashboard.handlers.core as core_handlers
 import kiro_crew.dashboard.handlers.messaging as mod
 from kiro_crew import slack_manifest
 from kiro_crew.dashboard import slack_code_settings as scs
-from kiro_crew.slack import scope_probe
+from kiro_crew.slack import features, scope_probe
 
 _FOLDERS = [
     {"id": "aaaaaaaaaaaa", "name": "Dev", "parent_id": "", "project_dir": "/tmp"},
@@ -103,7 +103,10 @@ class TestSwitches:
     def test_defaults_read_off(self, env: dict) -> None:
         status, body = _call(env, "GET")
         assert status == 200
-        assert body["agent_sessions"] is False and body["code_channels"] is False
+        assert body["code_channels"] is False
+        # Only registered switches are reported; agent sessions lands with its
+        # runtime, so this build neither reports nor accepts it.
+        assert "agent_sessions" not in body
         assert body["code_channel_defaults"] == {
             "folder": None,
             "agent": None,
@@ -112,15 +115,21 @@ class TestSwitches:
         }
         assert body["code_channel_warnings"] == []
 
-    @pytest.mark.parametrize("on", [(True, False), (False, True), (True, True), (False, False)])
-    def test_every_combination_saves_and_reads_back(self, env: dict, on: tuple) -> None:
-        status, res = _call(env, "PUT", {"agent_sessions": on[0], "code_channels": on[1]})
+    @pytest.mark.parametrize("on", [True, False])
+    def test_the_switch_saves_and_reads_back(self, env: dict, on: bool) -> None:
+        status, res = _call(env, "PUT", {"code_channels": on})
         assert status == 200
         # Hot-applied: the runtime reads the toggle per event, behind the
         # capability guard, so no flip needs a restart.
         assert res["restart_required"] is False
         _, body = _call(env, "GET")
-        assert (body["agent_sessions"], body["code_channels"]) == on
+        assert body["code_channels"] is on
+
+    def test_an_unregistered_switch_is_not_stored(self, env: dict) -> None:
+        _call(env, "PUT", {"agent_sessions": True, "code_channels": True})
+        stored = _stored(env)
+        assert stored["code_channels"] is True
+        assert "agent_sessions" not in stored
 
     def test_unchanged_switch_is_not_staged(self, env: dict) -> None:
         _call(env, "PUT", {"code_channels": True})
@@ -134,7 +143,7 @@ class TestSwitches:
         from kiro_crew.slack import features
 
         features.reset_capabilities()
-        _call(env, "PUT", {"code_channels": True, "agent_sessions": True})
+        _call(env, "PUT", {"code_channels": True})
         _, body = _call(env, "GET")
         assert body["code_channels"] is True
         assert body["code_channels_capability"] == {
@@ -142,14 +151,16 @@ class TestSwitches:
             "reason": "scopes_unknown",
             "scope": "code_channels:manage",
         }
-        features.record_granted_scopes({"chat:write", "assistant:write"})
+        features.record_granted_scopes({"chat:write"})
         _, body = _call(env, "GET")
-        assert body["agent_sessions_capability"] == {
+        assert body["code_channels_capability"]["reason"] == "missing_scope"
+        features.record_granted_scopes({"chat:write", "code_channels:manage"})
+        _, body = _call(env, "GET")
+        assert body["code_channels_capability"] == {
             "available": True,
             "reason": "",
-            "scope": "assistant:write",
+            "scope": "code_channels:manage",
         }
-        assert body["code_channels_capability"]["reason"] == "missing_scope"
         features.reset_capabilities()
 
     @pytest.mark.parametrize("bad", ["true", 1, None])
@@ -256,6 +267,51 @@ class TestDefaults:
         assert stored["agent"] == "builder"  # the CLI's edit is kept
         assert stored["reasoning_effort"] == "high"  # and so is this save's
         assert stored["model"] == "claude-x"
+
+    def test_a_failed_save_undoes_its_default_but_keeps_a_concurrent_sibling(self) -> None:
+        # Commit -> the CLI changes a sibling default -> the paired .env write
+        # fails -> rollback: this save's field goes back, the CLI's stays.
+        write = mod._LockedSectionWrite(
+            Path("unused"),
+            "slack",
+            {"code_channel_defaults": {"reasoning_effort": "high"}},
+            merge_nested=("code_channel_defaults",),
+        )
+        fresh = {
+            "slack": {"code_channel_defaults": {"agent": "reviewer", "reasoning_effort": "low"}}
+        }
+        fresh = write.apply(fresh)
+        assert fresh["slack"]["code_channel_defaults"] == {
+            "agent": "reviewer",
+            "reasoning_effort": "high",
+        }
+        fresh["slack"]["code_channel_defaults"]["agent"] = "builder"  # the CLI, in between
+        fresh = write.restore(fresh)
+        assert fresh["slack"]["code_channel_defaults"] == {
+            "agent": "builder",
+            "reasoning_effort": "low",
+        }
+
+    def test_a_failed_first_save_of_defaults_leaves_no_empty_object(self) -> None:
+        write = mod._LockedSectionWrite(
+            Path("unused"),
+            "slack",
+            {"code_channel_defaults": {"agent": "reviewer"}},
+            merge_nested=("code_channel_defaults",),
+        )
+        fresh = write.restore(write.apply({"slack": {"enabled": True}}))
+        assert fresh == {"slack": {"enabled": True}}
+
+    def test_a_field_someone_else_changed_since_is_not_reverted(self) -> None:
+        write = mod._LockedSectionWrite(
+            Path("unused"),
+            "slack",
+            {"code_channel_defaults": {"agent": "reviewer"}},
+            merge_nested=("code_channel_defaults",),
+        )
+        fresh = write.apply({"slack": {"code_channel_defaults": {"agent": "old"}}})
+        fresh["slack"]["code_channel_defaults"]["agent"] = "theirs"
+        assert write.restore(fresh)["slack"]["code_channel_defaults"] == {"agent": "theirs"}
 
     def test_null_and_blank_clear(self, env: dict) -> None:
         _call(env, "PUT", {"code_channel_defaults": {"agent": "reviewer", "model": "claude-x"}})
@@ -365,7 +421,6 @@ def _scopes(features: frozenset[str]) -> str:
 
 
 _CC = frozenset({slack_manifest.CODE_CHANNELS})
-_AS = frozenset({slack_manifest.AGENT_SESSIONS})
 
 
 @pytest.fixture(autouse=True)
@@ -396,10 +451,6 @@ class TestDrift:
             "code_channels:manage",
             "groups:write.invites",
         )
-
-    def test_old_install_after_enabling_agent_sessions_needs_update(self) -> None:
-        got = _probe(_FakeClient(_scopes(frozenset())), _AS)
-        assert got.missing_scopes == ("assistant:write",)
 
     def test_switch_turned_off_reports_extra_scopes_only(self) -> None:
         got = _probe(_FakeClient(_scopes(_CC) + ",emoji:read"), frozenset())
@@ -443,12 +494,15 @@ class TestDrift:
         assert "agents.conversations.listViews" not in client.calls
 
     def test_runtime_refusal_is_reported_and_retired_by_a_passing_probe(self) -> None:
-        scope_probe.note_feature_disabled("agent_sessions")
-        got = _probe(_FakeClient(_scopes(_AS)), _AS)
+        features.latch_unavailable("code_channels", "feature_disabled")
+        # The runtime's refusal shows on the page even before the page probes.
+        got = _probe(_FakeClient(_scopes(frozenset())), frozenset())
         assert got.status == scope_probe.STATUS_FEATURE_DISABLED
-        scope_probe.note_feature_disabled("code_channels")
-        got = _probe(_FakeClient(_scopes(_CC | _AS)), _CC | _AS)
-        assert got.disabled_features == ("agent_sessions",)
+        assert got.disabled_features == ("code_channels",)
+        # A probe that now gets past the gate retires the stale record.
+        got = _probe(_FakeClient(_scopes(_CC)), _CC)
+        assert got.status == scope_probe.STATUS_UP_TO_DATE
+        assert features.latched() == {}
 
     def test_status_endpoint_without_token(
         self, env: dict, monkeypatch: pytest.MonkeyPatch

@@ -1,4 +1,4 @@
-"""Slack Code settings: the agent-session / code-channel switches and defaults.
+"""Slack Code settings: the registered switches and the code-channel defaults.
 
 The read model, the validation and the manifest-drift report behind Settings →
 Slack's "Slack Code" cards. Kept out of :mod:`slack_settings` (whose functions
@@ -28,8 +28,10 @@ from kiro_crew.effort import is_valid_effort
 from kiro_crew.slack import features as slack_features
 from kiro_crew.slack import scope_probe
 
-#: The switches the PUT accepts, in display order.
-SWITCH_KEYS: tuple[str, ...] = ("agent_sessions", "code_channels")
+# The switches the PUT accepts and the GET reports are every switch registered
+# in ``slack_manifest.FEATURE_SCOPES`` (read at call time, as
+# ``slack_manifest.FEATURES``), each under its own ``slack.<name>`` key, so
+# registering one there needs nothing here.
 #: The ``code_channel_defaults`` keys the PUT accepts.
 DEFAULT_KEYS: tuple[str, ...] = ("folder", "agent", "model", "reasoning_effort")
 #: The model picker's "pin nothing, inherit" spelling; stored as unset.
@@ -107,13 +109,15 @@ async def code_settings_view(cfg: Any, state: Any) -> dict[str, Any]:
             "scope": slack_features.REQUIRED_SCOPE[feature],
         }
 
+    # Per registered switch: the toggle as saved (``<name>``) and whether the
+    # install can run it (``<name>_capability``); toggle AND available is what
+    # the runtime checks.
+    switches: dict[str, Any] = {}
+    for feature in slack_manifest.FEATURES:
+        switches[feature] = slack_features.toggle(cfg, feature)
+        switches[f"{feature}_capability"] = _capability(feature)
     return {
-        # The toggles as saved; whether each one actually runs also needs the
-        # capability below (toggle AND available is what the runtime checks).
-        "agent_sessions": slack_features.agent_sessions_toggle(cfg),
-        "code_channels": slack_features.code_channels_toggle(cfg),
-        "agent_sessions_capability": _capability(slack_features.AGENT_SESSIONS),
-        "code_channels_capability": _capability(slack_features.CODE_CHANNELS),
+        **switches,
         "code_channel_defaults": {
             "folder": defaults.folder,
             "agent": defaults.agent,
@@ -170,7 +174,7 @@ async def validate_code_settings(
     """
     staged: dict[str, object] = {}
     applied: list[str] = []
-    for key in SWITCH_KEYS:
+    for key in slack_manifest.FEATURES:
         if key not in body:
             continue
         val = body.get(key)
