@@ -37,7 +37,6 @@ from kiro_crew.shared_crew.access import (
     REASON_HOST_NOT_SUPPORTED,
     IdentityClass,
     detect_workload_host,
-    shared_access_eligibility,
     workload_host_supported,
 )
 from kiro_crew.shared_crew.codec import SCHEMA_VERSION, ContractError
@@ -74,6 +73,12 @@ CAP_CREW_IDENTITY = "crew_identity"
 CAP_HEARTBEAT = "heartbeat"
 CAP_INFERENCE_BUDGET = "inference_budget"
 CAP_DEPLOYMENT_CONTEXT = "deployment_context"
+CAP_HUMAN_SIGN_IN = "human_sign_in"
+CAP_REVOCATION = "revocation"
+CAP_WORKLOAD_VERIFIER = "workload_verifier"
+CAP_CREW_REGISTRATION = "crew_registration"
+CAP_DIRECTORY = "directory"
+CAP_CHANNEL_ACTORS = "channel_actors"
 
 ENTERPRISE_CAPABILITY_KEYS: tuple[str, ...] = (
     CAP_HUMAN_CREDENTIALS,
@@ -83,6 +88,12 @@ ENTERPRISE_CAPABILITY_KEYS: tuple[str, ...] = (
     CAP_HEARTBEAT,
     CAP_INFERENCE_BUDGET,
     CAP_DEPLOYMENT_CONTEXT,
+    CAP_HUMAN_SIGN_IN,
+    CAP_REVOCATION,
+    CAP_WORKLOAD_VERIFIER,
+    CAP_CREW_REGISTRATION,
+    CAP_DIRECTORY,
+    CAP_CHANNEL_ACTORS,
 )
 
 
@@ -189,8 +200,10 @@ class CredentialClaims:
 
     Times are epoch seconds. ``key_id`` names the signing key so a rotated key
     set can hold several keys at once. ``identity_class`` is how the issuer
-    established the person; a provider that cannot say leaves the default,
-    ``individual``, which is not eligible for shared multi-user access.
+    established the person, recorded as data; it decides nothing.
+    ``key_location`` is any key-set location the credential itself names: keys
+    come only from the provider's pinned configuration, so a credential that
+    names one is refused.
     """
 
     issuer: str
@@ -201,6 +214,7 @@ class CredentialClaims:
     expires_at: float
     not_before: Optional[float] = None
     identity_class: IdentityClass = IdentityClass.INDIVIDUAL
+    key_location: str = ""
 
 
 @dataclass(frozen=True)
@@ -271,6 +285,8 @@ class CredentialRejection(str, enum.Enum):
     EXPIRED = "expired"
     NOT_YET_VALID = "not_yet_valid"
     LIFETIME_EXCEEDED = "lifetime_exceeded"
+    #: The credential named where to fetch its own verification keys.
+    KEY_LOCATION_REFUSED = "key_location_refused"
 
 
 @dataclass(frozen=True)
@@ -318,6 +334,8 @@ def verify_credential(
         or c.expires_at <= c.issued_at
     ):
         return VerificationResult.reject(CredentialRejection.MALFORMED)
+    if c.key_location:
+        return VerificationResult.reject(CredentialRejection.KEY_LOCATION_REFUSED)
     if c.issuer not in policy.issuers:
         return VerificationResult.reject(CredentialRejection.UNKNOWN_ISSUER)
     if policy.audience not in c.audiences:
@@ -397,6 +415,9 @@ class ContractCredentialVerifier:
 class GrantState(str, enum.Enum):
     ACTIVE = "active"
     REVOKED = "revoked"
+    #: A member was added with a warning (for example, eligibility not yet
+    #: confirmed). It is recorded, and it is not a grant.
+    WARNING_ONLY = "warning_only"
 
 
 @dataclass(frozen=True)
@@ -406,6 +427,9 @@ class IndividualGrant:
     Individual users only: there is no group field, and a grant is never
     inferred from a session the person created or a message they wrote.
     ``revision`` is the authority's monotonic counter for this grant.
+    ``decision_reason`` is the authority's own reason for its eligibility
+    decision (an opaque token), carried through so the refusal or grant
+    names who decided and why. Only ``active`` admits.
     """
 
     principal_id: str
@@ -413,6 +437,7 @@ class IndividualGrant:
     state: GrantState
     revision: int
     grant_ref: str = ""
+    decision_reason: str = ""
 
 
 class AuthorityUnavailable(RuntimeError):
@@ -466,9 +491,8 @@ class AccessReason(str, enum.Enum):
     NO_GRANT = "no_grant"
     GRANT_REVOKED = "grant_revoked"
     NOT_INDIVIDUAL = "not_individual"
-    #: An individual consumer account: eligible for personal remote control of
-    #: its own machine, never for shared multi-user access.
-    INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE = "individual_account_not_eligible"
+    #: The authority recorded a warning-only addition, which is not a grant.
+    WARNING_ONLY_NOT_A_GRANT = "warning_only_not_a_grant"
     AUTHORITY_UNAVAILABLE = "authority_unavailable"
     NOT_CONFIGURED = "not_configured"
 
@@ -482,6 +506,8 @@ class AccessDecision:
     principal_id: str
     revision: Optional[int] = None
     from_cache: bool = False
+    #: The authority's own reason token, when it gave one.
+    authority_reason: str = ""
 
     @property
     def allowed(self) -> bool:
@@ -498,9 +524,10 @@ class GrantGate:
     """New-access decisions against the authority, with a bounded cache.
 
     The decision reads only the principal and the authority. Session
-    attribution, message authorship, presence and heartbeat freshness are not
-    inputs, so none of them can grant access. Call it at every start of new
-    work, including queued work about to run.
+    attribution, message authorship, presence, heartbeat freshness and the
+    principal's identity class are not inputs, so none of them can grant or
+    refuse access: eligibility is the authority's decision. Call it at every
+    start of new work, including queued work about to run.
     """
 
     def __init__(
@@ -548,22 +575,18 @@ class GrantGate:
             IndividualGrant(principal_id, self._crew_id, GrantState.REVOKED, revision), now
         )
 
-    def decide(
-        self, principal: Principal, now: float, identity_class: Optional[IdentityClass] = None
-    ) -> AccessDecision:
-        """Decide shared access for *principal*.
+    def decide(self, principal: Principal, now: float) -> AccessDecision:
+        """Decide shared access for *principal* from the authority's answer.
 
-        *identity_class* defaults to the class the principal carries
-        (``access.identity_class_of``). An ``individual`` account is refused
-        ``individual_account_not_eligible`` before the authority is asked.
+        No authority is ``not_configured``, which grants nothing. A non-human
+        principal is ``not_individual``. Every person, whatever their identity
+        class, gets the authority's answer.
         """
         pid = principal.id
         if self._authority is None:
             return AccessDecision(AccessReason.NOT_CONFIGURED, pid)
         if principal.kind is not PrincipalKind.HUMAN:
             return AccessDecision(AccessReason.NOT_INDIVIDUAL, pid)
-        if not shared_access_eligibility(principal, identity_class).eligible:
-            return AccessDecision(AccessReason.INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE, pid)
         held = self._cached(pid)
         age = None if held is None else now - held.confirmed_at
         fresh = age is not None and 0 <= age < self._policy.fresh_seconds
@@ -601,12 +624,19 @@ class GrantGate:
 
     @staticmethod
     def _from_grant(grant: IndividualGrant, *, from_cache: bool) -> AccessDecision:
-        reason = (
-            AccessReason.GRANT_ACTIVE
-            if grant.state is GrantState.ACTIVE
-            else AccessReason.GRANT_REVOKED
+        if grant.state is GrantState.ACTIVE:
+            reason = AccessReason.GRANT_ACTIVE
+        elif grant.state is GrantState.WARNING_ONLY:
+            reason = AccessReason.WARNING_ONLY_NOT_A_GRANT
+        else:
+            reason = AccessReason.GRANT_REVOKED
+        return AccessDecision(
+            reason,
+            grant.principal_id,
+            grant.revision,
+            from_cache=from_cache,
+            authority_reason=grant.decision_reason if _REF_RE.match(grant.decision_reason) else "",
         )
-        return AccessDecision(reason, grant.principal_id, grant.revision, from_cache=from_cache)
 
 
 # ── workload identity ──
@@ -795,14 +825,15 @@ class CrewBindingProvider(Protocol):
 
 
 class HeartbeatState(str, enum.Enum):
-    """The Crew's heartbeat health, as the Console shows it."""
+    """The Crew's health, as the Console shows it. Exactly three values."""
 
     #: An acknowledged heartbeat arrived within the late threshold.
     HEALTHY = "healthy"
-    #: No heartbeat has ever been acknowledged.
-    NOT_CONNECTED = "not_connected"
     #: The last acknowledged heartbeat is older than the late threshold.
     HEARTBEAT_LATE = "heartbeat_late"
+    #: No heartbeat was ever acknowledged, or the last one is older than the
+    #: disconnect threshold. A Crew that never connected is this, not a fourth value.
+    NOT_CONNECTED = "not_connected"
 
 
 #: The only keys a heartbeat may carry. Counts and states, never content: there
@@ -878,47 +909,78 @@ class HeartbeatTransport(Protocol):
         ...
 
 
+#: Placeholder timings. The real interval, late and disconnect thresholds, and
+#: where health is persisted are unresolved, so these live in memory only and
+#: no store is built for them.
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 60.0
 DEFAULT_LATE_AFTER_SECONDS = 180.0
+DEFAULT_NOT_CONNECTED_AFTER_SECONDS = 900.0
 
 
 class HeartbeatTracker:
-    """not_connected -> healthy <-> heartbeat_late, from acknowledged sends only.
+    """not_connected -> healthy <-> heartbeat_late -> not_connected, in memory.
 
-    The state is telemetry for the Console and the UI. It is not an input to any
-    access decision: a healthy Crew grants nothing and a late one revokes
-    nothing.
+    ``last_success`` moves only on an acknowledged send; ``last_attempt``
+    moves on every send tried, acknowledged or not, so a Crew that keeps
+    trying and failing reads late, with its attempts visible. The state is
+    telemetry for the Console and the UI. It is not an input to any access
+    decision: a healthy Crew grants nothing and a late one revokes nothing.
     """
 
-    def __init__(self, *, late_after_seconds: float = DEFAULT_LATE_AFTER_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        late_after_seconds: float = DEFAULT_LATE_AFTER_SECONDS,
+        not_connected_after_seconds: Optional[float] = DEFAULT_NOT_CONNECTED_AFTER_SECONDS,
+    ) -> None:
         self._late_after = max(0.0, late_after_seconds)
-        self._last_seen: Optional[float] = None
+        self._gone_after = (
+            None
+            if not_connected_after_seconds is None
+            else max(self._late_after, not_connected_after_seconds)
+        )
+        self._last_success: Optional[float] = None
+        self._last_attempt: Optional[float] = None
         self._lock = threading.Lock()
 
     @property
-    def last_seen(self) -> Optional[float]:
+    def last_success(self) -> Optional[float]:
         with self._lock:
-            return self._last_seen
+            return self._last_success
+
+    @property
+    def last_attempt(self) -> Optional[float]:
+        with self._lock:
+            return self._last_attempt
+
+    def record_attempt(self, now: float) -> None:
+        with self._lock:
+            if self._last_attempt is None or now > self._last_attempt:
+                self._last_attempt = now
 
     def record_ack(self, now: float) -> None:
         with self._lock:
-            if self._last_seen is None or now > self._last_seen:
-                self._last_seen = now
+            if self._last_attempt is None or now > self._last_attempt:
+                self._last_attempt = now
+            if self._last_success is None or now > self._last_success:
+                self._last_success = now
 
     def state(self, now: float) -> HeartbeatState:
         with self._lock:
-            last = self._last_seen
+            last = self._last_success
         if last is None:
             return HeartbeatState.NOT_CONNECTED
         age = now - last
-        return (
-            HeartbeatState.HEALTHY
-            if 0 <= age <= self._late_after
-            else HeartbeatState.HEARTBEAT_LATE
-        )
+        if 0 <= age <= self._late_after:
+            return HeartbeatState.HEALTHY
+        if self._gone_after is not None and age > self._gone_after:
+            return HeartbeatState.NOT_CONNECTED
+        return HeartbeatState.HEARTBEAT_LATE
 
     def snapshot(self, now: float) -> dict[str, Any]:
-        return {"state": self.state(now).value, "last_seen": self.last_seen}
+        with self._lock:
+            success, attempt = self._last_success, self._last_attempt
+        return {"state": self.state(now).value, "last_success": success, "last_attempt": attempt}
 
 
 class HeartbeatOutcome(str, enum.Enum):
@@ -950,6 +1012,7 @@ class HeartbeatSender:
             validate_heartbeat_payload(payload)
         except ContractError:
             return HeartbeatOutcome.REFUSED_PAYLOAD
+        self._tracker.record_attempt(now)
         try:
             credential = self._lease.ensure(now)
         except WorkloadDisabled:
@@ -1087,6 +1150,18 @@ class EnterpriseSeams:
     crew_binding: Optional[CrewBindingProvider] = None
     heartbeat_transport: Optional[HeartbeatTransport] = None
     inference_budget: Optional[InferenceBudgetProvider] = None
+    #: ``enterprise_signin.RelyingParty``
+    sign_in: Optional[Any] = None
+    #: ``enterprise_revocation.RevocationFeed``
+    revocation_feed: Optional[Any] = None
+    #: ``enterprise_workload.WorkloadVerifierConfig``
+    workload_verifier: Optional[Any] = None
+    #: ``enterprise_registration.CrewRegistry``
+    crew_registry: Optional[Any] = None
+    #: ``enterprise_directory.DirectoryProvider``
+    directory: Optional[Any] = None
+    #: ``enterprise_signin.ChannelActorMapping``
+    channel_actors: Optional[Any] = None
     deployment: DeploymentContext = DeploymentContext()
     capabilities: Mapping[str, EnterpriseCapability] = field(default_factory=dict)
 
@@ -1112,6 +1187,27 @@ _SLOTS: tuple[tuple[str, str, type], ...] = (
     ("heartbeat_transport", CAP_HEARTBEAT, HeartbeatTransport),
     ("inference_budget", CAP_INFERENCE_BUDGET, InferenceBudgetProvider),
 )
+
+
+_ABSENT = object()
+
+
+def _extended_slots() -> tuple[tuple[str, str, type], ...]:
+    """The slots whose contracts live in sibling modules, imported on first use."""
+    from kiro_crew.shared_crew.enterprise_directory import DirectoryProvider
+    from kiro_crew.shared_crew.enterprise_registration import CrewRegistry
+    from kiro_crew.shared_crew.enterprise_revocation import RevocationFeed
+    from kiro_crew.shared_crew.enterprise_signin import ChannelActorMapping, RelyingParty
+    from kiro_crew.shared_crew.enterprise_workload import WorkloadVerifierConfig
+
+    return (
+        ("sign_in", CAP_HUMAN_SIGN_IN, RelyingParty),
+        ("revocation_feed", CAP_REVOCATION, RevocationFeed),
+        ("workload_verifier", CAP_WORKLOAD_VERIFIER, WorkloadVerifierConfig),
+        ("crew_registry", CAP_CREW_REGISTRATION, CrewRegistry),
+        ("directory", CAP_DIRECTORY, DirectoryProvider),
+        ("channel_actors", CAP_CHANNEL_ACTORS, ChannelActorMapping),
+    )
 
 
 def _context_provider() -> Optional[object]:
@@ -1166,14 +1262,17 @@ def resolve_enterprise(
         return EnterpriseSeams()
 
     chosen: dict[str, Any] = {}
-    for attr, key, protocol in _SLOTS:
+    for attr, key, protocol in _SLOTS + _extended_slots():
         try:
-            obj = getattr(source, attr)()
+            # An edition written before a slot existed simply lacks the accessor;
+            # that is "not configured", not a provider failure.
+            accessor = getattr(source, attr, None)
+            obj = _ABSENT if accessor is None else accessor()
         except Exception:  # noqa: BLE001
             logger.warning("shared crew enterprise %s failed", attr, exc_info=True)
             caps[key] = _unavailable(UnavailableReason.PROVIDER_FAILED)
             continue
-        if obj is None:
+        if obj is _ABSENT or obj is None:
             caps[key] = _unavailable(UnavailableReason.NOT_CONFIGURED)
         elif _is_test_only(obj) and not allow_test_providers:
             caps[key] = _unavailable(UnavailableReason.TEST_PROVIDER_REFUSED)

@@ -159,14 +159,11 @@ class TestIdentityClass:
 
 
 class TestEligibility:
-    def test_shared_access_refuses_individual_with_a_reason(self) -> None:
-        verdict = shared_access_eligibility(INDIVIDUAL)
-        assert not verdict.eligible
-        assert verdict.reason.value == "individual_account_not_eligible"
-
-    def test_shared_access_admits_organization_and_tailnet(self) -> None:
-        assert shared_access_eligibility(ORG).eligible
-        assert shared_access_eligibility(TAILNET).eligible
+    def test_no_identity_class_decides_shared_access_here(self) -> None:
+        for person in (INDIVIDUAL, ORG, TAILNET):
+            verdict = shared_access_eligibility(person)
+            assert not verdict.eligible
+            assert verdict.reason.value == "external_decision_required"
 
     def test_personal_remote_control_admits_every_human_class(self) -> None:
         for p in (ORG, INDIVIDUAL, TAILNET):
@@ -177,7 +174,7 @@ class TestEligibility:
         assert shared_access_eligibility(bot).reason.value == "not_a_person"
         assert remote_control_eligibility(bot).reason.value == "not_a_person"
 
-    def test_grant_gate_refuses_individual_before_asking_the_authority(self) -> None:
+    def test_grant_gate_asks_the_authority_for_every_identity_class(self) -> None:
         calls: list[str] = []
 
         class Counting(_Authority):
@@ -186,17 +183,10 @@ class TestEligibility:
                 return super().lookup(principal_id, crew_id)
 
         gate = GrantGate(Counting(), crew_id=CREW)
-        decision = gate.decide(INDIVIDUAL, T0)
-        assert decision.reason is AccessReason.INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE
-        assert not decision.allowed and calls == []
+        gate.decide(INDIVIDUAL, T0)
         assert gate.decide(ORG, T0).reason is AccessReason.GRANT_ACTIVE
         assert gate.decide(TAILNET, T0).reason is AccessReason.GRANT_ACTIVE
-
-    def test_explicit_class_overrides_the_principal(self) -> None:
-        gate = GrantGate(_Authority(), crew_id=CREW)
-        assert gate.decide(ORG, T0, IdentityClass.INDIVIDUAL).reason is (
-            AccessReason.INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE
-        )
+        assert INDIVIDUAL.id in calls
 
     def test_disabled_grant_gate_stays_not_configured_for_individual(self) -> None:
         assert GrantGate(None, crew_id=CREW).decide(INDIVIDUAL, T0).reason is (
@@ -215,7 +205,12 @@ class TestAccessModes:
         assert modes["shared_multi_user"]["requires"] == "cloud_account"
         assert modes["agent_workload_identity"]["requires"] == "cloud_account"
         assert modes["personal_remote_control"]["requires"] == "individual_login"
-        assert "individual" not in modes["shared_multi_user"]["identity_classes"]
+        assert "identity_classes" not in modes["shared_multi_user"]
+        assert modes["shared_multi_user"]["eligibility"] == {
+            "decided_by": "external_authority",
+            "state": "unavailable",
+            "reason": "not_configured",
+        }
         assert "individual" in modes["personal_remote_control"]["identity_classes"]
 
     def test_remote_control_is_off_by_default(self) -> None:
@@ -307,6 +302,7 @@ class TestWorkloadHost:
             "host": "eks",
             "host_supported": True,
             "reason": "",
+            "pod_boundary": {"scope": "any_process_in_pod", "per_process_isolation": False},
         }
         for host in ("kubernetes", "ecs", "local"):
             row = workload_host_dict(host)
@@ -427,4 +423,4 @@ def test_no_role_or_acl_exists_in_any_contract() -> None:
             if dataclasses.is_dataclass(obj):
                 assert not banned & {f.name for f in dataclasses.fields(obj)}, obj
     params = set(inspect.signature(GrantGate.decide).parameters)
-    assert params == {"self", "principal", "now", "identity_class"}
+    assert params == {"self", "principal", "now"}

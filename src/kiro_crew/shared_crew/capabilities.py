@@ -41,6 +41,7 @@ from kiro_crew.shared_crew.contracts import (
     EnforcementLevel,
 )
 from kiro_crew.shared_crew.enterprise import (
+    CAP_INDIVIDUAL_GRANTS,
     CAP_WORKLOAD_IDENTITY,
     EnterpriseSeams,
     resolve_enterprise,
@@ -148,8 +149,11 @@ class CapabilityReport:
 
         ``setup_paths`` is each shared-access setup path's availability.
         ``access_modes`` keeps shared multi-user access, personal remote control
-        and agent workload identity apart, each with its own requirement.
-        ``workload_identity`` names the supported hosts and this host.
+        and agent workload identity apart, each with its own requirement; the
+        shared mode's ``eligibility`` is the external access decision, which
+        reads ``unavailable`` when no authority is composed.
+        ``workload_identity`` names the supported hosts, this host and the pod
+        boundary (no per-process isolation).
         """
         body = self.capabilities.to_dict()
         body["reasons"] = dict(self.reasons)
@@ -159,9 +163,12 @@ class CapabilityReport:
         body["setup_paths"] = setup
         shared_on = any(row["state"] == CapabilityState.AVAILABLE.value for row in setup.values())
         workload = enterprise[CAP_WORKLOAD_IDENTITY]["state"]
+        grants = enterprise[CAP_INDIVIDUAL_GRANTS]
         body["access_modes"] = access_modes_dict(
             shared_state=CapabilityState.AVAILABLE if shared_on else CapabilityState.UNAVAILABLE,
             workload_state=CapabilityState(workload),
+            eligibility_state=CapabilityState(grants["state"]),
+            eligibility_reason=grants["reason"],
         )
         body["workload_identity"] = workload_host_dict(self.workload_host)
         return body

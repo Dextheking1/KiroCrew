@@ -111,10 +111,23 @@ export type IdentityClass =
 
 export type AccessRequirement = 'cloud_account' | 'individual_login'
 
+/** Shared multi-user eligibility. Decided by an external authority, never by
+ *  identity class; `unavailable` (`not_configured`) means no person is granted
+ *  shared access through it. */
+export interface SharedEligibility {
+  decided_by: 'external_authority'
+  state: CapabilityState
+  reason: EnterpriseUnavailableReason | ''
+}
+
 export interface AccessMode {
+  /** For shared multi-user access: the network setup path, not eligibility. */
   state: CapabilityState
   requires: AccessRequirement
+  /** Personal remote control only: every human class. */
   identity_classes?: IdentityClass[]
+  /** Shared multi-user access only. An older gateway omits it. */
+  eligibility?: SharedEligibility
   /** Personal remote control only: whether it is on before the operator chooses. */
   default_enabled?: boolean
 }
@@ -131,13 +144,60 @@ export interface WorkloadIdentityHost {
   host_supported: boolean
   /** `host_not_supported` on any host outside `supported_hosts`. */
   reason: '' | 'host_not_supported'
+  /** An older gateway omits it. */
+  pod_boundary?: PodBoundary
 }
 
-/** The Crew's heartbeat health. Telemetry only: it never grants or revokes access. */
+/** Any process in the attested pod can obtain the workload identity. */
+export interface PodBoundary {
+  scope: 'any_process_in_pod'
+  per_process_isolation: false
+}
+
+/** The Crew's health: exactly three values. A Crew that never connected is
+ *  `not_connected`. Telemetry only: it never grants or revokes access. */
 export type HeartbeatHealth =
   | 'healthy'
-  | 'not_connected'
   | 'heartbeat_late'
+  | 'not_connected'
+
+export interface HeartbeatSnapshot {
+  state: HeartbeatHealth
+  /** Epoch seconds of the last acknowledged heartbeat. */
+  last_success: number | null
+  /** Epoch seconds of the last heartbeat tried, acknowledged or not. */
+  last_attempt: number | null
+}
+
+/** A Crew's state in a directory listing or after a failed connection.
+ *  Access loss (`revoked`, `sign_in_expired`) is never shown as `offline`. */
+export type CrewConnectionState =
+  | 'available'
+  | 'revoked'
+  | 'offline'
+  | 'relay_unavailable'
+  | 'sign_in_expired'
+  | 'host_disabled'
+  | 'version_incompatible'
+
+export interface DirectoryEntry {
+  crew_id: string
+  display_name: string
+  state: CrewConnectionState
+}
+
+export type DirectoryErrorCode =
+  | 'not_configured'
+  | 'directory_unavailable'
+  | 'sign_in_expired'
+  | 'relay_unavailable'
+  | 'version_incompatible'
+  | 'malformed'
+
+/** An empty listing and an error are different answers. */
+export type DirectoryAnswer =
+  | { status: 'ok'; entries: DirectoryEntry[] }
+  | { status: 'error'; error: DirectoryErrorCode }
 
 export type CapabilityField =
   | 'attribution'
@@ -166,6 +226,12 @@ export type EnterpriseCapabilityKey =
   | 'heartbeat'
   | 'inference_budget'
   | 'deployment_context'
+  | 'human_sign_in'
+  | 'revocation'
+  | 'workload_verifier'
+  | 'crew_registration'
+  | 'directory'
+  | 'channel_actors'
 
 export type EnterpriseUnavailableReason =
   | 'not_configured'
