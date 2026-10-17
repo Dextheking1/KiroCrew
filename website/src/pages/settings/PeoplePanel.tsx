@@ -8,8 +8,8 @@
  *  one is configured. There is no add, remove, role or admin control, and no
  *  management URL is ever taken from a peer or from config.
  *
- *  While no shared-access path is configured the whole surface is one setup
- *  empty state (`SharedAccessSetup`) instead. */
+ *  While no shared-access path is configured and no one but the viewer has been
+ *  seen, the whole surface is one setup empty state (`SharedAccessSetup`). */
 import { ExternalLink, Users } from 'lucide-react'
 import { SettingsCard, SettingsSection } from '../../components/settings'
 import { Badge, ContentSkeleton, EmptyState } from '../../components/ui'
@@ -71,15 +71,24 @@ export function PeoplePanel() {
   if (people.isError) {
     return <ErrorNotice message={people.error instanceof Error ? people.error.message : i18nT('sharedCrew.people_failed')} askAgent testId="people-error" />
   }
-  if (!sharedAccessConfigured(capabilities)) return <SharedAccessSetup capabilities={capabilities} />
+  // Someone other than the viewer already connected: sharing works, whatever the
+  // setup paths say (Tailscale Serve set up by hand, for one).
+  const othersSeen = (people.data?.people ?? []).some(row => !row.is_viewer)
+  if (!sharedAccessConfigured(capabilities) && !othersSeen) return <SharedAccessSetup capabilities={capabilities} />
   const data = people.data
+  const attributionReason = capabilities.reasons?.attribution
   if (!data || !capabilityUsable(capabilities.attribution)) {
+    const unnamed = attributionReason === 'platform_unprovable' || attributionReason === 'daemon_same_user'
     return (
       <EmptyState
         icon={<Users size={20} />}
-        title={i18nT('sharedCrew.people_unavailable_title')}
-        subtitle={i18nT('sharedCrew.people_unavailable_body')}
-        testId="people-unavailable"
+        title={i18nT(unnamed ? 'sharedCrew.people_unnamed_title' : 'sharedCrew.people_unavailable_title')}
+        subtitle={i18nT(
+          attributionReason === 'daemon_same_user' ? 'sharedCrew.people_unnamed_same_user_body'
+            : unnamed ? 'sharedCrew.people_unnamed_platform_body'
+              : 'sharedCrew.people_unavailable_body',
+        )}
+        testId={unnamed ? 'people-unnamed' : 'people-unavailable'}
       />
     )
   }
@@ -98,6 +107,9 @@ export function PeoplePanel() {
             </ul>
           )}
           {!usageAvailable && <p className="text-[12px] text-muted pt-2">{i18nT('sharedCrew.usage_unavailable')}</p>}
+          {attributionReason === 'daemon_not_found' && (
+            <p className="text-[12px] text-muted pt-2" data-testid="people-daemon-not-found">{i18nT('sharedCrew.people_daemon_not_found')}</p>
+          )}
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title={i18nT('sharedCrew.directory_title')}>

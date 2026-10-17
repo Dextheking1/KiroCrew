@@ -353,6 +353,11 @@ class TestSetupPaths:
         note_tailnet(enabled=enabled, host=host)
         assert setup_paths_dict()["tailscale"] == {"state": state, "reason": reason}
 
+    def test_identity_trust_sets_the_tailnet_path_up_without_the_enabled_flag(self) -> None:
+        """``tailscale serve`` set up by hand plus an allowlist is sharing."""
+        note_tailnet(enabled=False, host="", identity_trust=True)
+        assert setup_paths_dict()["tailscale"] == {"state": "available", "reason": ""}
+
     def test_a_registered_source_speaks_for_its_path(self) -> None:
         register_setup_path_source("kiro_login", lambda: SetupPathState(CapabilityState.AVAILABLE))
         assert setup_paths_dict()["kiro_login"] == {"state": "available", "reason": ""}

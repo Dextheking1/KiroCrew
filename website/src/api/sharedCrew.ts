@@ -149,7 +149,14 @@ export type CapabilityField =
   | 'membership_link'
   | 'remote_actions'
 
-export type CapabilityReason = 'no_source' | 'source_failed'
+/** `no_source` / `source_failed` for any field; the rest say why `attribution`
+ *  cannot name a person reaching this Crew through `tailscale serve`. */
+export type CapabilityReason =
+  | 'no_source'
+  | 'source_failed'
+  | 'platform_unprovable'
+  | 'daemon_same_user'
+  | 'daemon_not_found'
 
 export type EnterpriseCapabilityKey =
   | 'human_credentials'

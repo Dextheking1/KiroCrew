@@ -1968,9 +1968,16 @@ async def start_dashboard(
         _tailnet_host = await tailnet.resolve_tailnet_host(_ts_cfg.enabled)
         _tailnet_trust = await _resolve_tailnet_trust(_cfg)
         # Shared Crew: the Tailscale setup path reports what resolved here.
+        from kiro_crew.dashboard.tailnet_proxy_proof import proof_support
         from kiro_crew.shared_crew.access import note_tailnet
 
-        note_tailnet(enabled=bool(_ts_cfg.enabled), host=_tailnet_host)
+        note_tailnet(
+            enabled=bool(_ts_cfg.enabled),
+            host=_tailnet_host,
+            identity_trust=_tailnet_trust.trust_identity and bool(_tailnet_trust.allowed_logins),
+            loopback_only=local_only,
+            proof_gap=await asyncio.to_thread(proof_support),
+        )
         if _tailnet_host:
             logger.info(
                 "tailnet access enabled: trusting origin https://%s (bind and auth unchanged)",

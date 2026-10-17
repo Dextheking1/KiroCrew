@@ -229,6 +229,18 @@ REASON_NOT_IN_THIS_BUILD = "not_in_this_build"
 REASON_NOT_CONFIGURED = "not_configured"
 REASON_TAILNET_UNREACHABLE = "tailnet_unreachable"
 REASON_SOURCE_FAILED = "source_failed"
+#: Why a person reaching the Crew through ``tailscale serve`` cannot be named:
+#: the ``tailnet_proxy_proof.proof_support`` answers, mirrored here so this
+#: package does not import the dashboard. ``daemon_not_found`` is the one gap
+#: that can close while the gateway runs.
+REASON_PLATFORM_UNPROVABLE = "platform_unprovable"
+REASON_DAEMON_SAME_USER = "daemon_same_user"
+REASON_DAEMON_NOT_FOUND = "daemon_not_found"
+FORWARDED_ATTRIBUTION_REASONS: tuple[str, ...] = (
+    REASON_PLATFORM_UNPROVABLE,
+    REASON_DAEMON_SAME_USER,
+    REASON_DAEMON_NOT_FOUND,
+)
 
 
 @dataclass(frozen=True)
@@ -262,27 +274,80 @@ def unregister_setup_path_source(path: str) -> None:
 
 
 def _reset_setup_paths_for_tests() -> None:
+    global _forwarded_attribution
     with _LOCK:
         _SOURCES.clear()
+        _forwarded_attribution = ForwardedAttribution()
 
 
-def _tailnet_state(enabled: bool, host: str) -> SetupPathState:
+def _tailnet_state(enabled: bool, host: str, identity_trust: bool) -> SetupPathState:
     if not enabled:
+        if identity_trust:
+            # Identity trust with an allowlist only exists to admit tailnet
+            # people, so sharing is set up even where ``tailscale serve`` was
+            # configured by hand rather than through ``dashboard.tailscale.enabled``.
+            return SetupPathState(CapabilityState.AVAILABLE)
         return SetupPathState(CapabilityState.UNAVAILABLE, REASON_NOT_CONFIGURED)
     if not host:
         return SetupPathState(CapabilityState.DEGRADED, REASON_TAILNET_UNREACHABLE)
     return SetupPathState(CapabilityState.AVAILABLE)
 
 
-def note_tailnet(*, enabled: bool, host: str) -> None:
-    """Record the tailnet path the gateway resolved at start.
+@dataclass(frozen=True)
+class ForwardedAttribution:
+    """Whether a person reaching this Crew through ``tailscale serve`` can be named."""
 
-    ``available`` once Tailscale access is on and this machine's tailnet name
-    resolved; ``degraded`` when it is on but no name resolved.
+    state: CapabilityState = CapabilityState.AVAILABLE
+    reason: str = ""
+
+
+_forwarded_attribution = ForwardedAttribution()
+
+
+def _forwarded_state(
+    identity_trust: bool, loopback_only: bool, proof_gap: str
+) -> ForwardedAttribution:
+    if not (identity_trust and loopback_only and proof_gap):
+        return ForwardedAttribution()
+    if proof_gap not in FORWARDED_ATTRIBUTION_REASONS:
+        return ForwardedAttribution(CapabilityState.UNAVAILABLE, REASON_PLATFORM_UNPROVABLE)
+    if proof_gap == REASON_DAEMON_NOT_FOUND:
+        return ForwardedAttribution(CapabilityState.DEGRADED, proof_gap)
+    return ForwardedAttribution(CapabilityState.UNAVAILABLE, proof_gap)
+
+
+def note_tailnet(
+    *,
+    enabled: bool,
+    host: str,
+    identity_trust: bool = False,
+    loopback_only: bool = False,
+    proof_gap: str = "",
+) -> None:
+    """Record the tailnet path and forwarded attribution the gateway resolved at start.
+
+    The path is ``available`` once Tailscale access is on and this machine's
+    tailnet name resolved, or once identity trust with an allowlist is on;
+    ``degraded`` when access is on but no name resolved.
+
+    Forwarded attribution is weakened only when identity trust is on, the
+    gateway listens on loopback alone (so ``tailscale serve`` is the only way
+    in), and *proof_gap* says why the daemon proof cannot succeed here
+    (``tailnet_proxy_proof.proof_support``): ``unavailable`` for a platform or
+    a same-user daemon, ``degraded`` while no daemon is running.
     """
-    answer = _tailnet_state(bool(enabled), str(host or ""))
+    global _forwarded_attribution
+    answer = _tailnet_state(bool(enabled), str(host or ""), bool(identity_trust))
+    forwarded = _forwarded_state(bool(identity_trust), bool(loopback_only), str(proof_gap or ""))
     with _LOCK:
         _SOURCES[SETUP_TAILSCALE] = lambda: answer
+        _forwarded_attribution = forwarded
+
+
+def forwarded_attribution() -> ForwardedAttribution:
+    """The forwarded attribution :func:`note_tailnet` last recorded."""
+    with _LOCK:
+        return _forwarded_attribution
 
 
 def setup_paths_dict() -> dict[str, dict[str, str]]:
@@ -308,16 +373,19 @@ def setup_paths_dict() -> dict[str, dict[str, str]]:
 
 
 __all__ = [
+    "FORWARDED_ATTRIBUTION_REASONS",
     "IDENTITY_CLASS_KEY",
     "REMOTE_CONTROL_DEFAULT_ENABLED",
     "SETUP_PATHS",
     "SUPPORTED_WORKLOAD_HOSTS",
     "Eligibility",
     "EligibilityReason",
+    "ForwardedAttribution",
     "IdentityClass",
     "SetupPathState",
     "access_modes_dict",
     "detect_workload_host",
+    "forwarded_attribution",
     "identity_class_of",
     "note_tailnet",
     "parse_identity_class",

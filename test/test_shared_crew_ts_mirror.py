@@ -30,7 +30,13 @@ def test_typescript_capabilities_mirror_names_reasons_and_enterprise():
 
     assert union("EnterpriseCapabilityKey") == set(ENTERPRISE_CAPABILITY_KEYS)
     assert union("EnterpriseUnavailableReason") == {r.value for r in UnavailableReason}
-    assert union("CapabilityReason") == {REASON_NO_SOURCE, REASON_SOURCE_FAILED}
+    from kiro_crew.shared_crew.access import FORWARDED_ATTRIBUTION_REASONS
+
+    assert union("CapabilityReason") == {
+        REASON_NO_SOURCE,
+        REASON_SOURCE_FAILED,
+        *FORWARDED_ATTRIBUTION_REASONS,
+    }
     assert union("ReasonCode") == {r.value for r in ReasonCode}
 
 

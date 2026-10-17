@@ -83,6 +83,8 @@ class CapabilityContribution:
     states: Mapping[str, CapabilityState] = field(default_factory=dict)
     containment_level: Optional[EnforcementLevel] = None
     membership_link: str = ""
+    #: Why a state field is not ``available``; reported when this answer is the weakest.
+    reasons: Mapping[str, str] = field(default_factory=dict)
 
 
 CapabilitySource = Callable[[], CapabilityContribution]
@@ -206,7 +208,15 @@ def aggregate_capabilities(*, enterprise: Optional[EnterpriseSeams] = None) -> C
                 continue
             if not isinstance(value, CapabilityState):
                 value = CapabilityState.UNAVAILABLE
-            states[f] = _weaker_state(states.get(f), value)
+            prior = states.get(f)
+            if prior is None or _STATE_RANK[value] < _STATE_RANK[prior]:
+                # The weakest answer owns the field, and its reason with it.
+                reason = contribution.reasons.get(f)
+                if value is not CapabilityState.AVAILABLE and isinstance(reason, str) and reason:
+                    reasons[f] = reason
+                else:
+                    reasons.pop(f, None)
+            states[f] = _weaker_state(prior, value)
             answered.add(f)
         if FIELD_CONTAINMENT_LEVEL in reg.fields:
             offered = contribution.containment_level or EnforcementLevel.NONE
