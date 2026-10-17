@@ -276,7 +276,9 @@ ChildProbe = Callable[[str], "OperationState | None"]
 CancelHook = Callable[[AcceptedWork], Any]
 
 
-ReconcileListener = Callable[[AcceptedWork], Any]
+#: Told of a record reconciliation ended, with the payload it was accepted with
+#: (read before the terminal write clears it), or None when none was stored.
+ReconcileListener = Callable[[AcceptedWork, "Mapping[str, Any] | None"], Any]
 Reaper = Callable[[RuntimeOwnershipRef], int]
 
 
@@ -1436,7 +1438,7 @@ class AdmissionService:
                 S.CANCELLED,
                 extra={RECONCILE_DETAIL_KEY: RECONCILE_RESTARTED_BEFORE_START},
             )
-            self._tell_reconciled(ended)
+            self._tell_reconciled(ended, payload)
             return
         if work.state in (S.RUNNING, S.CANCELLING):
             work = await self._store.advance(work, S.RECONCILING, extra=detail_started)
@@ -1489,12 +1491,14 @@ class AdmissionService:
             return Liveness.UNKNOWN
         return Liveness.STOPPED
 
-    def _tell_reconciled(self, work: AcceptedWork) -> None:
+    def _tell_reconciled(
+        self, work: AcceptedWork, payload: Mapping[str, Any] | None = None
+    ) -> None:
         listener = self._reconcile_listener
         if listener is None:
             return
         try:
-            listener(work)
+            listener(work, payload)
         except Exception:  # noqa: BLE001 -- the note is best effort
             logger.debug("shared crew: reconcile listener failed", exc_info=True)
 
@@ -1504,13 +1508,18 @@ class AdmissionService:
         prior_cancel = live.work.reason is ReasonCode.CANCELLED_BY_USER
         target = S.CANCELLED if prior_cancel else S.UNKNOWN_OUTCOME
         try:
+            # The terminal write clears the payload, so it is read first.
+            payload = await self._store.tasks.run(self._store.payload_sync, live.work.work_id)
+        except Exception:  # noqa: BLE001 -- the note then carries no prompt
+            payload = None
+        try:
             live.work = await self._store.advance(
                 live.work,
                 target,
                 runtime=self._stopped_ref(live),
                 extra={ORPHANS_REAPED_KEY: live.reaped} if live.reaped else None,
             )
-            self._tell_reconciled(live.work)
+            self._tell_reconciled(live.work, payload)
         except (StaleRevision, InvalidTransition):
             pass
         live.awaiting_proof = False

@@ -47,10 +47,32 @@ def admission_pending(slot_key: str) -> bool:
     return slot_key in _PENDING_SLOTS
 
 
+#: Work payload key holding the prompt a chat turn was accepted with.
+CHAT_PROMPT_PAYLOAD_KEY = "prompt"
+#: Work payload key holding that prompt's author, in the public principal shape.
+CHAT_AUTHOR_PAYLOAD_KEY = "author"
+
+
+def _chat_payload(request: Any, message: str) -> dict[str, Any]:
+    from kiro_crew.shared_crew.attribution import author_meta
+
+    payload: dict[str, Any] = {CHAT_PROMPT_PAYLOAD_KEY: message}
+    actor = _gate.actor_of(request)
+    if actor is not None:
+        payload[CHAT_AUTHOR_PAYLOAD_KEY] = author_meta(actor)
+    return payload
+
+
 async def admit_chat_turn(
     request: Any, *, session_key: str, slot_key: str, message: str
 ) -> _gate.Admission:
-    """Admit one chat turn charged to the request's initiator."""
+    """Admit one chat turn charged to the request's initiator.
+
+    The prompt is stored with the work (``CHAT_PROMPT_PAYLOAD_KEY``) until the
+    work ends, so a crash before the session saves its user row still leaves
+    the accepted text for reconciliation to put back in the session. No chat
+    relauncher exists, so the payload is never replayed.
+    """
     service = await _gate.current_service()
     return await service.admit(
         budget_key=_gate.actor_budget(request),
@@ -59,6 +81,7 @@ async def admit_chat_turn(
         idempotency_key=_gate.idempotency_key_of(request),
         digest=chat_digest(slot_key, message),
         request_bytes=len(message.encode("utf-8", "replace")),
+        payload=_chat_payload(request, message),
     )
 
 
@@ -493,6 +516,8 @@ async def admit_background_run(
 
 
 __all__ = [
+    "CHAT_AUTHOR_PAYLOAD_KEY",
+    "CHAT_PROMPT_PAYLOAD_KEY",
     "QUEUED_WORK_META_KEY",
     "admission_enforced",
     "admit_queued_send",

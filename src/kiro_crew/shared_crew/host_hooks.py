@@ -8,23 +8,40 @@ The admission gate holds no dashboard state. The gateway installs three hooks
 * a message parked behind a busy session expires only once its queue entry is
   gone (a person removed the card), never while it still waits its turn;
 * a chat turn that reconciliation ended after a restart says so in its own
-  session, so a lost reply is never silent.
+  session, so a lost reply is never silent; the note waits for the startup
+  restore and opens the session from disk when no slot holds it.
 
-Every hook runs on the event loop and reads memory only.
+Every hook runs on the event loop; only the note's delivery reads the disk.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping
 
 from kiro_crew.shared_crew import admission_gate as _gate
 from kiro_crew.shared_crew.admission import AcceptedWork, OperationKind, OperationState
-from kiro_crew.shared_crew.admission_entry import QUEUED_WORK_META_KEY
+from kiro_crew.shared_crew.admission_entry import (
+    CHAT_AUTHOR_PAYLOAD_KEY,
+    CHAT_PROMPT_PAYLOAD_KEY,
+    QUEUED_WORK_META_KEY,
+)
+from kiro_crew.shared_crew.contracts import MESSAGE_AUTHOR_META_KEY
 
 logger = logging.getLogger(__name__)
 
 _ERROR_CLS = "msg msg-err"
+_USER_CLS = "msg msg-u"
+_DASHBOARD_PREFIX = "dashboard:"
+#: How many trailing user rows are compared against an accepted prompt.
+_USER_ROW_SCAN = 50
+#: Restart notes one process holds before the restore lets them land (bounded).
+_OWED_MAX = 10000
+_OWED_ATTR = "_shared_crew_owed_notes"
+_DELIVERY_ATTR = "_shared_crew_note_delivery"
+_RESTORED_ATTR = "_shared_crew_sessions_restored"
 #: Session history keys this process has seen recorded on disk (bounded).
 _RECORDED: set[str] = set()
 _RECORDED_MAX = 20000
@@ -69,28 +86,130 @@ def _slot_for(state: Any, session_key: str) -> Any:
     return None
 
 
-def reconcile_note(state: Any) -> Callable[[AcceptedWork], None]:
-    def note(work: AcceptedWork) -> None:
-        if work.operation is not OperationKind.CHAT_TURN:
+@dataclass(frozen=True)
+class _Note:
+    """A restart note owed to one session, with the prompt its work was accepted with."""
+
+    session_key: str
+    text: str
+    prompt: str
+    author: Mapping[str, Any] | None
+
+
+def _restored_event(state: Any) -> asyncio.Event:
+    event = getattr(state, _RESTORED_ATTR, None)
+    if not isinstance(event, asyncio.Event):
+        event = asyncio.Event()
+        setattr(state, _RESTORED_ATTR, event)
+    return event
+
+
+def mark_sessions_restored(state: Any) -> None:
+    """The gateway's startup restore built every slot it will build; owed notes may land.
+
+    Reconciliation runs at gateway start, before the restore, so a note written
+    then would find no slot. Notes wait for this mark.
+    """
+    _restored_event(state).set()
+
+
+def _note_for(work: AcceptedWork) -> str | None:
+    if work.operation is not OperationKind.CHAT_TURN:
+        return None
+    if work.extra.get(_gate.PARKED_KEY):
+        # Its queue entry was saved with the session and runs again from there.
+        return None
+    if work.state is OperationState.UNKNOWN_OUTCOME:
+        return NOTE_UNKNOWN
+    if work.state is OperationState.CANCELLED and work.reason is None:
+        return NOTE_NOT_STARTED
+    return None
+
+
+def reconcile_note(state: Any) -> Callable[[AcceptedWork, "Mapping[str, Any] | None"], None]:
+    """The listener reconciliation tells of each record it ended.
+
+    A chat turn the restart ended gets an error row in its session. The session
+    is opened from disk when no slot holds it (a session the crash left without
+    an open-tab record), and the accepted prompt from the work's payload is put
+    back as its user row when the session never saved it. Nothing is replayed.
+    Delivery waits for :func:`mark_sessions_restored`.
+    """
+
+    def note(work: AcceptedWork, payload: Mapping[str, Any] | None = None) -> None:
+        text = _note_for(work)
+        if text is None:
             return
-        if work.extra.get(_gate.PARKED_KEY):
-            # Its queue entry was saved with the session and runs again from there.
+        prompt = ""
+        author: Mapping[str, Any] | None = None
+        if isinstance(payload, Mapping):
+            raw = payload.get(CHAT_PROMPT_PAYLOAD_KEY)
+            prompt = raw if isinstance(raw, str) else ""
+            raw_author = payload.get(CHAT_AUTHOR_PAYLOAD_KEY)
+            author = raw_author if isinstance(raw_author, Mapping) else None
+        owed = getattr(state, _OWED_ATTR, None)
+        if not isinstance(owed, list):
+            owed = []
+            setattr(state, _OWED_ATTR, owed)
+        if len(owed) >= _OWED_MAX:
+            logger.warning("shared crew: restart note for %s dropped (bound)", work.session_key)
             return
-        if work.state is OperationState.UNKNOWN_OUTCOME:
-            text = NOTE_UNKNOWN
-        elif work.state is OperationState.CANCELLED and work.reason is None:
-            text = NOTE_NOT_STARTED
-        else:
-            return
-        slot = _slot_for(state, work.session_key)
-        if slot is None:
-            return
-        try:
-            slot.append("error", text, _ERROR_CLS)
-        except Exception:  # noqa: BLE001 -- the note is best effort
-            logger.debug("shared crew: restart note failed", exc_info=True)
+        owed.append(_Note(work.session_key, text, prompt, author))
+        task = getattr(state, _DELIVERY_ATTR, None)
+        if task is None or task.done():
+            setattr(state, _DELIVERY_ATTR, asyncio.ensure_future(deliver_owed_notes(state)))
 
     return note
+
+
+async def deliver_owed_notes(state: Any) -> int:
+    """Write every owed restart note once the startup restore is done; how many landed."""
+    await _restored_event(state).wait()
+    owed = getattr(state, _OWED_ATTR, None)
+    delivered = 0
+    while isinstance(owed, list) and owed:
+        item = owed.pop(0)
+        try:
+            if await _deliver(state, item):
+                delivered += 1
+        except Exception:  # noqa: BLE001 -- the note is best effort
+            logger.warning("shared crew: restart note failed", exc_info=True)
+    return delivered
+
+
+async def _deliver(state: Any, item: _Note) -> bool:
+    slot = _slot_for(state, item.session_key)
+    if slot is None and item.session_key.startswith(_DASHBOARD_PREFIX):
+        from kiro_crew.dashboard.chat_persistence import rehydrate_slot_from_history_async
+
+        slot = await rehydrate_slot_from_history_async(
+            state, item.session_key.removeprefix(_DASHBOARD_PREFIX)
+        )
+    if slot is None:
+        logger.warning(
+            "shared crew: no session %s for its restart note; the turn ended %s",
+            item.session_key,
+            "unknown_outcome" if item.text == NOTE_UNKNOWN else "cancelled",
+        )
+        return False
+    if item.prompt and not _holds_user_row(slot, item.prompt):
+        meta: dict[str, Any] = {}
+        if item.author is not None:
+            meta[MESSAGE_AUTHOR_META_KEY] = dict(item.author)
+        slot.append("user", item.prompt, _USER_CLS, meta=meta or None)
+    slot.append("error", item.text, _ERROR_CLS)
+    return True
+
+
+def _holds_user_row(slot: Any, prompt: str) -> bool:
+    """Whether one of *slot*'s recent user rows is *prompt* (the session saved it)."""
+    rows = getattr(slot, "messages", None)
+    if not isinstance(rows, list):
+        return False
+    for row in rows[-_USER_ROW_SCAN:]:
+        if isinstance(row, dict) and row.get("role") == "user" and row.get("content") == prompt:
+            return True
+    return False
 
 
 async def ensure_slot_recorded(state: Any, slot: Any) -> bool:
@@ -149,7 +268,9 @@ def uninstall() -> None:
 
 
 __all__ = [
+    "deliver_owed_notes",
     "ensure_slot_recorded",
+    "mark_sessions_restored",
     "NOTE_NOT_STARTED",
     "NOTE_UNKNOWN",
     "install",

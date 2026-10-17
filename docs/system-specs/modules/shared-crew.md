@@ -425,13 +425,21 @@ capacity read of a process, `ensure_ready` reconciles every non-terminal row:
 | child or probed background run | `reconciling`; its owner reconciles the run and the probe settles the row | held |
 
 Nothing that may have run is replayed. No relauncher is registered for chat turns in
-this build, so a chat turn queued across a restart ends `cancelled`; its user row is
-in the transcript to resend, and the session says so in an error row
-(`host_hooks.reconcile_note`, also for `unknown_outcome`). A parked message is the
-exception: its queue entry is saved with the session and drains again after the
-restart. A session that has never been saved gets its metadata line before its first
-work is accepted (`host_hooks.ensure_slot_recorded`), so a crash right after the
-accept cannot leave a work record for a session that is gone.
+this build, so a chat turn queued across a restart ends `cancelled`, and the session
+says so in an error row (`host_hooks.reconcile_note`, also for `unknown_outcome`). A
+parked message is the exception: its queue entry is saved with the session and drains
+again after the restart. A session that has never been saved gets its metadata line
+before its first work is accepted (`host_hooks.ensure_slot_recorded`), so a crash
+right after the accept cannot leave a work record for a session that is gone.
+
+A chat turn's work carries its accepted prompt and author as its payload
+(`admission_entry.CHAT_PROMPT_PAYLOAD_KEY`, `CHAT_AUTHOR_PAYLOAD_KEY`) until it ends;
+reconciliation reads it before the terminal write clears it and hands it to the note.
+Notes wait until the startup restore has built its slots
+(`host_hooks.mark_sessions_restored`). A session no slot holds is opened from disk,
+so a session the crash left without an open-tab record can be opened; when it never
+saved the accepted prompt, the prompt is put back as its user row ahead of the note.
+The prompt is only shown, never run again.
 
 ### Containment
 

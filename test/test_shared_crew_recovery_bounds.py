@@ -393,10 +393,14 @@ async def test_a_new_session_is_recorded_before_its_work_is_accepted(dash_state)
     assert dash_state.conversation_log._read_metadata(key)
 
 
-def test_a_turn_the_restart_ended_says_so_in_its_session():
+@pytest.mark.asyncio
+async def test_a_turn_the_restart_ended_says_so_in_its_session():
     rows: list[tuple[str, str]] = []
     slot = SimpleNamespace(
-        key="tab", linked_session_key="", append=lambda r, t, c: rows.append((r, t))
+        key="tab",
+        linked_session_key="",
+        messages=[],
+        append=lambda r, t, c, **_kw: rows.append((r, t)),
     )
     state = SimpleNamespace(_slots={"tab": slot})
     note = host_hooks.reconcile_note(state)
@@ -411,6 +415,8 @@ def test_a_turn_the_restart_ended_says_so_in_its_session():
     note(work(S.CANCELLED, extra={ag.PARKED_KEY: True}))
     note(work(S.CANCELLED, reason=ReasonCode.CANCELLED_BY_USER))
     note(work(S.UNKNOWN_OUTCOME, op=OperationKind.TASK))
+    host_hooks.mark_sessions_restored(state)
+    await asyncio.wait_for(state._shared_crew_note_delivery, BOUND)
     assert rows == [
         ("error", host_hooks.NOTE_UNKNOWN),
         ("error", host_hooks.NOTE_NOT_STARTED),
@@ -428,7 +434,7 @@ async def test_reconciliation_tells_the_session_of_a_turn_it_ended(tmp_path, clo
     store2 = _open(path, clock)
     told: list[str] = []
     svc2 = _service(store2, clock, liveness=lambda ref: Liveness.STOPPED)
-    svc2.set_reconcile_listener(lambda work: told.append(work.state.value))
+    svc2.set_reconcile_listener(lambda work, _payload: told.append(work.state.value))
     await svc2.ensure_ready()
     assert told == [S.UNKNOWN_OUTCOME.value]
 
