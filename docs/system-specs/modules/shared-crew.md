@@ -459,9 +459,12 @@ used for `SLICE_IDLE_SECONDS` (600) is stopped and its runtime drop-ins removed
 (`systemctl --user stop` then `revert`), only while no runtime scope in it holds a
 process; the gateway's stop releases every one at once, including the slice of a turn the
 stop interrupted, repeating the sweep a bounded number of times
-(`SHUTDOWN_SWEEP_ROUNDS`) while a runtime scope it ended still empties, and its start
-releases those an earlier process left (`AdmissionService.sweep_slices`,
-`shutdown_cleanup`, `release_stale_slices`). The slice is forgotten before it is stopped, so a spawn
+(`SHUTDOWN_SWEEP_ROUNDS`) while a runtime scope it ended still empties, then the
+instance slice once its own control group is empty (`release_instance_slice`). The
+gateway's hard-exit path runs the same release after it reaps orphaned sessions, so a
+graceful shutdown that ran out of time does not skip it. Its start releases those an
+earlier process left (`AdmissionService.sweep_slices`, `shutdown_cleanup`,
+`release_stale_slices`). The slice is forgotten before it is stopped, so a spawn
 racing the release lands in the instance slice. A shared session's runtime is one process, so it
 stays in the slice of the initiator whose turn started it; later turns by others are
 bounded by admission counts, not that slice.

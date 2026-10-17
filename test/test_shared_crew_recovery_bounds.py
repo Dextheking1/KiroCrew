@@ -564,10 +564,18 @@ async def test_a_stop_that_interrupted_a_running_turn_releases_its_slice(
         busy[name] = []  # the runtime the stop ended has exited
 
     runner.calls.clear()
-    assert await ag.shutdown_cleanup(rounds=3, interval=0.25, pause=pause) == 1
+    # A's slice, then the emptied instance slice.
+    assert await ag.shutdown_cleanup(rounds=3, interval=0.25, pause=pause) == 2
     assert pauses == [0.25]
     assert not svc._slices.is_ready(name)
-    assert [c[2] for c in runner.calls] == ["stop", "revert"]
+    instance = _containment.instance_slice_name()
+    released = [(c[2], c[-1]) for c in runner.calls if c[2] in ("stop", "revert")]
+    assert released == [
+        ("stop", name),
+        ("revert", name),
+        ("stop", instance),
+        ("revert", instance),
+    ]
     release.set()
     await asyncio.wait_for(turn, BOUND)
 
@@ -595,3 +603,17 @@ async def test_a_stop_keeps_a_slice_a_runtime_still_holds(tmp_path, clock, monke
     assert pauses == [0.25, 0.25]
     assert svc._slices.is_ready(name)
     assert not [c for c in runner.calls if c[2] in ("stop", "revert")]
+
+
+def test_the_instance_slice_is_kept_while_anything_runs_under_it():
+    from kiro_crew.shared_crew import admission_runtime
+
+    runner = _Runner()
+    slices = SliceManager(runner=runner, systemctl="/usr/bin/systemctl")
+    instance = _containment.instance_slice_name()
+    slices._applied[instance] = ()
+    assert admission_runtime.release_instance_slice(slices, populated=lambda _n: True) == 0
+    assert admission_runtime.release_instance_slice(slices, populated=lambda _n: None) == 0
+    assert instance in slices.applied()
+    assert admission_runtime.release_instance_slice(slices, populated=lambda _n: False) == 1
+    assert instance not in slices.applied()

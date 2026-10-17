@@ -122,6 +122,27 @@ def principal_slices_left(slices: _containment.SliceManager) -> list[str]:
     return [name for name in slices.applied() if name != instance]
 
 
+def release_instance_slice(
+    slices: _containment.SliceManager,
+    *,
+    populated: Callable[[str], "bool | None"] = _containment.slice_populated,
+) -> int:
+    """At the gateway's stop, release the instance slice once nothing runs under it.
+
+    Only once every per-principal slice is gone, and only when the slice's own
+    control group reports it empty; an unknown answer keeps it. Blocking.
+    """
+    try:
+        name = _containment.instance_slice_name()
+    except Exception:  # noqa: BLE001 -- no name, nothing to release
+        return 0
+    if name not in slices.applied() or principal_slices_left(slices):
+        return 0
+    if populated(name) is not False:
+        return 0
+    return 1 if slices.release(name, busy=lambda _n: []) else 0
+
+
 async def release_stale_slices(slices: _containment.SliceManager, *, busy: Busy) -> int:
     """Release the idle per-principal slices an earlier gateway process left behind."""
     names = await asyncio.to_thread(slices.principal_slices)
@@ -138,6 +159,7 @@ async def release_stale_slices(slices: _containment.SliceManager, *, busy: Busy)
 __all__ = [
     "SLICE_IDLE_SECONDS",
     "principal_slices_left",
+    "release_instance_slice",
     "release_stale_slices",
     "sweep_idle_slices",
     "systemd_reap",

@@ -302,6 +302,49 @@ RUNTIME_SCOPE_PREFIX = "kirocrew-rt-"
 _CGROUP_ROOT = "/sys/fs/cgroup"
 
 
+def slice_populated(
+    slice_name: str, *, runner: Runner = _run, cgroup_root: str = _CGROUP_ROOT
+) -> bool | None:
+    """Whether anything at all still runs under *slice_name*, or None when unknown.
+
+    Reads the slice's own ``cgroup.events``, which counts every descendant
+    (child slices and scopes alike). A slice that is not loaded holds nothing.
+    Shells out and reads a file: call off-loop.
+    """
+    if not _UNIT_NAME_RE.match(slice_name or "") or not slice_name.endswith(".slice"):
+        return None
+    from kiro_crew import platform_compat
+
+    systemctl = platform_compat.trusted_system_bin("systemctl")
+    if systemctl is None:
+        return None
+    try:
+        proc = runner([systemctl, "--user", "show", "-p", "ControlGroup", "--value", slice_name])
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    group = (proc.stdout or "").strip()
+    if not group:
+        return False
+    import os
+
+    try:
+        with open(
+            os.path.join(cgroup_root, group.lstrip("/"), "cgroup.events"), encoding="utf-8"
+        ) as fh:
+            events = fh.read()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    for line in events.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "populated":
+            return value.strip() != "0"
+    return None
+
+
 def populated_scopes(
     slice_name: str, *, runner: Runner = _run, cgroup_root: str = _CGROUP_ROOT
 ) -> list[str] | None:

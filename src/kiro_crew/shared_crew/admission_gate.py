@@ -1792,11 +1792,12 @@ async def shutdown_cleanup(
     interval: float = SHUTDOWN_SWEEP_INTERVAL_SECONDS,
     pause: Callable[[float], Awaitable[Any]] = asyncio.sleep,
 ) -> int:
-    """Gateway stop: release every per-principal slice this process sized.
+    """Gateway stop: release every per-principal slice this process sized, then the instance's.
 
     A slice whose runtime the stop is still ending holds a populated scope for
     a moment, so the sweep is repeated (bounded by *rounds*) until none is
-    left. A slice still held after that is released by the next start.
+    left. A slice still held after that is released by the next start. The
+    instance slice goes last, once its own control group is empty.
     """
     service = _SERVICE
     if service is None or not service.enabled or service._slices is None:
@@ -1811,6 +1812,15 @@ async def shutdown_cleanup(
         if not _runtime.principal_slices_left(service._slices) or attempt + 1 >= rounds:
             break
         await pause(interval)
+    try:
+        runner = getattr(service._slices, "_runner", _containment._run)
+        released += await asyncio.to_thread(
+            _runtime.release_instance_slice,
+            service._slices,
+            populated=lambda name: _containment.slice_populated(name, runner=runner),
+        )
+    except Exception:  # noqa: BLE001 -- cleanup never blocks the stop
+        logger.debug("shared crew: instance slice release at stop failed", exc_info=True)
     return released
 
 
