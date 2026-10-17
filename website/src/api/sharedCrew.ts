@@ -336,6 +336,7 @@ export type ReasonCode =
   | 'idempotency_conflict'
   | 'invalid_transition'
   | 'not_found'
+  | 'send_race'
 
 /** `AcceptedWork.to_public_dict`. */
 export interface AcceptedWork {
@@ -379,6 +380,33 @@ export interface SharedCrewErrorBody {
   current?: AcceptedWork
 }
 
+/** One send the host accepted into a session (`send_race.AcceptedSend`). */
+export interface AcceptedSend {
+  revision: number
+  principal: PublicPrincipal
+  message_id: string
+  accepted_at: number
+}
+
+/** A session's send revision: the GET `/api/shared-crew/send-state` body and the
+ *  `shared_crew.send_state` frame. A send carries it back as `base_revision`. */
+export interface SendState {
+  schema_version: number
+  session_key: string
+  revision: number
+  last: AcceptedSend | null
+}
+
+/** The 409 answer to a send that lost a first-submit-wins race. Nothing was
+ *  accepted: no queue entry, no steer, no turn. The draft stays with the sender. */
+export interface SendRaceConflictBody {
+  error: string
+  code: 'send_race'
+  session_key: string
+  current_revision: number
+  winner: AcceptedSend
+}
+
 export type Activity = 'viewing' | 'typing' | 'idle'
 
 export interface PresenceEntry {
@@ -411,6 +439,7 @@ export type SharedCrewServerFrame =
   | { type: 'shared_crew.work'; schema_version: number; work: AcceptedWork; slot_key?: string }
   | { type: 'shared_crew.decision'; schema_version: number; decision: SharedDecision }
   | { type: 'shared_crew.capacity'; schema_version: number; capacity: CapacityResponse }
+  | ({ type: 'shared_crew.send_state' } & SendState)
 
 /** Client activity report. Carries no principal: the server stamps the connection's actor. */
 export interface SharedCrewActivityFrame {

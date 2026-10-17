@@ -237,6 +237,7 @@ export function useWebSocket() {
           case 'shared_crew.work':
           case 'shared_crew.decision':
           case 'shared_crew.capacity':
+          case 'shared_crew.send_state':
             applySharedCrewFrame(queryClient, data)
             break
           case 'credential_redaction_changed':

@@ -5,7 +5,9 @@
  * same cache entries.
  */
 import { useQuery } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { api } from '../../api/client'
+import { noteSendRevision } from '../../api/sendRace'
 import type { CreatorFilter } from '../../api/sharedCrew'
 import { ALL_UNAVAILABLE } from '../../api/sharedCrewUi'
 import { sharedCrewKeys } from './sharedCrewSocket'
@@ -64,6 +66,22 @@ export function useSessionDecisions(sessionKey: string | null | undefined, enabl
     enabled: enabled && !!sessionKey,
     retry: false,
   })
+}
+
+/** The session's send revision, read on open and after every reconnect (the
+ *  socket's open invalidates `shared-crew`), then kept current by frames. The
+ *  revision it reads is what this tab's next send is based on. */
+export function useSessionSendState(sessionKey: string | null | undefined, enabled = true) {
+  const query = useQuery({
+    queryKey: sharedCrewKeys.sendState(sessionKey ?? ''),
+    queryFn: () => api.sharedCrewSendState(sessionKey ?? ''),
+    enabled: enabled && !!sessionKey,
+    retry: false,
+  })
+  useEffect(() => {
+    if (sessionKey && query.data) noteSendRevision(sessionKey, query.data.revision)
+  }, [sessionKey, query.data])
+  return query
 }
 
 /** One server-filtered page per cursor; the caller holds the cursor list. */

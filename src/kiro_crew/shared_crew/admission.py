@@ -156,6 +156,8 @@ class ReasonCode(str, enum.Enum):
     IDEMPOTENCY_CONFLICT = "idempotency_conflict"
     INVALID_TRANSITION = "invalid_transition"
     NOT_FOUND = "not_found"
+    #: A send lost a first-submit-wins race (``send_race``): nothing was accepted.
+    SEND_RACE = "send_race"
 
 
 #: HTTP status a handler answers for each refusal reason.
@@ -179,6 +181,7 @@ REASON_HTTP_STATUS: Mapping[ReasonCode, int] = {
     ReasonCode.IDEMPOTENCY_CONFLICT: 409,
     ReasonCode.INVALID_TRANSITION: 409,
     ReasonCode.NOT_FOUND: 404,
+    ReasonCode.SEND_RACE: 409,
 }
 
 
