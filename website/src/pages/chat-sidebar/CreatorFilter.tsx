@@ -1,33 +1,67 @@
-/** The sidebar's creator filter (All / Mine / a person / Unknown) and the
+/** The sidebar's creator filter (All / Mine / a person / Unattributed) and the
  *  server-filtered session list it shows while a filter other than All is on.
  *
  *  The filter runs on the server before paging (`GET /api/shared-crew/sessions`),
  *  so the counts are the server's: `total_matching` sessions match across every
  *  page, and `hidden_by_filter` is how many the filter left out. The client never
  *  hides a row it was sent. Filtering is discovery, not access: every session is
- *  still reachable with All. The control renders only when the Crew can attribute
- *  sessions, so a single-operator Crew's sidebar is unchanged. */
-import { useMemo, useState } from 'react'
+ *  still reachable with All.
+ *
+ *  The selection is remembered per Crew (keyed by the mode route's `crew_id`). A
+ *  personal Crew shows neither the control nor creator bylines, and neither
+ *  does a Crew that cannot attribute sessions. */
+import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { Users } from 'lucide-react'
 import SimpleSelect from '../../components/SimpleSelect'
 import ErrorNotice from '../../components/ErrorNotice'
 import { Btn, Skeleton } from '../../components/ui'
-import { capabilityUsable, principalName } from '../../api/sharedCrewUi'
+import { capabilityUsable, isUnknownPrincipal, principalName, sharedAccessConfigured } from '../../api/sharedCrewUi'
 import type { CreatorFilter as CreatorFilterValue } from '../../api/sharedCrew'
-import { useSharedCrewCapabilities, useSharedCrewPeople, useSharedCrewSessionsPage } from '../../hooks/sharedCrew/useSharedCrew'
+import { creatorDisplay, effectiveMode, hidesTeamAttribution, loadCreatorFilter, normalizeCreatorFilter, saveCreatorFilter } from '../../api/sharedCrewMode'
+import { useSharedCrewCapabilities, useSharedCrewMode, useSharedCrewPeople, useSharedCrewSessionsPage } from '../../hooks/sharedCrew/useSharedCrew'
 import { i18nT } from '../../i18n/t'
 import { fmtNumber } from '../../i18n/format'
 import { fmtRelativeTime } from '../chat/sessionOrder'
-import { creatorLabel } from './SessionCreatorByline'
+import { SharedCrewBylineContext, type SharedCrewBylineView } from './SessionCreatorByline'
 
-/** Whether this Crew can back a creator filter at all. */
-export function useCreatorFilterAvailable(): boolean {
+export interface SharedCrewListView {
+  /** Whether the creator filter control renders. */
+  filterAvailable: boolean
+  filter: CreatorFilterValue
+  setFilter: (v: CreatorFilterValue) => void
+  bylines: SharedCrewBylineView
+}
+
+/** The session list's Shared Crew view: whether to filter and label creators,
+ *  the remembered selection for this Crew, and the verified viewer. */
+export function useSharedCrewListView(): SharedCrewListView {
   const { capabilities } = useSharedCrewCapabilities()
-  return capabilityUsable(capabilities.attribution)
+  const attributes = capabilityUsable(capabilities.attribution)
+  const modeQuery = useSharedCrewMode(attributes)
+  const people = useSharedCrewPeople(attributes)
+  const modeKnown = attributes && (modeQuery.isSuccess || modeQuery.isError)
+  const mode = effectiveMode(modeQuery.data, {
+    teamPath: sharedAccessConfigured(capabilities),
+    othersSeen: (people.data?.people ?? []).some(row => !row.is_viewer),
+  })
+  const team = modeKnown && !hidesTeamAttribution(mode)
+  const crewId = modeQuery.data?.crew_id ?? ''
+  const viewer = modeQuery.data?.viewer
+  const viewerId = viewer && !isUnknownPrincipal(viewer) ? viewer.id : ''
+  const [filter, setFilterState] = useState<CreatorFilterValue>('all')
+  useEffect(() => { setFilterState(loadCreatorFilter(crewId)) }, [crewId])
+  const setFilter = useCallback((v: CreatorFilterValue) => {
+    const next = normalizeCreatorFilter(v)
+    setFilterState(next)
+    saveCreatorFilter(crewId, next)
+  }, [crewId])
+  const bylines = useMemo(() => ({ hidden: !team, viewerId }), [team, viewerId])
+  return { filterAvailable: team, filter: team ? filter : 'all', setFilter, bylines }
 }
 
 export function CreatorFilterBar({ value, onChange }: { value: CreatorFilterValue; onChange: (v: CreatorFilterValue) => void }) {
   const people = useSharedCrewPeople(true)
+  const current = normalizeCreatorFilter(value)
   const { options, labels } = useMemo(() => {
     const opts: string[] = ['all', 'mine']
     const labs: string[] = [i18nT('sharedCrew.filter_all'), i18nT('sharedCrew.filter_mine')]
@@ -38,23 +72,23 @@ export function CreatorFilterBar({ value, onChange }: { value: CreatorFilterValu
       opts.push(row.principal.id)
       labs.push(name)
     }
-    opts.push('unknown')
-    labs.push(i18nT('sharedCrew.unknown_person'))
+    opts.push('unattributed')
+    labs.push(i18nT('sharedCrew.unattributed'))
     // A creator chosen from an earlier People read stays selectable even if the
     // person is no longer listed, so the control never shows an empty value.
-    if (!opts.includes(value)) {
-      opts.push(value)
+    if (!opts.includes(current)) {
+      opts.push(current)
       labs.push(i18nT('sharedCrew.filter_other_person'))
     }
     return { options: opts, labels: labs }
-  }, [people.data, value])
+  }, [people.data, current])
   return (
     <div className="mx-2 mb-1 flex items-center gap-1.5 min-w-0" data-testid="creator-filter">
       <Users size={12} className="shrink-0 text-muted" aria-hidden />
       <SimpleSelect
         options={options}
         optionLabels={labels}
-        value={value}
+        value={current}
         onChange={v => onChange(v as CreatorFilterValue)}
         aria-label={i18nT('sharedCrew.filter_label')}
         className="h-7 text-[12px] py-0 min-w-0 flex-1"
@@ -75,7 +109,8 @@ export function CreatorFilteredSessions({ creator, q, connected, onOpen, onClear
   // The cursor trail of the pages already shown; Back pops it, More pushes.
   const [cursors, setCursors] = useState<string[]>([''])
   const cursor = cursors[cursors.length - 1]
-  const page = useSharedCrewSessionsPage(creator, q.trim(), cursor, true)
+  const { viewerId } = useContext(SharedCrewBylineContext)
+  const page = useSharedCrewSessionsPage(normalizeCreatorFilter(creator), q.trim(), cursor, true)
   const data = page.data
   const unavailable = page.isSuccess && data === null
   return (
@@ -113,7 +148,7 @@ export function CreatorFilteredSessions({ creator, q, connected, onOpen, onClear
             <ul className="flex flex-col" aria-label={i18nT('sharedCrew.filtered_sessions')}>
               {data.items.map(item => {
                 const title = item.title || item.key
-                const by = item.attribution ? creatorLabel(item.attribution) : i18nT('sharedCrew.unknown_person')
+                const by = item.attribution ? creatorDisplay(item.attribution, viewerId) : i18nT('sharedCrew.unattributed')
                 const when = item.modified ?? ''
                 return (
                   <li key={item.key}>

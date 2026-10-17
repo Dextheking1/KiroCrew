@@ -38,7 +38,7 @@ function AuthoredBy({ author, slotKey }: { author: PublicPrincipal; slotKey?: st
   const ownerId = sessionOwnerId(attribution, viewer.isSuccess ? viewer.data?.id : '')
   const sender = bylineFor(author, ownerId)
   if (!sender) return null
-  return <SenderLine name={principalName(sender) || i18nT('sharedCrew.unknown_person')} />
+  return <SenderLine name={principalName(sender) || i18nT('sharedCrew.unattributed')} />
 }
 
 export function MessageByline({ meta, slotKey }: { meta?: Record<string, unknown>; slotKey?: string }) {

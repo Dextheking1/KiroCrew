@@ -37,6 +37,7 @@ from kiro_crew.shared_crew.contracts import (
     keep_creator,
     principal_or_unknown,
 )
+from kiro_crew.shared_crew.trigger import SessionTrigger, trigger_of
 
 logger = logging.getLogger(__name__)
 
@@ -128,25 +129,55 @@ def metadata_value(slot: Any) -> dict[str, Any] | None:
     return value.to_dict()
 
 
-def public_attribution(value: SessionAttribution) -> dict[str, Any]:
-    """The browser-facing attribution: the creator without issuer or subject."""
-    return {
+def public_attribution(
+    value: SessionAttribution, trigger: SessionTrigger | None = None
+) -> dict[str, Any]:
+    """The browser-facing attribution: the creator without issuer or subject.
+
+    ``trigger`` is present only for a session a schedule, a webhook or the Crew
+    started (:mod:`kiro_crew.shared_crew.trigger`); such a session names its
+    trigger and never a person.
+    """
+    body: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "availability": value.availability.value,
         "creator": value.creator.to_public_dict(),
         "created_at": value.created_at,
     }
+    if trigger is not None and not is_person(value.creator):
+        body["trigger"] = trigger.to_public_dict()
+    return body
 
 
 def public_attribution_of_slot(slot: Any) -> dict[str, Any]:
     value = slot_attribution(slot)
-    return public_attribution(value if value is not None else SessionAttribution.legacy())
+    trigger = trigger_of(
+        key=str(getattr(slot, "key", "") or ""),
+        created_by=str(getattr(slot, "_created_by", "") or ""),
+        origin=str(getattr(slot, "_origin", "") or ""),
+    )
+    return public_attribution(
+        value if value is not None else SessionAttribution.legacy(), trigger
+    )
 
 
-def public_attribution_from_meta(meta: Mapping[str, Any] | None) -> dict[str, Any]:
+def public_attribution_from_meta(
+    meta: Mapping[str, Any] | None, *, key: str = ""
+) -> dict[str, Any]:
+    """The public attribution of a persisted session's metadata line (and its *key*)."""
     if not isinstance(meta, Mapping):
-        return public_attribution(SessionAttribution.legacy())
-    return public_attribution(SessionAttribution.from_metadata(meta))
+        return public_attribution(SessionAttribution.legacy(), trigger_of(key=key))
+    created_by = meta.get("created_by")
+    trigger = trigger_of(key=key, created_by=created_by if isinstance(created_by, str) else "")
+    return public_attribution(SessionAttribution.from_metadata(meta), trigger)
+
+
+def trigger_of_public(raw: object) -> Mapping[str, Any] | None:
+    """The ``trigger`` a public attribution value carries, or ``None``."""
+    if not isinstance(raw, Mapping):
+        return None
+    trigger = raw.get("trigger")
+    return trigger if isinstance(trigger, Mapping) else None
 
 
 def creator_of_public(raw: object) -> Principal:

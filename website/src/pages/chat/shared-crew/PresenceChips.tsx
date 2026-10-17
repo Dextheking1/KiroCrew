@@ -15,12 +15,12 @@ export function PresenceChips({ entries, viewer }: { entries: readonly PresenceE
   const shown = others.slice(0, MAX_CHIPS)
   const rest = others.length - shown.length
   const typing = others.filter(e => e.activity === 'typing')
-  const typingName = typing.length === 1 ? (principalName(typing[0].principal) || i18nT('sharedCrew.unknown_person')) : ''
+  const typingName = typing.length === 1 ? (principalName(typing[0].principal) || i18nT('sharedCrew.unattributed')) : ''
   return (
     <div className="flex items-center gap-1.5 min-w-0" data-testid="presence-chips">
       <ul className="flex items-center -space-x-1 shrink-0" aria-label={i18nT('sharedCrew.here_now')}>
         {shown.map(e => {
-          const name = principalName(e.principal) || i18nT('sharedCrew.unknown_person')
+          const name = principalName(e.principal) || i18nT('sharedCrew.unattributed')
           const label = e.activity === 'typing' ? i18nT('sharedCrew.person_typing', { name }) : i18nT('sharedCrew.person_viewing', { name })
           return (
             <li

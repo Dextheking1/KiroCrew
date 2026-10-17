@@ -18,6 +18,11 @@ of sessions the search alone would list.
 
 The filter is discovery, not access control: it only narrows what an already
 authorized viewer sees.
+
+``unattributed`` (``unknown`` is accepted as its older spelling) lists sessions
+with no human creator and no named trigger. A session a schedule or a webhook
+started names that trigger, so it is listed under All and its trigger, never
+under Unattributed.
 """
 
 from __future__ import annotations
@@ -28,7 +33,11 @@ import hashlib
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from kiro_crew.shared_crew.attribution import creator_of_public, public_attribution_from_meta
+from kiro_crew.shared_crew.attribution import (
+    creator_of_public,
+    public_attribution_from_meta,
+    trigger_of_public,
+)
 from kiro_crew.shared_crew.codec import ContractError
 from kiro_crew.shared_crew.contracts import Principal, SessionPage, SessionQuery
 
@@ -76,7 +85,9 @@ def _item(row: Mapping[str, Any]) -> dict[str, Any]:
     item = {k: row[k] for k in _ITEM_KEYS if k in row}
     attribution = row.get("attribution")
     item["attribution"] = (
-        dict(attribution) if isinstance(attribution, Mapping) else public_attribution_from_meta({})
+        dict(attribution)
+        if isinstance(attribution, Mapping)
+        else public_attribution_from_meta({}, key=str(row.get("key") or ""))
     )
     return item
 
@@ -104,7 +115,9 @@ def query_sessions(
             continue
         if not _matches_search(row, needle):
             continue
-        if query.matches(creator_of_public(row.get("attribution")), viewer):
+        attribution = row.get("attribution")
+        triggered = trigger_of_public(attribution) is not None
+        if query.matches(creator_of_public(attribution), viewer, triggered=triggered):
             matching.append((_sort_key(row), row))
         else:
             hidden += 1

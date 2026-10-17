@@ -7,7 +7,11 @@ module connects them once, at gateway start:
   so ``GET /api/shared-crew/capabilities`` reports what is actually running;
 * the admission scheduler becomes the People page's active/queued usage reader;
 * every accepted-work write is pushed to dashboard tabs as a ``shared_crew.work``
-  frame (:func:`work_broadcaster`).
+  frame (:func:`work_broadcaster`);
+* a scheduled session's trigger label reads its job name from the cron
+  service's in-memory snapshot (:func:`cron_job_namer`);
+* the team configuration is checked once and a refusal is logged
+  (``crew_mode.validate_at_startup``).
 
 Every source answers from in-memory state and performs no I/O, as the
 capability aggregator requires. :func:`install` is idempotent.
@@ -15,10 +19,19 @@ capability aggregator requires. :func:`install` is idempotent.
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Callable, Mapping
 
-from kiro_crew.shared_crew import access, admission_gate, capabilities, people, work_store
+from kiro_crew.shared_crew import (
+    access,
+    admission_gate,
+    capabilities,
+    crew_mode,
+    people,
+    trigger,
+    work_store,
+)
 from kiro_crew.shared_crew.admission import AcceptedWork
 from kiro_crew.shared_crew.capabilities import CapabilityContribution
 from kiro_crew.shared_crew.collab import work_frame
@@ -137,6 +150,18 @@ def work_broadcaster(state: Any) -> Callable[[AcceptedWork], None]:
     return broadcast
 
 
+def cron_job_namer(state: Any) -> Callable[[str], str]:
+    """``job id -> job name`` from *state*'s cron service, cache-only (no I/O)."""
+
+    def name_of(job_id: str) -> str:
+        crons = getattr(state, "crons", None)
+        job = crons.get_job(job_id) if crons is not None else None
+        name = getattr(job, "name", "") if job is not None else ""
+        return name if isinstance(name, str) else ""
+
+    return name_of
+
+
 _SOURCES = (
     (
         SOURCE_IDENTITY,
@@ -163,9 +188,14 @@ def install(state: Any = None) -> None:
         people.register_usage_source(admission_usage)
         if state is not None:
             work_store.set_change_listener(work_broadcaster(state))
+            trigger.register_name_resolver(trigger.TRIGGER_SCHEDULED, cron_job_namer(state))
             from kiro_crew.shared_crew import host_hooks
 
             host_hooks.install(state)
+    try:
+        crew_mode.validate_at_startup()
+    except Exception:  # noqa: BLE001 -- a failed check is logged, never fatal
+        logging.getLogger(__name__).warning("shared crew team check failed", exc_info=True)
 
 
 def uninstall() -> None:
@@ -175,6 +205,7 @@ def uninstall() -> None:
             capabilities.unregister_capability_source(name)
         people.register_usage_source(None)
         work_store.set_change_listener(None)
+        trigger.register_name_resolver(trigger.TRIGGER_SCHEDULED, None)
         from kiro_crew.shared_crew import host_hooks
 
         host_hooks.uninstall()
@@ -183,6 +214,7 @@ def uninstall() -> None:
 __all__ = [
     "admission_source",
     "admission_usage",
+    "cron_job_namer",
     "identity_source",
     "install",
     "presence_source",

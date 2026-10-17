@@ -44,9 +44,9 @@ describe('MessageByline', () => {
     expect((await screen.findByTestId('message-byline')).textContent).toBe('Bob')
   })
 
-  it('labels an Unknown author as Unknown', async () => {
+  it('labels an author with no recorded person as Unattributed', async () => {
     mount(<MessageByline meta={authored('unknown', '', 'unknown')} slotKey="s1" />, [SLOT])
-    expect((await screen.findByTestId('message-byline')).textContent).toBe('Unknown')
+    expect((await screen.findByTestId('message-byline')).textContent).toBe('Unattributed')
   })
 
   it('treats the viewer as owner in a session with no recorded creator', async () => {

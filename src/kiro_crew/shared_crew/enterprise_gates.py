@@ -55,6 +55,8 @@ REASON_NOT_CONFIGURED = "not_configured"
 REASON_ALLOWED = "allowed"
 ERROR_SHARED_ACCESS_REFUSED = "shared_access_refused"
 ERROR_INFERENCE_REFUSED = "inference_refused"
+#: Mirrors ``crew_mode.ERROR_TEAM_CONFIG_INVALID``.
+ERROR_TEAM_CONFIG_INVALID = "team_config_invalid"
 
 #: Provenance that marks a person reaching the Crew through a shared path.
 SHARED_PROVENANCE = frozenset(
@@ -209,11 +211,27 @@ def _actor_principal(request: web.Request) -> Optional[Principal]:
     return actor.principal if isinstance(actor, ActorContext) else None
 
 
+def team_config_refusal(seams: EnterpriseSeams) -> Optional[str]:
+    """The reason team mode is refused for *seams*, or ``None`` (``crew_mode``)."""
+    from kiro_crew.shared_crew.access import setup_paths_dict
+    from kiro_crew.shared_crew.crew_mode import team_config_problem
+
+    problem = team_config_problem(seams, setup_paths_dict())
+    return None if problem is None else problem.reason
+
+
 def make_enterprise_gate_middleware(
     gates: Callable[[], EnterpriseGates] = current_gates,
     clock: Callable[[], float] = time.time,
+    team_check: Callable[[EnterpriseSeams], Optional[str]] = team_config_refusal,
 ) -> Any:
-    """The middleware that asks both gates; *gates* and *clock* are seams for tests."""
+    """The middleware that asks both gates; *gates*, *clock* and *team_check* are seams for tests.
+
+    While the team configuration is invalid, a person reaching the Crew through
+    a shared path is refused with ``team_config_invalid``: an unusable team
+    setup never falls back to admitting them as if the Crew were personal. The
+    local operator is not a shared-access principal and keeps working.
+    """
 
     @web.middleware
     async def enterprise_gate_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
@@ -222,9 +240,17 @@ def make_enterprise_gate_middleware(
         except Exception:  # noqa: BLE001 -- an unreadable seam composes nothing
             logger.warning("shared crew enterprise gates unavailable", exc_info=True)
             return await handler(request)
+        principal = _actor_principal(request)
+        if principal is not None and is_shared_access(principal):
+            try:
+                refused = team_check(current.seams)
+            except Exception:  # noqa: BLE001 -- an unreadable check refuses
+                logger.warning("shared crew team configuration check failed", exc_info=True)
+                refused = "team_config_check_failed"
+            if refused:
+                return _refusal(ERROR_TEAM_CONFIG_INVALID, refused)
         if not current.configured:
             return await handler(request)
-        principal = _actor_principal(request)
         if principal is not None:
             verdict = current.check_shared_access(principal, clock())
             if not verdict.allowed:

@@ -10,8 +10,8 @@ import { useAppDispatch, useAppSelector } from '../store'
 import type { RootState } from '../store'
 import { useConnected } from '../hooks/useConnected'
 import { fetchHistory, deleteHistorySession, switchSlot, resumeFromHistory, clearHistorySessions } from '../store/chatSlice'
-import { CreatorFilterBar, CreatorFilteredSessions, useCreatorFilterAvailable } from './chat-sidebar/CreatorFilter'
-import type { CreatorFilter } from '../api/sharedCrew'
+import { CreatorFilterBar, CreatorFilteredSessions, useSharedCrewListView } from './chat-sidebar/CreatorFilter'
+import { SharedCrewBylineContext } from './chat-sidebar/SessionCreatorByline'
 import { api } from '../api/client'
 import { computeRecentRank, clampTintCount } from '../utils/recencyTint'
 import { useDndSensors } from '../hooks/useDndSensors'
@@ -281,8 +281,9 @@ function ChatSidebar({
   const connected = useConnected()
   // Shared Crew creator filter: server-side, so a non-All value swaps the lanes
   // for the server's filtered page instead of hiding rows already loaded.
-  const creatorFilterAvailable = useCreatorFilterAvailable()
-  const [creatorFilter, setCreatorFilter] = useState<CreatorFilter>('all')
+  // The selection is remembered per Crew; a personal Crew shows no filter or bylines.
+  const creatorView = useSharedCrewListView()
+  const { filterAvailable: creatorFilterAvailable, filter: creatorFilter, setFilter: setCreatorFilter } = creatorView
   const creatorFilterOn = creatorFilterAvailable && creatorFilter !== 'all'
   // An offline refusal stops being true once the gateway is back, so retire it on
   // the disconnected -> connected transition only.
@@ -796,9 +797,10 @@ function ChatSidebar({
   const board = createBoardLane({ ...scope, ...laneRows, ...folderBlocks })
 
   return (
-    // stable theming hook 'sidebar' — see website/docs/theming-contract.md
-    // The region is the session picker a guide's "choose the session" step
-    // points at (`sessions.list`): both layouts draw their rows inside it.
+    <SharedCrewBylineContext.Provider value={creatorView.bylines}>
+    {/* stable theming hook 'sidebar' — see website/docs/theming-contract.md
+        The region is the session picker a guide's "choose the session" step
+        points at (`sessions.list`): both layouts draw their rows inside it. */}
     <div role="region" aria-label={i18nT('pages.chatSidebar.sessions')} {...uiLocation('sessions.list', sidebarRootRef)} onPointerOver={onRootPointerOver} onPointerLeave={releaseHoverPin} className={`${LIST_SHELL_CLS} flex flex-col shrink-0 relative h-full`} style={rootStyle}>
       {/* Scroll peek: full titles in a floating, click-through layer. The
           card itself keeps `sidebarWidth`. */}
@@ -952,6 +954,7 @@ function ChatSidebar({
        *  ever open one, and so the ProjectPicker it hosts has a single owner. */}
       {folderModal && renderFolderModal(scope, folderModal)}
     </div>
+    </SharedCrewBylineContext.Provider>
   )
 }
 

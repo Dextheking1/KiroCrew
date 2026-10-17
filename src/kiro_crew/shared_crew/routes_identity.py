@@ -1,6 +1,6 @@
-"""``GET /api/shared-crew/sessions`` and ``GET /api/shared-crew/people``.
+"""``GET /api/shared-crew/sessions``, ``/people`` and ``/mode``.
 
-Both answer only a dashboard user (``request["is_dashboard_user"] is True``).
+All three answer only a dashboard user (``request["is_dashboard_user"] is True``).
 An app token or an internal caller is refused with 403: these routes are new,
 and admitting a caller the existing session list confines (an app sees only its
 own sessions there) would widen what that caller can read. Refusing them is the
@@ -19,16 +19,19 @@ from typing import Any
 
 from aiohttp import web
 
+from kiro_crew.shared_crew.attribution import creator_of_public
 from kiro_crew.shared_crew.codec import ContractError
-from kiro_crew.shared_crew.contracts import SessionPage, SessionQuery
+from kiro_crew.shared_crew.contracts import Principal, SessionPage, SessionQuery
 from kiro_crew.shared_crew.identity import viewer_principal
 from kiro_crew.shared_crew.people import people_view
+from kiro_crew.shared_crew.people import registry as people_registry
 from kiro_crew.shared_crew.session_query import query_sessions
 
 logger = logging.getLogger(__name__)
 
 SESSIONS_PATH = "/api/shared-crew/sessions"
 PEOPLE_PATH = "/api/shared-crew/people"
+MODE_PATH = "/api/shared-crew/mode"
 
 
 def _error(status: int, code: str, message: str) -> web.Response:
@@ -85,7 +88,37 @@ async def api_shared_crew_people(request: web.Request) -> web.Response:
     return web.json_response(people_view(viewer_principal(request), rows))
 
 
+def _observed_principals(rows: list[dict[str, Any]]) -> list[Principal]:
+    out = [obs.principal for obs in people_registry().snapshot()]
+    out.extend(creator_of_public(row.get("attribution")) for row in rows)
+    return out
+
+
+async def api_shared_crew_mode(request: web.Request) -> web.Response:
+    """The Crew's People/setup mode (``crew_mode.mode_view``)."""
+    refused = _refusal(request)
+    if refused is not None:
+        return refused
+    from kiro_crew.gateway_identity import gateway_id
+    from kiro_crew.shared_crew.access import setup_paths_dict
+    from kiro_crew.shared_crew.crew_mode import mode_view
+    from kiro_crew.shared_crew.enterprise import resolve_enterprise
+
+    rows = [r for r in await _catalog_rows(request) if not _machine_only(str(r.get("key") or ""))]
+    seams = await asyncio.to_thread(resolve_enterprise)
+    crew_id = await asyncio.to_thread(gateway_id)
+    body = mode_view(
+        viewer_principal(request),
+        _observed_principals(rows),
+        seams=seams,
+        setup_paths=setup_paths_dict(),
+        crew_id=crew_id,
+    )
+    return web.json_response(body)
+
+
 def register(app: web.Application) -> None:
     """Register the identity routes on *app*."""
     app.router.add_get(SESSIONS_PATH, api_shared_crew_sessions)
     app.router.add_get(PEOPLE_PATH, api_shared_crew_people)
+    app.router.add_get(MODE_PATH, api_shared_crew_mode)

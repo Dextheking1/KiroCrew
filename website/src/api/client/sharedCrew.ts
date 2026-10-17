@@ -17,6 +17,7 @@ import type {
   SharedCrewSessionPage,
   WorkListResponse,
 } from '../sharedCrewUi'
+import type { CrewModeResponse } from '../sharedCrewMode'
 import type { ClientTransport } from './transport'
 
 export interface SharedCrewSessionQuery {
@@ -47,6 +48,7 @@ export function createSharedCrewEndpoints({ get, post, j }: ClientTransport) {
       return read<SharedCrewSessionPage>('/api/shared-crew/sessions?' + params)
     },
     sharedCrewPeople: () => read<PeopleResponse>('/api/shared-crew/people'),
+    sharedCrewMode: () => read<CrewModeResponse>('/api/shared-crew/mode'),
     /** The viewer's server-derived principal from `/api/auth/me`, or `null` when
      *  this gateway does not report one. Never sent back as "who I am". */
     sharedCrewViewer: async (): Promise<Maybe<PublicPrincipal>> => {

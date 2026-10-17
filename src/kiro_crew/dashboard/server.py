@@ -1977,6 +1977,7 @@ async def start_dashboard(
             identity_trust=_tailnet_trust.trust_identity and bool(_tailnet_trust.allowed_logins),
             loopback_only=local_only,
             proof_gap=await asyncio.to_thread(proof_support),
+            identity_config_unreadable=tailnet_identity_unknown(_cfg.degraded_sections),
         )
         if _tailnet_host:
             logger.info(

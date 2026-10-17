@@ -274,10 +274,11 @@ def unregister_setup_path_source(path: str) -> None:
 
 
 def _reset_setup_paths_for_tests() -> None:
-    global _forwarded_attribution
+    global _forwarded_attribution, _identity_config_unreadable
     with _LOCK:
         _SOURCES.clear()
         _forwarded_attribution = ForwardedAttribution()
+        _identity_config_unreadable = False
 
 
 def _tailnet_state(enabled: bool, host: str, identity_trust: bool) -> SetupPathState:
@@ -302,6 +303,7 @@ class ForwardedAttribution:
 
 
 _forwarded_attribution = ForwardedAttribution()
+_identity_config_unreadable = False
 
 
 def _forwarded_state(
@@ -323,6 +325,7 @@ def note_tailnet(
     identity_trust: bool = False,
     loopback_only: bool = False,
     proof_gap: str = "",
+    identity_config_unreadable: bool = False,
 ) -> None:
     """Record the tailnet path and forwarded attribution the gateway resolved at start.
 
@@ -335,13 +338,24 @@ def note_tailnet(
     in), and *proof_gap* says why the daemon proof cannot succeed here
     (``tailnet_proxy_proof.proof_support``): ``unavailable`` for a platform or
     a same-user daemon, ``degraded`` while no daemon is running.
+
+    *identity_config_unreadable* says the tailnet login allowlist could not be
+    read (``config.resolution.tailnet_identity_unknown``); ``crew_mode`` refuses
+    team mode while it holds.
     """
-    global _forwarded_attribution
+    global _forwarded_attribution, _identity_config_unreadable
     answer = _tailnet_state(bool(enabled), str(host or ""), bool(identity_trust))
     forwarded = _forwarded_state(bool(identity_trust), bool(loopback_only), str(proof_gap or ""))
     with _LOCK:
         _SOURCES[SETUP_TAILSCALE] = lambda: answer
         _forwarded_attribution = forwarded
+        _identity_config_unreadable = bool(identity_config_unreadable)
+
+
+def tailnet_identity_config_unreadable() -> bool:
+    """Whether :func:`note_tailnet` last recorded an unreadable tailnet allowlist."""
+    with _LOCK:
+        return _identity_config_unreadable
 
 
 def forwarded_attribution() -> ForwardedAttribution:
@@ -393,6 +407,7 @@ __all__ = [
     "remote_control_eligibility",
     "setup_paths_dict",
     "shared_access_eligibility",
+    "tailnet_identity_config_unreadable",
     "unregister_setup_path_source",
     "workload_host_dict",
     "workload_host_supported",

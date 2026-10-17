@@ -99,11 +99,11 @@ describe('PresenceChips', () => {
     expect(screen.getByTestId('presence-typing').textContent).toBe('Bob Example is typing')
   })
 
-  it('handles a long name and Unknown without breaking', () => {
+  it('handles a long name and an Unattributed person without breaking', () => {
     const long = 'A'.repeat(200)
     mount(<PresenceChips viewer={null} entries={[entry('p_l', long, 'viewing'), { ...entry('p_unknown', '', 'viewing'), principal: { id: 'p_unknown', kind: 'unknown', display: { name: '', login: '', captured_at: null } } }]} />)
     expect(screen.getByLabelText(`${long} is here`)).toBeInTheDocument()
-    expect(screen.getByLabelText('Unknown is here')).toBeInTheDocument()
+    expect(screen.getByLabelText('Unattributed is here')).toBeInTheDocument()
   })
 
   it('renders nothing when nobody else is here', () => {

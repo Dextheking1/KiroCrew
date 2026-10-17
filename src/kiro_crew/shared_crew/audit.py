@@ -9,9 +9,22 @@ this module adds no second store.
 What a record carries: the action type and id, the session key, the initiator
 and responder as a reduced principal (id, kind, provenance and login, never an
 issuer subject beyond that or a display name), the target id, the outcome, the
-correlation id and the causal link. It never carries prompt text, message
-bodies, tool input, tokens or cookies, because :class:`ActionRecord` has no
-field for them.
+correlation id and the causal link. Two references ride in the record's
+``extra`` and the event metadata:
+
+* ``workload_identity_ref``: the Crew's workload identity from the Crew binding
+  (``crew_mode.crew_identity_refs``), ``unavailable`` when none is composed, so
+  every record names the human and the Crew workload separately;
+* ``trigger``: for work no person started (a schedule, a webhook, the Crew), the
+  trigger behind its session (:mod:`kiro_crew.shared_crew.trigger`). It is never
+  set for a human initiator and never stands in for one.
+
+It never carries prompt text, message bodies, tool input, tokens or cookies,
+because :class:`ActionRecord` has no field for them.
+
+Causal join: ``action_id``, ``causal_action_id``, ``session_key``, ``turn_id``,
+``target`` (the work id for work actions) and the initiator id join a record to
+the accepted work and session it acted on; :func:`joins_work` checks that join.
 
 Write-failure rule: :func:`record_action` writes synchronously off the event
 loop with the log's fail-closed ``critical`` mode and returns whether the record
@@ -35,7 +48,10 @@ from kiro_crew.shared_crew.contracts import (
     ActionType,
     ActorContext,
     Principal,
+    PrincipalKind,
 )
+from kiro_crew.shared_crew.crew_mode import WORKLOAD_UNAVAILABLE, current_workload_identity_ref
+from kiro_crew.shared_crew.trigger import trigger_of
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +80,21 @@ def audit_principal(principal: Principal | None) -> dict[str, Any] | None:
     }
 
 
+#: ``extra`` keys an action record carries beside the frozen fields.
+EXTRA_WORKLOAD_REF = "workload_identity_ref"
+EXTRA_TRIGGER = "trigger"
+
+
+def _unattended_trigger(initiator: Principal, session_key: str) -> dict[str, Any] | None:
+    if initiator.kind is PrincipalKind.HUMAN:
+        return None
+    found = trigger_of(key=session_key)
+    if found is None:
+        return None
+    body = found.to_public_dict()
+    return {"kind": body["kind"], "ref": body["ref"], "name": body["name"]}
+
+
 def new_action_record(
     action_type: ActionType,
     *,
@@ -76,8 +107,21 @@ def new_action_record(
     runtime_ref: str = "",
     causal_action_id: str = "",
     now: float | None = None,
+    workload_ref: str | None = None,
 ) -> ActionRecord:
-    """Build a record for an action *initiator* asked for."""
+    """Build a record for an action *initiator* asked for.
+
+    *workload_ref* defaults to the Crew's current workload identity reference.
+    """
+    extra: dict[str, Any] = {
+        EXTRA_WORKLOAD_REF: _clip(
+            current_workload_identity_ref() if workload_ref is None else workload_ref
+        )
+        or WORKLOAD_UNAVAILABLE,
+    }
+    trigger = _unattended_trigger(initiator.principal, session_key)
+    if trigger is not None:
+        extra[EXTRA_TRIGGER] = trigger
     return ActionRecord(
         action_id=uuid.uuid4().hex,
         action_type=action_type,
@@ -91,6 +135,22 @@ def new_action_record(
         causal_action_id=_clip(causal_action_id),
         correlation_id=_clip(initiator.correlation_id),
         target=_clip(target),
+        extra=extra,
+    )
+
+
+def joins_work(record: ActionRecord, work: Any) -> bool:
+    """Whether *record* acted on accepted *work*: the same work id and session.
+
+    The actor side of the join is the record's own initiator, kept apart from
+    the work's owner (``budget_key``): a collaborator may cancel work someone
+    else started, and the record names who acted while the work names who
+    started it.
+    """
+    return (
+        bool(record.target)
+        and record.target == getattr(work, "work_id", None)
+        and record.session_key == getattr(work, "session_key", None)
     )
 
 
@@ -120,6 +180,10 @@ def security_event(record: ActionRecord) -> Any:
             "runtime_ref": record.runtime_ref,
             "causal_action_id": record.causal_action_id,
             "target": record.target,
+            EXTRA_WORKLOAD_REF: str(
+                record.extra.get(EXTRA_WORKLOAD_REF) or WORKLOAD_UNAVAILABLE
+            ),
+            EXTRA_TRIGGER: record.extra.get(EXTRA_TRIGGER),
         },
     )
 

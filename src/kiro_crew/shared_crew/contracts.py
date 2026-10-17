@@ -142,7 +142,10 @@ class Principal:
 
     @classmethod
     def unknown(cls) -> Principal:
-        """The explicit Unknown principal for legacy or unattributable records."""
+        """The explicit Unknown principal for legacy or unattributable records.
+
+        Stored as kind ``unknown``; every surface displays it as Unattributed.
+        """
         return cls(id=UNKNOWN_PRINCIPAL_ID, kind=PrincipalKind.UNKNOWN)
 
     @classmethod
@@ -333,7 +336,7 @@ class AttributionAvailability(str, enum.Enum):
     """Whether a session's creator is known."""
 
     RECORDED = "recorded"
-    #: The session predates attribution; the creator displays as Unknown.
+    #: The session predates attribution; the creator displays as Unattributed.
     LEGACY_MISSING = "legacy_missing"
     #: Attribution was on but no principal could be established at creation.
     UNATTRIBUTED = "unattributed"
@@ -597,6 +600,9 @@ class Capabilities:
 #: ``creator`` filter values besides a principal id.
 CREATOR_ALL = "all"
 CREATOR_MINE = "mine"
+#: Sessions with no human creator and no named trigger, shown as Unattributed.
+CREATOR_UNATTRIBUTED = "unattributed"
+#: The older spelling of :data:`CREATOR_UNATTRIBUTED`, still accepted on input.
 CREATOR_UNKNOWN = "unknown"
 SESSION_PAGE_DEFAULT = 50
 SESSION_PAGE_MAX = 200
@@ -621,10 +627,12 @@ class SessionQuery:
     @classmethod
     def from_query(cls, params: Mapping[str, str]) -> SessionQuery:
         creator = (params.get("creator") or CREATOR_ALL).strip()
+        if creator == CREATOR_UNKNOWN:
+            creator = CREATOR_UNATTRIBUTED
         if creator not in (
             CREATOR_ALL,
             CREATOR_MINE,
-            CREATOR_UNKNOWN,
+            CREATOR_UNATTRIBUTED,
         ) and not _PRINCIPAL_ID_RE.match(creator):
             raise ContractError("invalid_filter", "creator", "not a creator filter")
         cursor = params.get("cursor") or ""
@@ -640,12 +648,16 @@ class SessionQuery:
             creator=creator, search=(params.get("q") or "")[:256], cursor=cursor, limit=limit
         )
 
-    def matches(self, creator: Principal, viewer: Principal) -> bool:
-        """Whether a session with *creator* passes the creator filter for *viewer*."""
+    def matches(self, creator: Principal, viewer: Principal, *, triggered: bool = False) -> bool:
+        """Whether a session with *creator* passes the creator filter for *viewer*.
+
+        *triggered* is a session a schedule, a webhook or the Crew started: it
+        names its trigger, so it is not Unattributed.
+        """
         if self.creator == CREATOR_ALL:
             return True
-        if self.creator == CREATOR_UNKNOWN:
-            return creator.is_unknown
+        if self.creator == CREATOR_UNATTRIBUTED:
+            return creator.is_unknown and not triggered
         if self.creator == CREATOR_MINE:
             return not viewer.is_unknown and creator.id == viewer.id
         return creator.id == self.creator

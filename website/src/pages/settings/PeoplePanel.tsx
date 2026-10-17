@@ -8,15 +8,21 @@
  *  one is configured. There is no add, remove, role or admin control, and no
  *  management URL is ever taken from a peer or from config.
  *
- *  While no shared-access path is configured and no one but the viewer has been
- *  seen, the whole surface is one setup empty state (`SharedAccessSetup`). */
+ *  The surface follows the Crew's mode (`GET /api/shared-crew/mode`), and the
+ *  modes never mix (`PeopleModes.tsx`): a personal Crew shows the setup empty
+ *  state (`SharedAccessSetup`) and personal Remote Control; a network Crew shows
+ *  who has been seen, each network adapter read-only and Remote Control; a
+ *  Console Crew shows read-only Team Access and its Console link only; an
+ *  invalid team setup shows an error, never the personal surface. */
 import { ExternalLink, Users } from 'lucide-react'
 import { SettingsCard, SettingsSection } from '../../components/settings'
 import { Badge, ContentSkeleton, EmptyState } from '../../components/ui'
 import ErrorNotice from '../../components/ErrorNotice'
 import { capabilityUsable, membershipPointer, principalInitials, principalName, sharedAccessConfigured, type PeopleRow, type PeopleSource } from '../../api/sharedCrewUi'
 import { SharedAccessSetup } from './SharedAccessSetup'
-import { useSharedCrewCapabilities, useSharedCrewPeople } from '../../hooks/sharedCrew/useSharedCrew'
+import { ConsoleAccess, NetworkAdapters, RemoteControlCard, TeamConfigInvalid } from './PeopleModes'
+import { effectiveMode } from '../../api/sharedCrewMode'
+import { useSharedCrewCapabilities, useSharedCrewMode, useSharedCrewPeople } from '../../hooks/sharedCrew/useSharedCrew'
 import { fmtDateTime, fmtNumber } from '../../i18n/format'
 import { i18nT } from '../../i18n/t'
 
@@ -32,7 +38,7 @@ function sourceLabel(source: PeopleSource): string {
 }
 
 function PersonRow({ row, usageAvailable }: { row: PeopleRow; usageAvailable: boolean }) {
-  const name = principalName(row.principal) || i18nT('sharedCrew.unknown_person')
+  const name = principalName(row.principal) || i18nT('sharedCrew.unattributed')
   const login = row.principal.display.login
   return (
     <li className="flex items-start gap-3 py-2 min-w-0" data-testid={`person-${row.principal.id}`}>
@@ -66,20 +72,63 @@ function PersonRow({ row, usageAvailable }: { row: PeopleRow; usageAvailable: bo
 export function PeoplePanel() {
   const { capabilities, isLoading: capsLoading } = useSharedCrewCapabilities()
   const people = useSharedCrewPeople(true)
+  const modeQuery = useSharedCrewMode(true)
   const pointer = membershipPointer(capabilities.membership_link)
-  if (capsLoading || people.isLoading) return <ContentSkeleton rows={4} />
+  if (capsLoading || people.isLoading || modeQuery.isLoading) return <ContentSkeleton rows={4} />
   if (people.isError) {
     return <ErrorNotice message={people.error instanceof Error ? people.error.message : i18nT('sharedCrew.people_failed')} askAgent testId="people-error" />
+  }
+  // An unreadable mode is an error, never a silent personal Crew.
+  if (modeQuery.isError) {
+    return <ErrorNotice message={modeQuery.error instanceof Error ? modeQuery.error.message : i18nT('sharedCrew.mode_failed')} askAgent testId="people-mode-error" />
   }
   // Someone other than the viewer already connected: sharing works, whatever the
   // setup paths say (Tailscale Serve set up by hand, for one).
   const othersSeen = (people.data?.people ?? []).some(row => !row.is_viewer)
-  if (!sharedAccessConfigured(capabilities) && !othersSeen) return <SharedAccessSetup capabilities={capabilities} />
+  const modeData = modeQuery.data ?? null
+  const mode = effectiveMode(modeData, { teamPath: sharedAccessConfigured(capabilities), othersSeen })
+  if (mode === 'invalid' && modeData) return <TeamConfigInvalid mode={modeData} />
+  if (mode === 'personal') {
+    return (
+      <div className="flex flex-col gap-4" data-testid="people-personal">
+        <SharedAccessSetup capabilities={capabilities} />
+        <RemoteControlCard />
+      </div>
+    )
+  }
   const data = people.data
+  if (mode === 'console' && modeData) {
+    const rows = data?.people ?? []
+    return (
+      <div className="flex flex-col gap-4" data-testid="people-console">
+        <SettingsSection title={i18nT('sharedCrew.team_access_title')}>
+          <SettingsCard>
+            <p className="text-[13px] text-muted">{i18nT('sharedCrew.team_access_note')}</p>
+            {rows.length === 0 ? (
+              <p className="text-[13px] text-muted pt-2">{i18nT('sharedCrew.team_access_empty')}</p>
+            ) : (
+              <ul className="flex flex-col divide-y divide-border" aria-label={i18nT('sharedCrew.team_access_title')}>
+                {rows.map(row => <PersonRow key={row.principal.id} row={row} usageAvailable={!!data?.usage_available} />)}
+              </ul>
+            )}
+            <div className="pt-2"><ConsoleAccess mode={modeData} /></div>
+          </SettingsCard>
+        </SettingsSection>
+      </div>
+    )
+  }
   const attributionReason = capabilities.reasons?.attribution
+  const adapters = modeData?.adapters ?? capabilities.setup_paths ?? {}
+  const networkExtras = (
+    <>
+      <NetworkAdapters adapters={adapters} />
+      <RemoteControlCard />
+    </>
+  )
   if (!data || !capabilityUsable(capabilities.attribution)) {
     const unnamed = attributionReason === 'platform_unprovable' || attributionReason === 'daemon_same_user'
     return (
+      <div className="flex flex-col gap-4" data-testid="people-network-unattributed">
       <EmptyState
         icon={<Users size={20} />}
         title={i18nT(unnamed ? 'sharedCrew.people_unnamed_title' : 'sharedCrew.people_unavailable_title')}
@@ -90,6 +139,8 @@ export function PeoplePanel() {
         )}
         testId={unnamed ? 'people-unnamed' : 'people-unavailable'}
       />
+      {networkExtras}
+      </div>
     )
   }
   const usageAvailable = !!data.usage_available
@@ -137,6 +188,7 @@ export function PeoplePanel() {
           )}
         </SettingsCard>
       </SettingsSection>
+      {networkExtras}
     </div>
   )
 }

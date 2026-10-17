@@ -30,13 +30,27 @@ export interface PublicPrincipal {
 
 export type AttributionAvailability = 'recorded' | 'legacy_missing' | 'unattributed'
 
+export type SessionTriggerKind = 'scheduled' | 'webhook' | 'system'
+
+/** What started a session no person started (`shared_crew.trigger`). A label,
+ *  never a person: `configured_by` is a verified principal only when recorded. */
+export interface SessionTrigger {
+  kind: SessionTriggerKind
+  ref: string
+  name: string
+  configured_by: PublicPrincipal | null
+}
+
 export interface SessionAttribution {
   creator: PublicPrincipal
   availability: AttributionAvailability
   created_at: number | null
+  trigger?: SessionTrigger
 }
 
-export type CreatorFilter = 'all' | 'mine' | 'unknown' | (string & { readonly __principalId?: never })
+/** `unattributed` lists sessions with no human creator and no named trigger;
+ *  `unknown` is its older spelling, which the server still accepts. */
+export type CreatorFilter = 'all' | 'mine' | 'unattributed' | 'unknown' | (string & { readonly __principalId?: never })
 
 export interface SessionPage<T> {
   schema_version: number

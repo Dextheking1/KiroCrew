@@ -3,11 +3,30 @@ import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { ALL_UNAVAILABLE, type PeopleResponse } from '../../api/sharedCrewUi'
+import type { CrewModeResponse } from '../../api/sharedCrewMode'
 import { PeoplePanel } from './PeoplePanel'
 
-vi.mock('../../api/client', () => ({ api: { sharedCrewPeople: vi.fn(), sharedCrewCapabilities: vi.fn() } }))
+vi.mock('../../api/client', () => ({
+  api: { sharedCrewPeople: vi.fn(), sharedCrewCapabilities: vi.fn(), sharedCrewMode: vi.fn(), mobileConnectMethods: vi.fn() },
+}))
 const people = vi.mocked(api.sharedCrewPeople)
 const caps = vi.mocked(api.sharedCrewCapabilities)
+const modeApi = vi.mocked(api.sharedCrewMode)
+const mobile = vi.mocked(api.mobileConnectMethods)
+
+function modeBody(mode: CrewModeResponse['mode'], over: Partial<CrewModeResponse> = {}): CrewModeResponse {
+  return {
+    schema_version: 1, mode, crew_id: 'crew-a',
+    team_config: { state: 'not_configured', reason: '', capability: '', cause: '' },
+    console: { state: 'not_offered', url: '' },
+    adapters: {
+      tailscale: { state: 'available', reason: '' },
+      kiro_login: { state: 'unavailable', reason: 'not_in_this_build' },
+      systems_manager: { state: 'unavailable', reason: 'not_in_this_build' },
+    },
+    systems_manager_attribution: 'unavailable', workload_identity_ref: 'unavailable', ...over,
+  }
+}
 
 const row = (id: string, name: string, over: Partial<PeopleResponse['people'][number]> = {}) => ({
   principal: { id, kind: 'human' as const, display: { name, login: `${id}@example.test`, captured_at: null } },
@@ -20,7 +39,12 @@ function mount() {
   return render(<QueryClientProvider client={qc}><PeoplePanel /></QueryClientProvider>)
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  // An older gateway: no mode route, so the mode is read from capabilities.
+  modeApi.mockResolvedValue(null)
+  mobile.mockResolvedValue({ methods: [] })
+})
 
 /** A Crew with the tailnet path set up, so the People list itself renders. */
 const SHARED = {
@@ -171,5 +195,100 @@ describe('PeoplePanel', () => {
     mount()
     expect(await screen.findByTestId('people-panel')).toBeInTheDocument()
     expect(screen.queryByTestId('shared-access-setup')).toBeNull()
+  })
+})
+
+describe('PeoplePanel modes', () => {
+  const EMPTY: PeopleResponse = { schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] }
+
+  it('network: adapters are read-only, SSM points to IAM and Session Manager and says Unattributed, Remote Control shows', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'available' })
+    people.mockResolvedValue({ ...EMPTY, people: [row('p_b', 'Bob')] })
+    modeApi.mockResolvedValue(modeBody('network'))
+    mount()
+    expect(await screen.findByTestId('people-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('adapter-tailscale')).toHaveAttribute('data-state', 'available')
+    expect(screen.getByTestId('adapter-tailscale-docs')).toHaveAttribute('href', 'https://tailscale.com/kb/1084/sharing')
+    expect(screen.getByTestId('adapter-systems_manager').textContent).toMatch(/IAM and Session Manager/)
+    expect(screen.getByTestId('adapter-systems_manager').textContent).toMatch(/Unattributed/)
+    expect(screen.getByTestId('adapter-ssm-docs')).toHaveAttribute('href', expect.stringContaining('session-manager'))
+    expect(screen.getByTestId('adapter-kiro_login').textContent).toContain('Not available in this build')
+    expect(screen.getByTestId('remote-control-setup')).toBeInTheDocument()
+    expect(screen.getByTestId('remote-control-unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('people-console')).toBeNull()
+    // Read-only: no invite, revoke or role control.
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('network: offers the existing phone connection when a method is renderable', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'available' })
+    people.mockResolvedValue(EMPTY)
+    modeApi.mockResolvedValue(modeBody('network'))
+    mobile.mockResolvedValue({ methods: [{ kind: 'tailnet_qr' }] } as never)
+    mount()
+    expect(await screen.findByTestId('remote-control-setup')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Set up Remote Control/ })).toBeInTheDocument()
+  })
+
+  it('console: read-only Team Access and the validated Console link, with no setup or Remote Control surface', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue({ ...EMPTY, people: [row('p_b', 'Bob')] })
+    modeApi.mockResolvedValue(modeBody('console', {
+      team_config: { state: 'valid', reason: '', capability: '', cause: '' },
+      console: { state: 'available', url: 'https://console.example.test/crews/1' },
+    }))
+    mount()
+    expect(await screen.findByTestId('people-console')).toBeInTheDocument()
+    expect(screen.getByText('Team access')).toBeInTheDocument()
+    expect(screen.getByText('Bob')).toBeInTheDocument()
+    expect(screen.getByTestId('console-link')).toHaveAttribute('href', 'https://console.example.test/crews/1')
+    expect(screen.queryByTestId('shared-access-setup')).toBeNull()
+    expect(screen.queryByTestId('remote-control-setup')).toBeNull()
+    expect(screen.queryByTestId('adapter-tailscale')).toBeNull()
+    expect(screen.queryByTestId('tailscale-admin-link')).toBeNull()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('console: an unsafe link is never rendered', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue(EMPTY)
+    modeApi.mockResolvedValue(modeBody('console', { console: { state: 'available', url: 'javascript:alert(1)' } }))
+    mount()
+    expect(await screen.findByTestId('console-link-missing')).toBeInTheDocument()
+    expect(screen.queryByTestId('console-link')).toBeNull()
+    expect(screen.getByText('No one has signed in yet.')).toBeInTheDocument()
+  })
+
+  it('invalid: an error state with the reason code, never the personal surface', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue(EMPTY)
+    modeApi.mockResolvedValue(modeBody('invalid', {
+      team_config: { state: 'invalid', reason: 'console_capability_missing', capability: 'individual_grants', cause: 'provider_refused' },
+    }))
+    mount()
+    expect(await screen.findByTestId('people-team-config-invalid')).toBeInTheDocument()
+    expect(screen.getByTestId('team-config-reason').textContent).toContain('console_capability_missing')
+    expect(screen.queryByTestId('shared-access-setup')).toBeNull()
+    expect(screen.queryByTestId('remote-control-setup')).toBeNull()
+  })
+
+  it('a failed mode read is an error, not a personal Crew', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue(EMPTY)
+    modeApi.mockRejectedValue(new Error('mode down'))
+    mount()
+    expect(await screen.findByTestId('people-mode-error')).toBeInTheDocument()
+    expect(screen.queryByTestId('shared-access-setup')).toBeNull()
+  })
+
+  it('personal: the setup guidance with every adapter shown honestly, plus Remote Control', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue(EMPTY)
+    modeApi.mockResolvedValue(modeBody('personal'))
+    mount()
+    expect(await screen.findByTestId('people-personal')).toBeInTheDocument()
+    expect(screen.getByTestId('shared-access-setup')).toBeInTheDocument()
+    expect(screen.getByTestId('setup-path-kiro_login-status').textContent).toBe('Not available in this build')
+    expect(screen.getByTestId('remote-control-setup')).toBeInTheDocument()
   })
 })

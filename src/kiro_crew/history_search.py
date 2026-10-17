@@ -1393,7 +1393,7 @@ class SessionCatalogProjection:
                 meta["memory_mode"] = d.get("memory_mode", "persistent")
                 if d.get("folder_id"):
                     meta["folder_id"] = d["folder_id"]
-                meta["attribution"] = public_attribution_from_meta(d)
+                meta["attribution"] = public_attribution_from_meta(d, key=key)
             else:
                 # Read only the first line for metadata
                 try:
@@ -1411,7 +1411,7 @@ class SessionCatalogProjection:
                             meta["memory_mode"] = d.get("memory_mode", "persistent")
                             if d.get("folder_id"):
                                 meta["folder_id"] = d["folder_id"]
-                            meta["attribution"] = public_attribution_from_meta(d)
+                            meta["attribution"] = public_attribution_from_meta(d, key=key)
                             # Guarded publish — discard the fill if a write
                             # invalidated this key inside the stat → read
                             # window (see the generation snapshot above).
@@ -1438,9 +1438,9 @@ class SessionCatalogProjection:
                     pass
             # Ensure memory_mode is always present (old sessions lack it)
             meta.setdefault("memory_mode", "persistent")
-            # A session with no readable metadata line has no creator: Unknown.
+            # A session with no readable metadata line has no creator: Unattributed.
             if "attribution" not in meta:
-                meta["attribution"] = public_attribution_from_meta(None)
+                meta["attribution"] = public_attribution_from_meta(None, key=key)
             # Extract first user message as title fallback
             if "title" not in meta:
                 msg_cached = self._log._msg_cache.get(key)

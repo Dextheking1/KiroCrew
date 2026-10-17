@@ -38,7 +38,7 @@ export function decisionVerdict(decision: SharedDecision): 'approved' | 'rejecte
 
 /** "Alice approved this" / "Answered by Unknown": who settled the decision. */
 export function resolvedByLine(decision: SharedDecision): string {
-  const name = principalName(decision.responder) || i18nT('sharedCrew.unknown_person')
+  const name = principalName(decision.responder) || i18nT('sharedCrew.unattributed')
   if (decision.kind === 'question') return i18nT('sharedCrew.answered_by_person', { name })
   return decisionVerdict(decision) === 'approved'
     ? i18nT('sharedCrew.approved_by_person', { name })
@@ -47,6 +47,6 @@ export function resolvedByLine(decision: SharedDecision): string {
 
 /** "Requested in Alice's turn": who started the turn that asked. */
 export function requestedByLine(decision: SharedDecision): string {
-  const name = principalName(decision.initiator) || i18nT('sharedCrew.unknown_person')
+  const name = principalName(decision.initiator) || i18nT('sharedCrew.unattributed')
   return i18nT('sharedCrew.requested_by_person', { name })
 }

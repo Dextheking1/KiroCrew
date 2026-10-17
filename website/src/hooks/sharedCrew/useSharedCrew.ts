@@ -26,6 +26,11 @@ export function useSharedCrewViewer(enabled = true) {
   return useQuery({ queryKey: sharedCrewKeys.viewer, queryFn: () => api.sharedCrewViewer(), enabled, staleTime: 60_000, retry: false })
 }
 
+/** This Crew's People/setup mode; `null` from a gateway without the route. */
+export function useSharedCrewMode(enabled = true) {
+  return useQuery({ queryKey: sharedCrewKeys.mode, queryFn: () => api.sharedCrewMode(), enabled, staleTime: 60_000, retry: false })
+}
+
 export function useSharedCrewPeople(enabled = true) {
   return useQuery({ queryKey: sharedCrewKeys.people, queryFn: () => api.sharedCrewPeople(), enabled, retry: false })
 }
