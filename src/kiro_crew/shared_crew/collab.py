@@ -37,7 +37,11 @@ FRAME_PRESENCE = "shared_crew.presence"
 FRAME_WORK = "shared_crew.work"
 FRAME_DECISION = "shared_crew.decision"
 FRAME_CAPACITY = "shared_crew.capacity"
-SERVER_FRAMES = frozenset({FRAME_PRESENCE, FRAME_WORK, FRAME_DECISION, FRAME_CAPACITY})
+#: A session's send revision and its last accepted send (``send_race``).
+FRAME_SEND_STATE = "shared_crew.send_state"
+SERVER_FRAMES = frozenset(
+    {FRAME_PRESENCE, FRAME_WORK, FRAME_DECISION, FRAME_CAPACITY, FRAME_SEND_STATE}
+)
 
 #: WebSocket frame ``type`` the client sends to report its own activity. The
 #: server ignores any principal in it and stamps the connection's actor.

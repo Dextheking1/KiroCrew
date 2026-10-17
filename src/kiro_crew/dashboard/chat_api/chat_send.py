@@ -211,6 +211,57 @@ async def decided_message_handling(slot: Any, message: str) -> tuple[bool, dict 
         return False, None
 
 
+def _send_id_of(user_meta: dict | None) -> str:
+    return (normalize_send_id(user_meta.get("sendId")) or "") if user_meta else ""
+
+
+def _committed_if_accepted(request: web.Request, resp: Any, user_meta: dict | None) -> Any:
+    """Record the claimed send when *resp* accepted it; a refusal gives the claim back."""
+    from kiro_crew.shared_crew import send_race
+
+    if getattr(resp, "status", 500) < 400:
+        send_race.commit_request(request, message_id=_send_id_of(user_meta))
+    return resp
+
+
+async def _settle_send_race(
+    request: web.Request, state: Any, slot: Any, body: dict, message: str
+) -> web.StreamResponse | None:
+    """Claim the session's next send revision for this send, or answer it.
+
+    None means the claim is granted and stored on the request: the branch that
+    records the send commits it, and the claim is given back when the request's
+    handler task ends without recording it (``send_race.Claim.owner``). A
+    lost race answers 409 ``send_race`` naming the winner; a retry of a send this
+    principal already won with answers that send and accepts nothing.
+    """
+    from kiro_crew.shared_crew import admission_entry, send_race
+    from kiro_crew.shared_crew.identity import actor_of
+
+    try:
+        base = send_race.base_revision_of(body.get("base_revision"))
+    except send_race.BaseRevisionError as exc:
+        return web.json_response({"error": str(exc), "code": "invalid_base_revision"}, status=400)
+    registry = send_race.send_race_for(state)
+    result = await registry.claim(
+        slot.key,
+        principal=actor_of(request).principal,
+        base_revision=base,
+        idempotency_key=admission_entry.explicit_idempotency_key(request),
+    )
+    if isinstance(result, send_race.Conflict):
+        return web.json_response(send_race.conflict_body(result, session_key=slot.key), status=409)
+    if isinstance(result, send_race.Replay):
+        recorded = await admission_entry.chat_replay(
+            request, session_key=effective_session_key(slot), slot_key=slot.key, message=message
+        )
+        if recorded is not None:
+            return admission_entry.chat_replay_response(recorded, slot_key=slot.key)
+        return web.json_response(send_race.replay_body(result, slot_key=slot.key))
+    request[send_race.CLAIM_REQUEST_KEY] = result.claim
+    return None
+
+
 async def api_chat(request: web.Request) -> web.StreamResponse:
     """POST /api/chat — send message to a slot, stream response via SSE."""
     state: DashboardState = request.app["state"]
@@ -464,6 +515,10 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
     # send a turn and nothing else.
     may_configure = not request_app or bool(getattr(slot, "_app", ""))
     steer = body.get("steer") if may_configure else None
+    # Send now, after losing a send race, is a new submission that waits its turn
+    # like any send: it never steers a running turn.
+    if body.get("send_now") is True:
+        steer = None
     if not may_configure:
         # The dedicated agent route refuses an app on a slot it does not own, and
         # persona consent is the user's own grant from the consent modal. Refused
@@ -707,6 +762,15 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             {"error": "message is required", "code": "message_required"}, status=400
         )
 
+    # First submit wins (Shared Crew): settle this send against the session's
+    # send revision before any branch can queue, steer or start it. A loser is
+    # refused here with the winner named, and its tab keeps the draft.
+    from kiro_crew.shared_crew import send_race as _send_race
+
+    _race_answer = await _settle_send_race(request, state, slot, body, message)
+    if _race_answer is not None:
+        return _race_answer
+
     from kiro_crew.dashboard import responsive_chat
 
     _responsive_eligible = False
@@ -723,7 +787,9 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             ),
         )
         if _responsive_eligible and (not steer or not slot.turn_running):
-            return await responsive_chat.accept(request, slot, message, user_meta)
+            return _committed_if_accepted(
+                request, await responsive_chat.accept(request, slot, message, user_meta), user_meta
+            )
 
     # Shared Crew: a retry under a key already accepted answers its recorded work
     # and writes nothing (no row, no queue entry, no turn), whichever way the
@@ -818,14 +884,20 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
                 **_responsive_steer_kwargs,
             )
             if outcome == STEER_STEERED:
+                _send_race.commit_request(request, message_id=_send_id_of(user_meta))
                 return web.json_response({"ok": True, "steered": True})
             if outcome == STEER_REQUEUED:
                 # The turn's teardown moved it into the queue while the steer RPC
                 # was suspended — queueing again would deliver the same text twice.
+                _send_race.commit_request(request, message_id=_send_id_of(user_meta))
                 return web.json_response({"ok": True, "queued": True})
             if _responsive_eligible:
-                return await responsive_chat.accept(
-                    request, slot, message, user_meta, steer_first=False
+                return _committed_if_accepted(
+                    request,
+                    await responsive_chat.accept(
+                        request, slot, message, user_meta, steer_first=False
+                    ),
+                    user_meta,
                 )
             # steer requested but unavailable -> fall through to queue below.
         # Queue the message - return JSON immediately (no SSE needed).
@@ -889,6 +961,7 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             author=None if request_app else _author_meta(_queued_actor_of(request)),
         )
         _sc_entry.stamp_queued_work(slot, qid, _queued_admission)
+        _send_race.commit_request(request, message_id=qid)
         return web.json_response(
             {"ok": True, "queued": True, "queue_id": qid},
             headers=_sc_entry.admission_headers(_queued_admission),
@@ -948,6 +1021,7 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
             directive_user_origin=not bool(request_app),
         )
         _sc_entry.stamp_queued_work(slot, qid, _held_admission)
+        _send_race.commit_request(request, message_id=qid)
         _redacted = queued_text_for_display(message, user_origin=not bool(request_app))
         warn_if_not_durable(slot._queue, qid, slot.key)
         # Start the durable write here too, not only in the busy-slot branch.
@@ -1144,6 +1218,9 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         prior_user_turns=sum(1 for m in slot.messages if m.get("role") == "user"),
     )
     _user_row = slot.append("user", message, "msg msg-u", meta=_user_row_meta)
+    _send_race.commit_request(
+        request, message_id=str(_user_row.get("meta", {}).get("mid") or _send_id_of(user_meta))
+    )
     schedule_action_audit(
         ActionType.MESSAGE,
         session_key=slot.key,

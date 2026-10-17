@@ -335,6 +335,11 @@ coroutine unrun.
 
 ### Responses
 
+A lost send race is settled before admission and is not an admission refusal:
+it answers 409 `send_race` with the winner (section 5, First submit wins) and
+creates no `AcceptedWork`. The race-versus-queue boundary is open; the POC
+settles races by revision compare-and-set and leaves capacity to admission.
+
 A refusal or conflict answers `admission.error_body`: the dashboard's
 `{"error", "code"}` envelope, plus `capacity` on a limit and `current` (the public
 `AcceptedWork`) on a conflict, so a stale UI action reconciles against server truth.
@@ -609,6 +614,53 @@ Recorded non-goal: no input lock. Typing or presence never locks the composer or
 session for anyone else; every collaborator can send at any time, and admission
 (section 4) orders the turns. Presence and typing stay telemetry only.
 
+### First submit wins
+
+POC choice, not an approved product contract: revision-based compare-and-set
+(`shared_crew.send_race`). The boundary between a refused race and accepted work
+waiting for capacity stays open; this is the shape the POC ships to exercise it.
+
+Each session (keyed by slot) has a send revision, the count of accepted sends.
+`GET /api/shared-crew/send-state?session_key=` answers `{schema_version,
+session_key, revision, last}` and every accepted send pushes the same body as a
+`shared_crew.send_state` frame. A send carries the revision its tab last saw as
+`base_revision` and a per-send `Idempotency-Key`.
+
+`chat_send` settles the race (`_settle_send_race`) after the empty-message guard
+and before the responsive, steer, busy-queue, sub-agent-hold and new-turn branches,
+so a losing send reaches none of them. `SendRaceRegistry.claim` decides, in order:
+
+1. while another claim on the session is pending, wait for it to settle (bounded by
+   `SETTLE_WAIT_SECONDS`; past it the pending sender wins);
+2. a key this principal already won with is a replay: the admission replay answers
+   when it has one, else `{ok, replayed, send_revision, message_id}`; nothing is
+   accepted again, so a retry after a lost winner response never runs twice;
+3. no `base_revision` (app token, script, old client): not compared;
+4. a session with no accepted send since process start accepts any base, and its
+   next revision continues above that base;
+5. otherwise the earliest send accepted after the base by a DIFFERENT principal
+   makes this send lose. One person's own tabs never race each other, so a
+   single-operator session behaves as before.
+
+A granted claim is pending until the branch that records the send commits it (the
+user row, the queue entry, the steer or the responsive accept); `api_chat` releases
+an uncommitted claim in a `finally`, so a send refused for capacity, a closed
+session or any other reason never makes a collaborator lose to nothing. Commit bumps
+the revision by one and records `{revision, principal, message_id, accepted_at}`.
+`message_id` is the user row's `mid`, else the queue id, else the client `sendId`.
+
+A loser answers 409 `{"error", "code": "send_race", session_key, current_revision,
+winner: {revision, principal (public), message_id, accepted_at}}`. Nothing was
+accepted: no row, no queue entry, no steer, no turn.
+
+Send now is a new send with `send_now: true` and `base_revision` set to the
+conflict's `current_revision`. `send_now` forces `steer` off, so it goes through
+normal fair admission and may queue behind the running turn or a capacity limit;
+it can lose again if yet another send landed first.
+
+Everything is in memory and bounded (`MAX_SESSIONS`, `HISTORY_PER_SESSION`). A tab
+that never learned a revision sends none and is not compared.
+
 ## 6. Wire shapes
 
 ### HTTP
@@ -626,6 +678,8 @@ session for anyone else; every collaborator can send at any time, and admission
 | an approval or answer, with `response_id` | the `SharedDecision`; 409 `already_resolved` with it on a lost race |
 | `GET /api/shared-crew/presence?session_key=` | the session's `PresenceEntry` list (dashboard users only) |
 | `GET /api/shared-crew/decisions?session_key=` | the session's `SharedDecision` list (dashboard users only) |
+| `GET /api/shared-crew/send-state?session_key=` | the session's send revision and last accepted send (dashboard users only) |
+| a chat send with `base_revision` | 409 `send_race` with `winner` and `current_revision` when another principal's send was accepted after it |
 
 Browser-bound principals use `to_public_dict` (no issuer or subject); browser-bound
 work uses `AcceptedWork.to_public_dict` (no idempotency scope, lease or fencing ids).
@@ -642,8 +696,9 @@ all pages; `hidden_by_filter` counts the sessions it excluded.
 ### WebSocket
 
 The server pushes whole-value frames: `shared_crew.presence`, `shared_crew.work`,
-`shared_crew.decision` and `shared_crew.capacity` (`collab.SERVER_FRAMES`). The
-client sends `shared_crew.activity` with a session and an `Activity`. The frame
+`shared_crew.decision`, `shared_crew.capacity` and `shared_crew.send_state`
+(`collab.SERVER_FRAMES`). The
+client sends `shared_crew.activity` with a session and an `Activity`. The activity frame
 carries no principal; the server stamps the connection's actor and ignores anything
 else. On reconnect the client refetches the HTTP state and treats the next frames as
 authoritative. It never resubmits a send on its own.
@@ -659,6 +714,7 @@ authoritative. It never resubmits a send on its own.
 | `reconciling` | checking | sent |
 | `completed` | done | cleared |
 | `rejected` | refused, with the reason and next step | restored |
+| lost send race (`send_race`, never an `OperationState`) | notice above the composer: "X sent first", Send now, Dismiss; no bubble or error row | restored |
 | `failed`, `expired`, `cancelled`, `unknown_outcome` | ended, with the reason | sent |
 
 ## 8. Capabilities
