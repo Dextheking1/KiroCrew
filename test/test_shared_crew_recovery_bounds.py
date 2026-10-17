@@ -516,3 +516,72 @@ async def test_slices_an_earlier_process_left_are_released_at_start(tmp_path, cl
     assert await svc.release_stale_slices() == 1
     stopped = [c[-1] for c in runner.calls if c[2] == "stop"]
     assert stopped == [left]
+
+
+@pytest.mark.asyncio
+async def test_a_stop_that_interrupted_a_running_turn_releases_its_slice(
+    tmp_path, clock, monkeypatch
+):
+    runner = _Runner()
+    busy: dict[str, list[str]] = {}
+    svc = _service(
+        _open(tmp_path / "t.db", clock),
+        clock,
+        runner=runner,
+        liveness=lambda ref: Liveness.STOPPED,
+        slice_busy=lambda name: busy.get(name, []),
+        cfg={"containment_enabled": True},
+    )
+    monkeypatch.setattr(ag, "_SERVICE", svc)
+    adm = await _admit(svc)
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def held():
+        started.set()
+        await release.wait()
+
+    turn = asyncio.ensure_future(adm.run(held()))
+    await asyncio.wait_for(started.wait(), BOUND)
+    name = await svc.prepare_principal_slice(A)
+    assert name and svc._slices.is_ready(name)
+    # The stop finds A's turn still live and its runtime scope still emptying.
+    busy[name] = ["kirocrew-rt-a.scope"]
+    pauses: list[float] = []
+
+    async def pause(seconds: float) -> None:
+        pauses.append(seconds)
+        busy[name] = []  # the runtime the stop ended has exited
+
+    runner.calls.clear()
+    assert await ag.shutdown_cleanup(rounds=3, interval=0.25, pause=pause) == 1
+    assert pauses == [0.25]
+    assert not svc._slices.is_ready(name)
+    assert [c[2] for c in runner.calls] == ["stop", "revert"]
+    release.set()
+    await asyncio.wait_for(turn, BOUND)
+
+
+@pytest.mark.asyncio
+async def test_a_stop_keeps_a_slice_a_runtime_still_holds(tmp_path, clock, monkeypatch):
+    runner = _Runner()
+    svc = _service(
+        _open(tmp_path / "t.db", clock),
+        clock,
+        runner=runner,
+        liveness=lambda ref: Liveness.STOPPED,
+        slice_busy=lambda name: ["kirocrew-rt-a.scope"],
+        cfg={"containment_enabled": True},
+    )
+    monkeypatch.setattr(ag, "_SERVICE", svc)
+    name = await svc.prepare_principal_slice(A)
+    pauses: list[float] = []
+
+    async def pause(seconds: float) -> None:
+        pauses.append(seconds)
+
+    runner.calls.clear()
+    assert await ag.shutdown_cleanup(rounds=3, interval=0.25, pause=pause) == 0
+    assert pauses == [0.25, 0.25]
+    assert svc._slices.is_ready(name)
+    assert not [c for c in runner.calls if c[2] in ("stop", "revert")]

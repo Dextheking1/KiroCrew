@@ -1775,16 +1775,37 @@ async def startup_check() -> _containment.ContainmentReport | None:
     return report
 
 
-async def shutdown_cleanup() -> int:
-    """Gateway stop: release every idle per-principal slice this process sized."""
+#: Sweeps the gateway's stop makes while a runtime scope still empties.
+SHUTDOWN_SWEEP_ROUNDS = 8
+SHUTDOWN_SWEEP_INTERVAL_SECONDS = 0.5
+
+
+async def shutdown_cleanup(
+    *,
+    rounds: int = SHUTDOWN_SWEEP_ROUNDS,
+    interval: float = SHUTDOWN_SWEEP_INTERVAL_SECONDS,
+    pause: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+) -> int:
+    """Gateway stop: release every per-principal slice this process sized.
+
+    A slice whose runtime the stop is still ending holds a populated scope for
+    a moment, so the sweep is repeated (bounded by *rounds*) until none is
+    left. A slice still held after that is released by the next start.
+    """
     service = _SERVICE
-    if service is None or not service.enabled:
+    if service is None or not service.enabled or service._slices is None:
         return 0
-    try:
-        return await service.sweep_slices(force=True)
-    except Exception:  # noqa: BLE001 -- cleanup never blocks the stop
-        logger.debug("shared crew: slice cleanup at stop failed", exc_info=True)
-        return 0
+    released = 0
+    for attempt in range(max(1, rounds)):
+        try:
+            released += await service.sweep_slices(force=True)
+        except Exception:  # noqa: BLE001 -- cleanup never blocks the stop
+            logger.debug("shared crew: slice cleanup at stop failed", exc_info=True)
+            return released
+        if not _runtime.principal_slices_left(service._slices) or attempt + 1 >= rounds:
+            break
+        await pause(interval)
+    return released
 
 
 def _configured_hard_limits() -> bool:

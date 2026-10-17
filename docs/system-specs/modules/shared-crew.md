@@ -457,9 +457,11 @@ the principal slice from the `principal_scope` context the gate sets around admi
 work and around subagent run tasks. A principal slice nothing of its principal has
 used for `SLICE_IDLE_SECONDS` (600) is stopped and its runtime drop-ins removed
 (`systemctl --user stop` then `revert`), only while no runtime scope in it holds a
-process; the gateway's stop releases every idle one at once and its start releases
-those an earlier process left (`AdmissionService.sweep_slices`,
-`release_stale_slices`). The slice is forgotten before it is stopped, so a spawn
+process; the gateway's stop releases every one at once, including the slice of a turn the
+stop interrupted, repeating the sweep a bounded number of times
+(`SHUTDOWN_SWEEP_ROUNDS`) while a runtime scope it ended still empties, and its start
+releases those an earlier process left (`AdmissionService.sweep_slices`,
+`shutdown_cleanup`, `release_stale_slices`). The slice is forgotten before it is stopped, so a spawn
 racing the release lands in the instance slice. A shared session's runtime is one process, so it
 stays in the slice of the initiator whose turn started it; later turns by others are
 bounded by admission counts, not that slice.

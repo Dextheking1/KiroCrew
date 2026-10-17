@@ -86,8 +86,11 @@ async def sweep_idle_slices(
 
     *budgets* are the principals with live work; *idle* records since when each
     other slice has been unused. A slice is released once unused for
-    :data:`SLICE_IDLE_SECONDS` (*force*: at once, at shutdown), and only while
-    *busy* names no populated runtime scope in it.
+    :data:`SLICE_IDLE_SECONDS`, and only while *busy* names no populated runtime
+    scope in it. *force* (the gateway's stop) releases at once, including the
+    slice of a principal whose turn the stop interrupted: that record ends with
+    the process, and the populated-scope check still keeps a slice a runtime
+    holds.
     """
     try:
         instance = _containment.instance_slice_name()
@@ -98,7 +101,7 @@ async def sweep_idle_slices(
     for name in slices.applied():
         if name == instance:
             continue
-        if name in live:
+        if name in live and not force:
             idle.pop(name, None)
             continue
         since = idle.setdefault(name, now)
@@ -108,6 +111,15 @@ async def sweep_idle_slices(
             released += 1
             idle.pop(name, None)
     return released
+
+
+def principal_slices_left(slices: _containment.SliceManager) -> list[str]:
+    """The per-principal slices this process sized and still holds."""
+    try:
+        instance = _containment.instance_slice_name()
+    except Exception:  # noqa: BLE001 -- no name, nothing to report
+        return []
+    return [name for name in slices.applied() if name != instance]
 
 
 async def release_stale_slices(slices: _containment.SliceManager, *, busy: Busy) -> int:
@@ -125,6 +137,7 @@ async def release_stale_slices(slices: _containment.SliceManager, *, busy: Busy)
 
 __all__ = [
     "SLICE_IDLE_SECONDS",
+    "principal_slices_left",
     "release_stale_slices",
     "sweep_idle_slices",
     "systemd_reap",
