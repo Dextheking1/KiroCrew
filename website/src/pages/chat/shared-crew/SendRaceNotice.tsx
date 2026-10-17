@@ -11,7 +11,7 @@ import { i18nT } from '../../../i18n/t'
 export function SendRaceNotice({ sessionKey, onSendNow }: { sessionKey: string | null | undefined; onSendNow: (sessionKey: string) => void }) {
   const notice = useSendRaceNotice(sessionKey)
   if (!sessionKey || !notice) return null
-  const name = principalName(notice.winner.principal) || i18nT('sharedCrew.unknown_person')
+  const name = principalName(notice.winner.principal) || i18nT('sharedCrew.unattributed')
   return (
     <div
       role="status"
