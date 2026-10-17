@@ -282,9 +282,7 @@ class DecisionRegistry:
                 return Resolution(ResolveOutcome.NOT_PENDING, None)
             return Resolution(classify_response(current, response_id), current)
 
-    def classify_late(
-        self, decision_id: str, response_id: str, responder: Principal
-    ) -> Resolution:
+    def classify_late(self, decision_id: str, response_id: str, responder: Principal) -> Resolution:
         """:meth:`classify` for a response that arrived after the decision settled.
 
         A different response is a losing one and is audited ``conflict`` like

@@ -292,9 +292,12 @@ async def test_a_channel_turn_is_refused_when_the_budget_refuses(monkeypatch, bu
         )
         is None
     )
-    assert await turn_gate.run_admitted(
-        work(), session_key="agent:x", operation=Op.CHANNEL_TURN, refused=told.append
-    ) is None
+    assert (
+        await turn_gate.run_admitted(
+            work(), session_key="agent:x", operation=Op.CHANNEL_TURN, refused=told.append
+        )
+        is None
+    )
     assert ran == []
     assert told == [reason, reason]
     assert "inference budget" in turn_gate.capacity_note(reason)

@@ -302,13 +302,21 @@ async def test_work_started_inside_a_persons_turn_is_charged_to_that_person(
     unknown = Principal.unknown().id
     # Kernel-attested or token-proven calling session: charged to its person.
     assert await budget({"X-Session-Key": "dashboard:alice-tab"}, peer_verified=True) == A
-    assert await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "tok-alice"}) == A
+    assert (
+        await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "tok-alice"}) == A
+    )
     assert await budget({"X-Session-Token": "tok-alice"}) == A
     # The header alone is the caller's word: it names no one's budget.
     assert await budget({"X-Session-Key": "dashboard:alice-tab"}) == unknown
     # A token for another session, a forged one, an unbound session, or none: Unknown.
-    assert await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "tok-nobody"}) == unknown
-    assert await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "forged"}) == unknown
+    assert (
+        await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "tok-nobody"})
+        == unknown
+    )
+    assert (
+        await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "forged"})
+        == unknown
+    )
     assert await budget({"X-Session-Token": "tok-nobody"}) == unknown
     assert await budget({}) == unknown
     # None of them reaches the automation budget, a second one for anybody.

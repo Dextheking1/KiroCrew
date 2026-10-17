@@ -201,9 +201,7 @@ async def api_ask_question(request: web.Request) -> web.Response:
     try:
         body = await request.json()
     except Exception:
-        return web.json_response(
-            {"error": "invalid JSON", "code": "invalid_json"}, status=400
-        )
+        return web.json_response({"error": "invalid JSON", "code": "invalid_json"}, status=400)
     if not isinstance(body, dict):
         # Valid JSON is not necessarily an object: `[]`, `null` and bare scalars
         # all parse, then blow up on `.get()` as a 500 instead of a 400.
@@ -233,9 +231,7 @@ async def api_ask_question(request: web.Request) -> web.Response:
     try:
         questions = validate_ask_user_question(body)
     except ValidationError as exc:
-        return web.json_response(
-            {"error": str(exc), "code": "invalid_questions"}, status=400
-        )
+        return web.json_response({"error": str(exc), "code": "invalid_questions"}, status=400)
 
     try:
         timeout_secs = int(body.get("timeout_secs") or state._QUESTION_TIMEOUT_DEFAULT)
@@ -268,9 +264,7 @@ async def api_ask_question(request: web.Request) -> web.Response:
         # Raised when redaction collapses two questions into the same key, which
         # is only detectable after the redaction pass — so it surfaces here as a
         # 400 rather than from validate_ask_user_question.
-        return web.json_response(
-            {"error": str(exc), "code": "duplicate_question_key"}, status=400
-        )
+        return web.json_response({"error": str(exc), "code": "duplicate_question_key"}, status=400)
     if answers is None:
         return web.json_response({"status": "timeout", "ask_id": ask_id})
     return web.json_response({"status": "answered", "ask_id": ask_id, "answers": answers})
@@ -419,9 +413,7 @@ async def api_ask_question_answer(request: web.Request) -> web.Response:
     try:
         body = await request.json()
     except Exception:
-        return web.json_response(
-            {"error": "invalid JSON", "code": "invalid_json"}, status=400
-        )
+        return web.json_response({"error": "invalid JSON", "code": "invalid_json"}, status=400)
     if not isinstance(body, dict):
         return web.json_response(
             {"error": "body must be a JSON object", "code": "invalid_body"}, status=400
@@ -435,7 +427,11 @@ async def api_ask_question_answer(request: web.Request) -> web.Response:
         # ("queued"), so the agent neither reads the question as declined nor
         # waits for a message that has not arrived yet.
         raw_reason = body.get("reason")
-        reason = raw_reason if isinstance(raw_reason, str) and raw_reason in _ASK_SEND_REASONS else "dismissed"
+        reason = (
+            raw_reason
+            if isinstance(raw_reason, str) and raw_reason in _ASK_SEND_REASONS
+            else "dismissed"
+        )
     else:
         raw = body.get("answers")
         if not isinstance(raw, dict) or not raw:
@@ -603,9 +599,7 @@ def _unattested(request: web.Request, operation: str) -> web.Response:
         request,
         operation,
         message,
-        web.json_response(
-            {"error": message, "code": "session_unattested"}, status=403
-        ),
+        web.json_response({"error": message, "code": "session_unattested"}, status=403),
     )
 
 
@@ -636,9 +630,7 @@ async def api_agent_ask_open(request: web.Request) -> web.Response:
             request,
             "agent_ask_open",
             message,
-            web.json_response(
-                {"error": message, "code": "not_dashboard_session"}, status=403
-            ),
+            web.json_response({"error": message, "code": "not_dashboard_session"}, status=403),
             session_key=session_key,
         )
     slot_key = _slot_key_from_session(session_key)
@@ -657,7 +649,9 @@ async def api_agent_ask_open(request: web.Request) -> web.Response:
     elif isinstance(requested, str) and _ASK_ID_RE.fullmatch(requested):
         ask_id = requested
     else:
-        return web.json_response({"error": "ask_id must be 32 hex chars", "code": "invalid_ask_id"}, status=400)
+        return web.json_response(
+            {"error": "ask_id must be 32 hex chars", "code": "invalid_ask_id"}, status=400
+        )
     existing = state._agent_asks.get(ask_id)
     if existing is not None:
         # The ask is still registered, as when its owner retries an open whose reply was lost.
@@ -668,18 +662,14 @@ async def api_agent_ask_open(request: web.Request) -> web.Response:
                 request,
                 "agent_ask_open",
                 message,
-                web.json_response(
-                    {"error": message, "code": "ask_id_conflict"}, status=409
-                ),
+                web.json_response({"error": message, "code": "ask_id_conflict"}, status=409),
                 session_key=session_key,
             )
         return web.json_response({"ask_id": ask_id, "clients": 1})
     try:
         clients = await state.open_agent_ask(ask_id, slot_key, session_key, questions)
     except ValueError as exc:
-        return web.json_response(
-            {"error": str(exc), "code": "duplicate_question_key"}, status=400
-        )
+        return web.json_response({"error": str(exc), "code": "duplicate_question_key"}, status=400)
     try:
         if clients is None:
             outcome = "capacity"
@@ -727,9 +717,7 @@ async def api_agent_ask_wait(request: web.Request) -> web.Response:
                 request,
                 "agent_ask_wait",
                 message,
-                web.json_response(
-                    {"error": message, "code": "question_not_found"}, status=404
-                ),
+                web.json_response({"error": message, "code": "question_not_found"}, status=404),
                 session_key=session_key,
             )
         return web.json_response(
@@ -754,9 +742,7 @@ async def api_agent_ask_withdraw(request: web.Request) -> web.Response:
                 request,
                 "agent_ask_withdraw",
                 message,
-                web.json_response(
-                    {"error": message, "code": "question_not_found"}, status=404
-                ),
+                web.json_response({"error": message, "code": "question_not_found"}, status=404),
                 session_key=session_key,
             )
         return web.json_response(

@@ -12,12 +12,12 @@ from kiro_crew.session_lifecycle import STOP_DECLINED_ESCALATION_SECS
 from kiro_crew.shared_crew.attribution import public_attribution_of_slot
 
 
-
 def _admission_queued(slot_key: str) -> bool:
     """Whether *slot_key*'s dispatched turn still waits in fair admission. In memory."""
     from kiro_crew.shared_crew.admission_entry import admission_pending
 
     return admission_pending(slot_key)
+
 
 def summary_rows(slot: Any) -> list[Any]:
     """The rows a slot's sidebar summary reads, without loading a pending window.
