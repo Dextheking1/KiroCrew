@@ -56,8 +56,10 @@ from kiro_crew.dashboard.revocation_gen import (  # noqa: F401  # re-exports
     current_revocation_gen_or_none,
 )
 from kiro_crew.dashboard.tailnet import (
+    REFUSE_NOT_ALLOWED,
     ForwardedPeer,
     TailnetTrust,
+    forwarded_peer_refusal,
     is_forwarded_tailnet_request,
     login_allowed,
     peer_pin_key,
@@ -2888,12 +2890,9 @@ def token_auth_middleware(
                 # widening this gate exists to stop, so the "unknown policy"
                 # deny would announce itself and then not happen.
                 #
-                # Distinct from the ordinary enabled path, where an unresolved
-                # peer deliberately falls through (fail-closed on identity,
-                # fail-open on availability): there the operator's allowlist is
-                # KNOWN, so availability is the only thing at stake. Here the
-                # restriction itself is missing, and there is nothing left to be
-                # available for.
+                # Distinct from ``forwarded_peer_refusal`` below, which still
+                # admits a whois-named allowlisted login as Unknown: here the
+                # allowlist itself is missing, so no login can be checked.
                 #
                 # ``is_forwarded_tailnet_request`` is what keeps this from being
                 # a lockout: a local request resolves to no peer for an entirely
@@ -2911,6 +2910,23 @@ def token_auth_middleware(
                 )
                 _log_auth(request, "", "denied", "tailnet identity policy unreadable")
                 return _deny(request, "tailnet login not allowed")
+            refusal = await forwarded_peer_refusal(request, tailnet_trust, peer)
+            if refusal is not None:
+                # The allowlist fails closed: a forwarded tailnet request that
+                # names no allowed login is refused, never admitted unnamed.
+                _sel_fn().log_api_access(
+                    caller=request.remote or "",
+                    forwarded=True,
+                    operation="tailnet_peer_auth",
+                    outcome="denied",
+                    source="token_auth",
+                    resources=path,
+                    error=refusal,
+                )
+                _log_auth(request, "", "denied", f"tailnet identity unverified: {refusal}")
+                if refusal == REFUSE_NOT_ALLOWED:
+                    return _deny(request, "tailnet login not allowed")
+                return _deny(request, "tailnet identity unverified")
         # Audit attribution (RFC §3): when a peer resolved, the trail names a
         # person; otherwise it stays the immediate peer address as today.
         _caller = peer.login if peer is not None else (request.remote or "")

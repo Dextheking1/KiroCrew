@@ -231,15 +231,27 @@ async def test_tagged_nodes_are_distinct_machines():
         [("Tailscale-User-Login", "bob@example.com"), ("X-Forwarded-For", "100.64.0.5")],
         [("X-Forwarded-For", "100.64.0.7, 100.64.0.5")],
         [("X-Forwarded-For", "100.64.0.7"), ("X-Forwarded-For", "100.64.0.5")],
-        [("X-Forwarded-For", "10.0.0.7")],
-        [("Forwarded", "for=100.64.0.7")],
     ],
-    ids=["disagreeing-login-header", "comma-chain", "repeated-xff", "non-tailnet", "rfc7239-only"],
+    ids=["disagreeing-login-header", "comma-chain", "repeated-xff"],
 )
-async def test_forged_or_ambiguous_forwarding_is_unknown_never_a_person(headers):
+async def test_unattributable_tailnet_forwarding_is_refused_never_a_person(headers):
+    """A forwarded tailnet request that names no allowed person is refused."""
     mw = token_auth_middleware(tailnet_trust=TRUST)
     status, actor = await _actor_after(mw, _request(token=_token(), headers=headers))
-    assert status == 200, "attribution never changes the auth decision"
+    assert status == 403
+    assert actor is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [[("X-Forwarded-For", "10.0.0.7")], [("Forwarded", "for=100.64.0.7")]],
+    ids=["non-tailnet", "rfc7239-only"],
+)
+async def test_non_tailnet_forwarding_is_unknown_never_a_person(headers):
+    mw = token_auth_middleware(tailnet_trust=TRUST)
+    status, actor = await _actor_after(mw, _request(token=_token(), headers=headers))
+    assert status == 200, "forwarding outside the tailnet is not the allowlist's business"
     assert actor is not None and actor.principal.is_unknown
 
 
