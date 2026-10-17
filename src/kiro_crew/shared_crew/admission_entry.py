@@ -354,6 +354,8 @@ async def admit_subagent(request: Any, state: Any, parent_session: str) -> _gate
         service.set_child_probe(subagent_probe(manager))
         service.set_child_cancel(subagent_cancel(manager, asyncio.get_running_loop()))
     internal = request.get("internal_auth") is True
+    if internal:
+        await _gate.attest_internal_session(request)
     admission = await service.admit_child(
         parent_session_key=parent_session,
         fallback_budget=_gate.actor_budget(request, automation=internal),
@@ -502,8 +504,11 @@ async def admit_background_run(
         service.register_probe(operation, probe)
     if cancel is not None:
         service.register_cancel(operation, _cancel_hook(cancel))
+    internal = request.get("internal_auth") is True
+    if internal:
+        await _gate.attest_internal_session(request)
     admission = await service.admit(
-        budget_key=_gate.actor_budget(request, automation=request.get("internal_auth") is True),
+        budget_key=_gate.actor_budget(request, automation=internal),
         session_key=session_key or operation.value,
         operation=operation,
         idempotency_key=_gate.idempotency_key_of(request),

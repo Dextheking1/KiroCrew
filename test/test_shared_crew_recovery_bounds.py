@@ -290,12 +290,29 @@ async def test_work_started_inside_a_persons_turn_is_charged_to_that_person(
         principal=Principal.system("internal"), request_id="r", transport=Transport.INTERNAL
     )
     svc.bind_session("dashboard:alice-tab", A, "w-root")
-    inside = _Req({"X-Session-Key": "dashboard:alice-tab"}, internal)
-    assert ag.actor_budget(inside, automation=True) == A
-    nowhere = _Req({"X-Session-Key": "dashboard:nobody"}, internal)
-    assert ag.actor_budget(nowhere, automation=True) == ag.AUTOMATION_PRINCIPAL.id
-    bare = _Req({}, internal)
-    assert ag.actor_budget(bare, automation=True) == ag.AUTOMATION_PRINCIPAL.id
+    signed = {"tok-alice": "dashboard:alice-tab", "tok-nobody": "dashboard:nobody"}
+    monkeypatch.setattr(ag, "_verify_token", lambda token: signed.get(token, ""))
+
+    async def budget(headers: dict[str, str], **marks: object) -> str:
+        req = _Req(headers, internal)
+        req.update(marks)
+        await ag.attest_internal_session(req)
+        return ag.actor_budget(req, automation=True)
+
+    unknown = Principal.unknown().id
+    # Kernel-attested or token-proven calling session: charged to its person.
+    assert await budget({"X-Session-Key": "dashboard:alice-tab"}, peer_verified=True) == A
+    assert await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "tok-alice"}) == A
+    assert await budget({"X-Session-Token": "tok-alice"}) == A
+    # The header alone is the caller's word: it names no one's budget.
+    assert await budget({"X-Session-Key": "dashboard:alice-tab"}) == unknown
+    # A token for another session, a forged one, an unbound session, or none: Unknown.
+    assert await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "tok-nobody"}) == unknown
+    assert await budget({"X-Session-Key": "dashboard:alice-tab", "X-Session-Token": "forged"}) == unknown
+    assert await budget({"X-Session-Token": "tok-nobody"}) == unknown
+    assert await budget({}) == unknown
+    # None of them reaches the automation budget, a second one for anybody.
+    assert ag.AUTOMATION_PRINCIPAL.id != unknown
     # A's agent spending on background work spends A's own budget.
     from kiro_crew.shared_crew import admission_entry
 
@@ -303,11 +320,19 @@ async def test_work_started_inside_a_persons_turn_is_charged_to_that_person(
         return svc
 
     monkeypatch.setattr(ag, "current_service", _current)
+    inside = _Req({"X-Session-Key": "dashboard:alice-tab"}, internal)
     inside["internal_auth"] = True
+    inside["peer_verified"] = True
     run = await admission_entry.admit_background_run(
         inside, operation=OperationKind.TASK, session_key="taskrunner:x", probe=None
     )
     assert run.admitted and run.work.budget_key == A
+    claimed = _Req({"X-Session-Key": "dashboard:alice-tab"}, internal)
+    claimed["internal_auth"] = True
+    run2 = await admission_entry.admit_background_run(
+        claimed, operation=OperationKind.TASK, session_key="taskrunner:y", probe=None
+    )
+    assert run2.admitted and run2.work.budget_key == unknown
 
 
 # -- hard limits never run unlimited -------------------------------------

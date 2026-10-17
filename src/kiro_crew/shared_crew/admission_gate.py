@@ -1878,22 +1878,76 @@ def scope_principal_for_session(session_key: str) -> str | None:
 
 #: Header an internal caller (a runtime's MCP server) names its own session with.
 CALLER_SESSION_HEADER = "X-Session-Key"
+#: Header carrying the per-session token the gateway signed for that session.
+CALLER_TOKEN_HEADER = "X-Session-Token"
+#: Request key holding the calling session :func:`attest_internal_session` proved.
+ATTESTED_SESSION_KEY = "shared_crew_attested_session"
+_MAX_SESSION_KEY = 512
+
+
+def _declared_session(request: Any) -> str:
+    headers = getattr(request, "headers", None)
+    raw = headers.get(CALLER_SESSION_HEADER, "") if headers is not None else ""
+    session = raw.strip() if isinstance(raw, str) else ""
+    return session if 0 < len(session) <= _MAX_SESSION_KEY else ""
+
+
+def _verify_token(token: str) -> str:
+    """The session the gateway signed *token* for, or ``""``. Blocking: reads a file."""
+    from kiro_crew.session_token_sig import verify_session_token
+
+    return verify_session_token(token)
+
+
+async def attest_internal_session(request: Any) -> str:
+    """Prove which session an internal request comes from; ``""`` when nothing proves it.
+
+    The header alone is the caller's word. Proof is the auth layer's kernel
+    attestation of the declared key (``peer_verified``), or a per-session token
+    the gateway signed (``session_token_sig``) that names the declared session,
+    or names one when none is declared. The answer is kept on the request for
+    :func:`internal_initiator`.
+    """
+    try:
+        cached = request.get(ATTESTED_SESSION_KEY)
+    except Exception:  # noqa: BLE001 -- a request that cannot hold keys proves nothing
+        return ""
+    if isinstance(cached, str):
+        return cached
+    declared = _declared_session(request)
+    proved = ""
+    if declared and request.get("peer_verified") is True:
+        proved = declared
+    else:
+        headers = getattr(request, "headers", None)
+        token = headers.get(CALLER_TOKEN_HEADER, "") if headers is not None else ""
+        if isinstance(token, str) and token:
+            signed = await asyncio.to_thread(_verify_token, token)
+            if signed and (not declared or signed == declared):
+                proved = signed
+    try:
+        request[ATTESTED_SESSION_KEY] = proved
+    except Exception:  # noqa: BLE001 -- not cached; the answer still stands
+        pass
+    return proved
 
 
 def internal_initiator(request: Any) -> str | None:
-    """The person whose work runs in an internal request's calling session, or None.
+    """The person whose work runs in an internal request's proven calling session, or None.
 
     The internal secret proves the call came from a runtime this gateway
-    started, and that runtime names its own session. The principal whose work
-    is (or last was) running there is the initiator a tool call carries.
+    started; it does not prove which session. Only a session
+    :func:`attest_internal_session` proved is read, and the principal is the
+    one admission bound to that session server-side (``budget_for_session``).
     """
     service = _SERVICE
     if service is None or not service.enabled:
         return None
-    headers = getattr(request, "headers", None)
-    raw = headers.get(CALLER_SESSION_HEADER, "") if headers is not None else ""
-    session = raw.strip() if isinstance(raw, str) else ""
-    if not session or len(session) > 512:
+    try:
+        session = request.get(ATTESTED_SESSION_KEY)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(session, str) or not session:
         return None
     return service.budget_for_session(session)
 
@@ -1902,13 +1956,15 @@ def actor_budget(request: Any, *, automation: bool = False) -> str:
     """The budget key for *request*: its actor's principal, its initiator's, or Unknown.
 
     An internal request (work an agent starts from inside a turn) is charged
-    to the person whose turn runs in the calling session, so automation never
-    adds a second budget to anyone; with no such person, to automation.
+    to the person whose turn runs in its proven calling session, so automation
+    never adds a second budget to anyone. An internal request whose session is
+    unproven or holds no work is charged to the bounded Unknown bucket, never
+    to automation. Automation with no actor (cron, loopback) is automation.
     """
     actor = actor_of(request)
     if actor is not None and not actor.principal.is_unknown:
         if automation and actor.transport is Transport.INTERNAL:
-            return internal_initiator(request) or AUTOMATION_PRINCIPAL.id
+            return internal_initiator(request) or Principal.unknown().id
         return actor.principal.id
     if automation:
         return AUTOMATION_PRINCIPAL.id
@@ -1916,6 +1972,7 @@ def actor_budget(request: Any, *, automation: bool = False) -> str:
 
 
 __all__ = [
+    "ATTESTED_SESSION_KEY",
     "AUTOMATION_PRINCIPAL",
     "Admission",
     "AdmissionEnded",
@@ -1939,6 +1996,7 @@ __all__ = [
     "internal_initiator",
     "shutdown_cleanup",
     "actor_of",
+    "attest_internal_session",
     "admit_and_run",
     "current_service",
     "idempotency_key_of",

@@ -379,9 +379,14 @@ steering or spawning inside someone else's turn charges that turn's initiator. C
 and loopback automation with no recorded initiator charge `Principal.system("automation")`,
 which has the same limits as anyone. Work an agent starts from inside a turn reaches
 the gateway on the internal transport naming its calling session (`X-Session-Key`,
-set by the in-process MCP broker); it is charged to the principal whose work runs
-in that session (`admission_gate.internal_initiator`), so a person cannot gain a
-second budget through automation.
+set by the in-process MCP broker). The header alone is the caller's word, so the
+session counts only once proven (`admission_gate.attest_internal_session`): the
+auth layer kernel-attested the declared key (`peer_verified`), or a per-session token
+the gateway signed (`X-Session-Token`, `session_token_sig`) names it. The work is
+charged to the principal admission bound to that session server-side
+(`internal_initiator`, `budget_for_session`). An internal request whose session is
+unproven or holds no work is charged to the bounded Unknown bucket, never to
+automation, so a person cannot gain a second budget through automation.
 
 ### Accepted work, revalidation and recovery
 
