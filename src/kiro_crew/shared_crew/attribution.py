@@ -156,9 +156,7 @@ def public_attribution_of_slot(slot: Any) -> dict[str, Any]:
         created_by=str(getattr(slot, "_created_by", "") or ""),
         origin=str(getattr(slot, "_origin", "") or ""),
     )
-    return public_attribution(
-        value if value is not None else SessionAttribution.legacy(), trigger
-    )
+    return public_attribution(value if value is not None else SessionAttribution.legacy(), trigger)
 
 
 def public_attribution_from_meta(

@@ -94,7 +94,6 @@ _LINK_MAX = 512
 WORKLOAD_UNAVAILABLE = "unavailable"
 
 
-
 @dataclass(frozen=True)
 class TeamConfigProblem:
     """Why a team configuration is refused."""
@@ -164,7 +163,9 @@ def team_config_problem(
             and _cap(seams, CAP_HUMAN_CREDENTIALS)[0] == CapabilityState.AVAILABLE.value
         )
         if broken or signin_without_grants:
-            return TeamConfigProblem(REASON_CONSOLE_CAPABILITY_MISSING, capability=key, cause=reason)
+            return TeamConfigProblem(
+                REASON_CONSOLE_CAPABILITY_MISSING, capability=key, cause=reason
+            )
     if console_ready(seams) and network_configured(setup_paths):
         return TeamConfigProblem(REASON_CONFLICTING_TEAM_MODES)
     return None

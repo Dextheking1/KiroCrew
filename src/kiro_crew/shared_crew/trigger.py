@@ -133,7 +133,9 @@ def _webhook(value: str) -> Optional[SessionTrigger]:
     return None
 
 
-def trigger_of(*, key: str = "", created_by: str = "", origin: str = "") -> Optional[SessionTrigger]:
+def trigger_of(
+    *, key: str = "", created_by: str = "", origin: str = ""
+) -> Optional[SessionTrigger]:
     """The trigger that started the session, or ``None`` for one a person (or nobody known) started."""
     created = str(created_by or "")
     job_id = _cron_job_id(created) if created.startswith("cron:") else ""

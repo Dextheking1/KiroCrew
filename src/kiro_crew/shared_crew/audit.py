@@ -180,9 +180,7 @@ def security_event(record: ActionRecord) -> Any:
             "runtime_ref": record.runtime_ref,
             "causal_action_id": record.causal_action_id,
             "target": record.target,
-            EXTRA_WORKLOAD_REF: str(
-                record.extra.get(EXTRA_WORKLOAD_REF) or WORKLOAD_UNAVAILABLE
-            ),
+            EXTRA_WORKLOAD_REF: str(record.extra.get(EXTRA_WORKLOAD_REF) or WORKLOAD_UNAVAILABLE),
             EXTRA_TRIGGER: record.extra.get(EXTRA_TRIGGER),
         },
     )

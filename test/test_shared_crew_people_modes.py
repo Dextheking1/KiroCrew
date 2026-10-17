@@ -101,9 +101,13 @@ class TestModes:
         assert (mode, problem) == (crew_mode.MODE_PERSONAL, None)
 
     def test_network_when_a_path_is_on_or_someone_else_was_seen(self):
-        assert crew_mode.resolve_mode(EnterpriseSeams(), TAILNET_ON, others_seen=False)[0] == "network"
+        assert (
+            crew_mode.resolve_mode(EnterpriseSeams(), TAILNET_ON, others_seen=False)[0] == "network"
+        )
         degraded = {**NO_PATHS, "tailscale": {"state": "degraded", "reason": "tailnet_unreachable"}}
-        assert crew_mode.resolve_mode(EnterpriseSeams(), degraded, others_seen=False)[0] == "network"
+        assert (
+            crew_mode.resolve_mode(EnterpriseSeams(), degraded, others_seen=False)[0] == "network"
+        )
         assert crew_mode.resolve_mode(EnterpriseSeams(), NO_PATHS, others_seen=True)[0] == "network"
 
     def test_console_when_sign_in_and_grants_are_backed(self):
@@ -116,12 +120,24 @@ class TestModes:
     @pytest.mark.parametrize(
         "caps,paths,reason,capability",
         [
-            ({"human_credentials": AVAILABLE}, NO_PATHS, "console_capability_missing", "individual_grants"),
-            ({"human_credentials": REFUSED, "individual_grants": AVAILABLE}, NO_PATHS, "console_capability_missing", "human_credentials"),
+            (
+                {"human_credentials": AVAILABLE},
+                NO_PATHS,
+                "console_capability_missing",
+                "individual_grants",
+            ),
+            (
+                {"human_credentials": REFUSED, "individual_grants": AVAILABLE},
+                NO_PATHS,
+                "console_capability_missing",
+                "human_credentials",
+            ),
             (CONSOLE, TAILNET_ON, "conflicting_team_modes", ""),
         ],
     )
-    def test_invalid_team_configuration_is_refused_not_personal(self, caps, paths, reason, capability):
+    def test_invalid_team_configuration_is_refused_not_personal(
+        self, caps, paths, reason, capability
+    ):
         mode, problem = crew_mode.resolve_mode(_seams(caps), paths, others_seen=False)
         assert mode == crew_mode.MODE_INVALID
         assert problem is not None and problem.reason == reason and problem.capability == capability
@@ -136,17 +152,34 @@ class TestModes:
         seams = resolve_enterprise(Leaked())
         problem = crew_mode.team_config_problem(seams, NO_PATHS)
         assert problem is not None
-        assert (problem.reason, problem.cause) == ("console_provider_unusable", "test_provider_refused")
+        assert (problem.reason, problem.cause) == (
+            "console_provider_unusable",
+            "test_provider_refused",
+        )
 
     def test_an_unreadable_tailnet_allowlist_refuses_team_mode(self):
-        access.note_tailnet(enabled=True, host="crew.example.ts.net", identity_config_unreadable=True)
-        assert crew_mode.resolve_mode(EnterpriseSeams(), access.setup_paths_dict(), others_seen=False)[0] == "invalid"
+        access.note_tailnet(
+            enabled=True, host="crew.example.ts.net", identity_config_unreadable=True
+        )
+        assert (
+            crew_mode.resolve_mode(EnterpriseSeams(), access.setup_paths_dict(), others_seen=False)[
+                0
+            ]
+            == "invalid"
+        )
         access.note_tailnet(enabled=True, host="crew.example.ts.net")
-        assert crew_mode.resolve_mode(EnterpriseSeams(), access.setup_paths_dict(), others_seen=False)[0] == "network"
+        assert (
+            crew_mode.resolve_mode(EnterpriseSeams(), access.setup_paths_dict(), others_seen=False)[
+                0
+            ]
+            == "network"
+        )
 
     def test_startup_validation_logs_a_machine_readable_reason(self, caplog):
         with caplog.at_level(logging.ERROR, logger="kiro_crew.shared_crew.crew_mode"):
-            problem = crew_mode.validate_at_startup(_seams({"human_credentials": AVAILABLE}), NO_PATHS)
+            problem = crew_mode.validate_at_startup(
+                _seams({"human_credentials": AVAILABLE}), NO_PATHS
+            )
         assert problem is not None
         assert "console_capability_missing" in caplog.text and "individual_grants" in caplog.text
         assert crew_mode.validate_at_startup(EnterpriseSeams(), NO_PATHS) is None
@@ -213,7 +246,12 @@ class TestConsoleLink:
                 return "https://console.example.com/"
 
         view = crew_mode.mode_view(
-            OPERATOR, [], seams=_seams(CONSOLE), setup_paths=NO_PATHS, crew_id="g1", provider=Provider()
+            OPERATOR,
+            [],
+            seams=_seams(CONSOLE),
+            setup_paths=NO_PATHS,
+            crew_id="g1",
+            provider=Provider(),
         )
         assert view["mode"] == "console" and view["console"] == {
             "state": "available",
@@ -221,7 +259,12 @@ class TestConsoleLink:
         }
         assert view["team_config"]["state"] == "valid"
         personal = crew_mode.mode_view(
-            OPERATOR, [], seams=EnterpriseSeams(), setup_paths=NO_PATHS, crew_id="g1", provider=Provider()
+            OPERATOR,
+            [],
+            seams=EnterpriseSeams(),
+            setup_paths=NO_PATHS,
+            crew_id="g1",
+            provider=Provider(),
         )
         assert personal["mode"] == "personal" and personal["console"]["url"] == ""
         assert personal["crew_id"] == "g1"
@@ -235,7 +278,9 @@ class TestConsoleLink:
 def _gate_app(seams: EnterpriseSeams, principal: Principal, paths: dict) -> web.Application:
     @web.middleware
     async def publish(request: web.Request, handler: Any) -> web.StreamResponse:
-        request[ACTOR_REQUEST_KEY] = ActorContext(principal=principal, request_id="r", transport=Transport.HTTP)
+        request[ACTOR_REQUEST_KEY] = ActorContext(
+            principal=principal, request_id="r", transport=Transport.HTTP
+        )
         return await handler(request)
 
     def check(s: EnterpriseSeams) -> Optional[str]:
@@ -246,7 +291,9 @@ def _gate_app(seams: EnterpriseSeams, principal: Principal, paths: dict) -> web.
         return web.json_response({"ok": True})
 
     gates = EnterpriseGates(seams)
-    app = web.Application(middlewares=[publish, make_enterprise_gate_middleware(lambda: gates, team_check=check)])
+    app = web.Application(
+        middlewares=[publish, make_enterprise_gate_middleware(lambda: gates, team_check=check)]
+    )
     app.router.add_get("/api/sessions", ok)
     return app
 
@@ -257,7 +304,10 @@ async def test_invalid_team_setup_refuses_a_tailnet_person_but_not_the_local_ope
     async with TestClient(TestServer(_gate_app(seams, ALICE, TAILNET_ON))) as client:
         resp = await client.get("/api/sessions")
         assert resp.status == 403
-        assert await resp.json() == {"error": "team_config_invalid", "reason": "conflicting_team_modes"}
+        assert await resp.json() == {
+            "error": "team_config_invalid",
+            "reason": "conflicting_team_modes",
+        }
     async with TestClient(TestServer(_gate_app(seams, OPERATOR, TAILNET_ON))) as client:
         assert (await client.get("/api/sessions")).status == 200
     async with TestClient(TestServer(_gate_app(EnterpriseSeams(), ALICE, TAILNET_ON))) as client:
@@ -271,10 +321,16 @@ class TestTriggers:
     def test_cron_created_by_names_the_schedule(self):
         trigger.register_name_resolver(trigger.TRIGGER_SCHEDULED, {"abc12345": "Nightly"}.get)
         found = trigger.trigger_of(key="dashboard:tab", created_by="cron:abc12345")
-        assert found is not None and (found.kind, found.ref, found.name) == ("scheduled", "abc12345", "Nightly")
+        assert found is not None and (found.kind, found.ref, found.name) == (
+            "scheduled",
+            "abc12345",
+            "Nightly",
+        )
         assert found.configured_by is None
 
-    @pytest.mark.parametrize("key", ["cron:abc12345", "cron_abc12345", "cron:abc12345:run", "dashboard_cron_abc12345"])
+    @pytest.mark.parametrize(
+        "key", ["cron:abc12345", "cron_abc12345", "cron:abc12345:run", "dashboard_cron_abc12345"]
+    )
     def test_cron_namespace_keys_in_either_spelling(self, key):
         found = trigger.trigger_of(key=key)
         assert found is not None and found.kind == "scheduled" and found.ref == "abc12345"
@@ -288,7 +344,9 @@ class TestTriggers:
         system = trigger.trigger_of(key="startup", origin="system")
         assert system is not None and system.kind == "system"
 
-    @pytest.mark.parametrize("key,created_by", [("dashboard:tab", ""), ("cron:NOTHEX!", ""), ("tab", "dashboard:other")])
+    @pytest.mark.parametrize(
+        "key,created_by", [("dashboard:tab", ""), ("cron:NOTHEX!", ""), ("tab", "dashboard:other")]
+    )
     def test_a_person_s_session_has_no_trigger(self, key, created_by):
         assert trigger.trigger_of(key=key, created_by=created_by) is None
 
@@ -302,8 +360,15 @@ class TestTriggers:
 
     def test_public_attribution_names_the_trigger_never_for_a_person(self):
         legacy = public_attribution_from_meta({"created_by": "cron:abc12345"}, key="dashboard:t")
-        assert trigger_of_public(legacy) == {"kind": "scheduled", "ref": "abc12345", "name": "", "configured_by": None}
-        person = SessionAttribution(creator=ALICE, availability=AttributionAvailability.RECORDED, created_at=1.0)
+        assert trigger_of_public(legacy) == {
+            "kind": "scheduled",
+            "ref": "abc12345",
+            "name": "",
+            "configured_by": None,
+        }
+        person = SessionAttribution(
+            creator=ALICE, availability=AttributionAvailability.RECORDED, created_at=1.0
+        )
         meta = {"attribution": person.to_dict(), "created_by": "cron:abc12345"}
         assert trigger_of_public(public_attribution_from_meta(meta, key="cron:abc12345")) is None
 
@@ -311,7 +376,9 @@ class TestTriggers:
 # ── Unattributed filter over real catalog rows ──
 
 
-def _write(base, key: str, *, creator: Principal | None, mtime: float, extra: dict | None = None) -> None:
+def _write(
+    base, key: str, *, creator: Principal | None, mtime: float, extra: dict | None = None
+) -> None:
     meta: dict[str, Any] = {"_type": "metadata", "title": key}
     if creator is not None:
         meta["attribution"] = SessionAttribution(
@@ -319,7 +386,10 @@ def _write(base, key: str, *, creator: Principal | None, mtime: float, extra: di
         ).to_dict()
     meta.update(extra or {})
     path = base / f"{key}.jsonl"
-    path.write_text(json.dumps(meta) + "\n" + json.dumps({"role": "user", "content": "x"}) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(meta) + "\n" + json.dumps({"role": "user", "content": "x"}) + "\n",
+        encoding="utf-8",
+    )
     os.utime(path, (mtime, mtime))
 
 
@@ -345,15 +415,21 @@ def test_unattributed_filter_counts_and_pages_before_search(catalog, spelling):
     assert page.total_matching == 4 and page.hidden_by_filter == 5
     assert {i["key"] for i in page.items} <= {f"dashboard_l{i}" for i in range(4)}
     assert page.next_cursor
-    rest = query_sessions(rows, SessionQuery.from_query({"creator": spelling, "cursor": page.next_cursor}), ALICE)
+    rest = query_sessions(
+        rows, SessionQuery.from_query({"creator": spelling, "cursor": page.next_cursor}), ALICE
+    )
     assert len(page.items) + len(rest.items) == 4
-    searched = query_sessions(rows, SessionQuery.from_query({"creator": spelling, "q": "l1"}), ALICE)
+    searched = query_sessions(
+        rows, SessionQuery.from_query({"creator": spelling, "q": "l1"}), ALICE
+    )
     assert [i["key"] for i in searched.items] == ["dashboard_l1"]
     assert searched.total_matching + searched.hidden_by_filter == 1
 
 
 def test_scheduled_sessions_list_under_all_with_their_trigger(catalog):
-    page = query_sessions(catalog.list_sessions(), SessionQuery.from_query({"creator": "all"}), ALICE)
+    page = query_sessions(
+        catalog.list_sessions(), SessionQuery.from_query({"creator": "all"}), ALICE
+    )
     triggers = {i["key"]: trigger_of_public(i["attribution"]) for i in page.items}
     assert triggers["dashboard_c0"]["ref"] == "abc12345"
     assert triggers["cron_def67890"]["ref"] == "def67890"
@@ -362,10 +438,15 @@ def test_scheduled_sessions_list_under_all_with_their_trigger(catalog):
 
 def test_filters_change_visibility_only(catalog):
     rows = catalog.list_sessions()
-    every = {i["key"] for i in query_sessions(rows, SessionQuery.from_query({"limit": "200"}), ALICE).items}
+    every = {
+        i["key"]
+        for i in query_sessions(rows, SessionQuery.from_query({"limit": "200"}), ALICE).items
+    }
     union: set[str] = set()
     for creator in ("mine", "unattributed"):
-        page = query_sessions(rows, SessionQuery.from_query({"creator": creator, "limit": "200"}), ALICE)
+        page = query_sessions(
+            rows, SessionQuery.from_query({"creator": creator, "limit": "200"}), ALICE
+        )
         union |= {i["key"] for i in page.items}
     assert union < every and every - union == {"dashboard_c0", "cron_def67890"}
 
@@ -379,7 +460,9 @@ async def _mode_client(log, principal: Principal, *, app_name: str = "") -> Test
         request["is_dashboard_user"] = not app_name
         if app_name:
             request["app"] = app_name
-        request[ACTOR_REQUEST_KEY] = ActorContext(principal=principal, request_id="r", transport=Transport.HTTP)
+        request[ACTOR_REQUEST_KEY] = ActorContext(
+            principal=principal, request_id="r", transport=Transport.HTTP
+        )
         return await handler(request)
 
     app = web.Application(middlewares=[fake_auth])
@@ -427,7 +510,10 @@ class TestAudit:
     def test_every_record_names_the_crew_workload_or_unavailable(self, monkeypatch):
         monkeypatch.setattr(audit, "current_workload_identity_ref", lambda: "unavailable")
         record = audit.new_action_record(
-            ActionType.MESSAGE, session_key="dashboard:t", initiator=_actor(ALICE), outcome=ActionOutcome.ACCEPTED
+            ActionType.MESSAGE,
+            session_key="dashboard:t",
+            initiator=_actor(ALICE),
+            outcome=ActionOutcome.ACCEPTED,
         )
         meta = audit.security_event(record).metadata
         assert meta["workload_identity_ref"] == "unavailable"
@@ -436,7 +522,10 @@ class TestAudit:
     def test_the_workload_ref_comes_from_the_crew_binding(self):
         seams = EnterpriseSeams(crew_binding=_Binding("wl-ref-1"))
         assert crew_mode.crew_identity_refs(seams) == ("crew-1", "wl-ref-1")
-        assert crew_mode.crew_identity_refs(EnterpriseSeams(crew_binding=_Binding(""))) == ("crew-1", "unavailable")
+        assert crew_mode.crew_identity_refs(EnterpriseSeams(crew_binding=_Binding(""))) == (
+            "crew-1",
+            "unavailable",
+        )
         record = audit.new_action_record(
             ActionType.CANCEL,
             session_key="dashboard:t",
@@ -504,7 +593,11 @@ class TestAudit:
         assert back.extra["workload_identity_ref"] == "wl"
         assert follow.causal_action_id == back.action_id
         event = audit.security_event(back).metadata
-        assert (event["target"], event["session_key"], event["initiator"]["id"]) == ("w1", "dashboard:t", bob.id)
+        assert (event["target"], event["session_key"], event["initiator"]["id"]) == (
+            "w1",
+            "dashboard:t",
+            bob.id,
+        )
         other = audit.new_action_record(
             ActionType.CANCEL,
             session_key="dashboard:other",
