@@ -17,6 +17,7 @@ from kiro_crew.dashboard import chat_handlers, chat_runner
 from kiro_crew.dashboard import responsive_chat as rc
 from kiro_crew.dashboard.chat_delivery import queue_entry_view
 from kiro_crew.dashboard.handlers import ask_question
+from kiro_crew.dashboard.state import _ChatSlot
 
 fixture = _responsive_fixture
 
@@ -359,7 +360,9 @@ async def test_stop_resolver_cannot_wake_a_different_owner(fixture, monkeypatch,
         slot._stop_state = "idle"
         slot._stop_state = "soft_pending"
     elif fence == "replacement":
-        state._slots[slot.key] = object()
+        # Stand-in with .key and to_dict() so the background serializer
+        # can iterate _slots.values() safely; identity check still fails.
+        state._slots[slot.key] = _ChatSlot(slot.key)
     elif fence == "rebind":
         slot.linked_session_key = "dashboard:other"
     elif fence == "running":
