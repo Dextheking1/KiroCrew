@@ -110,6 +110,10 @@ class TestModes:
         )
         assert crew_mode.resolve_mode(EnterpriseSeams(), NO_PATHS, others_seen=True)[0] == "network"
 
+    def test_relying_party_sign_in_with_grants_is_a_console_team(self):
+        seams = _seams({"human_sign_in": AVAILABLE, "individual_grants": AVAILABLE})
+        assert crew_mode.resolve_mode(seams, NO_PATHS, others_seen=False) == ("console", None)
+
     def test_console_when_sign_in_and_grants_are_backed(self):
         assert crew_mode.resolve_mode(_seams(CONSOLE), NO_PATHS, others_seen=True)[0] == "console"
 
@@ -133,6 +137,18 @@ class TestModes:
                 "human_credentials",
             ),
             (CONSOLE, TAILNET_ON, "conflicting_team_modes", ""),
+            (
+                {"human_sign_in": AVAILABLE},
+                NO_PATHS,
+                "console_capability_missing",
+                "individual_grants",
+            ),
+            (
+                {"human_sign_in": REFUSED, "individual_grants": AVAILABLE},
+                NO_PATHS,
+                "console_capability_missing",
+                "human_sign_in",
+            ),
         ],
     )
     def test_invalid_team_configuration_is_refused_not_personal(

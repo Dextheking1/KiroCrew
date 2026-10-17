@@ -728,6 +728,15 @@ protocol before use and reports one capability per concern:
 | `heartbeat` | `HeartbeatTransport.send(payload, workload credential)`; `HeartbeatTracker` | never sent; needs `workload_identity` too |
 | `inference_budget` | `InferenceBudgetProvider.state`; `BudgetGate` | `not_enforced` |
 | `deployment_context` | opaque `deployment_ref`, `tenant_ref`, `resource_policy_ref` | empty |
+| `human_sign_in` | `enterprise_signin.RelyingParty` over a pinned `RelyingPartyConfig` | no sign-in path |
+| `revocation` | `enterprise_revocation.RevocationFeed` (removal stream plus `RevocationPolicy`) | no enforcer; queued-work recheck is a no-op |
+| `workload_verifier` | `enterprise_workload.WorkloadVerifierConfig` (registered trust anchors, exact SPIFFE IDs, audience) | no workload token is accepted |
+| `crew_registration` | `enterprise_registration.CrewRegistry` | none |
+| `directory` | `enterprise_directory.DirectoryProvider` | `not_configured` error, never an empty list |
+| `channel_actors` | `enterprise_signin.ChannelActorMapping` | channel users are mapped to no one |
+
+An edition written before an accessor existed may omit it; that reads as
+`not_configured`, never `provider_failed`.
 
 `available` means a checked provider is composed. It says the Crew is configured for
 the concern, not that the remote service answered. A provider, or anything it
@@ -743,15 +752,67 @@ Identity class. A human credential carries an `access.IdentityClass`:
 individually authenticated consumer account) or `tailnet` (a Tailscale user). The
 verifier copies `CredentialClaims.identity_class` onto the principal's `extra`; a
 credential that states none, or an unknown value, is `individual`. A tailnet principal
-is `tailnet`. Shared multi-user access is for `organization_directory` and `tailnet`:
-`GrantGate.decide` refuses `individual` with `individual_account_not_eligible` before
-it asks the authority. Personal remote control of one's own machine admits every human
-class (`access.remote_control_eligibility`). Tailscale attribution is unchanged.
+is `tailnet`. The class is data, not policy: no rule in core allows or refuses shared
+access because of it (`access.shared_access_eligibility` answers
+`external_decision_required` for every person). Personal remote control of one's own
+machine admits every human class (`access.remote_control_eligibility`) and stays a
+separate, same-account path. Tailscale attribution is unchanged.
+
+Access decisions. Shared multi-user eligibility is the external authority's decision.
+`GrantAuthority.lookup` returns an `IndividualGrant` whose `state` is `active`,
+`revoked` or `warning_only`, with the authority's `decision_reason` token, which
+`AccessDecision.authority_reason` carries through. Only `active` admits. A
+`warning_only` member addition is recorded and refused `warning_only_not_a_grant`.
+With no authority composed, the capabilities report shows
+`access_modes.shared_multi_user.eligibility` as `{decided_by: external_authority,
+state: unavailable, reason: not_configured}`: no person is granted shared access through
+it, and the default never allows everyone. `shared_multi_user.state` stays the network
+setup path, so Tailscale behaviour is unchanged. A sign-in never grants Crew access: a
+request from an `enterprise` principal with no authority composed is refused
+`access_decision_unavailable`, and `SignInResult.grants_access` is always false.
 
 Grants are individual only: no group field, and `GrantGate.decide` reads only the
-principal, its identity class and the authority. Session attribution, authorship,
-presence and heartbeat state are not inputs, so none of them grants access. Non-human
-principals are refused `not_individual`.
+principal and the authority. Session attribution, authorship, presence, heartbeat state
+and identity class are not inputs, so none of them grants access. Non-human principals
+are refused `not_individual`.
+
+Channel actors. A channel (for example a chat workspace) reaches the Crew without the
+web sign-in. While a grant authority is composed, a channel user acts as a person only
+through the authority's `ChannelActorMapping` (`EnterpriseGates.check_channel_actor`),
+and an unmapped user is refused `channel_actor_unmapped`. A channel-generated dashboard
+link authenticates a token subject; opened through a proxy it resolves to Unknown, and
+an authenticated Unknown caller is refused `unattributed_actor` while the authority is
+composed, so the link cannot bypass team-access policy. With no authority composed the
+channel allowlist governs alone, as before.
+
+Human sign-in (draft, per-Crew OIDC). `enterprise_signin.RelyingPartyConfig` pins the
+issuer (https), client id, audience, exact redirect URI (https, or loopback http for
+development) and a key-set reference; `openid` scope is required and a discovery URL
+alone is not a configuration. `RelyingParty.begin` issues a single-use `state` and a
+distinct `nonce` that expire (default 600 s, max 900 s; pending requests bounded).
+`complete` spends the `state` on first use, checks expiry and redirect, calls the
+provider's `CodeExchange`, binds the `nonce` (constant-time) and `azp`, then runs
+`verify_credential` against the pinned key set: issuer, audience, key id, key rotation
+window, signature, lifetime and expiry. A credential that names its own key location
+(`CredentialClaims.key_location`) is refused `key_location_refused`.
+
+Revocation (`enterprise_revocation`). A removal is committed by the authority; the
+Crew enforces it within `RevocationPolicy.max_propagation_seconds` (required, max 900;
+`poll_interval_seconds` must be shorter). `RevocationEnforcer` learns removals by cursor
+from `RevocationFeed.removals_since` (read off the event loop when due) or by
+`apply` for a push, closes the person's registered live connections, and refuses them at
+every `EnforcementPoint`: `cookie`, `websocket`, `relay_connection`, `reconnect`,
+`approval_submission` and `queued_dispatch` (`member_removed`). When the feed has not
+been read within the bound (a partition or outage), every member it admitted is refused
+`authority_stale`, so the bound holds without the feed. An unexpired offline ID token is
+never proof of membership (`is_current_member` reads the enforcer). The dashboard gate
+checks the cookie, WebSocket upgrade and approval-submission points; queued work is
+rechecked in `AdmissionService._revalidate` through `queued_dispatch_recheck`, which is
+`None` with no enforcer installed. `measured_propagation` records the largest
+commit-to-enforcement delay per point; the contract tests measure it with a fake clock.
+`RevocationPolicy.running_work` (`continue` or `cancel`) has no default:
+`running_work_action` reports `undecided` until it is chosen, and nothing here releases
+capacity, because a disconnected person is not evidence that the runtime stopped.
 
 Call sites. `enterprise_gates.enterprise_gate_middleware` runs inner to token auth on
 the dashboard. A request from a person on a shared path (tailnet or enterprise
@@ -782,12 +843,54 @@ Workload disablement is terminal for the lease: after it, no bind or renew is
 attempted. A failed renewal keeps the current credential until it expires and no
 longer. `WorkloadCredentialRef` is a handle, never material.
 
+Workload verification (draft, SPIFFE-shaped; `enterprise_workload.verify_workload`).
+A receiver accepts a workload token only when its issuer is a registered `TrustAnchor`
+(`untrusted_provider` otherwise, whatever trust domain the token asserts), the SPIFFE
+ID's trust domain is the one that anchor was registered for (`trust_domain_mismatch`),
+the SPIFFE ID is exactly one the receiver expects (`unexpected_spiffe_id`), the
+receiver's own audience is in the token (another Crew's or another destination's token
+is `wrong_audience`), and key id, rotation window, signature, lifetime and expiry pass
+`verify_credential` against the anchor's pinned key set. A token naming a key location
+is `key_location_refused`. There is no static-key or shared-secret path. The pod
+boundary is reported as `workload_identity.pod_boundary = {scope: any_process_in_pod,
+per_process_isolation: false}`: any process in an attested pod can obtain the identity,
+and credential stripping and the sandbox stay as they are.
+
+Logical Crew identity (`enterprise_registration`). `LogicalCrewIdentity` is `crew_id`,
+SPIFFE ID and `profile_ref`; quotas key on `crew_id` and no credential is part of it, so
+restarts, upgrades, extra replicas and credential rotation keep quota and Profile.
+Registration states are `unregistered`, `in_use` and `released`. A claim from the
+holding deployment with the current fencing token joins as a replica; a different
+logical deployment while in use is `identity_in_use`; after release and re-registration
+the fencing token advances, so the old deployment is `fenced`; an unprovisioned id is
+`unknown_identity` and registering never creates one. `InMemoryCrewRegistry` is a
+`TEST_ONLY` reference implementation; no persistent store is defined.
+
+Directory and client states (`enterprise_directory`). A directory answer is
+`{status: ok, entries}` (possibly empty) or `{status: error, error}`; anything unclear,
+and a missing or failing provider, is an error, never an empty list. Entries carry a
+stable `crew_id` and a `CrewConnectionState`: `available`, `revoked`, `offline`,
+`relay_unavailable`, `sign_in_expired`, `host_disabled`, `version_incompatible`.
+`classify_connection_failure` checks access loss before reachability, so a removed
+person is never shown `offline`. A listed Crew connects only on an explicit Connect.
+
+Personal Remote Control. Registration, discovery, connect and enabling remote access
+are separate transitions (`RemoteControl`). Everything starts off; `turn_on` (Turn on
+Remote Control, the proposed baseline) registers through an explicit action and does
+nothing else; nothing registers, publishes or calls out on its own; with no registrar it
+is `not_configured`. Disabling remote access keeps local execution.
+
 The synthetic Crew principal is keyed under its own provider namespace
 (`crew-workload`), so no human credential can produce its id. `CrewBinding.inference_owner`
 is the Crew, so chargeable inference is never billed to the human who started it.
 
-Heartbeat health: `not_connected -> healthy <-> heartbeat_late`, moved only by an
-acknowledged, workload-authenticated send; `last_seen` is the last acknowledged send. The payload is the closed `HEARTBEAT_PAYLOAD_KEYS` set of
+Health has exactly three values, `healthy`, `heartbeat_late` and `not_connected`; a
+Crew that never connected is `not_connected`, and one whose last acknowledged heartbeat
+is older than the disconnect threshold reads `not_connected` again. `last_success` (the
+last acknowledged send) and `last_attempt` (the last send tried) are tracked apart. The
+interval and thresholds (defaults 60, 180 and 900 s) are placeholders and live in
+memory only; their real values and where health is stored are unresolved, so no store
+exists for them. The payload is the closed `HEARTBEAT_PAYLOAD_KEYS` set of
 ids, counts and capability states; anything else is refused before sending, so no
 transcript, prompt, title or principal can ride in it. Freshness is telemetry, never
 authorization.
@@ -809,11 +912,11 @@ enterprise setting is read from `config.json`.
 
 Access modes and what each needs (`access.access_modes_dict`):
 
-| Mode | Needs | Identity classes |
+| Mode | Needs | Who is eligible |
 |---|---|---|
-| `shared_multi_user` | a cloud account setup | `organization_directory`, `tailnet` |
+| `shared_multi_user` | a cloud account setup | decided by the external authority (`eligibility`), never by identity class |
 | `agent_workload_identity` | a cloud account setup, on a supported host | the Crew's own machine identity |
-| `personal_remote_control` | an individual login only | every human class |
+| `personal_remote_control` | an individual login only | every human class, for the person's own machine |
 
 Workload identity runs only on EKS at launch (`SUPPORTED_WORKLOAD_HOSTS = ('eks',)`,
 detected by `access.detect_workload_host`); any other host reports
@@ -826,24 +929,33 @@ product shows no cost UI and reports no cost.
 
 Live enterprise verification needs, none of which exist in the public build:
 
-- an approved human credential contract and issuer key distribution;
-- an authoritative individual-assignment service with revocation push;
+- an approved human credential contract and issuer key distribution, and a per-Crew
+  relying-party registration;
+- an authoritative individual-assignment service with a removal feed or push and a
+  recorded revocation bound;
+- a registered workload trust anchor and a token exchange that accepts it;
+- a Crew registry, a directory and a personal registrar;
 - a workload identity provider on the target runtime;
 - a heartbeat and discovery endpoint that accepts workload-authenticated calls;
 - an inference budget and Profile service.
 
-Open, for the identity and security owners: the cache and outage bounds above; whether
-running work is stopped on revocation or only new work is refused; whether an unknown
-budget should refuse (current) or allow for a bounded window; how the Crew and a relay
-check each other through the authority.
+### Unresolved decisions
 
-Open product questions:
+Core holds a seam and a disabled default for each of these. None is decided in code.
 
-- whether a Crew must be deployed in the same cloud account as the console that
-  manages it;
-- where connection, membership and heartbeat state lives, in the backend or in the
-  relay, preferring the least persistent storage, possibly a heartbeat over the relay;
-- whether personal remote control is opt-in (current default) or opt-out.
+| Topic | Current behaviour in core | Unresolved |
+|---|---|---|
+| Network versus enterprise access | Tailscale and Systems Manager paths work without a product login; `shared_multi_user.state` reports them | how the network path and an enterprise-only multi-user offering are worded together; no broad eligibility claim is made |
+| Member eligibility | external authority decides (`eligibility`); warning-only additions are not grants; identity class is data | which account tiers are eligible and which identity providers are supported at launch |
+| Revocation mechanism and bound | `RevocationPolicy` requires a recorded bound; feed or push; fail closed past the bound | the authority, its enforcement points beyond this Crew, the invalidation protocol and the bound's value |
+| Running work on removal | `running_work` has no default; reported `undecided`; capacity not released | whether running work continues or is cancelled |
+| External attribution display | the acting person is recorded in Crew logs and audit only | whether and where downstream systems show who acted; metadata is not delegation |
+| Same-account deployment templates | no same-account check exists | whether generated templates assume one cloud account for Crew and console |
+| Health storage and timing | three states in memory; placeholder thresholds | interval, late and disconnect thresholds, and whether state lives in a backend or rides a relay |
+| Personal relay registration | off by default; explicit Turn on registers | explicit, login-driven or default-on registration, and QR coexistence |
+| API keys for other hosts | not implemented | whether other hosts get keys, creation and rotation, under what contract |
+| Per-task permissions | every admitted person can use everything the Crew can; no per-task authorization layer | a customer-validation gate: if that assumption fails for a customer, it is a product and security blocker |
+| Unknown budget | refuses new chargeable inference | whether to allow for a bounded window instead |
 
 Acceptance probes once services exist: forged, expired, wrong-audience, wrong-issuer
 and retired-key credentials are refused; a revoked person cannot start work within the

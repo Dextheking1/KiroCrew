@@ -45,6 +45,7 @@ from typing import Any, Awaitable, Callable, Coroutine, Mapping, TypeVar
 from kiro_crew.config.sections_shared_crew import EffectiveLimits
 from kiro_crew.shared_crew import admission_runtime as _runtime
 from kiro_crew.shared_crew import containment as _containment
+from kiro_crew.shared_crew import enterprise_revocation as _revocation
 from kiro_crew.shared_crew.accounting import SessionCreateRate, StorageAccount
 from kiro_crew.shared_crew.admission import (
     CAPACITY_HOLDING,
@@ -1023,6 +1024,8 @@ class AdmissionService:
         report = await self.containment_report()
         if report.refusal_reason is not None:
             return ReasonCode.CONTAINMENT_UNAVAILABLE
+        if _revocation.queued_dispatch_recheck(live.work.budget_key, self._clock()) is not None:
+            return ReasonCode.GRANT_REVOKED
         if revalidate is not None:
             try:
                 return await revalidate()

@@ -39,6 +39,7 @@ from kiro_crew.shared_crew.codec import SCHEMA_VERSION
 from kiro_crew.shared_crew.contracts import CapabilityState, Principal, PrincipalKind, Provenance
 from kiro_crew.shared_crew.enterprise import (
     CAP_HUMAN_CREDENTIALS,
+    CAP_HUMAN_SIGN_IN,
     CAP_INDIVIDUAL_GRANTS,
     ENTERPRISE_CAPABILITY_KEYS,
     EnterpriseSeams,
@@ -76,8 +77,10 @@ TEAM_CONFIG_REASONS: tuple[str, ...] = (
 #: configuration is invalid.
 ERROR_TEAM_CONFIG_INVALID = "team_config_invalid"
 
-#: Capabilities a Console team needs before it is a team.
-CONSOLE_REQUIRED: tuple[str, ...] = (CAP_HUMAN_CREDENTIALS, CAP_INDIVIDUAL_GRANTS)
+#: Either sign-in seam: a presented-credential verifier or the relying-party sign-in.
+SIGN_IN_KEYS: tuple[str, ...] = (CAP_HUMAN_CREDENTIALS, CAP_HUMAN_SIGN_IN)
+#: A Console team needs one sign-in seam from :data:`SIGN_IN_KEYS` plus these.
+CONSOLE_REQUIRED: tuple[str, ...] = (CAP_INDIVIDUAL_GRANTS,)
 
 _UNUSABLE_CAUSES = frozenset(
     {UnavailableReason.PROVIDER_FAILED.value, UnavailableReason.TEST_PROVIDER_REFUSED.value}
@@ -116,10 +119,16 @@ def console_composed(seams: EnterpriseSeams) -> bool:
     return bool(seams.capabilities)
 
 
+def _sign_in_available(seams: EnterpriseSeams) -> bool:
+    return any(_cap(seams, key)[0] == CapabilityState.AVAILABLE.value for key in SIGN_IN_KEYS)
+
+
 def console_ready(seams: EnterpriseSeams) -> bool:
-    """Whether the provider backs every capability a Console team needs."""
-    return console_composed(seams) and all(
-        _cap(seams, key)[0] == CapabilityState.AVAILABLE.value for key in CONSOLE_REQUIRED
+    """Whether the provider backs a sign-in path and per-person grants."""
+    return (
+        console_composed(seams)
+        and _sign_in_available(seams)
+        and _cap(seams, CAP_INDIVIDUAL_GRANTS)[0] == CapabilityState.AVAILABLE.value
     )
 
 
@@ -150,7 +159,7 @@ def team_config_problem(
     if CapabilityState.AVAILABLE.value not in states and _UNUSABLE_CAUSES & set(causes):
         cause = next(c for c in causes if c in _UNUSABLE_CAUSES)
         return TeamConfigProblem(REASON_CONSOLE_PROVIDER_UNUSABLE, cause=cause)
-    for key in CONSOLE_REQUIRED:
+    for key in (*SIGN_IN_KEYS, CAP_INDIVIDUAL_GRANTS):
         state, reason = _cap(seams, key)
         if state == CapabilityState.AVAILABLE.value:
             continue
@@ -158,10 +167,7 @@ def team_config_problem(
         # sign-in is on without per-person grants, which would admit everyone
         # who can sign in. A slot that failed or was refused is a broken team.
         broken = reason != UnavailableReason.NOT_CONFIGURED.value
-        signin_without_grants = (
-            key == CAP_INDIVIDUAL_GRANTS
-            and _cap(seams, CAP_HUMAN_CREDENTIALS)[0] == CapabilityState.AVAILABLE.value
-        )
+        signin_without_grants = key == CAP_INDIVIDUAL_GRANTS and _sign_in_available(seams)
         if broken or signin_without_grants:
             return TeamConfigProblem(
                 REASON_CONSOLE_CAPABILITY_MISSING, capability=key, cause=reason

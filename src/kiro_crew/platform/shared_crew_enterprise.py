@@ -2,9 +2,12 @@
 
 ``PlatformContext.shared_crew_enterprise`` carries the edition's providers for
 human credential verification, authoritative individual grants, workload
-identity, the synthetic Crew identity, the outbound heartbeat transport and the
-inference budget. The public build composes :class:`DefaultSharedCrewEnterpriseProvider`,
-which answers ``enabled() -> False`` and ``None`` for every provider, so every
+identity, the synthetic Crew identity, the outbound heartbeat transport, the
+inference budget, human sign-in, the revocation feed, the workload verifier,
+Crew registration, the Crew directory and the channel actor mapping. An edition
+written before an accessor existed may omit it; that reads as not configured.
+The public build composes :class:`DefaultSharedCrewEnterpriseProvider`, which
+answers ``enabled() -> False`` and ``None`` for every provider, so every
 enterprise capability reports unavailable and nothing reaches the network.
 
 The accessors return ``object | None`` on purpose. The contracts each provider
@@ -57,6 +60,30 @@ class SharedCrewEnterpriseProvider(Protocol):
         """Opaque tenant / deployment / resource-policy references (default: empty)."""
         ...
 
+    def sign_in(self) -> Optional[object]:
+        """A ``shared_crew.enterprise_signin.RelyingParty`` or ``None``."""
+        ...
+
+    def revocation_feed(self) -> Optional[object]:
+        """A ``shared_crew.enterprise_revocation.RevocationFeed`` or ``None``."""
+        ...
+
+    def workload_verifier(self) -> Optional[object]:
+        """A ``shared_crew.enterprise_workload.WorkloadVerifierConfig`` or ``None``."""
+        ...
+
+    def crew_registry(self) -> Optional[object]:
+        """A ``shared_crew.enterprise_registration.CrewRegistry`` or ``None``."""
+        ...
+
+    def directory(self) -> Optional[object]:
+        """A ``shared_crew.enterprise_directory.DirectoryProvider`` or ``None``."""
+        ...
+
+    def channel_actors(self) -> Optional[object]:
+        """A ``shared_crew.enterprise_signin.ChannelActorMapping`` or ``None``."""
+        ...
+
 
 class DefaultSharedCrewEnterpriseProvider:
     """Disabled seam: no providers, no references, no network."""
@@ -84,3 +111,21 @@ class DefaultSharedCrewEnterpriseProvider:
 
     def deployment_context(self) -> Mapping[str, str]:
         return {}
+
+    def sign_in(self) -> Optional[object]:
+        return None
+
+    def revocation_feed(self) -> Optional[object]:
+        return None
+
+    def workload_verifier(self) -> Optional[object]:
+        return None
+
+    def crew_registry(self) -> Optional[object]:
+        return None
+
+    def directory(self) -> Optional[object]:
+        return None
+
+    def channel_actors(self) -> Optional[object]:
+        return None
