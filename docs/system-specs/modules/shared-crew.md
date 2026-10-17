@@ -512,7 +512,9 @@ sees its own queued and running work. Every accepted-work write is pushed as a
 queued or admitted record at once and moves running work to `cancelling`; a stale
 revision or a terminal record is 409 with `current`. A chat send answers 202 with
 `admission` when queued (WS mode) or carries `X-Shared-Crew-Work` /
-`X-Shared-Crew-Work-State` headers (SSE mode).
+`X-Shared-Crew-Work-State` headers (SSE mode). While a dispatched turn waits in
+admission, the slot detail (`GET /api/chat/slots/{slot}`) and the slot list report
+`running: false` and `admission_queued: true`; once admitted, `running` is true.
 
 ## 5. Collaboration
 

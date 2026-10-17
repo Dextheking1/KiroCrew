@@ -12,6 +12,13 @@ from kiro_crew.session_lifecycle import STOP_DECLINED_ESCALATION_SECS
 from kiro_crew.shared_crew.attribution import public_attribution_of_slot
 
 
+
+def _admission_queued(slot_key: str) -> bool:
+    """Whether *slot_key*'s dispatched turn still waits in fair admission. In memory."""
+    from kiro_crew.shared_crew.admission_entry import admission_pending
+
+    return admission_pending(slot_key)
+
 def summary_rows(slot: Any) -> list[Any]:
     """The rows a slot's sidebar summary reads, without loading a pending window.
 
@@ -418,7 +425,10 @@ class SlotProjection:
             "row_identity": resolved_row_identity(slot),
             "artifact": slot._artifact,
             "messages": len(rows),
-            "running": slot.turn_running,
+            # A turn accepted but still waiting in fair admission reads as
+            # queued, not running.
+            "running": slot.turn_running and not _admission_queued(slot.key),
+            "admission_queued": _admission_queued(slot.key),
             # A loop wake is opening this running turn and its row is not in the
             # transcript yet: a structured monitor writes that row only once the
             # runner accepts the turn. Rides the same frame as `running`, so a

@@ -1250,6 +1250,9 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
     turn_running = slot.turn_running
     verdict_key = slot_history_key(slot)
     running = slot.running
+    from kiro_crew.shared_crew.admission_entry import admission_pending
+
+    admission_queued = admission_pending(key)
     # Admission-only running has no numbered turn yet. Omitting the pair keeps
     # this response from naming the preceding turn as the one currently running.
     turn_identity: dict[str, object] = (
@@ -1353,7 +1356,10 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
                 # LLM-generated or set by a rename, so they are content, not
                 # configuration.
                 "title": _redact_for_display(display_title),
-                "running": running,
+                # A turn accepted but still waiting in fair admission is queued,
+                # not running (``shared_crew.admission_entry.admission_pending``).
+                "running": running and not admission_queued,
+                "admission_queued": admission_queued,
                 **turn_identity,
                 "stopping": stopping,
                 "stop_state": stop_state,
