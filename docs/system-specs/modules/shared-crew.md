@@ -678,7 +678,8 @@ A source answers from state it already holds; it does no I/O on the request path
 - `setup_paths`: each shared-access setup path (`access.SETUP_PATHS`: `tailscale`,
   `kiro_login`, `systems_manager`) to `{state, reason}`. Tailscale reports what the
   gateway resolved at start (`access.note_tailnet`): `available` once Tailscale access
-  is on and the tailnet name resolved, `degraded` (`tailnet_unreachable`) when it is
+  is on and the tailnet name resolved, or once identity trust with an allowlist is on
+  (`tailscale serve` set up by hand), `degraded` (`tailnet_unreachable`) when it is
   on without a name, else `not_configured`. A path no source registered for
   (`access.register_setup_path_source`) reports `not_in_this_build`;
 - `access_modes`: `shared_multi_user`, `personal_remote_control` and
@@ -687,7 +688,7 @@ A source answers from state it already holds; it does no I/O on the request path
   `reason` (`host_not_supported` off a supported host).
 
 The People surface (Settings > People) shows one setup empty state while no setup
-path is `available`: it names the three paths, each with the availability its
+path is `available` and no one but the viewer has been seen: it names the three paths, each with the availability its
 capability reports and a link to existing docs only. It offers no button that does
 nothing.
 

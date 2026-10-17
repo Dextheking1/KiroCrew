@@ -8,8 +8,8 @@
  *  one is configured. There is no add, remove, role or admin control, and no
  *  management URL is ever taken from a peer or from config.
  *
- *  While no shared-access path is configured the whole surface is one setup
- *  empty state (`SharedAccessSetup`) instead. */
+ *  While no shared-access path is configured and no one but the viewer has been
+ *  seen, the whole surface is one setup empty state (`SharedAccessSetup`). */
 import { ExternalLink, Users } from 'lucide-react'
 import { SettingsCard, SettingsSection } from '../../components/settings'
 import { Badge, ContentSkeleton, EmptyState } from '../../components/ui'
@@ -71,7 +71,10 @@ export function PeoplePanel() {
   if (people.isError) {
     return <ErrorNotice message={people.error instanceof Error ? people.error.message : i18nT('sharedCrew.people_failed')} askAgent testId="people-error" />
   }
-  if (!sharedAccessConfigured(capabilities)) return <SharedAccessSetup capabilities={capabilities} />
+  // Someone other than the viewer already connected: sharing works, whatever the
+  // setup paths say (Tailscale Serve set up by hand, for one).
+  const othersSeen = (people.data?.people ?? []).some(row => !row.is_viewer)
+  if (!sharedAccessConfigured(capabilities) && !othersSeen) return <SharedAccessSetup capabilities={capabilities} />
   const data = people.data
   const attributionReason = capabilities.reasons?.attribution
   if (!data || !capabilityUsable(capabilities.attribution)) {

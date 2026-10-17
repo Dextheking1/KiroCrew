@@ -95,6 +95,29 @@ describe('PeoplePanel', () => {
     expect(screen.getByTestId('people-panel')).toBeInTheDocument()
   })
 
+  it('lists teammates instead of the setup state once someone else has connected', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue({
+      schema_version: 1, directory: { state: 'unavailable' }, usage_available: false,
+      people: [row('p_a', 'Alice', { is_viewer: true }), row('p_b', 'Bob')],
+    })
+    mount()
+    expect(await screen.findByTestId('people-panel')).toBeInTheDocument()
+    expect(screen.getByText('Bob')).toBeInTheDocument()
+    expect(screen.queryByTestId('shared-access-setup')).toBeNull()
+    expect(screen.queryByText(/only you can use it/)).toBeNull()
+  })
+
+  it('keeps the setup state when only the viewer has been seen', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+    people.mockResolvedValue({
+      schema_version: 1, directory: { state: 'unavailable' }, usage_available: false,
+      people: [row('p_a', 'Alice', { is_viewer: true })],
+    })
+    mount()
+    expect(await screen.findByTestId('shared-access-setup')).toBeInTheDocument()
+  })
+
   it('shows one setup empty state when no shared-access path is configured', async () => {
     caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
     people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })

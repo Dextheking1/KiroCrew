@@ -282,6 +282,11 @@ def _reset_setup_paths_for_tests() -> None:
 
 def _tailnet_state(enabled: bool, host: str, identity_trust: bool) -> SetupPathState:
     if not enabled:
+        if identity_trust:
+            # Identity trust with an allowlist only exists to admit tailnet
+            # people, so sharing is set up even where ``tailscale serve`` was
+            # configured by hand rather than through ``dashboard.tailscale.enabled``.
+            return SetupPathState(CapabilityState.AVAILABLE)
         return SetupPathState(CapabilityState.UNAVAILABLE, REASON_NOT_CONFIGURED)
     if not host:
         return SetupPathState(CapabilityState.DEGRADED, REASON_TAILNET_UNREACHABLE)
@@ -322,7 +327,8 @@ def note_tailnet(
     """Record the tailnet path and forwarded attribution the gateway resolved at start.
 
     The path is ``available`` once Tailscale access is on and this machine's
-    tailnet name resolved; ``degraded`` when it is on but no name resolved.
+    tailnet name resolved, or once identity trust with an allowlist is on;
+    ``degraded`` when access is on but no name resolved.
 
     Forwarded attribution is weakened only when identity trust is on, the
     gateway listens on loopback alone (so ``tailscale serve`` is the only way
