@@ -772,6 +772,9 @@
     "sharedCrew.setup_status_degraded": "Status badge on a setup method that is turned on but cannot currently be reached.",
     "sharedCrew.setup_status_not_set_up": "Status badge on a setup method that exists in this build but is not configured.",
     "sharedCrew.setup_status_not_in_build": "Status badge on a setup method this build of the app does not include.",
-    "sharedCrew.setup_guide_link": "Link to the documentation guide for one setup method; {{name}} is the method name."
+    "sharedCrew.setup_guide_link": "Link to the documentation guide for one setup method; {{name}} is the method name.",
+    "sharedCrew.send_race_lost": "Notice above the composer after another collaborator's message in the same session was accepted first: names who sent first, says this user's message was not sent, and that the draft is still in the composer. {{name}} is that person's display name.",
+    "sharedCrew.send_race_send_now": "Button in the lost-send notice that sends the kept draft now, as a new message after the one that was accepted first.",
+    "sharedCrew.send_race_dismiss": "Button in the lost-send notice that hides the notice and keeps the draft in the composer for editing."
   }
 }

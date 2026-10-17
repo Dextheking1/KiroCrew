@@ -9,7 +9,8 @@
  * Nothing here ever resubmits a send.
  */
 import type { QueryClient } from '@tanstack/react-query'
-import type { Activity, SharedCrewActivityFrame, SharedCrewServerFrame } from '../../api/sharedCrew'
+import { noteSendRevision } from '../../api/sendRace'
+import type { Activity, SendState, SharedCrewActivityFrame, SharedCrewServerFrame } from '../../api/sharedCrew'
 import { mergeDecision, mergeWork, type DecisionsResponse, type PresenceResponse, type WorkListResponse } from '../../api/sharedCrewUi'
 
 export const sharedCrewKeys = {
@@ -22,6 +23,7 @@ export const sharedCrewKeys = {
   work: (sessionKey: string) => ['shared-crew', 'work', sessionKey] as const,
   presence: (sessionKey: string) => ['shared-crew', 'presence', sessionKey] as const,
   decisions: (sessionKey: string) => ['shared-crew', 'decisions', sessionKey] as const,
+  sendState: (sessionKey: string) => ['shared-crew', 'send-state', sessionKey] as const,
 }
 
 /** Fold one server frame into the cache. `data` is the frame the gateway sent. */
@@ -59,6 +61,14 @@ export function applySharedCrewFrame(queryClient: QueryClient, data: unknown): v
     case 'shared_crew.capacity':
       queryClient.setQueryData(sharedCrewKeys.capacity, frame.capacity)
       return
+    case 'shared_crew.send_state': {
+      if (!frame.session_key) return
+      noteSendRevision(frame.session_key, frame.revision)
+      const value: SendState = { schema_version: frame.schema_version, session_key: frame.session_key, revision: frame.revision, last: frame.last ?? null }
+      queryClient.setQueryData<SendState | null>(sharedCrewKeys.sendState(frame.session_key), prev =>
+        prev && prev.revision > value.revision ? prev : value)
+      return
+    }
   }
 }
 

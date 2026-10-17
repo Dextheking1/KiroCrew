@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, type MutableRefObject, type Dispatch, type SetStateAction, type RefObject } from 'react'
 import { refusalMessage } from '../shared-crew/overloadCopy'
+import { baseRevisionFor, clearSendRaceNotice, isSendRaceConflict, sendIdempotencyKey, setSendRaceNotice } from '../../../api/sendRace'
 import type { CapacityResponse } from '../../../api/sharedCrew'
 import type { UseMessageQuote } from '../../../chat-core/composer/useMessageQuote'
 import { store, type AppDispatch } from '../../../store'
@@ -8,7 +9,7 @@ import { expandAll as expandPasteTokens, carryPastes, mergeCarriedDraft, type Pa
 import { mergeSessionRefs, type SessionRef } from '../../../utils/sessionRefs'
 import type { PickedFileTokens } from './composerFileMentions'
 import { queuedSendStash } from '../../../hooks/useQueuedMessageActions'
-import { syncSlotRunningFromServer, capturePendingAskId, createSlot, appendMessage, selectComposerBusy, startLocalTurn, endLocalTurn, appendSlotMessage, setSlotRunning, selectSendConfirmed, markSendUnconfirmed, confirmOptimisticSend, ageFolderSuggestion } from '../../../store/chatSlice'
+import { syncSlotRunningFromServer, capturePendingAskId, createSlot, appendMessage, selectComposerBusy, startLocalTurn, endLocalTurn, appendSlotMessage, setSlotRunning, selectSendConfirmed, markSendUnconfirmed, confirmOptimisticSend, resolveOptimisticSteer, ageFolderSuggestion } from '../../../store/chatSlice'
 import { confirmedDelivered } from '../../../utils/sendDelivery'
 import { mintSendId, sendTurn } from '../../../chat-core/transport/sendTurn'
 import type { MessageQuote } from '../../../chat-core/composer/messageQuote'
@@ -132,7 +133,9 @@ export function useComposerSend({
   // intercepted locally, transport error, refused). UI reactions all stay
   // inside send(); the verdict exists for callers that persist state only on
   // delivery (ArtifactPanel's submit-to-chat batch marks comments sent on it).
-  const send = useCallback(async (optionText?: string, targetSlot?: string, steerNow?: boolean | 'auto', isolated = false): Promise<boolean> => {
+  // `sendNow`: the deliberate Send now after this tab lost a send race. It is
+  // a new submission at the current revision and never steers.
+  const send = useCallback(async (optionText?: string, targetSlot?: string, steerNow?: boolean | 'auto', isolated = false, sendNow = false): Promise<boolean> => {
     // Defense-in-depth: ChatInput already gates Send/Optimize buttons and
     // the keyboard Enter shortcut on `connected`, but a future caller (a
     // programmatic dispatch from a hotkey, a follow-up option click, an
@@ -633,8 +636,9 @@ export function useComposerSend({
       message: turn.wire,
       slot: slot ?? undefined,
       meta: metaPayload,
-      steer: steerNow,
+      steer: sendNow ? undefined : steerNow,
       colorTheme: colorThemeRef.current,
+      race: { baseRevision: baseRevisionFor(slot), sendNow, idempotencyKey: sendIdempotencyKey(sendId) },
     })
     const { body } = receipt
     // - `transport-error`: the fetch rejected. Restore and report only when
@@ -739,6 +743,19 @@ export function useComposerSend({
         queuedSendStash.set(body.queue_id, { raw, files: stagedFilesAtSend, sent: turn.wire, aliases: sentSlotTokens, ...(sentQuote ? { quote: sentQuote } : {}) })
       }
     }
+    if (receipt.status === 'refused' && slot && !isolated && isSendRaceConflict(receipt.body)) {
+      // A collaborator's send was accepted first. Nothing of this one was
+      // accepted, so its bubble goes and the draft returns to the composer;
+      // the notice above the composer names who sent first and offers Send
+      // now. Not an error row: nothing failed, and an overload refusal (below)
+      // reads differently on purpose.
+      setSendRaceNotice(slot, receipt.body)
+      dispatch(resolveOptimisticSteer({ slot, sendId, outcome: 'queued' }))
+      dispatch(endLocalTurn(slot))
+      restoreComposerAfterFailedSend()
+      return false
+    }
+    if (receipt.status !== 'refused' && slot) clearSendRaceNotice(slot)
     if (receipt.status === 'refused') {
       // FRAMED like the steer's refusal (and ChatEmbed's): a raw backend reason
       // ("slot agent mismatch") reads as the agent erroring mid-work, not as

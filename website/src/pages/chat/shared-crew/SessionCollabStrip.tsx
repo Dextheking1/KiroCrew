@@ -8,6 +8,7 @@ import { capabilityUsable } from '../../../api/sharedCrewUi'
 import {
   useSessionDecisions,
   useSessionPresence,
+  useSessionSendState,
   useSessionWork,
   useSharedCrewCapabilities,
   useSharedCrewCapacity,
@@ -35,6 +36,8 @@ export function SessionCollabStrip({ sessionKey, typing }: { sessionKey: string 
   const work = useSessionWork(sessionKey, queueOn)
   const capacity = useSharedCrewCapacity(queueOn)
   const decisions = useSessionDecisions(sessionKey, attributionOn)
+  // The revision this tab's next send is based on (first submit wins).
+  useSessionSendState(sessionKey, presenceOn || attributionOn)
   const { noteTyping } = usePresenceReporter(sessionKey, presenceOn)
   useEffect(() => typing?.subscribe(noteTyping), [typing, noteTyping])
 
