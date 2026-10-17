@@ -257,9 +257,9 @@ function writeInviteExpanded(expanded: boolean): void {
  * (or in the query cache) by itself.
  *
  * **`published: null` is not `false`.** An undeterminable serve state arrives as
- * the `occupied` step, so the card renders the manual command (see the
- * `occupied` branch below, which prints `kirocrew tailnet up`) instead of a
- * publish button that would overwrite a mount it could not identify.
+ * the `occupied` step, so the card renders the manual `serve_command` (see the
+ * `occupied` branch below) instead of a publish button that would overwrite a
+ * mount it could not identify.
  *
  * **Setup is one explicit mutation, even across a gateway restart.** The click
  * itself is the operator's consent to every in-scope step, so the mutation may
@@ -510,20 +510,23 @@ export function TailnetMobileCard() {
           ) : null}
 
           {/* The command `occupied_body` tells the user to run. Without this the
-              copy ("Publish it yourself if you are sure it is safe to
-              overwrite") is an instruction with no means to follow it — and
-              `occupied` is the ONE state whose remedy is deliberately manual,
-              because publishing here would replace whatever Tailscale is
-              already serving. No copy button: the row already carries two, and
-              `max-two-buttons-per-row` counts a link styled as one.
+              copy ("publish it yourself if it is safe to overwrite") is an
+              instruction with no means to follow it — and `occupied` is the ONE
+              state whose remedy is deliberately manual, because publishing here
+              would REPLACE whatever Tailscale is already serving.
 
-              No `break-all` on this one, unlike the origin and detail spans: it
-              is a FIXED 19-character command, so it cannot overflow even at
-              320px, and breaking a command mid-token would only make it harder
-              to read. */}
-          {step === 'occupied' ? (
+              It renders `serve_command`, the same `tailscale serve` publish the
+              gateway would run (built server-side so it names the real port),
+              not the `kirocrew tailnet up` shown here before — that command runs
+              the very publish path that just refused, so it could never resolve
+              the conflict. No copy button: `occupied` reads as a hand-run remedy
+              and `max-two-buttons-per-row` counts a link styled as one.
+
+              `break-words`, matching the `untrusted_cli` command span: a
+              host:port target can overflow at 320px. */}
+          {step === 'occupied' && data.serve_command ? (
             <p className="mt-2 text-muted">
-              <code className="select-all">kirocrew tailnet up</code>
+              <code className="select-all break-words min-w-0">{data.serve_command}</code>
             </p>
           ) : null}
 

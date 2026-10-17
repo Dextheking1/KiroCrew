@@ -284,11 +284,21 @@ describe('TailnetMobileCard — the daemon detail line', () => {
 })
 
 describe('TailnetMobileCard — occupied', () => {
-  it('renders the manual command its copy tells the operator to run', async () => {
-    // Without this the body ("Publish it yourself if you are sure it is safe to
-    // overwrite") is an instruction with no means to follow it.
-    await mount(data({ step: 'occupied' }))
-    expect(screen.getByText('kirocrew tailnet up')).toBeInTheDocument()
+  it('renders the serve_command its copy tells the operator to run', async () => {
+    // The body ("run the command below to point this address at the dashboard")
+    // is an instruction with no means to follow it unless the command is shown —
+    // and it must be the real `tailscale serve` publish, not `kirocrew tailnet
+    // up`, which re-runs the publish path that just refused.
+    await mount(
+      data({
+        step: 'occupied',
+        serve_command: 'tailscale serve --bg --https=443 http://127.0.0.1:7788',
+      }),
+    )
+    expect(
+      screen.getByText('tailscale serve --bg --https=443 http://127.0.0.1:7788'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('kirocrew tailnet up')).toBeNull()
     // And no publish button: publishing here would replace whatever Tailscale is
     // already serving, which is exactly what this step exists to avoid.
     expect(screen.queryByRole('button', { name: /Set up & show QR/ })).toBeNull()
