@@ -908,20 +908,37 @@ Tailscale daemon:
 | Host | Through `tailscale serve` | Gateway bound to its tailnet address |
 |---|---|---|
 | Linux, `tailscaled` as root or its own user | Each person is named | Each person is named |
-| Linux, `tailscaled` as the gateway's user | Allowed people get in, shown as Unknown | Each person is named |
-| macOS | Allowed people get in, shown as Unknown | Each person is named |
-| Windows | Allowed people get in, shown as Unknown | Each person is named |
+| Linux, `tailscaled` as the gateway's user | Allowed people get in, shown as Unattributed | Each person is named |
+| macOS | Allowed people get in, shown as Unattributed | Each person is named |
+| Windows | Allowed people get in, shown as Unattributed | Each person is named |
 
 On a Mac, then, teammates on the allowlist can use the Crew through
-`tailscale serve`, but their sessions and messages read Unknown, and
+`tailscale serve`, but their sessions and messages read Unattributed, and
 Settings > People says that people cannot be named on this machine. Anyone not
 on the list is refused. `GET /api/shared-crew/capabilities` reports the same
 thing: `attribution` is `unavailable` with reason `platform_unprovable` (macOS,
 Windows) or `daemon_same_user`, and `degraded` with `daemon_not_found` when no
 `tailscaled` was running when the gateway started.
 
-Where people are named, each session shows its creator, each message its
-author, and the People settings page lists who has connected. To give every
+Where people are named, each session shows its creator (You for yourself), each
+message its author, and the People settings page lists who has connected. The
+session list shows All sessions by default; the filter above it narrows to Mine,
+one person or Unattributed, and remembers your choice for this Crew. A session a
+schedule or a webhook started reads `Scheduled: <job name>` or `Webhook: <name>`,
+never a person. Until anyone else connects and no sharing path is set up, the
+Crew is personal: the list shows no creator names and no filter.
+
+Who can connect is managed in Tailscale, not in Kiro Crew: Settings > People is
+read-only and has no invite, remove or role controls. Teammates who reach a
+cloud-hosted Crew through AWS Systems Manager are governed by IAM and Session
+Manager; their connections arrive as local connections, so their work reads
+Unattributed. A Crew managed through an organization Console shows its Team
+Access list and the Console link instead, with no Tailscale or Remote Control
+setup. A team setup that cannot be used (for example both a Console team and
+Tailscale sharing, or an unreadable allowlist) turns teammate access off and
+Settings > People shows the reason code; fix the setup and the Crew picks it up.
+
+To give every
 person a fair share of the host, turn on fair admission:
 
 ```bash

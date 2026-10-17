@@ -179,6 +179,60 @@ authoritative assigned-user directory. Per-person `usage` is `null`, and
 `usage_available` false, until the admission layer registers a reader
 (`people.register_usage_source`).
 
+### People and setup modes
+
+`crew_mode` puts every Crew in exactly one mode, served by `GET
+/api/shared-crew/mode` (dashboard user only, 403 otherwise). The People surface,
+setup guidance and session list follow it, and the modes never mix:
+
+| Mode | When | People shows | Session list |
+|---|---|---|---|
+| `personal` | no setup path is available or degraded, and no principal but the local operator viewing has been seen | setup guidance with each adapter's honest status, personal Remote Control | no creator bylines, no All/Mine control |
+| `network` | a Tailscale or Systems Manager path is on, or a network person or another operator has been seen | who has been seen (labelled as seen), each adapter read-only, personal Remote Control | bylines, filter |
+| `console` | the enterprise provider backs a sign-in seam (`human_credentials` or `human_sign_in`) and `individual_grants` | read-only Team Access (people seen signing in) and the Console link; no share, Remote Control or Tailscale setup | bylines, filter |
+| `invalid` | a team configuration exists but is refused | one error state with the reason code | bylines, filter |
+
+A team configuration is refused (`crew_mode.team_config_problem`) with a
+machine-readable reason:
+
+| Reason | Cause |
+|---|---|
+| `network_identity_config_unreadable` | the tailnet login allowlist could not be read (`config.resolution.tailnet_identity_unknown`, recorded by `access.note_tailnet`) |
+| `console_provider_unusable` | the enterprise provider is composed but no slot is usable (`provider_failed`, `test_provider_refused`); `cause` names which |
+| `console_capability_missing` | a sign-in or grant slot failed or was refused, or sign-in is on with no per-person grants; `capability` and `cause` name it |
+| `conflicting_team_modes` | a Console team and a network sharing path are both on |
+
+The gateway logs the refusal at start (`crew_mode.validate_at_startup`, from
+`wiring.install`) and the enterprise gate middleware refuses every shared-access
+principal (tailnet or enterprise provenance) with 403 `{error:
+team_config_invalid, reason}` while it holds. The local operator keeps working and
+sees the error in People. An invalid team setup never falls back to personal mode,
+and the browser treats an unreadable mode route as an error, not as personal. A
+provider that marks itself test-only reaching a production gateway is
+`console_provider_unusable`.
+
+The mode body: `mode`, `crew_id` (the Crew binding's id, else the gateway id; it
+keys the browser's remembered list filter), `viewer`, `team_config` (`state`
+`not_configured` | `valid` | `invalid`, with `reason`, `capability`, `cause`),
+`console` (`state` `available` | `not_offered` | `invalid`, `url`), `adapters`
+(the setup paths), `systems_manager_attribution` (always `unavailable`) and
+`workload_identity_ref`.
+
+The Console link comes only from the composed provider's optional
+`console_link()`, never from config, a request or a peer, and only in `console`
+mode. `crew_mode.validate_console_link` accepts an absolute `https` URL to a named
+host on the default port with no credentials, whitespace or control characters,
+and refuses an address literal, a single-label host and `*.localhost`; the browser
+re-checks it. The Tailscale and Session Manager links are fixed public
+documentation pages.
+
+AWS Systems Manager governs its path through IAM and Session Manager. A port-forwarded
+Session Manager connection reaches the Crew as a local connection, and no verified
+connection-to-principal binding exists in this build, so its work is Unattributed.
+Identity is never inferred from the OS user, a loopback source or a typed label.
+
+People has no invite, revoke or role control in any mode.
+
 ## 3. Session attribution and records
 
 `SessionAttribution` is stored under the metadata-line key
@@ -195,6 +249,10 @@ reads it back on every hydration purpose. No writer lists the key as owned, so a
 save that does not write it carries the stored value through
 `history.carry_unowned_metadata`, and the whole line is replaced atomically by the
 existing full save.
+
+Missing human attribution is displayed as Unattributed on every surface (session
+list, filters, bylines, People, decisions and presence). Storage keeps the
+`unknown` principal kind and the `p_unknown` id; nothing is rewritten.
 
 A session with no `attribution` key reads as `legacy_missing` with an Unknown creator.
 It stays legacy: the codec never writes a legacy value back, no stamp replaces it,
@@ -225,6 +283,25 @@ inherits it). Channel rows name the bounded Unknown principal and automation row
 automation principal (`stamp_principal_author`). A message written before authors
 reads as Unknown (`attribution.message_author`).
 
+Trigger attribution. A session a schedule, a webhook or the Crew started names
+that trigger instead of a person (`trigger.trigger_of`): `created_by` of
+`cron:<job id>` (stamped only for a transport-attested cron caller), a key in the
+`cron` or `hook` namespace in either separator spelling, or slot origin `system`.
+The public attribution then carries `trigger` `{kind: scheduled | webhook |
+system, ref, name, configured_by}`, and never for a human creator. The UI reads
+`Scheduled: <job name>`, `Webhook: <name>` or `Crew automation`. The job name
+comes from the cron service's in-memory snapshot (`wiring.cron_job_namer`), so a
+label costs no I/O; without it the label omits the name. `configured_by` is the
+verified principal who configured the trigger; no schedule or webhook records one
+in this build, so it is `null`, and the UI never fills it with the viewer or the
+job's owner session. A trigger is a label derived from editable records and grants
+nothing.
+
+External attribution output is suspended pending product reconciliation: no
+tool call, outbound post or other downstream system receives "Requested by
+<person>" text. The human stays in Crew records; a downstream system sees only
+the Crew. `test_no_external_requested_by_attribution_is_emitted` pins it.
+
 ### Session list query
 
 `session_query.query_sessions` runs over the whole persisted catalog: machine
@@ -239,6 +316,17 @@ that has never been saved is not in it. The route answers only the dashboard
 user, and refuses an app token or an internal caller with 403, so it reaches no
 session the existing list does not.
 
+The `unattributed` filter (the older `unknown` value is accepted and echoed as
+`unattributed`) lists sessions with no human creator and no named trigger. A
+triggered session lists under All with its trigger. Filters change visibility
+only; every session stays reachable with All.
+
+The browser shows All by default, Mine, each person seen and Unattributed, labels
+the verified viewer You, and remembers the choice per Crew in local storage keyed
+by the mode route's `crew_id` (`kc.sharedCrew.creatorFilter.<crew id>`). A
+personal Crew, or one that cannot attribute, hides the control and the bylines
+(`useSharedCrewListView`, `SharedCrewBylineContext`).
+
 ### Audit
 
 `ActionRecord` audits a consequential shared action: session create, message,
@@ -252,6 +340,17 @@ initiator's principal id, `operation` is `shared_crew.<action_type>`, `resources
 is the target, `request_id` the correlation id, and `metadata` holds the action
 ids and a reduced principal (id, kind, provenance, login). That log's HMAC chain,
 size rotation and age retention bound it; there is no second audit store.
+
+Every record also carries, in `ActionRecord.extra` and the event metadata,
+`workload_identity_ref`: the Crew workload identity reference from the Crew
+binding (`crew_mode.crew_identity_refs`), `unavailable` when none is composed, so
+the human and the Crew workload are named separately. Work no person started (a
+system or Unknown initiator in a `cron` or `hook` session) adds `trigger` `{kind,
+ref, name}`; a human initiator never gets one. The causal join is the record's
+`target` (the work id for work actions), `session_key`, `turn_id`,
+`causal_action_id` and initiator id; `audit.joins_work` checks a record against
+the accepted work it acted on, and the initiator stays distinct from the work's
+owner (`budget_key`) when a collaborator acts on someone else's work.
 
 The write is the log's fail-closed `critical` mode, off the event loop, bounded by
 `AUDIT_TIMEOUT_SECONDS`. `record_action` returns whether the record is confirmed.
@@ -632,8 +731,9 @@ work uses `AcceptedWork.to_public_dict` (no idempotency scope, lease or fencing 
 
 ### Session list filter
 
-`SessionQuery.from_query` parses `creator` (`all`, `mine`, `unknown` or a principal
-id), `q`, an opaque `cursor` and `limit` (clamped to `SESSION_PAGE_MAX`). The filter
+`SessionQuery.from_query` parses `creator` (`all`, `mine`, `unattributed`, its older
+spelling `unknown`, or a principal id), `q`, an opaque `cursor` and `limit` (clamped
+to `SESSION_PAGE_MAX`). The filter
 runs on the server before pagination. `mine` resolves against the authenticated
 viewer, and never matches for an Unknown viewer. The filter is discovery, not access
 control. `SessionPage.total_matching` counts every session the filter passes across

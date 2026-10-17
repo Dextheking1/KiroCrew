@@ -622,3 +622,24 @@ class TestAudit:
             target="w1",
         )
         assert not audit.joins_work(other, work)
+
+
+def test_no_external_requested_by_attribution_is_emitted():
+    """Human attribution stays in Crew records; nothing tells a downstream system who asked.
+
+    External "Requested by <person>" output is suspended pending product
+    reconciliation, so no source file under ``src/kiro_crew`` may build one.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "src" / "kiro_crew"
+    pattern = re.compile(
+        r"[\"']Requested by\b|requested_by_human|on_behalf_of_human", re.IGNORECASE
+    )
+    hits = [
+        str(p.relative_to(root))
+        for p in root.rglob("*.py")
+        if pattern.search(p.read_text(encoding="utf-8", errors="replace"))
+    ]
+    assert hits == []
