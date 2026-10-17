@@ -671,6 +671,7 @@ would otherwise clobber your pin.
 | `kirocrew-ledger-conductor.json` | generated; your `allowedTools` entries are carried forward | every gateway start |
 | `kirocrew-pipeline-conductor.json` | generated; your `allowedTools` entries are carried forward | every gateway start |
 | `kirocrew-security-conductor.json` | generated; your `allowedTools` entries are carried forward | every gateway start |
+| `kirocrew-mate-conductor.json` | generated; your `allowedTools` entries are carried forward. The agent a crewmate's chat runs on: a conductor (no file-writing tool, no shell, no user MCP server) whose charter is shipped in source and never read from this file | every gateway start |
 | `kirocrew-knowledge.json` | generated | every gateway start |
 | `kirocrew-research.json` | generated | every gateway start |
 | `kirocrew-dashboard-manager.json` | generated | every gateway start (the subagent a crewmate hands page work to) |

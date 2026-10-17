@@ -95,9 +95,11 @@ import {
 } from '../KiroCrewAgentsPage'
 
 /** The template a new crewmate is built from unless Advanced settings picks
- *  another: the built-in kiro agent every install ships, which leads the
- *  "Built from" list. The folded card never names it. */
-export const DEFAULT_CREWMATE_TEMPLATE = 'kirocrew'
+ *  another: the mate conductor every install ships, which leads the "Built
+ *  from" list even though the catalog withholds it from the template rows. Kept
+ *  equal by hand to the backend's `change_card_catalog.DEFAULT_CREWMATE_TEMPLATE`.
+ *  The folded card never names it. */
+export const DEFAULT_CREWMATE_TEMPLATE = 'kirocrew-mate-conductor'
 /** The id the Advanced settings row's `aria-controls` points at. */
 const ADVANCED_ID = 'crewmate-create-advanced'
 

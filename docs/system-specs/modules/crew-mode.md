@@ -975,7 +975,8 @@ The first crewmate (config key `mate`, `agent_files.ASSISTANT_MEMBER_NAME`,
 shown as Mate while its `display_name` is empty) is an ordinary crewmate. Every
 install, fresh or upgraded, creates it once (`agent_materialization/first_crewmate.create_first_crewmate_once`,
 called from `rebuild_agent_config`) bound to the same template a user-created crewmate
-gets (the configured `agent.default_agent`, else `kirocrew`), with its own private V2
+gets (the configured `agent.default_agent`, else the mate conductor,
+`kirocrew-mate-conductor` -- see "The mate conductor" below), with its own private V2
 store and its own workspace from the start: the row is built in memory, given a store by
 `provision_member_memory` (the ordinary, collision-reserving identity: a deleted
 predecessor's retained DM binding or another legacy member's slug is never inherited),
@@ -1002,11 +1003,58 @@ The only thing that sets the first crewmate apart is its first welcome (see the
 first-welcome paragraph below), and it is the crewmate the Crewmates page opens when there
 is no previously used conversation.
 
+### The mate conductor
+
+Every crewmate's chat runs on `kirocrew-mate-conductor`
+(`agent_files.MATE_CONDUCTOR_AGENT_NAME`), a generated conductor spec installed by
+`agent_materialization/conductor_agents._install_mate_conductor_agent` on every gateway
+start beside the goal, pipeline and security conductors
+([RFC](../../request-for-change/rfc-mate-owned-agent-config.md) §5.0, migration step 1).
+It is the default both doors create from (`change_card_catalog.DEFAULT_CREWMATE_TEMPLATE`
+and the New Crewmate dialog's own `DEFAULT_CREWMATE_TEMPLATE`, kept equal by hand) and the
+first crewmate's implicit template (`first_crewmate._ORDINARY_TEMPLATE`); the "Built from"
+picker withholds it (`agent_catalog._BACKGROUND_ONLY_FILES`) so it is never offered as a
+second default beside `kirocrew`, and the dialog prepends its constant to the list so the
+default still shows, labelled as the default.
+
+What makes it a conductor is the spec, not the prose: `fs_read` and `web_fetch` are its
+only builtins beyond `session`/`report`/`tool_search` -- no `fs_write`, no `code`, and
+unlike its siblings no `execute_bash` at all -- and its `mcpServers` are narrowed to the
+Crew servers (`kirocrew-core`, `-dashboard`, `-work`, `-cron`, `-guide`, `-mate`), so a
+user's own MCP server never reaches a crewmate's conversational turn; those reach the
+worker it dispatches (steps 2 and 3 of the RFC). Its grants follow the conductor rule
+(create or read, never mutate a peer's state) plus the dispatch verbs (`spawn_*`), the
+memory reads, the session's own cron verbs and the guide and member verbs the default
+template auto-approves; they are listed in `conductor_agents._SHIPPED_GRANT_HISTORY` so a
+user's own entries survive a rebuild. The spec's `permissions` block inherits the
+operator's `deny`/`ask` (`kas_policy="inherit_narrowing"`), as the research spec does.
+
+Its charter is `agent._MATE_CONDUCTOR_SYSTEM_PROMPT` and reaches the session as the
+`[AGENT SYSTEM PROMPT]` block straight from source
+(`context_assembly.agent_spec._resolve_agent_prompt`): the spec file's `prompt` is the
+native stub, `~/.kiro/crew/prompt.md` does not apply to it, and so nothing on disk changes
+what a mate runs. It is still classed as a Crew default
+(`agent_files.is_kirocrew_default_agent`), so it keeps the workspace identity block, the
+docs pointer, the crew context and the global skill catalog a crewmate's chat has always
+had. The charter says what the spec enforces: the mate plans, dispatches to workers
+(`spawn_run`) and answers, and never runs a task inline, so a message that arrives while
+workers run is answered at once. Pinned by `test/test_mate_conductor_agent.py`.
+
+A crewmate's unnamed `spawn_run` does not inherit this spec. A member's unnamed spawn
+runs the member's own template (`subagent_parts/agent_policy._inherited_member_agent`,
+and `subagent_manager/run.py`'s `info.agent or ...` fallback), which for a
+`kirocrew`-bound member is the full default again; a dispatch-only conductor cannot be
+its own worker, so both sites read `agent_policy.dispatch_template_for`, which maps the
+mate conductor to `kirocrew-worker` and leaves every other template alone. The route
+moves to the source-defined worker in RFC step 3, together with the per-mate file.
+Pinned by `test/test_spawn_inherited_agent_admission.py`.
+
 Guides, change cards, `find_ui` and `search_docs` are platform capabilities of the
-default `kirocrew` template, every crewmate built from it, the worker derived from it, and
-every dashboard session on them, on the always-mounted `kirocrew-guide` server
-([MCP architecture](../../architecture/mcp.md)). The conductor and background templates
-keep their own narrow server sets and do not mount it. The guide and card tools answer
+default `kirocrew` template, the mate conductor every crewmate is built from, the worker
+derived from the default, and every dashboard session on them, on the always-mounted
+`kirocrew-guide` server ([MCP architecture](../../architecture/mcp.md)). The goal,
+pipeline and security conductors and the background templates keep their own narrow
+server sets and do not mount it. The guide and card tools answer
 only a turn the user sent from the dashboard; a message from Slack or another channel is
 refused even when its conversation is mirrored into a dashboard slot, and a turn the person
 did not send (a loop wake, a schedule, `session_send`, a subagent completion) cannot start a
@@ -1123,7 +1171,7 @@ Undo sends the mode the card wrote, and a profile save that landed in between an
 of a card made from an unset mode restores the unset-effective mode explicitly, since the
 route accepts no `""`.
 Crewmate proposals are
-`crewmate.create` cards; the card builds the crewmate from `kirocrew`
+`crewmate.create` cards; the card builds the crewmate from the mate conductor
 (`change_card_catalog.DEFAULT_CREWMATE_TEMPLATE`, the Crewmates page's own default)
 and sends `first_greeting`, so the crewmate opens its chat by asking about the
 proposed goal exactly as one created on the Crewmates page does (see the goal
@@ -1439,7 +1487,7 @@ dashed roster card (`pages.kiroCrewAgentsPage.add_crew_member` in
 has no separate create sheet. Both doors use the
 existing owner-gated `POST /api/agents`; editing an existing member still uses
 the crew manager. The crew manager's door opens with Advanced settings unfolded
-and `kirocrew` as the default **Built from** (labelled as the default), and shows
+and the mate conductor as the default **Built from** (labelled as the default), and shows
 no first-greeting hint, since it asks for none. What happens after a create
 depends on the door. On the Crewmates page the card sends `first_greeting`, the
 page re-reads the roster and opens the new crewmate's verified thread (a failed
@@ -3200,9 +3248,9 @@ Parent-change and impact previews use the server's redacted projection.
   masked for every caller but the owner. An already-stored name is not renamed
   retroactively, which is why the owner keeps reading it verbatim: a name must
   be legible to be renamed.
-- `kirocrew`, `kirocrew-conductor`, `kirocrew-pipeline-conductor` and
-  `kirocrew-security-conductor` are in `UNADVERTISED_AGENTS`, so they never
-  appear in a rendered roster.
+- `kirocrew`, `kirocrew-conductor`, `kirocrew-pipeline-conductor`,
+  `kirocrew-security-conductor` and `kirocrew-mate-conductor` are in
+  `UNADVERTISED_AGENTS`, so they never appear in a rendered roster.
 
 ## Tests that pin this
 

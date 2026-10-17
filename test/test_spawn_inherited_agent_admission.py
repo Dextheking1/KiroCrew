@@ -60,6 +60,23 @@ def test_inheritedMemberAgent_selectionShapes_namesOnlyAMembersTemplate(
     assert _inherited_member_agent(kind, template) == expected
 
 
+def test_inheritedMemberAgent_mateConductorMember_dispatchesTheWorkerSpec() -> None:
+    """A member bound to the mate conductor must not inherit it for an unnamed
+    spawn: that spec is dispatch-only (no write tool, no shell), so a worker on
+    it could not do the work. It maps to ``kirocrew-worker``; every other
+    template still inherits itself (rfc-mate-owned-agent-config.md §6 step 1)."""
+    from kiro_crew.agent_files import MATE_CONDUCTOR_AGENT_NAME
+    from kiro_crew.subagent import dispatch_template_for
+
+    assert dispatch_template_for(MATE_CONDUCTOR_AGENT_NAME) == "kirocrew-worker"
+    assert dispatch_template_for("kirocrew") == "kirocrew"
+    assert dispatch_template_for("repobot") == "repobot"
+    assert _inherited_member_agent("member", MATE_CONDUCTOR_AGENT_NAME) == "kirocrew-worker"
+    # A template-kind parent on the conductor is not a member and inherits nothing
+    # through this helper, as before.
+    assert _inherited_member_agent("template", MATE_CONDUCTOR_AGENT_NAME) == ""
+
+
 def test_inheritedMemberAgent_coldProjectCache_namesNothing(tmp_path) -> None:
     clear_project_agent_cache()
     assert _inherited_member_agent("member", "repobot", str(tmp_path)) == ""

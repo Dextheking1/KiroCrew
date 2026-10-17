@@ -240,6 +240,7 @@ from kiro_crew.subagent_parts import start_pricing as _start_pricing
 from kiro_crew.subagent_parts import terminal_surface as _terminal_surface
 from kiro_crew.subagent_parts.agent_policy import (  # noqa: F401
     _AGENT_GLOB_RE,
+    _DISPATCH_TEMPLATE_FOR,
     _MAX_AVAILABLE_AGENTS_GLOB_CHARS,
     _MAX_AVAILABLE_AGENTS_GLOBS,
     _MAX_AVAILABLE_IN_ERROR,
@@ -268,6 +269,7 @@ from kiro_crew.subagent_parts.agent_policy import (  # noqa: F401
     _vet_parent_available_agents,
     _vet_spawn_governance,
     agent_matches_allowlist,
+    dispatch_template_for,
     parent_project_dirs,
     parent_spawn_allowlists,
     parent_spawn_policy,

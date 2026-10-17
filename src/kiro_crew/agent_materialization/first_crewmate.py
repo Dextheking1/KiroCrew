@@ -13,13 +13,17 @@ kickoff (:mod:`kiro_crew.dashboard.mate_welcome`).
 from __future__ import annotations
 
 from kiro_crew import agent as agent_mod
-from kiro_crew.agent_files import ASSISTANT_MEMBER_NAME
+from kiro_crew.agent_files import ASSISTANT_MEMBER_NAME, MATE_CONDUCTOR_AGENT_NAME
 
 #: One-time marker for :func:`create_first_crewmate_once`, under the data home.
 FIRST_CREWMATE_MARKER = "mate_member_created.json"
 
-#: The template a crewmate gets when the config names no default one.
-_ORDINARY_TEMPLATE = "kirocrew"
+#: The template a crewmate gets when the config names no default one: the mate
+#: conductor (rfc-mate-owned-agent-config.md §5.0, migration step 1). Read off
+#: ``agent_files`` rather than ``change_card_catalog.DEFAULT_CREWMATE_TEMPLATE``,
+#: which names the same spec: that module is dashboard-facing (change cards) and
+#: importing it here would pull dashboard code into boot-time crewmate creation.
+_ORDINARY_TEMPLATE = MATE_CONDUCTOR_AGENT_NAME
 
 
 def _default_template(*sections: object) -> str:

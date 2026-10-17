@@ -46,6 +46,7 @@ from typing import Any
 
 from kiro_crew import guide_catalog
 from kiro_crew import member_goals as _goals
+from kiro_crew.agent_files import MATE_CONDUCTOR_AGENT_NAME
 from kiro_crew.config.sections import (
     DEFAULT_MODEL,
     MEMBER_APPROVAL_MODE_UNSET_EFFECTIVE,
@@ -93,8 +94,16 @@ OP_UNDO = "undo"
 
 #: The crewmate template a proposed crewmate is built from: the one the
 #: Crewmates page's New crewmate card builds from (``NewCrewmateDialog.tsx``
-#: ``DEFAULT_CREWMATE_TEMPLATE``).
-DEFAULT_CREWMATE_TEMPLATE = "kirocrew"
+#: ``DEFAULT_CREWMATE_TEMPLATE``, kept equal by hand -- the two are the one
+#: user-visible default and the API payload that default sends).
+#:
+#: The mate conductor, not ``kirocrew`` (rfc-mate-owned-agent-config.md §5.0
+#: and migration step 1): a crewmate's chat is a conductor that plans and
+#: dispatches, and the full default template is the shape that did the work
+#: itself. ``first_crewmate._ORDINARY_TEMPLATE`` names the same spec for the
+#: first crewmate; the "Built from" picker withholds it so it is never offered
+#: as a second default beside ``kirocrew``.
+DEFAULT_CREWMATE_TEMPLATE = MATE_CONDUCTOR_AGENT_NAME
 
 REASON_MAX_CHARS = 500
 _NAME_MAX = 128

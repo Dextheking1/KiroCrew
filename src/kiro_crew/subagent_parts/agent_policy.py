@@ -11,6 +11,7 @@ import re
 from typing import TYPE_CHECKING
 
 from kiro_crew.agent_discovery import AgentsDirMemo
+from kiro_crew.agent_files import MATE_CONDUCTOR_AGENT_NAME, WORKER_AGENT_FILENAME
 
 if TYPE_CHECKING:
     import os
@@ -47,13 +48,16 @@ if TYPE_CHECKING:
 #: Agent names a roster never suggests: the host default and the conductors are
 #: reached by OMITTING ``agent``, not by naming one. Every roster inherits this
 #: as :func:`visible_agent_names`' default ``exclude``, so no other module names
-#: the set and it cannot drift when a reserved name appears.
+#: the set and it cannot drift when a reserved name appears. The mate conductor
+#: is a conductor too -- the one a crewmate's chat runs on -- and a worker
+#: dispatched onto it would be a conductor with no one to talk to.
 UNADVERTISED_AGENTS = frozenset(
     {
         "kirocrew",
         "kirocrew-conductor",
         "kirocrew-pipeline-conductor",
         "kirocrew-security-conductor",
+        "kirocrew-mate-conductor",
     }
 )
 
@@ -302,12 +306,38 @@ def _validate_agent(requested: str, project_dir: str = "") -> tuple[str, str, st
     )
 
 
+#: The template a spawn runs when its parent's template is the mate conductor and
+#: the caller named no agent. A member's unnamed spawn inherits the member's own
+#: template (:func:`_inherited_member_agent`, and the ``info.agent or
+#: execution.template_id`` fallback in ``subagent_manager.run``), which for a
+#: ``kirocrew``-bound member is the full default again. A member bound to the
+#: mate conductor must not inherit it: that spec is dispatch-only -- no write
+#: tool, no shell -- so a worker running it could not do the work it was spawned
+#: for. It maps to ``kirocrew-worker``, the default template's mirror, which is
+#: what carries the user's servers until the per-mate worker lands
+#: (rfc-mate-owned-agent-config.md §6, steps 1-3). Every other template inherits
+#: unchanged.
+_DISPATCH_TEMPLATE_FOR: dict[str, str] = {
+    MATE_CONDUCTOR_AGENT_NAME: WORKER_AGENT_FILENAME[: -len(".json")],
+}
+
+
+def dispatch_template_for(template_id: str) -> str:
+    """The template an UNNAMED spawn runs for a parent on *template_id*.
+
+    Identity for every template but the mate conductor, which maps to the
+    worker spec (:data:`_DISPATCH_TEMPLATE_FOR`). Read by both inheritance sites
+    so they cannot disagree about which template a member's spawn runs.
+    """
+    return _DISPATCH_TEMPLATE_FOR.get(template_id, template_id)
+
+
 def _inherited_member_agent(selection_kind: str, template_id: str, project_dir: str = "") -> str:
     if selection_kind != "member" or template_id in KIRO_CLI_BUILTIN_AGENTS:
         return ""
     if project_dir and cached_project_agent_names(project_dir) is None:
         return ""
-    return template_id
+    return dispatch_template_for(template_id)
 
 
 def _vet_spawn_governance(parent_session_key: str, agent: str, app: str = "") -> str | None:

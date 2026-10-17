@@ -22,6 +22,7 @@ from kiro_crew.agent_files import CONDUCTOR_AGENT_FILENAME as _CONDUCTOR_AGENT_F
 from kiro_crew.agent_files import (
     LEDGER_CONDUCTOR_AGENT_FILENAME as _LEDGER_CONDUCTOR_AGENT_FILENAME,
 )
+from kiro_crew.agent_files import MATE_CONDUCTOR_AGENT_FILENAME as _MATE_CONDUCTOR_AGENT_FILENAME
 from kiro_crew.agent_files import (
     PIPELINE_CONDUCTOR_AGENT_FILENAME as _PIPELINE_CONDUCTOR_AGENT_FILENAME,
 )
@@ -206,6 +207,69 @@ _SHIPPED_GRANT_HISTORY: dict[str, frozenset[str]] = {
         | _HISTORY_DASHBOARD_VERBS
         | {"@kirocrew-dashboard/chat_folder_file_self"}
         | {"@kirocrew-work/work_ledger_read", "@kirocrew-work/work_ledger_record"}
+    ),
+    # The mate conductor shipped from its first release with the core verbs
+    # minus ``select_crew`` (a mate routes nothing), the dispatch and memory verbs
+    # its charter runs on, the goal conductor's dashboard verbs, the base work
+    # verbs, the session's own cron verbs, and the guide and member verbs the
+    # default template auto-approves for every crewmate.
+    "kirocrew-mate-conductor": (
+        frozenset({"session", "report", "tool_search"})
+        | (_HISTORY_CORE_VERBS - {"@kirocrew-core/select_crew"})
+        | {"@kirocrew-core/reset_conversation"}
+        | {
+            "@kirocrew-core/spawn_run",
+            "@kirocrew-core/spawn_list",
+            "@kirocrew-core/spawn_status",
+            "@kirocrew-core/spawn_steer",
+            "@kirocrew-core/spawn_continue",
+            "@kirocrew-core/spawn_release",
+            "@kirocrew-core/memory_recall",
+            "@kirocrew-core/search_chat_history",
+            "@kirocrew-core/get_chat_session",
+            "@kirocrew-core/learn_add",
+            "@kirocrew-core/learn_list",
+            "@kirocrew-core/suggest_followup",
+            "@kirocrew-core/file_send",
+        }
+        | _HISTORY_DASHBOARD_VERBS
+        | {"@kirocrew-dashboard/chat_folder_file_self"}
+        | {"@kirocrew-work/work_ledger_read", "@kirocrew-work/work_ledger_record"}
+        | {
+            "@kirocrew-cron/cron_add",
+            "@kirocrew-cron/cron_list",
+            "@kirocrew-cron/cron_update",
+            "@kirocrew-cron/cron_remove",
+            "@kirocrew-cron/cron_pause",
+            "@kirocrew-cron/cron_resume",
+            "@kirocrew-cron/cron_trigger",
+        }
+        | {
+            "@kirocrew-guide/find_ui",
+            "@kirocrew-guide/search_docs",
+            "@kirocrew-guide/guide_list_actions",
+            "@kirocrew-guide/guide_start",
+            "@kirocrew-guide/guide_status",
+            "@kirocrew-guide/guide_cancel",
+            "@kirocrew-guide/list_change_kinds",
+            "@kirocrew-guide/find_setting",
+            "@kirocrew-guide/get_member_capabilities",
+            "@kirocrew-guide/diagnose_settings",
+            "@kirocrew-guide/propose_change",
+            "@kirocrew-guide/get_change_status",
+        }
+        | {
+            "@kirocrew-mate/update_self",
+            "@kirocrew-mate/set_model",
+            "@kirocrew-mate/set_approval_mode",
+            "@kirocrew-mate/request_capabilities",
+            "@kirocrew-mate/goal_read",
+            "@kirocrew-mate/set_goal",
+            "@kirocrew-mate/set_key_results",
+            "@kirocrew-mate/set_check_ins",
+            "@kirocrew-mate/key_result_progress",
+            "@kirocrew-mate/save_goal_report",
+        }
     ),
 }
 
@@ -999,4 +1063,175 @@ def _install_security_conductor_agent(*, clean: bool = False) -> bool:
     # than restating it, so a ceiling that strips a grant strips its KAS rule too.
     auto_approve.write_governed_spec(path, config, source="_install_security_conductor_agent")
     agent_mod.logger.info("Installed security-conductor agent config: %s", path)
+    return True
+
+
+#: The default template's servers a mate conductor carries beyond the conductor
+#: set: the person's schedules (its charter names ``cron_add`` and its siblings),
+#: and the two platform servers a crewmate IS the subject of -- the guide server
+#: (where-is / how-to answers and change cards for the person at the dashboard)
+#: and the member's own record (``update_self``, ``request_capabilities``, its
+#: goal). Background agents drop these two (``service_agents._without_guide_server``)
+#: because nobody is at the dashboard for them; a mate is the opposite case.
+_MATE_CONDUCTOR_EXTRA_SERVERS: tuple[str, ...] = (
+    "kirocrew-cron",
+    agent_mod._GUIDE_SERVER,
+    agent_mod._MATE_SERVER,
+)
+
+
+def _mate_conductor_mcp_servers(config: dict[str, Any]) -> dict[str, Any]:
+    """The ``mcpServers`` map the mate conductor carries.
+
+    :func:`_conductor_mcp_servers` is the three servers every conductor mounts
+    (core, dashboard, work); :data:`_MATE_CONDUCTOR_EXTRA_SERVERS` are copied from
+    the default agent's resolved entries, the way the core entry is inherited
+    there. Nothing else from the default agent's map is carried: a user's own MCP
+    server reaches the WORKER a mate dispatches, never the mate itself
+    (rfc-mate-owned-agent-config.md §5.0). The panel server is mounted per session
+    by the runtime rather than declared on any spec.
+    """
+    narrowed = _conductor_mcp_servers(config)
+    declared = config.get("mcpServers", {}) or {}
+    for server in _MATE_CONDUCTOR_EXTRA_SERVERS:
+        entry = declared.get(server)
+        if entry:
+            narrowed[server] = entry
+    return narrowed
+
+
+def _mate_conductor_spec(*, clean: bool = False) -> dict[str, Any] | None:
+    """The mate conductor spec, or ``None`` when the spec on disk is the user's and
+    unreadable and must be left in place (``_governed_grants``).
+
+    The agent a crewmate's own chat runs on (rfc-mate-owned-agent-config.md,
+    §5.0 and migration step 1). It is a CONDUCTOR in the sense this module
+    enforces -- it plans and dispatches, and never does a work item's work
+    itself -- and so it is derived the way the other four are, not from the
+    default template's full surface: ``build_agent_config()`` supplies the
+    resolved MCP invocations and security hooks, and everything the full default
+    template carries beyond that is removed here.
+
+    What makes "never does the work itself" a property of the spec rather than
+    of the prose, as on its siblings: **no tool that can write a file** (not
+    ``fs_write``, not ``code``), and **no shell at all** -- where the goal
+    conductor mounts ``execute_bash`` un-approved for its bundled evaluator, a
+    mate has no such script and the tool is not mounted. ``fs_read`` is the one
+    file tool, so the conductor can read what a request points at before it
+    writes a worker's brief; that it is read-only is RFC §10 question 7's
+    default, taken here. ``web_fetch`` is mounted and never auto-approved by
+    Crew, as on every conductor: a link the person pastes is part of the request
+    the conductor reads before it briefs a worker, and a read of a page is on
+    the same side of the create-or-read line as ``fs_read``.
+
+    No user MCP server is mounted. The default agent's map is narrowed to the
+    conductor set plus cron, the guide server and the member's own server
+    (:func:`_mate_conductor_mcp_servers`), so a person with many servers
+    configured pays for none of them on a conversational turn; the servers the
+    person adds for this mate reach its worker, through the per-mate file steps
+    2 and 3 introduce.
+
+    The spec's ``prompt`` is the native stub every default-derived spec carries,
+    NOT the charter: the charter is ``agent._MATE_CONDUCTOR_SYSTEM_PROMPT`` and
+    reaches the session as the ``[AGENT SYSTEM PROMPT]`` block straight from
+    source (``context_assembly.agent_spec._resolve_agent_prompt``), so the text on
+    disk cannot change what a mate runs. That is what "the conductor's prompt is
+    source-defined and not user-editable" means mechanically; the other
+    conductors carry their charter in the file because they run as custom
+    agents, and a mate is classified as a Crew default instead
+    (``agent_files.is_kirocrew_default_agent``) so it keeps the workspace
+    identity block, the docs pointer, the crew context and the global skill
+    catalog a crewmate's chat has today.
+
+    The grants follow the conductor rule -- create or read, never mutate what
+    exists and is not the conductor's own -- with the dispatch verbs its charter
+    runs on (``agent._MATE_CONDUCTOR_CORE_GRANTS``) and the session's own cron
+    jobs (``agent._MATE_CONDUCTOR_CRON_GRANTS``), plus the guide and member
+    verbs the default template auto-approves for every crewmate
+    (``agent._GUIDE_AUTO_GRANTS``, ``agent._MATE_AUTO_GRANTS``: a card proposes
+    and the person's button decides, so none of them mutates on its own). The
+    dashboard verbs are the goal conductor's; the work-ledger verbs are the base
+    every conductor holds.
+    A crewmate's own thread opens in trust, so these grants decide little at the
+    approval surface today; they decide what the governance ceiling filters and
+    what the KAS policy derives, and they are listed in
+    ``_SHIPPED_GRANT_HISTORY`` so a user's own entries on the file survive a
+    rebuild the way they do on every conductor.
+    """
+    config = agent_mod.build_agent_config()
+    config["name"] = "kirocrew-mate-conductor"
+    config["description"] = (
+        "The agent a crewmate's own chat runs on: talks with the person, plans, "
+        "dispatches workers and reports back. Never does the work itself."
+    )
+    config["prompt"] = agent_mod._NATIVE_PROMPT_STUB
+    # The charter is not in this file, so there are no prompt-named skills to map.
+    # ``resources`` stays the default agent's: the global skill catalog and the
+    # steering the crewmate's startup context already reads (``session_skill_globs``
+    # answers ``None`` for a Crew default, and ``member_essential_context`` resolves
+    # declared documents off the bound template).
+    config["tools"] = [
+        "fs_read",
+        "web_fetch",
+        "session",
+        "report",
+        # Load-bearing, as on every conductor: with MCP Tool Search active the
+        # dispatch and session-control verbs are deferred until loaded by id.
+        "tool_search",
+        "@kirocrew-core",
+        "@kirocrew-dashboard",
+        "@kirocrew-work",
+        *(f"@{server}" for server in _MATE_CONDUCTOR_EXTRA_SERVERS),
+    ]
+    shipped = _conductor_shipped(
+        agent_mod._MATE_CONDUCTOR_CORE_GRANTS,
+        agent_mod._CONDUCTOR_DASHBOARD_GRANTS,
+        agent_mod._MATE_CONDUCTOR_CRON_GRANTS
+        + agent_mod._GUIDE_AUTO_GRANTS
+        + agent_mod._MATE_AUTO_GRANTS,
+    )
+    granted = _governed_grants(
+        shipped,
+        name="kirocrew-mate-conductor",
+        filename=_MATE_CONDUCTOR_AGENT_FILENAME,
+        source="_install_mate_conductor_agent",
+        clean=clean,
+    )
+    if granted is None:
+        return None
+    config["allowedTools"] = granted
+    config["mcpServers"] = _mate_conductor_mcp_servers(config)
+    return config
+
+
+def _install_mate_conductor_agent(*, clean: bool = False) -> bool:
+    """Generate and install the ``kirocrew-mate-conductor`` agent config.
+
+    Every crewmate binds to this spec: the first crewmate's implicit template
+    (``first_crewmate._ORDINARY_TEMPLATE``) and the New Crewmate dialog's default
+    (``change_card_catalog.DEFAULT_CREWMATE_TEMPLATE``) both name it, and the
+    "Built from" picker withholds it (``agent_catalog._BACKGROUND_ONLY_FILES``)
+    so it is never offered as a second default beside ``kirocrew``.
+
+    Returns whether the spec was written, on the same contract as
+    :func:`_install_conductor_agent`: ``False`` is the one non-raising path that
+    leaves the file untouched, and the rebuild reads it so a moved governance
+    ceiling is not marked projected onto a list that was never rewritten.
+    """
+    config = _mate_conductor_spec(clean=clean)
+    if config is None:
+        return False
+    agent_mod.kiro_agents_dir_path().mkdir(parents=True, exist_ok=True)
+    path = agent_mod.kiro_agents_dir_path() / _MATE_CONDUCTOR_AGENT_FILENAME
+    # ``inherit_narrowing``, unlike the other conductors' ``derive``: this is the
+    # agent a crewmate's chat actually runs on, so an operator's own KAS
+    # ``deny``/``ask`` rules in ``agent.json`` must reach it as they reach the
+    # default template -- the derive policy would replace that block with allows
+    # from ``allowedTools`` and silently drop them on every crewmate session. The
+    # tail still derives the allows from the FILTERED grant list, so a ceiling
+    # that strips a grant strips its KAS rule too.
+    auto_approve.write_governed_spec(
+        path, config, source="_install_mate_conductor_agent", kas_policy="inherit_narrowing"
+    )
+    agent_mod.logger.info("Installed mate conductor agent config: %s", path)
     return True

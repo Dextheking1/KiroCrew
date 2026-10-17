@@ -105,6 +105,7 @@ if TYPE_CHECKING:
         apply_completion_keep,
         classify_stop_reason,
         configured_fallback_chain,
+        dispatch_template_for,
         evict_completed_agents,
         extract_options,
         failure_name,
@@ -2284,7 +2285,11 @@ class RunEventCoordinator(ManagerComponent):
                 else execution.template_id
             ),
         )
-        agent = info.agent or execution.template_id
+        # An unnamed spawn inherits the parent's template, except that a parent
+        # on the mate conductor dispatches to the worker spec
+        # (``agent_policy.dispatch_template_for``): the conductor has no write
+        # tool and no shell, so it cannot be its own worker.
+        agent = info.agent or dispatch_template_for(execution.template_id)
         kind = _selection_kind(info)
         if info.crew or execution.member_id or (not info.agent and agent):
             policy_agent = info.crew or (execution.selection_name if kind == "member" else agent)

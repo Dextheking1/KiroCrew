@@ -51,6 +51,7 @@ from kiro_crew import agent, agent_discovery
 from kiro_crew.agent_files import (
     CONDUCTOR_AGENT_FILENAME,
     LEDGER_CONDUCTOR_AGENT_FILENAME,
+    MATE_CONDUCTOR_AGENT_FILENAME,
     PIPELINE_CONDUCTOR_AGENT_FILENAME,
     SECURITY_CONDUCTOR_AGENT_FILENAME,
 )
@@ -79,6 +80,12 @@ _CONDUCTORS = [
         "_install_security_conductor_agent",
         id="security",
     ),
+    pytest.param(
+        "kirocrew-mate-conductor",
+        MATE_CONDUCTOR_AGENT_FILENAME,
+        "_install_mate_conductor_agent",
+        id="mate",
+    ),
 ]
 
 #: Mounted on every conductor and auto-approved by none of them: the entry a user
@@ -96,6 +103,7 @@ _RETIRED_GRANT: dict[str, str | None] = {
     "kirocrew-conductor": "@kirocrew-core",
     "kirocrew-pipeline-conductor": None,
     "kirocrew-security-conductor": None,
+    "kirocrew-mate-conductor": None,
 }
 
 #: An entry every regeneration drops from any conductor spec: a wildcard, which the
@@ -137,6 +145,7 @@ _VERIFIED_RETIREMENTS: dict[str, frozenset[str]] = {
     "kirocrew-ledger-conductor": frozenset(),
     "kirocrew-pipeline-conductor": frozenset(),
     "kirocrew-security-conductor": frozenset(),
+    "kirocrew-mate-conductor": frozenset(),
 }
 
 
@@ -301,7 +310,10 @@ class TestUserGrantsSurviveRegeneration:
             install()
 
         data = _read(agents_dir, filename)
-        assert "execute_bash" in data["tools"]
+        # Every conductor but the mate mounts the shell un-approved; the mate
+        # conductor mounts no shell at all (``_mate_conductor_spec``), and the
+        # ceiling still names and drops the hand-added grant the same way.
+        assert ("execute_bash" in data["tools"]) == (name != "kirocrew-mate-conductor")
         assert "execute_bash" not in data["allowedTools"]
         assert "execute_bash" in _one_line(caplog, filename)
 

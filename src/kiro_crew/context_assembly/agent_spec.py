@@ -502,10 +502,22 @@ def _resolve_agent_prompt(
     that restores the block reuses the session's own.
     """
     from kiro_crew import context as ctx  # circular import: the facade imports this owner
+    from kiro_crew.agent_files import MATE_CONDUCTOR_AGENT_NAME, is_kirocrew_default_agent
 
-    is_custom = bool(agent) and agent != "kirocrew"
+    is_custom = bool(agent) and not is_kirocrew_default_agent(agent)
     agent_prompt: str
-    if is_cc and not is_custom:
+    if agent == MATE_CONDUCTOR_AGENT_NAME:
+        # The mate conductor's charter comes straight from source, on every
+        # provider: not from ``prompt.md`` (which ``~/.kiro/crew/prompt.md``
+        # overrides) and not from the spec file on disk (whose ``prompt`` is the
+        # native stub). That is what makes it the one contract a person cannot
+        # edit -- rfc-mate-owned-agent-config.md §5.0 -- while the predicate
+        # above still classes it as a Crew default so it keeps the workspace
+        # identity block, the docs pointer and the crew context below.
+        from kiro_crew import agent as agent_mod
+
+        agent_prompt = agent_mod._MATE_CONDUCTOR_SYSTEM_PROMPT.strip()
+    elif is_cc and not is_custom:
         # CC gets the same Kiro Crew persona prompt as kiro — including
         # the Output Format rules (diff blocks, image embeds, OPTIONS)
         # which are dashboard UI contracts, not kiro-specific. Only the

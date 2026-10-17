@@ -1447,7 +1447,9 @@ declaration itself (`subagent._vet_parent_available_agents`, called from
   on a cold cache, and an empty read would admit a spawn the declaration
   forbids. When the revision cannot prove freshness (Windows, a symlinked
   spec, an entry younger than two seconds) the walk simply runs uncached.
-- **Target** = the EFFECTIVE child template (`execution.template_id`: explicit
+- **Target** = the EFFECTIVE child template (`execution.template_id` through
+  `agent_policy.dispatch_template_for`, which maps a parent on the mate conductor
+  to `kirocrew-worker` and is identity for every other template: explicit
   `agent`, the inherited parent template, or a `crew=`/`target_member` member's
   `kiro_agent`), matched with `fnmatch.fnmatchcase` against each glob. Only
   when the VERIFIED calling app (`execution.app`, bound by the SpawnSDK and

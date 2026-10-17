@@ -273,5 +273,6 @@ class TestExclusionIsInheritedNotRespelled:
                 "kirocrew-conductor",
                 "kirocrew-pipeline-conductor",
                 "kirocrew-security-conductor",
+                "kirocrew-mate-conductor",
             }
         )

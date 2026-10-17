@@ -70,7 +70,7 @@ describe('NewCrewmateDialog', () => {
     await waitFor(() => expect(api.createKirocrewAgent).toHaveBeenCalledTimes(1))
     // Unasked, the create owes no first greeting.
     const body = vi.mocked(api.createKirocrewAgent).mock.calls[0][0] as Record<string, unknown>
-    expect(body).toMatchObject({ name: 'Scout', kiro_agent: 'kirocrew' })
+    expect(body).toMatchObject({ name: 'Scout', kiro_agent: 'kirocrew-mate-conductor' })
     expect(body).not.toHaveProperty('first_greeting')
     await waitFor(() => expect(props.onCreated).toHaveBeenCalledWith({ name: 'Scout', job: '' }), { timeout: 4000 })
   })
@@ -80,8 +80,8 @@ describe('NewCrewmateDialog', () => {
     const select = await screen.findByRole('combobox', { name: 'Built from' })
     // The label stays short enough to show "(default)" on a phone; what the
     // default is goes in the field's helper text instead.
-    expect(select.textContent?.trim()).toBe('kirocrew (default)')
-    expect(fieldHint(select)).toHaveTextContent(/kirocrew/)
+    expect(select.textContent?.trim()).toBe('kirocrew-mate-conductor (default)')
+    expect(fieldHint(select)).toHaveTextContent(/kirocrew-mate-conductor/)
   })
 
   it('the Model helper text is a sentence of its own, not a lowercase fragment', async () => {
@@ -124,7 +124,7 @@ describe('NewCrewmateDialog', () => {
       expect(region).not.toHaveTextContent(/kirocrew/i)
     })
 
-    it('unfolding shows Built from = kirocrew and every setting in the same card, under the same heading', async () => {
+    it('unfolding shows Built from = the mate conductor and every setting in the same card, under the same heading', async () => {
       card()
       const region = await screen.findByRole('dialog')
       fireEvent.click(toggle())
@@ -132,7 +132,7 @@ describe('NewCrewmateDialog', () => {
       const advanced = screen.getByTestId('crewmate-create-advanced')
       expect(toggle()).toHaveAttribute('aria-controls', advanced.id)
       expect(region).toContainElement(advanced)
-      expect(await screen.findByRole('combobox', { name: 'Built from' })).toHaveTextContent('kirocrew')
+      expect(await screen.findByRole('combobox', { name: 'Built from' })).toHaveTextContent('kirocrew-mate-conductor')
       expect(screen.getByRole('textbox', { name: 'What it looks after' })).toBeInTheDocument()
       expect(advanced).toContainElement(screen.getByRole('combobox', { name: 'Built from' }))
       expect(within(advanced).getByLabelText('Workspace')).toBeInTheDocument()
@@ -160,7 +160,7 @@ describe('NewCrewmateDialog', () => {
       await waitFor(() => expect(api.createKirocrewAgent).toHaveBeenCalledTimes(1))
       expect(vi.mocked(api.createKirocrewAgent).mock.calls[0][0]).toMatchObject({
         name: 'Scout',
-        kiro_agent: 'kirocrew',
+        kiro_agent: 'kirocrew-mate-conductor',
         description: 'Watch PRs',
         first_greeting: true,
       })
@@ -171,7 +171,7 @@ describe('NewCrewmateDialog', () => {
       expect(foldedBody.avatar.bg).toMatch(/^#[0-9a-f]{6}$/i)
     })
 
-    it('Create from the folded card builds from kirocrew, follows the name\'s own look and asks for the first greeting', async () => {
+    it('Create from the folded card builds from the mate conductor, follows the name\'s own look and asks for the first greeting', async () => {
       card()
       await screen.findByTestId('crewmate-create-form')
       typeName('Scout')
@@ -180,7 +180,7 @@ describe('NewCrewmateDialog', () => {
       const body = vi.mocked(api.createKirocrewAgent).mock.calls[0][0] as Record<string, unknown>
       expect(body).toMatchObject({
         name: 'Scout',
-        kiro_agent: 'kirocrew',
+        kiro_agent: 'kirocrew-mate-conductor',
         workspace: '',
         description: '',
         first_greeting: true,
@@ -403,7 +403,7 @@ describe('NewCrewmateDialog', () => {
       fireEvent.click(toggle())
       fireEvent.click(screen.getByTestId('crewmate-create-submit-end'))
       await waitFor(() => expect(api.createKirocrewAgent).toHaveBeenCalledTimes(1))
-      expect(vi.mocked(api.createKirocrewAgent).mock.calls[0][0]).toMatchObject({ name: 'Scout', kiro_agent: 'kirocrew' })
+      expect(vi.mocked(api.createKirocrewAgent).mock.calls[0][0]).toMatchObject({ name: 'Scout', kiro_agent: 'kirocrew-mate-conductor' })
       // In flight: both Create buttons are locked, so no second POST leaves.
       await waitFor(() => expect(screen.getByTestId('crewmate-create-submit-end')).toBeDisabled())
       expect(screen.getByTestId('crewmate-create-submit')).toBeDisabled()
