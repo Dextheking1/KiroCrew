@@ -82,6 +82,12 @@ from kiro_crew.shared_crew.admission_runtime import systemd_reap as _systemd_rea
 from kiro_crew.shared_crew.admission_runtime import systemd_unit_liveness as _systemd_unit_liveness
 from kiro_crew.shared_crew.codec import ContractError
 from kiro_crew.shared_crew.contracts import EnforcementLevel, Principal, Transport
+from kiro_crew.shared_crew.internal_caller import (  # noqa: F401 -- public import path
+    ATTESTED_SESSION_KEY,
+    CALLER_SESSION_HEADER,
+    CALLER_TOKEN_HEADER,
+    attest_internal_session,
+)
 from kiro_crew.shared_crew.scheduler import (
     Decision,
     FairScheduler,
@@ -1895,62 +1901,6 @@ def scope_principal_for_session(session_key: str) -> str | None:
     if service is None or not service.enabled or not session_key:
         return None
     return service.budget_for_session(session_key)
-
-
-#: Header an internal caller (a runtime's MCP server) names its own session with.
-CALLER_SESSION_HEADER = "X-Session-Key"
-#: Header carrying the per-session token the gateway signed for that session.
-CALLER_TOKEN_HEADER = "X-Session-Token"
-#: Request key holding the calling session :func:`attest_internal_session` proved.
-ATTESTED_SESSION_KEY = "shared_crew_attested_session"
-_MAX_SESSION_KEY = 512
-
-
-def _declared_session(request: Any) -> str:
-    headers = getattr(request, "headers", None)
-    raw = headers.get(CALLER_SESSION_HEADER, "") if headers is not None else ""
-    session = raw.strip() if isinstance(raw, str) else ""
-    return session if 0 < len(session) <= _MAX_SESSION_KEY else ""
-
-
-def _verify_token(token: str) -> str:
-    """The session the gateway signed *token* for, or ``""``. Blocking: reads a file."""
-    from kiro_crew.session_token_sig import verify_session_token
-
-    return verify_session_token(token)
-
-
-async def attest_internal_session(request: Any) -> str:
-    """Prove which session an internal request comes from; ``""`` when nothing proves it.
-
-    The header alone is the caller's word. Proof is the auth layer's kernel
-    attestation of the declared key (``peer_verified``), or a per-session token
-    the gateway signed (``session_token_sig``) that names the declared session,
-    or names one when none is declared. The answer is kept on the request for
-    :func:`internal_initiator`.
-    """
-    try:
-        cached = request.get(ATTESTED_SESSION_KEY)
-    except Exception:  # noqa: BLE001 -- a request that cannot hold keys proves nothing
-        return ""
-    if isinstance(cached, str):
-        return cached
-    declared = _declared_session(request)
-    proved = ""
-    if declared and request.get("peer_verified") is True:
-        proved = declared
-    else:
-        headers = getattr(request, "headers", None)
-        token = headers.get(CALLER_TOKEN_HEADER, "") if headers is not None else ""
-        if isinstance(token, str) and token:
-            signed = await asyncio.to_thread(_verify_token, token)
-            if signed and (not declared or signed == declared):
-                proved = signed
-    try:
-        request[ATTESTED_SESSION_KEY] = proved
-    except Exception:  # noqa: BLE001 -- not cached; the answer still stands
-        pass
-    return proved
 
 
 def internal_initiator(request: Any) -> str | None:

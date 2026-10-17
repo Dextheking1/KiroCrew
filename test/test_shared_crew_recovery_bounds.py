@@ -291,7 +291,9 @@ async def test_work_started_inside_a_persons_turn_is_charged_to_that_person(
     )
     svc.bind_session("dashboard:alice-tab", A, "w-root")
     signed = {"tok-alice": "dashboard:alice-tab", "tok-nobody": "dashboard:nobody"}
-    monkeypatch.setattr(ag, "_verify_token", lambda token: signed.get(token, ""))
+    from kiro_crew.shared_crew import internal_caller
+
+    monkeypatch.setattr(internal_caller, "_verify_token", lambda token: signed.get(token, ""))
 
     async def budget(headers: dict[str, str], **marks: object) -> str:
         req = _Req(headers, internal)
