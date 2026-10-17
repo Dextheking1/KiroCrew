@@ -834,7 +834,13 @@ async def api_chat_slot_approve(request: web.Request) -> web.Response:
             or native_future.done()
             or slot.approval_instance(request_id) != request_mid
         ):
-            settled = shared_decisions.settled_reply(state, slot.key, request_id, response_id)
+            settled = shared_decisions.settled_reply(
+                state,
+                slot.key,
+                request_id,
+                response_id,
+                shared_decisions.request_principal(request),
+            )
             if settled is not None:
                 return shared_decisions.respond(settled)
             return web.json_response(
@@ -1061,7 +1067,13 @@ async def api_chat_slot_approve(request: web.Request) -> web.Response:
             )
             if state_reply is not None:
                 return shared_decisions.respond(state_reply)
-        settled = shared_decisions.settled_reply(state, slot.key, request_id, response_id)
+        settled = shared_decisions.settled_reply(
+            state,
+            slot.key,
+            request_id,
+            response_id,
+            shared_decisions.request_principal(request),
+        )
         if settled is not None:
             return shared_decisions.respond(settled)
         return web.json_response({"error": "no pending approval"}, status=404)

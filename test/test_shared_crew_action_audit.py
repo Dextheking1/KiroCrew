@@ -141,3 +141,19 @@ async def test_a_stale_cancellation_is_audited_as_conflict(events, monkeypatch):
         assert resp.status == 409
     await _drain()
     assert [(e.operation, e.outcome) for e in events] == [("shared_crew.cancel", "conflict")]
+
+
+@pytest.mark.asyncio
+async def test_a_late_different_response_is_audited_as_conflict(events):
+    reg = DecisionRegistry()
+    reg.open("d2", DecisionKind.APPROVAL, "s1", ALICE)
+    reg.resolve("d2", response_id="b", responder=BOB, outcome="yes", apply=lambda: True)
+    # The waiting future is gone, so these arrive at the settled decision.
+    reg.classify_late("d2", "b", BOB)
+    reg.classify_late("d2", "c", CAROL)
+    reg.classify_late("missing", "c", CAROL)
+    await _drain()
+    assert [(e.operation, e.outcome, e.metadata["responder"]["id"]) for e in events] == [
+        ("shared_crew.approval", "applied", BOB.id),
+        ("shared_crew.approval", "conflict", CAROL.id),
+    ]

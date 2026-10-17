@@ -510,9 +510,16 @@ async def api_ask_question_answer(request: web.Request) -> web.Response:
         responder=shared_decisions.request_principal(request),
         response_id=response_id,
     ):
+        # A different answer that lost the race is audited as the conflict.
+        late = shared_decisions.decisions_for(state)
+        decision_id = shared_decisions.question_decision_id(ask_id)
         settled = shared_decisions.lost_race_reply(
-            shared_decisions.decisions_for(state).classify(
-                shared_decisions.question_decision_id(ask_id), response_id
+            (
+                late.classify_late(
+                    decision_id, response_id, shared_decisions.request_principal(request)
+                )
+                if response_id
+                else late.classify(decision_id, response_id)
             ),
             response_id,
         )

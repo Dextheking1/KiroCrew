@@ -282,6 +282,19 @@ class DecisionRegistry:
                 return Resolution(ResolveOutcome.NOT_PENDING, None)
             return Resolution(classify_response(current, response_id), current)
 
+    def classify_late(
+        self, decision_id: str, response_id: str, responder: Principal
+    ) -> Resolution:
+        """:meth:`classify` for a response that arrived after the decision settled.
+
+        A different response is a losing one and is audited ``conflict`` like
+        one that lost inside :meth:`resolve`; a replay of the winner and a
+        response to nothing add no record.
+        """
+        resolution = self.classify(decision_id, response_id)
+        audit_decision_response(resolution, responder)
+        return resolution
+
     def close(self, decision_id: str, state: DecisionState) -> SharedDecision | None:
         """End a pending decision nobody answered (``expired`` / ``withdrawn``)."""
         if state not in (DecisionState.EXPIRED, DecisionState.WITHDRAWN):
@@ -553,8 +566,17 @@ def lost_race_reply(resolution: Resolution, response_id: str) -> Reply | None:
     return None
 
 
-def settled_reply(state: Any, slot_key: str, request_id: object, response_id: str) -> Reply | None:
-    """Answer a response whose future is gone from the decision that settled it."""
+def settled_reply(
+    state: Any,
+    slot_key: str,
+    request_id: object,
+    response_id: str,
+    responder: Principal | None = None,
+) -> Reply | None:
+    """Answer a response whose future is gone from the decision that settled it.
+
+    With *responder*, a different response is audited as the losing one.
+    """
     if not isinstance(request_id, str) or not request_id:
         return None
     registry = decisions_for(state)
@@ -562,7 +584,11 @@ def settled_reply(state: Any, slot_key: str, request_id: object, response_id: st
         approval_decision_id(slot_key, request_id),
         state_approval_decision_id(request_id),
     ):
-        resolution = registry.classify(decision_id, response_id)
+        resolution = (
+            registry.classify(decision_id, response_id)
+            if responder is None or not response_id
+            else registry.classify_late(decision_id, response_id, responder)
+        )
         if resolution.decision is not None:
             return lost_race_reply(resolution, response_id)
     return None
@@ -609,11 +635,12 @@ def resolve_approval_by_id(
             broadcast_decision(state, resolution.decision)
             return 200, {"ok": True, "decision": resolution.decision.to_public_dict()}
         return lost_race_reply(resolution, response_id)
+    responder = request_principal(request)
     for slot_key in [s.key for s in state._slots.values()]:
-        settled = settled_reply(state, slot_key, approval_id, response_id)
+        settled = settled_reply(state, slot_key, approval_id, response_id, responder)
         if settled is not None:
             return settled
-    return settled_reply(state, "", approval_id, response_id)
+    return settled_reply(state, "", approval_id, response_id, responder)
 
 
 def _settle_slot_by_id(

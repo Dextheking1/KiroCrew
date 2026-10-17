@@ -139,6 +139,44 @@ async def test_a_collaborator_sees_and_answers_and_the_first_answer_wins(state):
 
 
 @pytest.mark.asyncio
+async def test_the_losing_answer_is_audited_as_a_conflict(state, monkeypatch):
+    from kiro_crew.shared_crew import audit
+
+    events: list[Any] = []
+    monkeypatch.setattr(audit, "_default_writer", events.append)
+    task = await _open_question(state, "q-race")
+    async with _client(state, BOB) as bob, _client(state, ALICE, subject="alice") as alice:
+        won = await bob.post(
+            "/api/ask-question/q-race/answer",
+            json={"answers": {"Ship it?": "yes"}, "response_id": "bob-click"},
+        )
+        assert won.status == 200
+        replay = await bob.post(
+            "/api/ask-question/q-race/answer",
+            json={"answers": {"Ship it?": "yes"}, "response_id": "bob-click"},
+        )
+        assert replay.status == 200
+        lost = await alice.post(
+            "/api/ask-question/q-race/answer",
+            json={"answers": {"Ship it?": "no"}, "response_id": "alice-click"},
+        )
+        assert lost.status == 409
+    await task
+    while audit._pending_audits:
+        await asyncio.gather(*list(audit._pending_audits))
+    rows = [
+        (e.operation, e.outcome, e.metadata["responder"]["id"], e.resources) for e in events
+    ]
+    target = question_decision_id("q-race")
+    # The replay of the winner adds nothing; the different losing answer is recorded.
+    assert rows == [
+        ("shared_crew.question_answer", "applied", BOB.id, target),
+        ("shared_crew.question_answer", "conflict", ALICE.id, target),
+    ]
+    assert all(e.caller_identity == ALICE.id for e in events)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "principal", [LOCAL, DIRECT, Principal.unknown()], ids=lambda p: p.provenance.value
 )
