@@ -4,6 +4,8 @@ import { ArrowRight } from 'lucide-react'
 import { SettingsSection, SettingsCard, SettingsToggle } from '../../components/settings'
 import { FeaturePreviewIntroButton, type FeaturePreviewIntro } from '../../components/FeaturePreviewIntroDialog'
 import { usePreviewFlag, useRemoteCrewChat } from '../../hooks/usePreviewFlag'
+import { clearPreviewFlagWriteError, usePreviewFlagWriteError } from '../../hooks/usePreviewFlagServerSync'
+import ErrorNotice from '../../components/ErrorNotice'
 import { PREVIEW_ARTIFACT_DEPLOY, PREVIEW_CREW, PREVIEW_FOLDER_CONDUCTOR, PREVIEW_LAYOUT_HARNESS, PREVIEW_WEBHOOKS, setPreviewFlag, setRemoteCrewChat } from '../../utils/previewFlags'
 import { DecisionsCard } from './DecisionsCard'
 import { i18nT } from '../../i18n/t'
@@ -52,11 +54,13 @@ import { i18nT } from '../../i18n/t'
  * page it holds. The PAGE stays un-advertised: `getAdvertisedSurfaces()` and
  * the Search Everywhere Pages provider still filter it until the flag is on.
  *
- * No `configKey` on the four `previewFlags.ts` toggles, deliberately: that prop
- * is what makes a `<SettingRef>` chip deep-link here and what feeds
- * `settingsRegistry.gen.ts`, and a per-device localStorage flag has no config
- * path to name at all. Search deep-links still reach every toggle through its
- * registry id + `data-setting-label`, which need no configKey.
+ * No `configKey` on the `previewFlags.ts` toggles, deliberately: that prop is
+ * what makes a `<SettingRef>` chip deep-link here and what feeds
+ * `settingsRegistry.gen.ts`, and these toggles write through `setPreviewFlag`
+ * (the browser cache first, then `dashboard.feature_previews.<name>`), not the
+ * generic config-key path a `configKey` control uses. Search deep-links still
+ * reach every toggle through its registry id + `data-setting-label`, which need
+ * no configKey.
  *
  * The Decisions toggle (now in `DecisionsCard.tsx`) carries no `configKey` either,
  * for a different reason: it writes no config path. Its value is the KEYSTONE
@@ -134,6 +138,7 @@ export function FeaturePreviewsSection() {
   const remoteCrewChat = useRemoteCrewChat()
   const layoutHarness = usePreviewFlag(PREVIEW_LAYOUT_HARNESS)
   const folderConductor = usePreviewFlag(PREVIEW_FOLDER_CONDUCTOR)
+  const writeError = usePreviewFlagWriteError()
 
   return (
     // The wrapper exists for the legacy redirect: `?highlight=key:<anchor>`
@@ -152,6 +157,19 @@ export function FeaturePreviewsSection() {
       <p className="text-[13px] text-muted mb-2">
         {i18nT('pages.settings.developerPanel.feature_previews_desc')}
       </p>
+      {/* The gateway refused a toggle and the switch went back to its stored
+          value. Said once for the section: the reason (not the owner, or the
+          write failed) is the same whichever card's switch was flipped. */}
+      {writeError && (
+        <ErrorNotice
+          testId="feature-previews-save-error"
+          message={writeError.denied
+            ? i18nT('pages.settings.developerPanel.feature_previews_save_denied')
+            : i18nT('pages.settings.developerPanel.feature_previews_save_failed')}
+          onDismiss={clearPreviewFlagWriteError}
+          className="mb-2"
+        />
+      )}
       {/* Artifact Deploy ships without a "See what it looks like" intro: the
           capture pipeline shoots a running pod, and the deploy surface's own
           screens need a registered AWS profile to show anything real. A card with
@@ -274,7 +292,7 @@ export function FeaturePreviewsSection() {
       {/* Dev-only MECHANISM preview, not a shippable surface: the composable-layout
           mechanism (placement-driven renderer + scope + editor) being built beside
           the Members page. This card is the FLAG PLUMBING only — the switch exists so
-          the mechanism can be built and tested behind a per-device gate.
+          the mechanism can be built and tested behind a preview gate.
 
           NO ingress button, on purpose: unlike the webhooks card, this preview has no
           routable door in the bundle yet, so a link here would point at a route that
@@ -311,7 +329,7 @@ export function FeaturePreviewsSection() {
           onChange={v => setPreviewFlag(PREVIEW_FOLDER_CONDUCTOR, v)}
         />
       </SettingsCard>
-      {/* LAST, and the only card here whose switch is not a per-device flag: it
+      {/* LAST, and the only card here whose switch is not a preview flag: it
           writes the KEYSTONE `decisions_consent.json`, not a config path. It lives in
           `DecisionsCard.tsx` because it is a list and a detail rather than one row,
           and that file's own doc comment carries why. */}
