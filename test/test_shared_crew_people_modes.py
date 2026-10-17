@@ -634,9 +634,9 @@ def test_no_external_requested_by_attribution_is_emitted():
     import re
 
     root = pathlib.Path(__file__).resolve().parents[1] / "src" / "kiro_crew"
-    pattern = re.compile(
-        r"[\"']Requested by\b|requested_by_human|on_behalf_of_human", re.IGNORECASE
-    )
+    # Case-sensitive: the outbound label is "Requested by <person>"; prose such as
+    # "requested by me" in a filter description is not attribution output.
+    pattern = re.compile(r"[\"']Requested by\b|requested_by_human|on_behalf_of_human")
     hits = [
         str(p.relative_to(root))
         for p in root.rglob("*.py")
