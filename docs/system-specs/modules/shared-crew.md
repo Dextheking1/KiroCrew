@@ -254,7 +254,7 @@ Audited sites, all through `schedule_action_audit`:
 | `session_create` | `chat_api.slot_create` | request actor | | `accepted` |
 | `message` | `chat_api.chat_send` | request actor | | `accepted` |
 | `cancel` | `routes_admission.api_work_cancel`, target the work id | request actor | | `applied`, or `conflict` on a stale or illegal revision |
-| `approval`, `question_answer` | `DecisionRegistry.resolve` (`decisions.audit_decision_response`), target the decision id | the decision's initiator | the verified responder | `applied` for the winner, `conflict` for a different response that lost; a replay of the winner and a response to nothing pending add no record |
+| `approval`, `question_answer` | `DecisionRegistry.resolve` (`decisions.audit_decision_response`), target the decision id | the decision's initiator | the verified responder | `applied` for the winner, `conflict` for a different response that lost, including one that reaches the settled decision after its wait ended (`DecisionRegistry.classify_late`, from the question answer and approval routes); a replay of the winner and a response to nothing pending add no record |
 
 ## 4. Admission and accepted work
 
