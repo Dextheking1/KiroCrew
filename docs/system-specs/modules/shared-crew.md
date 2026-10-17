@@ -740,8 +740,12 @@ continue a subagent, cron run, task plan and execute) passes `BudgetGate.check`.
 refusal is 403 `{error: shared_access_refused | inference_refused, reason}`. The local
 operator, automation and apps are not shared access. With the default seam neither
 gate is composed, so the middleware is a no-op and both concerns report unavailable.
-Model work that does not arrive over HTTP (cron schedules, channels) is not yet
-budget-checked here.
+Model work that does not arrive over HTTP asks the same budget at its entry point
+(`enterprise_gates.check_background_inference`): a scheduled cron fire
+(`admission_entry.admitted_cron_dispatch`, as an automation run) is skipped and
+recorded on the job, and a channel turn (`turn_gate.run_channel_turn`, and
+`run_admitted` for `channel_turn` work) is not started and its surface gets a
+one-line reply naming the budget reason. Both run whether or not fair admission is on.
 
 Cache and outage policy (`GrantCachePolicy`): a confirmed active grant is reused for
 `fresh_seconds` (default 60, max 300). After that the authority is asked; when it is

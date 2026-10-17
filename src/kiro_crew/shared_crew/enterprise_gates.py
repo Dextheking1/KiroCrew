@@ -9,7 +9,9 @@ token auth, after the request's actor is published, and checks two things:
   once a grant authority is composed. The local operator, Crew automation and
   apps are not shared access and are not asked.
 * **inference.** A request that starts new model work (:data:`CHARGEABLE_ROUTES`)
-  passes ``BudgetGate.check`` once a budget provider is composed.
+  passes ``BudgetGate.check`` once a budget provider is composed. Model work
+  with no request (cron schedules, channel turns) asks
+  :func:`check_background_inference` at its entry point.
 
 With the public default seam neither gate is composed, so both checks return
 ``not_configured`` and every request proceeds exactly as before: the disabled
@@ -145,6 +147,25 @@ class EnterpriseGates:
         return GateVerdict(decision.allowed, decision.reason.value, enforced=True)
 
 
+def check_background_inference(
+    operation: OperationKind,
+    gates: Callable[[], EnterpriseGates] | None = None,
+) -> GateVerdict:
+    """``BudgetGate.check`` for model work that does not arrive over HTTP.
+
+    Cron schedules and channel turns start model work with no request the
+    middleware could see, so their entry points ask here. With no budget
+    provider composed this is ``not_configured`` and the work proceeds; an
+    unreadable seam composes nothing, exactly as in the middleware.
+    """
+    try:
+        current = (gates or current_gates)()
+    except Exception:  # noqa: BLE001 -- an unreadable seam composes nothing
+        logger.warning("shared crew enterprise gates unavailable", exc_info=True)
+        return _NOT_CONFIGURED
+    return current.check_inference(operation)
+
+
 def is_shared_access(principal: Principal) -> bool:
     """A person reaching the Crew through a tailnet or enterprise identity."""
     return principal.kind is PrincipalKind.HUMAN and principal.provenance in SHARED_PROVENANCE
@@ -219,6 +240,7 @@ def install(app: web.Application) -> None:
 
 __all__ = [
     "CHARGEABLE_ROUTES",
+    "check_background_inference",
     "EnterpriseGates",
     "GateVerdict",
     "chargeable_operation",

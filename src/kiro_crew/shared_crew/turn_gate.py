@@ -145,8 +145,29 @@ def in_channel_turn() -> bool:
 
 def capacity_note(reason: object) -> str:
     """The one-line answer a refused message gets on its own surface."""
-    label = str(getattr(reason, "value", reason) or "capacity").replace("_", " ")
+    raw = str(getattr(reason, "value", reason) or "capacity")
+    label = raw.replace("_", " ")
+    if raw.startswith(_BUDGET_REASON_PREFIX):
+        return f"This message did not start: the Crew's inference budget ({label})."
     return f"This message did not start: Crew capacity ({label}). Try again later."
+
+
+_BUDGET_REASON_PREFIX = "inference_budget"
+
+
+def inference_refusal(operation: OperationKind) -> str | None:
+    """The budget reason refusing a channel turn's model work, or None to proceed.
+
+    Only channel turns are asked here: every other turn ``run_admitted`` serves
+    arrives over HTTP, where the enterprise middleware already asked.
+    """
+    if operation is not OperationKind.CHANNEL_TURN:
+        return None
+    from kiro_crew.shared_crew.enterprise import OperationKind as BudgetOperation
+    from kiro_crew.shared_crew.enterprise_gates import check_background_inference
+
+    verdict = check_background_inference(BudgetOperation.NEW_TURN)
+    return None if verdict.allowed else verdict.reason
 
 
 def admitted_work() -> str:
@@ -325,7 +346,7 @@ async def run_admitted(
     budget_key: str = "",
     automation: bool = False,
     operation: OperationKind = OperationKind.CHAT_TURN,
-    refused: Callable[[ReasonCode | None], Any] | None = None,
+    refused: Callable[[ReasonCode | str | None], Any] | None = None,
 ) -> T | None:
     """Run *work* (model work that starts a runtime of its own) as one admitted turn.
 
@@ -340,13 +361,8 @@ async def run_admitted(
     budget = budget_key or _INITIATOR.get()
     if not budget:
         budget = _gate.AUTOMATION_PRINCIPAL.id if automation else Principal.unknown().id
-    admission = await admit_turn(
-        budget_key=budget, session_key=session_key, text=text, operation=operation
-    )
-    if admission is None:
-        return await work
 
-    async def _tell(reason: ReasonCode | None) -> None:
+    async def _tell(reason: ReasonCode | str | None) -> None:
         if refused is None:
             return
         try:
@@ -355,6 +371,17 @@ async def run_admitted(
                 await result
         except Exception:  # noqa: BLE001 -- the note is best effort
             logger.debug("shared crew: refusal note failed", exc_info=True)
+
+    spent = None if _ADMITTED_WORK.get() else inference_refusal(operation)
+    if spent is not None:
+        work.close()
+        await _tell(spent)
+        return None
+    admission = await admit_turn(
+        budget_key=budget, session_key=session_key, text=text, operation=operation
+    )
+    if admission is None:
+        return await work
 
     if admission.rejected:
         work.close()
@@ -370,7 +397,7 @@ async def run_admitted(
 class TurnRefused(RuntimeError):
     """Fair admission refused (or ended unstarted) a turn run by :func:`run_admitted_or_raise`."""
 
-    def __init__(self, reason: ReasonCode | None) -> None:
+    def __init__(self, reason: ReasonCode | str | None) -> None:
         super().__init__(capacity_note(reason or ReasonCode.CREW_ACTIVE_LIMIT))
         self.reason = reason
 
@@ -389,7 +416,7 @@ async def run_admitted_or_raise(
     Raises :class:`TurnRefused` (a ``RuntimeError`` naming the limit) when the
     turn was refused or ended before it ran; *work* never ran.
     """
-    reasons: list[ReasonCode | None] = []
+    reasons: list[ReasonCode | str | None] = []
     result = await run_admitted(
         work,
         session_key=session_key,
@@ -410,7 +437,7 @@ async def run_channel_turn(
     text: str,
     automation: bool,
     run: Callable[[], Coroutine[Any, Any, T]],
-    refused: Callable[[ReasonCode | None], Coroutine[Any, Any, T]],
+    refused: Callable[[ReasonCode | str | None], Coroutine[Any, Any, T]],
 ) -> T:
     """Run one channel transport turn through admission.
 
@@ -419,6 +446,9 @@ async def run_channel_turn(
     *refused* answers a turn that was refused or ended before it ran.
     """
     budget = _gate.AUTOMATION_PRINCIPAL.id if automation else Principal.unknown().id
+    spent = inference_refusal(OperationKind.CHANNEL_TURN)
+    if spent is not None:
+        return await refused(spent)
 
     async def _inside() -> T:
         token = _IN_CHANNEL_TURN.set(True)
@@ -456,7 +486,7 @@ async def run_slack_message(
     channel = args["channel"]
     reply_ts = args.get("thread_ts") or args["msg_ts"]
 
-    async def _refused(reason: ReasonCode | None) -> None:
+    async def _refused(reason: ReasonCode | str | None) -> None:
         try:
             await slack.post_message(channel, capacity_note(reason), reply_ts)
         except Exception:  # noqa: BLE001 -- the note is best effort

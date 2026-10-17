@@ -212,3 +212,114 @@ def test_gateway_installs_the_gate() -> None:
 
     server = Path(__file__).resolve().parents[1] / "src" / "kiro_crew" / "dashboard" / "server.py"
     assert "enterprise_gates.install(app)" in server.read_text(encoding="utf-8")
+
+
+# -- model work with no request: cron schedules and channel turns ---------------
+
+
+def _composed(budget: BudgetState):
+    gates = EnterpriseGates(_seams(grants=False, budget=budget))
+    return lambda: gates
+
+
+@pytest.mark.asyncio
+async def test_a_scheduled_cron_fire_is_refused_when_the_budget_is_spent(monkeypatch):
+    from types import SimpleNamespace
+
+    from kiro_crew.shared_crew import admission_entry
+
+    monkeypatch.setattr(enterprise_gates, "current_gates", _composed(BudgetState.EXHAUSTED))
+    ran: list[int] = []
+
+    async def dispatch() -> str:
+        ran.append(1)
+        return "ran"
+
+    job = SimpleNamespace(id="j1", created_by_principal="", last_status="", last_error="")
+    assert await admission_entry.admitted_cron_dispatch(job, dispatch()) is None
+    assert ran == []
+    assert job.last_status == "error"
+    assert "inference_budget_exhausted" in job.last_error
+
+
+@pytest.mark.asyncio
+async def test_a_cron_fire_runs_while_the_budget_allows(monkeypatch):
+    from types import SimpleNamespace
+
+    from kiro_crew.shared_crew import admission_entry
+    from kiro_crew.shared_crew import admission_gate as ag
+
+    monkeypatch.setattr(enterprise_gates, "current_gates", _composed(BudgetState.AVAILABLE))
+
+    async def _unadmitted(coro, **_kw):
+        return await coro
+
+    monkeypatch.setattr(ag, "admit_and_run", _unadmitted)
+
+    async def dispatch() -> str:
+        return "ran"
+
+    job = SimpleNamespace(id="j2", created_by_principal="", last_status="", last_error="")
+    assert await admission_entry.admitted_cron_dispatch(job, dispatch()) == "ran"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget,reason",
+    [
+        (BudgetState.EXHAUSTED, "inference_budget_exhausted"),
+        (BudgetState.UNKNOWN, "inference_budget_unknown"),
+    ],
+)
+async def test_a_channel_turn_is_refused_when_the_budget_refuses(monkeypatch, budget, reason):
+    from kiro_crew.shared_crew import turn_gate
+    from kiro_crew.shared_crew.admission import OperationKind as Op
+
+    monkeypatch.setattr(enterprise_gates, "current_gates", _composed(budget))
+    ran: list[int] = []
+    told: list[object] = []
+
+    async def work() -> str:
+        ran.append(1)
+        return "ran"
+
+    async def refused(why: object) -> None:
+        told.append(why)
+
+    assert (
+        await turn_gate.run_channel_turn(
+            session_key="slack:1", text="hi", automation=False, run=work, refused=refused
+        )
+        is None
+    )
+    assert await turn_gate.run_admitted(
+        work(), session_key="agent:x", operation=Op.CHANNEL_TURN, refused=told.append
+    ) is None
+    assert ran == []
+    assert told == [reason, reason]
+    assert "inference budget" in turn_gate.capacity_note(reason)
+
+
+@pytest.mark.asyncio
+async def test_an_http_turn_is_not_asked_twice(monkeypatch):
+    from kiro_crew.shared_crew import turn_gate
+
+    asked: list[int] = []
+
+    def gates():
+        asked.append(1)
+        return EnterpriseGates(_seams(grants=False, budget=BudgetState.EXHAUSTED))
+
+    monkeypatch.setattr(enterprise_gates, "current_gates", gates)
+
+    async def off() -> bool:
+        return False
+
+    monkeypatch.setattr(turn_gate, "admission_on", off)
+
+    async def work() -> str:
+        return "ran"
+
+    # A side chat or thread reply arrives over HTTP: the middleware already asked.
+    assert await turn_gate.run_admitted(work(), session_key="side:x") == "ran"
+    assert asked == []

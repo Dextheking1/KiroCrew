@@ -504,7 +504,9 @@ async def api_crew_turn(request: web.Request) -> web.StreamResponse:
         session_key=f"remote:{request.match_info.get('id', '')}",
         budget_key=actor_budget(request),
         operation=OperationKind.REMOTE,
-        refused=refusal.append,
+        # Only a channel turn is refused by a budget reason string; this one
+        # arrives over HTTP, where the enterprise middleware answers that.
+        refused=lambda why: refusal.append(why if isinstance(why, ReasonCode) else None),
     )
     if response is not None:
         return response
