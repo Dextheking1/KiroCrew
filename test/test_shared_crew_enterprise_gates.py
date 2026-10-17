@@ -144,15 +144,14 @@ class TestSharedAccess:
             assert (await _call(_app(gates, person), "GET", "/api/sessions"))[0] == 200
 
     @pytest.mark.asyncio
-    async def test_individual_account_is_refused_with_a_reason(self) -> None:
+    async def test_individual_account_gets_the_authority_answer_not_a_local_rule(self) -> None:
         status, body = await _call(
             _app(EnterpriseGates(_seams()), INDIVIDUAL), "GET", "/api/sessions"
         )
+        # This authority holds no grant for the person, so it is "no_grant":
+        # the refusal names the authority's answer, never an identity class.
         assert status == 403
-        assert body == {
-            "error": "shared_access_refused",
-            "reason": "individual_account_not_eligible",
-        }
+        assert body == {"error": "shared_access_refused", "reason": "no_grant"}
 
     @pytest.mark.asyncio
     async def test_revoked_grant_is_refused(self) -> None:

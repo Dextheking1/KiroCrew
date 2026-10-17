@@ -302,7 +302,18 @@ class TestResolution:
     def test_full_provider_resolves_when_tests_opt_in(self) -> None:
         seams = resolve_enterprise(_Enterprise(), allow_test_providers=True, workload_host="eks")
         caps = seams.capabilities_dict()
-        assert {r["state"] for r in caps.values()} == {"available"}
+        original = (
+            "human_credentials",
+            "individual_grants",
+            "workload_identity",
+            "crew_identity",
+            "heartbeat",
+            "inference_budget",
+            "deployment_context",
+        )
+        assert {caps[k]["state"] for k in original} == {"available"}
+        # An edition written before the newer accessors existed reads not configured.
+        assert {caps[k]["reason"] for k in caps if k not in original} == {"not_configured"}
         assert seams.deployment == DeploymentContext(deployment_ref="dep-1", tenant_ref="ten-1")
 
     def test_object_not_meeting_contract_refused(self) -> None:
@@ -684,14 +695,18 @@ class TestHeartbeat:
     def test_state_machine(self) -> None:
         tracker = HeartbeatTracker(late_after_seconds=180)
         assert tracker.state(T0) is HeartbeatState.NOT_CONNECTED
-        assert tracker.snapshot(T0) == {"state": "not_connected", "last_seen": None}
+        assert tracker.snapshot(T0) == {
+            "state": "not_connected",
+            "last_success": None,
+            "last_attempt": None,
+        }
         tracker.record_ack(T0)
         assert tracker.state(T0 + 180) is HeartbeatState.HEALTHY
         assert tracker.state(T0 + 181) is HeartbeatState.HEARTBEAT_LATE
         tracker.record_ack(T0 + 200)
         assert tracker.state(T0 + 210) is HeartbeatState.HEALTHY
         tracker.record_ack(T0 + 5)
-        assert tracker.last_seen == T0 + 200
+        assert tracker.last_success == T0 + 200
 
     def test_payload_keys_are_exactly_the_allowlist(self) -> None:
         assert set(_payload()) == HEARTBEAT_PAYLOAD_KEYS

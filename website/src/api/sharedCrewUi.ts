@@ -108,6 +108,12 @@ export const ALL_UNAVAILABLE: SharedCrewCapabilities = {
     heartbeat: { state: 'unavailable', reason: 'not_configured' },
     inference_budget: { state: 'unavailable', reason: 'not_configured' },
     deployment_context: { state: 'unavailable', reason: 'not_configured' },
+    human_sign_in: { state: 'unavailable', reason: 'not_configured' },
+    revocation: { state: 'unavailable', reason: 'not_configured' },
+    workload_verifier: { state: 'unavailable', reason: 'not_configured' },
+    crew_registration: { state: 'unavailable', reason: 'not_configured' },
+    directory: { state: 'unavailable', reason: 'not_configured' },
+    channel_actors: { state: 'unavailable', reason: 'not_configured' },
   },
 }
 

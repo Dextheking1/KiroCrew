@@ -2,9 +2,10 @@
 
 Three access modes exist and each has its own bar:
 
-* **shared multi-user access** lets several people work in one Crew. It is for
-  organization-managed (directory-backed) human identities and tailnet users;
-  an individually authenticated consumer account is not eligible;
+* **shared multi-user access** lets several people work in one Crew. Which
+  people are eligible is decided outside this build by an access-decision
+  authority; no identity class is eligible or refused here, and a sign-in
+  alone grants nothing;
 * **personal remote control** lets one person reach their own machine. Any
   human identity class is eligible, and it stays off until the operator turns
   it on;
@@ -43,7 +44,12 @@ logger = logging.getLogger(__name__)
 
 
 class IdentityClass(str, enum.Enum):
-    """How a human credential was established, which decides eligibility."""
+    """How a human credential was established.
+
+    Data, not policy: the class is recorded and shown, and an external access
+    decision may read it, but no rule in this build allows or refuses shared
+    access because of it.
+    """
 
     #: An organization-managed identity backed by a directory.
     ORGANIZATION_DIRECTORY = "organization_directory"
@@ -88,8 +94,9 @@ def identity_class_of(principal: Principal) -> IdentityClass:
 
 class EligibilityReason(str, enum.Enum):
     ELIGIBLE = "eligible"
-    #: An individual consumer account asked for shared multi-user access.
-    INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE = "individual_account_not_eligible"
+    #: Shared access for a person is decided by an external access-decision
+    #: authority; this build holds no eligibility rule of its own.
+    EXTERNAL_DECISION_REQUIRED = "external_decision_required"
     #: The principal is not a person.
     NOT_A_PERSON = "not_a_person"
 
@@ -104,26 +111,27 @@ class Eligibility:
         return self.reason is EligibilityReason.ELIGIBLE
 
 
-SHARED_ACCESS_CLASSES = frozenset({IdentityClass.ORGANIZATION_DIRECTORY, IdentityClass.TAILNET})
 REMOTE_CONTROL_CLASSES = frozenset(IdentityClass)
 
-
-def _eligibility(
-    principal: Principal, identity_class: Optional[IdentityClass], allowed: frozenset[IdentityClass]
-) -> Eligibility:
-    cls = identity_class if identity_class is not None else identity_class_of(principal)
-    if principal.kind is not PrincipalKind.HUMAN:
-        return Eligibility(EligibilityReason.NOT_A_PERSON, cls)
-    if cls not in allowed:
-        return Eligibility(EligibilityReason.INDIVIDUAL_ACCOUNT_NOT_ELIGIBLE, cls)
-    return Eligibility(EligibilityReason.ELIGIBLE, cls)
+#: Who decides shared multi-user eligibility. Reported in ``access_modes`` so a
+#: client never reads an identity class as a verdict.
+SHARED_ELIGIBILITY_DECIDED_BY = "external_authority"
 
 
 def shared_access_eligibility(
     principal: Principal, identity_class: Optional[IdentityClass] = None
 ) -> Eligibility:
-    """Whether *principal* may use shared multi-user access."""
-    return _eligibility(principal, identity_class, SHARED_ACCESS_CLASSES)
+    """What this build can say about *principal* and shared multi-user access.
+
+    Nothing beyond "a person needs an external decision": a person reads
+    ``external_decision_required`` whatever their identity class, and anything
+    else reads ``not_a_person``. The decision itself is
+    ``enterprise.GrantGate.decide`` against a composed authority.
+    """
+    cls = identity_class if identity_class is not None else identity_class_of(principal)
+    if principal.kind is not PrincipalKind.HUMAN:
+        return Eligibility(EligibilityReason.NOT_A_PERSON, cls)
+    return Eligibility(EligibilityReason.EXTERNAL_DECISION_REQUIRED, cls)
 
 
 def remote_control_eligibility(
@@ -132,8 +140,12 @@ def remote_control_eligibility(
     """Whether *principal* may remotely control their own machine.
 
     Every human identity class qualifies, an individual account included.
+    This is the personal same-account path, separate from shared access.
     """
-    return _eligibility(principal, identity_class, REMOTE_CONTROL_CLASSES)
+    cls = identity_class if identity_class is not None else identity_class_of(principal)
+    if principal.kind is not PrincipalKind.HUMAN:
+        return Eligibility(EligibilityReason.NOT_A_PERSON, cls)
+    return Eligibility(EligibilityReason.ELIGIBLE, cls)
 
 
 # ── access modes and their requirements ──
@@ -149,15 +161,33 @@ REQUIRES_INDIVIDUAL_LOGIN = "individual_login"
 REMOTE_CONTROL_DEFAULT_ENABLED = False
 
 
+REASON_ELIGIBILITY_NOT_CONFIGURED = "not_configured"
+
+
 def access_modes_dict(
-    *, shared_state: CapabilityState, workload_state: CapabilityState
+    *,
+    shared_state: CapabilityState,
+    workload_state: CapabilityState,
+    eligibility_state: CapabilityState = CapabilityState.UNAVAILABLE,
+    eligibility_reason: str = REASON_ELIGIBILITY_NOT_CONFIGURED,
 ) -> dict[str, dict[str, Any]]:
-    """The three access modes, each with its own requirement and eligible classes."""
+    """The three access modes, each with its own requirement.
+
+    ``shared_multi_user.state`` is the network setup path (Tailscale and the
+    other setup paths). ``shared_multi_user.eligibility`` is the external
+    access decision for people: ``unavailable`` with no authority composed,
+    which means no person is granted shared access through it.
+    """
+    eligibility: dict[str, Any] = {
+        "decided_by": SHARED_ELIGIBILITY_DECIDED_BY,
+        "state": eligibility_state.value,
+        "reason": "" if eligibility_state is CapabilityState.AVAILABLE else eligibility_reason,
+    }
     return {
         MODE_SHARED_MULTI_USER: {
             "state": shared_state.value,
             "requires": REQUIRES_CLOUD_ACCOUNT,
-            "identity_classes": sorted(c.value for c in SHARED_ACCESS_CLASSES),
+            "eligibility": eligibility,
         },
         MODE_PERSONAL_REMOTE_CONTROL: {
             "state": CapabilityState.DISABLED.value,
@@ -208,6 +238,16 @@ def workload_host_supported(host: str) -> bool:
     return host in SUPPORTED_WORKLOAD_HOSTS
 
 
+#: The pod boundary workload identity actually has. Any process in an attested
+#: pod can ask the workload API for the Crew's identity, so there is no
+#: per-process isolation to claim; credential stripping and the sandbox are
+#: what keep a tool from it, and they are unchanged.
+POD_BOUNDARY: dict[str, Any] = {
+    "scope": "any_process_in_pod",
+    "per_process_isolation": False,
+}
+
+
 def workload_host_dict(host: str) -> dict[str, Any]:
     supported = workload_host_supported(host)
     return {
@@ -215,6 +255,7 @@ def workload_host_dict(host: str) -> dict[str, Any]:
         "host": host,
         "host_supported": supported,
         "reason": "" if supported else REASON_HOST_NOT_SUPPORTED,
+        "pod_boundary": dict(POD_BOUNDARY),
     }
 
 
@@ -375,7 +416,9 @@ def setup_paths_dict() -> dict[str, dict[str, str]]:
 __all__ = [
     "FORWARDED_ATTRIBUTION_REASONS",
     "IDENTITY_CLASS_KEY",
+    "POD_BOUNDARY",
     "REMOTE_CONTROL_DEFAULT_ENABLED",
+    "SHARED_ELIGIBILITY_DECIDED_BY",
     "SETUP_PATHS",
     "SUPPORTED_WORKLOAD_HOSTS",
     "Eligibility",

@@ -6,8 +6,18 @@ token auth, after the request's actor is published, and checks two things:
 
 * **shared access.** A request from a person reaching the Crew through a shared
   path (a tailnet peer or an enterprise identity) passes ``GrantGate.decide``
-  once a grant authority is composed. The local operator, Crew automation and
-  apps are not shared access and are not asked.
+  once a grant authority is composed. A signed-in enterprise identity with no
+  authority composed is refused ``access_decision_unavailable``: a login alone
+  never grants Crew access. While a grant authority is composed, an Unknown
+  caller (for example one who opened a channel-minted dashboard link through a
+  proxy) is refused ``unattributed_actor``, because the authority cannot decide
+  for no one; a channel user acts only through the authority's explicit
+  mapping (:meth:`EnterpriseGates.check_channel_actor`). The local operator,
+  Crew automation and apps are not shared access and are not asked.
+* **revocation.** With a revocation feed composed, a removed person is refused
+  at the cookie, WebSocket and approval-submission points
+  (``enterprise_revocation``), and the same enforcer rechecks queued work
+  before it starts.
 * **inference.** A request that starts new model work (:data:`CHARGEABLE_ROUTES`)
   passes ``BudgetGate.check`` once a budget provider is composed. Model work
   with no request (cron schedules, channel turns) asks
@@ -48,6 +58,11 @@ from kiro_crew.shared_crew.enterprise import (
     OperationKind,
     resolve_enterprise,
 )
+from kiro_crew.shared_crew.enterprise_revocation import (
+    EnforcementPoint,
+    RevocationEnforcer,
+    install_enforcer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +70,13 @@ REASON_NOT_CONFIGURED = "not_configured"
 REASON_ALLOWED = "allowed"
 ERROR_SHARED_ACCESS_REFUSED = "shared_access_refused"
 ERROR_INFERENCE_REFUSED = "inference_refused"
+REASON_ACCESS_DECISION_UNAVAILABLE = "access_decision_unavailable"
+REASON_UNATTRIBUTED_ACTOR = "unattributed_actor"
+REASON_CHANNEL_ACTOR_UNMAPPED = "channel_actor_unmapped"
+
+_APPROVAL_PATHS = re.compile(
+    r"\A/api/(?:approvals/[^/]+/[^/]+|chat/slots/[^/]+/approve|ask-question/[^/]+/answer)\Z"
+)
 
 #: Provenance that marks a person reaching the Crew through a shared path.
 SHARED_PROVENANCE = frozenset(
@@ -118,27 +140,104 @@ def _crew_id_of(seams: EnterpriseSeams) -> str:
 
 
 class EnterpriseGates:
-    """The grant and budget gates built from one set of checked providers."""
+    """The grant, revocation and budget gates built from one set of checked providers."""
 
-    def __init__(self, seams: EnterpriseSeams) -> None:
+    def __init__(self, seams: EnterpriseSeams, *, now: Optional[float] = None) -> None:
         self.seams = seams
         self._grants: Optional[GrantGate] = None
         self._budget: Optional[BudgetGate] = None
+        self._revocation: Optional[RevocationEnforcer] = None
+        crew_id = _crew_id_of(seams)
         if seams.grant_authority is not None:
-            self._grants = GrantGate(seams.grant_authority, crew_id=_crew_id_of(seams))
+            self._grants = GrantGate(seams.grant_authority, crew_id=crew_id)
         if seams.inference_budget is not None:
             self._budget = BudgetGate(seams.inference_budget, seams.deployment)
+        if seams.revocation_feed is not None:
+            try:
+                self._revocation = RevocationEnforcer(
+                    seams.revocation_feed,
+                    crew_id=crew_id,
+                    now=time.time() if now is None else now,
+                )
+            except Exception:  # noqa: BLE001 -- a feed with no policy enforces nothing
+                logger.warning("revocation feed refused", exc_info=True)
+        self._sign_in = seams.credential_verifier is not None or seams.sign_in is not None
 
     @property
     def configured(self) -> bool:
-        return self._grants is not None or self._budget is not None
+        return (
+            self._grants is not None
+            or self._budget is not None
+            or self._revocation is not None
+            or self._sign_in
+        )
 
-    def check_shared_access(self, principal: Principal, now: float) -> GateVerdict:
-        """Whether *principal* may use this Crew through a shared path."""
-        if self._grants is None or not is_shared_access(principal):
+    @property
+    def revocation(self) -> Optional[RevocationEnforcer]:
+        return self._revocation
+
+    def check_shared_access(
+        self,
+        principal: Principal,
+        now: float,
+        point: EnforcementPoint = EnforcementPoint.COOKIE,
+        *,
+        authenticated: bool = True,
+    ) -> GateVerdict:
+        """Whether *principal* may use this Crew through a shared path.
+
+        *authenticated* is whether dashboard auth admitted the request. An
+        Unknown caller that auth did not admit (a public path) is left to auth.
+        """
+        if not self.configured:
+            return _NOT_CONFIGURED
+        if principal.kind is PrincipalKind.UNKNOWN:
+            if self._grants is None or not authenticated:
+                return _NOT_CONFIGURED
+            return GateVerdict(False, REASON_UNATTRIBUTED_ACTOR, enforced=True)
+        if not is_shared_access(principal):
+            return _NOT_CONFIGURED
+        if self._revocation is not None:
+            removed = self._revocation.check(point, principal.id, now)
+            if not removed.allowed:
+                return GateVerdict(False, removed.reason.value, enforced=True)
+        if self._grants is None:
+            if principal.provenance is Provenance.ENTERPRISE:
+                return GateVerdict(False, REASON_ACCESS_DECISION_UNAVAILABLE, enforced=True)
             return _NOT_CONFIGURED
         decision = self._grants.decide(principal, now)
+        if decision.allowed and self._revocation is not None:
+            self._revocation.note_member(principal.id)
         return GateVerdict(decision.allowed, decision.reason.value, enforced=True)
+
+    def check_channel_actor(
+        self, channel: str, channel_user_id: str, now: float
+    ) -> tuple[GateVerdict, Optional[Principal]]:
+        """The person a channel user acts as, and whether they may.
+
+        With no grant authority composed the channel's own allowlist governs
+        alone, as before. Otherwise the user acts only through the
+        authority's explicit mapping, and the mapped person passes
+        :meth:`check_shared_access` like anyone else.
+        """
+        if self._grants is None:
+            return _NOT_CONFIGURED, None
+        mapping = self.seams.channel_actors
+        person: Optional[Principal] = None
+        if mapping is not None:
+            try:
+                person = mapping.principal_for(channel, channel_user_id)
+            except Exception:  # noqa: BLE001 -- an unreadable mapping maps no one
+                logger.info("channel actor mapping failed", exc_info=True)
+        if not isinstance(person, Principal) or person.kind is not PrincipalKind.HUMAN:
+            return GateVerdict(False, REASON_CHANNEL_ACTOR_UNMAPPED, enforced=True), None
+        decision = self._grants.decide(person, now)
+        verdict = GateVerdict(decision.allowed, decision.reason.value, enforced=True)
+        if decision.allowed and self._revocation is not None:
+            removed = self._revocation.check(EnforcementPoint.COOKIE, person.id, now)
+            if not removed.allowed:
+                verdict = GateVerdict(False, removed.reason.value, enforced=True)
+        return verdict, person if verdict.allowed else None
 
     def check_inference(self, operation: OperationKind) -> GateVerdict:
         """Whether *operation* may start new model work under the budget."""
@@ -178,19 +277,28 @@ def is_shared_access(principal: Principal) -> bool:
 
 
 _LOCK = threading.Lock()
-_CACHED: Optional[tuple[tuple[int, int, int], EnterpriseGates]] = None
+_CACHED: Optional[tuple[tuple[int, ...], EnterpriseGates]] = None
 
 
 def current_gates(resolver: Callable[[], EnterpriseSeams] = resolve_enterprise) -> EnterpriseGates:
     """The gates for the composed providers, reused while they stay the same."""
     global _CACHED
     seams = resolver()
-    key = (id(seams.grant_authority), id(seams.inference_budget), id(seams.crew_binding))
+    key = (
+        id(seams.grant_authority),
+        id(seams.inference_budget),
+        id(seams.crew_binding),
+        id(seams.revocation_feed),
+        id(seams.credential_verifier),
+        id(seams.sign_in),
+        id(seams.channel_actors),
+    )
     with _LOCK:
         if _CACHED is not None and _CACHED[0] == key:
             return _CACHED[1]
         gates = EnterpriseGates(seams)
         _CACHED = (key, gates)
+        install_enforcer(gates.revocation)
         return gates
 
 
@@ -198,6 +306,15 @@ def _reset_for_tests() -> None:
     global _CACHED
     with _LOCK:
         _CACHED = None
+    install_enforcer(None)
+
+
+def _point_of(request: web.Request) -> EnforcementPoint:
+    if (request.headers.get("Upgrade") or "").lower() == "websocket":
+        return EnforcementPoint.WEBSOCKET
+    if request.method == "POST" and _APPROVAL_PATHS.match(request.path):
+        return EnforcementPoint.APPROVAL_SUBMISSION
+    return EnforcementPoint.COOKIE
 
 
 def _refusal(error: str, reason: str) -> web.Response:
@@ -224,9 +341,15 @@ def make_enterprise_gate_middleware(
             return await handler(request)
         if not current.configured:
             return await handler(request)
+        now = clock()
+        enforcer = current.revocation
+        if enforcer is not None and enforcer.sync_due(now):
+            await asyncio.to_thread(enforcer.sync, now)
         principal = _actor_principal(request)
         if principal is not None:
-            verdict = current.check_shared_access(principal, clock())
+            verdict = current.check_shared_access(
+                principal, now, _point_of(request), authenticated=bool(request.get("user"))
+            )
             if not verdict.allowed:
                 return _refusal(ERROR_SHARED_ACCESS_REFUSED, verdict.reason)
         operation = chargeable_operation(request.method, request.path)
