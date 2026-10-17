@@ -899,9 +899,30 @@ kirocrew config set dashboard.tailscale.trust_identity true
 kirocrew config set dashboard.tailscale.allowed_logins '["alice@example.com", "bob@example.com"]'
 ```
 
-Each session then shows its creator, each message its author, and the People
-settings page lists who has connected. To give every person a fair share of the
-host, turn on fair admission:
+The allowlist always holds: a tailnet login not on the list is refused, on
+every platform. Naming each person is a separate question. Behind
+`tailscale serve` the gateway only sees a local connection, so it names the
+person only when the operating system can prove that connection came from the
+Tailscale daemon:
+
+| Host | Through `tailscale serve` | Gateway bound to its tailnet address |
+|---|---|---|
+| Linux, `tailscaled` as root or its own user | Each person is named | Each person is named |
+| Linux, `tailscaled` as the gateway's user | Allowed people get in, shown as Unknown | Each person is named |
+| macOS | Allowed people get in, shown as Unknown | Each person is named |
+| Windows | Allowed people get in, shown as Unknown | Each person is named |
+
+On a Mac, then, teammates on the allowlist can use the Crew through
+`tailscale serve`, but their sessions and messages read Unknown, and
+Settings > People says that people cannot be named on this machine. Anyone not
+on the list is refused. `GET /api/shared-crew/capabilities` reports the same
+thing: `attribution` is `unavailable` with reason `platform_unprovable` (macOS,
+Windows) or `daemon_same_user`, and `degraded` with `daemon_not_found` when no
+`tailscaled` was running when the gateway started.
+
+Where people are named, each session shows its creator, each message its
+author, and the People settings page lists who has connected. To give every
+person a fair share of the host, turn on fair admission:
 
 ```bash
 kirocrew config set dashboard.shared_crew.admission_enabled true

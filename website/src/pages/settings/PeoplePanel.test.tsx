@@ -69,6 +69,32 @@ describe('PeoplePanel', () => {
     expect(await screen.findByTestId('people-unavailable')).toBeInTheDocument()
   })
 
+  it('says people cannot be named where the host cannot prove who comes through Tailscale Serve', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'unavailable', reasons: { attribution: 'platform_unprovable' } })
+    people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })
+    mount()
+    expect(await screen.findByTestId('people-unnamed')).toBeInTheDocument()
+    expect(screen.getByText('People cannot be named on this machine')).toBeInTheDocument()
+    expect(screen.getByText(/this operating system cannot prove who each one is/)).toBeInTheDocument()
+    expect(screen.queryByTestId('people-unavailable')).toBeNull()
+  })
+
+  it('names a same-user Tailscale as the reason', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'unavailable', reasons: { attribution: 'daemon_same_user' } })
+    people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })
+    mount()
+    expect(await screen.findByTestId('people-unnamed')).toBeInTheDocument()
+    expect(screen.getByText(/runs as the same user as this Crew/)).toBeInTheDocument()
+  })
+
+  it('notes when Tailscale was not running at start', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'degraded', reasons: { attribution: 'daemon_not_found' } })
+    people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })
+    mount()
+    expect(await screen.findByTestId('people-daemon-not-found')).toBeInTheDocument()
+    expect(screen.getByTestId('people-panel')).toBeInTheDocument()
+  })
+
   it('shows one setup empty state when no shared-access path is configured', async () => {
     caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
     people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] })

@@ -137,7 +137,22 @@ proves the client end of the loopback socket belongs to `tailscaled`
 (`tailnet_proxy_proof.loopback_client_is_daemon`, Linux only; elsewhere the serve row
 never resolves and such a caller is Unknown). A process running as the gateway's own
 user is never that proof, so a local token holder adding `X-Forwarded-For` is Unknown,
-not the person it names. A
+not the person it names. Without the proof the allowlist still decides admission
+(`tailnet.forwarded_peer_refusal`): a forwarded tailnet request is admitted, as
+Unknown, only when the daemon's `whois` of its single forwarded address names an
+allowlisted login, and refused otherwise, so access never widens where names cannot
+be proven.
+
+Supported matrix for the serve row: Linux with `tailscaled` running as a different
+user than the gateway names people; Linux with a same-user `tailscaled`, macOS and
+Windows admit allowlisted people as Unknown. macOS gives an unprivileged process no
+owner for another user's loopback socket, Windows has no such check in this build,
+and `tailscale serve` does not register its loopback connections for a `whois` by
+port. The direct row names people on every platform. When identity trust is on and
+the gateway listens on loopback only, `access.note_tailnet` records
+`tailnet_proxy_proof.proof_support()` at start and `attribution` reports
+`unavailable` (`platform_unprovable`, `daemon_same_user`) or `degraded`
+(`daemon_not_found`). A
 `Tailscale-User-Login` header that disagrees with the daemon drops the
 attribution. A non-loopback peer that sends `X-Forwarded-For` is a proxy on
 another node and is Unknown. Funnel, other reverse proxies and unverifiable
@@ -655,7 +670,10 @@ A source answers from state it already holds; it does no I/O on the request path
 `Capabilities.to_dict()` plus these additive keys, states and reasons only, sent
 `no-store`:
 
-- `reasons`: field to `no_source` or `source_failed`;
+- `reasons`: field to `no_source` or `source_failed`, or for `attribution` the
+  forwarded-identity gap (`platform_unprovable`, `daemon_same_user`,
+  `daemon_not_found`, see Derivation). A source names a reason in
+  `CapabilityContribution.reasons`; the weakest answer's reason is reported;
 - `enterprise`: each key in `enterprise.ENTERPRISE_CAPABILITY_KEYS` to `{state, reason}`;
 - `setup_paths`: each shared-access setup path (`access.SETUP_PATHS`: `tailscale`,
   `kiro_login`, `systems_manager`) to `{state, reason}`. Tailscale reports what the

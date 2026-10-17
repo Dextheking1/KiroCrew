@@ -18,7 +18,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, Mapping
 
-from kiro_crew.shared_crew import admission_gate, capabilities, people, work_store
+from kiro_crew.shared_crew import access, admission_gate, capabilities, people, work_store
 from kiro_crew.shared_crew.admission import AcceptedWork
 from kiro_crew.shared_crew.capabilities import CapabilityContribution
 from kiro_crew.shared_crew.collab import work_frame
@@ -26,6 +26,7 @@ from kiro_crew.shared_crew.contracts import CapabilityState, EnforcementLevel
 
 SOURCE_IDENTITY = "shared_crew.identity"
 SOURCE_PRESENCE = "shared_crew.presence"
+SOURCE_FORWARDED_IDENTITY = "shared_crew.forwarded_identity"
 SOURCE_ADMISSION = "shared_crew.admission"
 
 _LOCK = threading.Lock()
@@ -47,6 +48,18 @@ def identity_source() -> CapabilityContribution:
         },
         membership_link="",
     )
+
+
+def forwarded_identity_source() -> CapabilityContribution:
+    """Attribution through ``tailscale serve``, as :func:`access.note_tailnet` recorded it.
+
+    ``unavailable`` (or ``degraded``) with the proof's reason where a person
+    reaching the Crew through ``tailscale serve`` can never be named on this
+    host; ``available`` otherwise, so it never weakens a host it does not describe.
+    """
+    answer = access.forwarded_attribution()
+    reasons = {"attribution": answer.reason} if answer.reason else {}
+    return CapabilityContribution(states={"attribution": answer.state}, reasons=reasons)
 
 
 def presence_source() -> CapabilityContribution:
@@ -130,6 +143,7 @@ _SOURCES = (
         ("attribution", "authoritative_directory", "membership_link"),
         identity_source,
     ),
+    (SOURCE_FORWARDED_IDENTITY, ("attribution",), forwarded_identity_source),
     (SOURCE_PRESENCE, ("presence",), presence_source),
     (SOURCE_ADMISSION, ("queueing", "containment", "containment_level"), admission_source),
 )

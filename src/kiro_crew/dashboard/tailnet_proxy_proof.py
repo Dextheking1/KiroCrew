@@ -17,8 +17,9 @@ The proof, Linux only (``/proc`` is the source):
 3. The owner uid is the uid of a running process named ``tailscaled``.
 
 Every other platform, and every read failure, answers ``False``: no forwarded
-identity, which the caller already treats as an unresolved peer. Nothing here
-raises. The blocking reads run on the caller's subprocess executor.
+identity, so the allowlist alone decides admission and nobody is named.
+:func:`proof_support` says at start why the proof cannot succeed on this host.
+Nothing here raises. The blocking reads run on the caller's subprocess executor.
 """
 
 from __future__ import annotations
@@ -31,7 +32,18 @@ import threading
 import time
 from pathlib import Path
 
-__all__ = ["loopback_client_is_daemon"]
+__all__ = [
+    "PROOF_DAEMON_NOT_FOUND",
+    "PROOF_DAEMON_SAME_USER",
+    "PROOF_PLATFORM_UNPROVABLE",
+    "loopback_client_is_daemon",
+    "proof_support",
+]
+
+#: Why :func:`loopback_client_is_daemon` cannot succeed on this host.
+PROOF_PLATFORM_UNPROVABLE = "platform_unprovable"
+PROOF_DAEMON_SAME_USER = "daemon_same_user"
+PROOF_DAEMON_NOT_FOUND = "daemon_not_found"
 
 _PROC = Path("/proc")
 _TCP_ESTABLISHED = "01"
@@ -154,3 +166,24 @@ def loopback_client_is_daemon(peer: object, local: object) -> bool:
         return owner in _daemon_uids()
     except Exception:  # noqa: BLE001 - the module contract: nothing here raises
         return False
+
+
+def proof_support() -> str:
+    """``""`` when the proof can succeed on this host, else why it cannot.
+
+    ``platform_unprovable`` off Linux: no source names a loopback socket's owner
+    to an unprivileged process there. ``daemon_same_user`` when every running
+    ``tailscaled`` has the gateway's effective uid. ``daemon_not_found`` when
+    none is running, which may change once the daemon starts. Blocking: it
+    scans ``/proc``.
+    """
+    if not sys.platform.startswith("linux"):
+        return PROOF_PLATFORM_UNPROVABLE
+    try:
+        uids = _scan_daemon_uids()
+        euid = os.geteuid()
+    except Exception:  # noqa: BLE001 - the module contract: nothing here raises
+        return PROOF_DAEMON_NOT_FOUND
+    if not uids:
+        return PROOF_DAEMON_NOT_FOUND
+    return "" if uids - {euid} else PROOF_DAEMON_SAME_USER
