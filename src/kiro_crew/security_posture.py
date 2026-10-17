@@ -1961,14 +1961,26 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # ``apps/builtins/aws_control/backend/backup.py`` boundary, which keeps every
         # outbound archive and label PUT. ``egress_text`` defines the redaction sequence
         # the engine applies to exported conversation rows, published and foreign labels
-        # and the recorded nightly failure text; ``nightly`` applies it to that failure
-        # text, which the status route serves (the call-site scan matches its read of the
-        # outbound-redaction switch, ``_unattended_sessions_redaction_gap``);
-        # ``retention`` redacts only its gate-side log lines and SEL audit text. The split
-        # adds no transport or audience and therefore no posture row.
+        # and the recorded nightly failure text; ``conversations`` applies it to each
+        # exported conversation row before the row reaches the archive the facade
+        # uploads; ``nightly`` applies it to that failure text, which the status route
+        # serves (the call-site scan matches its read of the outbound-redaction switch,
+        # ``_unattended_sessions_redaction_gap``); ``retention`` redacts only its
+        # gate-side log lines and SEL audit text. The split adds no transport or audience
+        # and therefore no posture row.
+        "apps/builtins/aws_control/backend/backup_parts/conversations.py",
         "apps/builtins/aws_control/backend/backup_parts/egress_text.py",
         "apps/builtins/aws_control/backend/backup_parts/nightly.py",
         "apps/builtins/aws_control/backend/backup_parts/retention.py",
+        # Internal partitions behind the single registered
+        # ``apps/builtins/aws_control/backend/routes.py`` boundary, the AWS Control HTTP
+        # surface whose routes serve every response. ``routes_parts/common.py`` holds
+        # ``_safe_error``, the one chokepoint every outbound error string goes through,
+        # and ``routes_parts/drive.py`` redacts a preview's head bytes before the preview
+        # route returns them. The split adds no transport or audience and therefore no
+        # posture row.
+        "apps/builtins/aws_control/backend/routes_parts/common.py",
+        "apps/builtins/aws_control/backend/routes_parts/drive.py",
         # The shared recursive redactor helper itself — a pure scrubber, not an
         # egress boundary; the modules that CALL it (mochi routes/hooks) are the
         # registered sinks.
@@ -2283,10 +2295,18 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # the redacted string to chat_utils and emits nothing of its own.
         "dashboard/display_battery.py",
         "dashboard/chat_voice.py",
-        # The content-search engines composed into dashboard/handlers/files.py:
-        # they redact each hit row, and that facade's api_file_grep, a registered
-        # sink module, returns the rows.
+        # The grep route and its content-search engines, composed into
+        # dashboard/handlers/files.py: they redact each hit row, and that facade, a
+        # registered sink module, serves the route that returns the rows.
         "dashboard/file_api/grep.py",
+        # The outbox routes, the Slack and channel uploads with their admission gate,
+        # and the file viewer's read, raw, write and diff routes, composed into
+        # dashboard/handlers/files.py: they redact the file cards, upload gates and
+        # viewer bodies that facade's registered sink rows already name, and open no
+        # output path of their own.
+        "dashboard/file_api/outbox.py",
+        "dashboard/file_api/channel_upload.py",
+        "dashboard/file_api/editor.py",
         # Owner-driven components extracted from dashboard/state.py.  They
         # redact while staging or dispatching through the facade, but they do
         # not introduce new logical egress paths: the same DashboardState
@@ -2805,7 +2825,7 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # credential pass (its docstring and identifier match the scan). Nothing
         # is redacted here and nothing leaves; the sink that honours the switch is
         # `dashboard/handlers/files.py`, already registered.
-        "config/loader.py",
+        "config/loader_locations.py",
         # Owner-gated GET/PUT for the credential-redaction switch. The identifiers
         # (`api_credential_redaction_*`, `redaction_switch.set_enabled`) match the
         # scan, but the handler redacts nothing: it reads and writes a boolean on

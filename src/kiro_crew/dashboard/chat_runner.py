@@ -549,6 +549,7 @@ from kiro_crew.hooks import (  # noqa: F401
 from kiro_crew.image_artifacts import register_images_off_loop
 from kiro_crew.llm_helpers import (  # noqa: F401
     _NO_PRIOR_STATS,
+    CREDENTIAL_RELOAD_RETRY_NOTICE,
     ROUTE_BASELINE_ATTR,
     TRANSIENT_RETRIES,
     TURN_FALLBACK_ATTR,
@@ -558,10 +559,12 @@ from kiro_crew.llm_helpers import (  # noqa: F401
     acp_error_is_connection_failure,
     acp_error_is_session_not_found,
     acp_error_is_transient,
+    acp_error_needs_fresh_credentials,
     advance_fallback_candidate,
     configured_fallback_chain,
     connection_recovery_open,
     connection_retry_delay,
+    credential_give_up_text,
     fallback_rewound_transient_budget,
     first_advertised_fallback,
     latch_route_baseline,
@@ -16951,12 +16954,17 @@ async def _run_chat(
             # process that session/loads the SAME backend id (falling back to a
             # new session plus history replay only when that load fails). ONE
             # retry per landed turn: a backend that loses it again ends here.
+            # A credential failure rides the same path, worded for its cause.
+            _creds = acp_error_needs_fresh_credentials(exc)
             logger.warning(
-                "Backend lost the session for slot %s — re-loading on a fresh runtime",
+                "Backend %s for slot %s — re-loading on a fresh runtime",
+                "could not load its cloud credentials" if _creds else "lost the session",
                 slot.key,
             )
             needs_session_reset = True  # checked in finally block
-            await _persist_partial_reply("error: session not found")
+            await _persist_partial_reply(
+                "error: cloud credentials not loaded" if _creds else "error: session not found"
+            )
             # A Stop that already resolved to idle is invisible to the suppress
             # check; the replay snapshots below are post-Stop, so only this gate
             # can see it.
@@ -16966,7 +16974,7 @@ async def _run_chat(
                 slot._session_not_found_retry_used = True
                 slot.append(
                     "error",
-                    SESSION_NOT_FOUND_RETRY_TEXT,
+                    CREDENTIAL_RELOAD_RETRY_NOTICE if _creds else SESSION_NOT_FOUND_RETRY_TEXT,
                     "msg msg-err",
                     meta={"kind": TRANSIENT_RETRY_KIND},
                 )
@@ -16992,6 +17000,15 @@ async def _run_chat(
                     session_key=session_key,
                     stop_gen=_snf_stop_gen,
                     session_stop_gen=_snf_session_stop_gen,
+                )
+            elif _creds:
+                # The fresh process failed too, so the helper itself is broken
+                # and a new chat would fail the same way: the provider's own
+                # instruction is the only actionable line.
+                slot.append(
+                    "error",
+                    f"❌ {credential_give_up_text(exc)} Then send your message again.",
+                    "msg msg-err",
                 )
             else:
                 slot.append("error", SESSION_NOT_FOUND_GIVE_UP_TEXT, "msg msg-err")

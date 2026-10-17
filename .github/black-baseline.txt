@@ -490,7 +490,6 @@ test/test_design_tweak_discovery.py
 test/test_design_tweak_project_routes.py
 test/test_design_tweak_queue_routes.py
 test/test_design_tweak_relay_paths.py
-test/test_dev_fleet_app.py
 test/test_dev_fleet_node_toolchain.py
 test/test_dev_fleet_server_more_coverage.py
 test/test_diagnostics.py
@@ -583,7 +582,6 @@ test/test_lesson_ranking.py
 test/test_lifecycle_hooks.py
 test/test_link_dashboard.py
 test/test_local_gate.py
-test/test_loopback_proxy.py
 test/test_manifest_hooks.py
 test/test_mark_permission_resolved.py
 test/test_mcp_api_port_resolution.py
@@ -789,7 +787,6 @@ test/test_source_providers_comment_guard.py
 test/test_source_summary.py
 test/test_spawn_list_redaction.py
 test/test_stable_release_gate.py
-test/test_stale_asset_watchdog.py
 test/test_steering_api.py
 test/test_stop_kill_cancel.py
 test/test_streaming_meta_redaction.py
@@ -810,7 +807,6 @@ test/test_tailnet_serve.py
 test/test_tailnet_session_url.py
 test/test_taskrunner_atomic_persistence.py
 test/test_taskrunner_autoapprove.py
-test/test_taskrunner_v2_scenarios.py
 test/test_tcc_protected_dirs.py
 test/test_teams_config.py
 test/test_teams_gateway.py
@@ -828,7 +824,6 @@ test/test_turn_duration_hooks.py
 test/test_turn_duration_slack.py
 test/test_turn_duration_task_runner.py
 test/test_turn_duration_workflow.py
-test/test_unattended_slot_guardrails.py
 test/test_update_venv_detection.py
 test/test_use_builtin_browser_config.py
 test/test_user_resolution_fallback.py

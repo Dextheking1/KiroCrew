@@ -62,7 +62,6 @@
  5 test_auto_research_campaign_contract.py
  3 test_auto_research_handlers_coverage.py
  1 test_auto_research_onloop_db.py
-13 test_autonudge.py
  2 test_autonudge_reconciler.py
  4 test_autonudge_remove_offload_425.py
  4 test_aws_control_backup.py
@@ -82,8 +81,8 @@
  3 test_chat_fork_member_memory.py
  3 test_chat_mode_security.py
  2 test_chat_nav.py
- 5 test_chat_regenerate_cov80.py
- 9 test_chat_runner_coverage.py
+ 4 test_chat_regenerate_cov80.py
+ 1 test_chat_regenerate_cov80_edit_resend_boundary.py
  1 test_chat_runner_folder_steering.py
  2 test_chat_send_client_meta_survival.py
  4 test_chat_send_echo_scope.py
@@ -96,11 +95,11 @@
  2 test_cloud_ssm.py
  1 test_codex_session_mcp.py
  4 test_cold_start_concurrency_config.py
- 9 test_compaction_failure_pause.py
- 6 test_conductor_wake.py
+ 3 test_conductor_wake.py
+ 3 test_conductor_wake_pushed_ticks.py
  1 test_config_api.py
  6 test_config_live.py
- 1 test_config_loader.py
+ 1 test_config_loader_agent_resolution.py
  2 test_config_save_locking.py
  1 test_config_savers_locked_write.py
  1 test_connections_l1_smoke.py
@@ -147,14 +146,9 @@
  1 test_decisions_points.py
  2 test_denied_commands_security.py
  1 test_dependency_coordinator.py
- 4 test_dev_fleet_app_guards.py
- 3 test_dev_fleet_app_make_live_cutover.py
- 1 test_dev_fleet_app_prune.py
+ 3 test_dev_fleet_app_guards.py
  1 test_dev_fleet_app_sync.py
  2 test_dev_fleet_app_teardown.py
-14 test_dev_fleet_removal_pod_start.py
- 7 test_dev_fleet_server_coverage.py
- 8 test_devfleet_prune_shutdown_drain.py
  1 test_diag_threads.py
  3 test_discord_approval_press_race_13539.py
  2 test_discord_dispatcher.py
@@ -164,7 +158,6 @@
  5 test_embedding_rebuild_generation.py
  1 test_embedding_rebuild_process.py
  2 test_embeddings.py
- 8 test_embeddings_resource_budget.py
  5 test_executors.py
  1 test_explain_for_skill.py
  6 test_external_logout_detection_retirement.py
@@ -184,7 +177,6 @@
  7 test_history_locking_remediation.py
  1 test_history_pagination_projection.py
  1 test_hook_gate_off_loop.py
- 8 test_hook_reconcile.py
  3 test_hop_port_guard.py
  1 test_inbound_spool.py
  3 test_inbound_unbind_notice.py
@@ -209,7 +201,6 @@
  2 test_knowledge_agent_sync_off_loop.py
  2 test_knowledge_cross_thread.py
  3 test_knowledge_handlers_coverage.py
- 7 test_knowledge_handlers_off_loop.py
  1 test_knowledge_ingest_magic_byte.py
  2 test_knowledge_store_sources.py
  1 test_knowledge_sync_local_file.py
@@ -237,9 +228,7 @@
  1 test_mcp_preflight.py
  1 test_mcp_shared.py
  3 test_mcp_shared_deferred_tools.py
- 7 test_md_notebook.py
  1 test_meetings_audio_import.py
- 8 test_meetings_routes.py
  4 test_meetings_routes_lifecycle.py
  3 test_member_memory_mcp_routing.py
  1 test_members_eventlog_wiring_append_ordering.py
@@ -262,7 +251,6 @@
  1 test_native_subagent_boundary.py
  2 test_oneshot_supervisor.py
  1 test_opencode_session_mcp.py
-13 test_overload_integration_glue.py
  1 test_papyrus_latex.py
  6 test_pathres_loop_starvation.py
  1 test_pid_lifecycle_process_sweeps.py
@@ -277,7 +265,8 @@
  1 test_provider_spawn_off_loop_18172.py
  4 test_publish_delete_race.py
  4 test_published_queue_depth.py
- 3 test_push_guard.py
+ 2 test_push_guard_diagnostics.py
+ 1 test_push_guard_squash.py
  1 test_queue_boundary_finalize.py
  4 test_queue_depth_after_deferred_start.py
  3 test_queue_receipt.py
@@ -295,7 +284,7 @@
  1 test_sandbox_argv.py
  2 test_sandbox_mount_source_sweep.py
  1 test_scenarios_v2_logic.py
- 2 test_security_conductor_scripts.py
+ 2 test_security_conductor_scripts_verify_finding.py
  4 test_security_path_resolve_bounded.py
  2 test_sel.py
  2 test_sel_prune_streaming.py
@@ -328,7 +317,6 @@
  1 test_session_work_dir.py
  2 test_shell_audit_log.py
  1 test_shutdown_event.py
-15 test_side.py
  1 test_side_steer_queue.py
  5 test_sign_in_refresher.py
  1 test_skill_catalog_snapshot.py
@@ -349,7 +337,7 @@
  1 test_slot_payload_lineage.py
  1 test_slots_broadcast_byte_pacing.py
  1 test_snapshot.py
- 1 test_source_providers.py
+ 1 test_source_providers_gitlab_host.py
  1 test_spawn_admission_verdict_census.py
  1 test_spawn_approval_channel_governance_13491.py
  1 test_spawn_approval_mid_wait_deny_13559.py
@@ -357,7 +345,6 @@
  4 test_spawn_reasoning_effort.py
  3 test_spawn_release_queued.py
  6 test_ssh_tunnel_manager_cov80.py
-16 test_stale_asset_watchdog.py
  2 test_stall_enrichment.py
  4 test_start_priority.py
  1 test_stop_kill_cancel.py
@@ -367,7 +354,7 @@
  4 test_stub_broker_reconnect.py
  2 test_stub_writer_death.py
  4 test_subagent_config_hot_reload.py
- 1 test_subagent_coverage.py
+ 1 test_subagent_coverage_live_runs.py
  1 test_subagent_error_detail.py
  3 test_subagent_memory_bounds_concurrency.py
  1 test_subagent_no_tool_calls_note.py
@@ -398,9 +385,7 @@
  2 test_tool_permission.py
  4 test_truncating_save_recreate_order.py
  1 test_trusted_apps_api.py
- 7 test_tunnel_keeper.py
  3 test_turn_dispatch.py
- 7 test_unattended_slot_guardrails.py
  4 test_update_check_install_aware.py
  2 test_update_ownership.py
  1 test_vector_commit_failures.py
@@ -417,7 +402,6 @@
  3 test_windows_fail_closed_optin.py
  1 test_windows_job_limits.py
  2 test_windows_tree_reap.py
- 8 test_work_ledger_board_lock.py
  1 test_work_ledger_projection.py
  6 test_work_ledger_projection_rebuild_guards.py
  1 test_workflow_agent_spawn_governance.py

@@ -2903,6 +2903,19 @@ CHAT_FOLDER_DELETE_SCHEMA = ToolSchema(
     ],
 )
 
+CHAT_SESSION_PIN_MOVE_SCHEMA = ToolSchema(
+    tool_name="chat_session_pin_move",
+    fields=[
+        # Session references share chat_folder_move_session's shape: a slot key,
+        # a ``dashboard:`` session key, or an exact title -- only bound the length.
+        # Exactly one of ``before`` / ``after`` is required; the handler owns that
+        # rule, since it is not expressible as a field constraint.
+        FieldSpec("session", str, required=True, max_len=512),
+        FieldSpec("before", str, max_len=512),
+        FieldSpec("after", str, max_len=512),
+    ],
+)
+
 CHAT_FOLDER_FILE_SELF_SCHEMA = ToolSchema(
     tool_name="chat_folder_file_self",
     fields=[
@@ -4543,6 +4556,7 @@ MCP_DASHBOARD_SCHEMAS: dict[str, ToolSchema] = {
     "chat_folder_move_session": CHAT_FOLDER_MOVE_SESSION_SCHEMA,
     "chat_folder_delete": CHAT_FOLDER_DELETE_SCHEMA,
     "chat_folder_file_self": CHAT_FOLDER_FILE_SELF_SCHEMA,
+    "chat_session_pin_move": CHAT_SESSION_PIN_MOVE_SCHEMA,
     "chat_tag_list": CHAT_TAG_LIST_SCHEMA,
     "chat_tag_create": CHAT_TAG_CREATE_SCHEMA,
     "chat_tag_update": CHAT_TAG_UPDATE_SCHEMA,
@@ -5014,8 +5028,8 @@ DASHBOARD_PREVIEW_SCHEMA = ToolSchema(
 DASHBOARD_APPLY_SCHEMA = ToolSchema(
     tool_name="dashboard_apply",
     fields=[
-        # Optional. Present, the template is applied directly -- a preview is an
-        # optional look, not a gate. Absent, the staged preview is applied.
+        # Optional. Present, that template goes live -- a preview is an optional
+        # look, not a gate. Absent, the crewmate's own saved package goes live.
         FieldSpec("template_id", str, max_len=64),
     ],
 )

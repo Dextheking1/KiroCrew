@@ -16,7 +16,8 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from kiro_crew.config.loader import KiroCrewConfig, _feature_previews
+from kiro_crew.config.loader import KiroCrewConfig
+from kiro_crew.config.loader_builders import _feature_previews
 from kiro_crew.config.sections import FEATURE_PREVIEW_FLAGS
 
 REPO = Path(__file__).resolve().parents[1]

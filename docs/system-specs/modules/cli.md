@@ -531,7 +531,11 @@ module outside the snapshot family imports an owner.
 
 `kirocrew token` has a **machine-readable stdout contract**: stdout carries only
 the dashboard URL(s), and every failure reason (invalid TTL, gateway not running,
-gateway unreachable, gateway refused, empty token) goes to **stderr**.
+gateway not verified on this port, gateway unreachable, gateway refused, empty
+token) goes to **stderr**. "Gateway not verified on this port" means the listener
+on the resolved port could not be proven to be this install's gateway, so the
+token-minting secret is withheld — distinct from "gateway not running", which
+means no listener was reachable at all.
 
 A gateway that ANSWERS with an HTTP error is reported as a refusal carrying the
 gateway's own reason (`Gateway refused the token request (HTTP 403): <error
@@ -1369,9 +1373,13 @@ One flag is a MODE rather than a check and short-circuits before the list above 
 3. Reinstalls backend via `pip install -e .`
 4. Refreshes the agent config, then, best-effort, asks a running gateway to
    re-check for updates (`POST /api/update/revalidate`) so its update badge
-   reconciles at once. It does so only when this gateway owns the port it would
-   dial (`_gateway_owns_port`) and holds its local secret; no gateway, a refusal
-   or an error prints at most one line and never changes the exit code.
+   reconciles at once. The local secret rides `_owner_verified_secret_urlopen`
+   (see [Owner-verified secret sends](#owner-verified-secret-sends)), so it is
+   written only after the connected peer is proven to be this install's
+   recorded gateway; there is no separate port-ownership pre-check. This runs
+   on every platform, Windows included (TCP arm). No gateway, a refused peer
+   (`_GatewayPeerRefused`), a refusal or an error prints at most one line and
+   never changes the exit code.
 
 A wheel install (no git checkout) takes a different path by install shape
 (`cli_server._update_wheel`): a managed venv updates through its own engine; a
@@ -1418,9 +1426,12 @@ are talking to:
    keep it from being a guess:
    - **Ownership, not reachability** — `clear_marker()` only runs on graceful
      shutdown, so a crash leaves a stale marker behind and an unrelated process
-     may since have bound that port. Because `_token` / `_logout` send
-     `X-Local-Secret` to whatever answers, a bare "is something listening" probe
-     would walk the local secret into that process. A command-line check is not
+     may since have bound that port. Discovery only picks the port; the
+     secret-bearing sends then prove the connected peer on their own
+     ([Owner-verified secret sends](#owner-verified-secret-sends)), so this
+     guard is not what keeps the local secret from a squatter. It keeps
+     discovery from naming a port that a squatter now holds, which a bare "is
+     something listening" probe would do. A command-line check is not
      enough either — argv is attacker-chosen, so a listener started as
      `/tmp/kirocrew gateway` would pass it. `_gateway_owns_port()` therefore
      requires three things, none sufficient alone:
@@ -1492,6 +1503,81 @@ IPv6 squatter from the real IPv4 gateway), so a name-based URL could deliver
 *printed* for the browser still uses `resolve_dashboard_host()` (`localhost`) —
 that must not change, because the SPA's per-origin `localStorage` is keyed on it.
 
+## Owner-verified secret sends
+
+Six CLI sends carry `X-Local-Secret`: `kirocrew token` (`_token`), the
+post-restart token URL (`_print_token_url`), `kirocrew logout` (`_logout`),
+`kirocrew update approve` (`_update_approve`), the `stop` API fallback
+(`_request_gateway_shutdown`) and the post-update badge poke
+(`_revalidate_gateway_update_check`). All six go through
+`cli_server._owner_verified_secret_urlopen`. It runs a `verify_peer` hook on
+the CONNECTED socket, after connect and before the first byte is written, so
+the proof and the send share one connection. A peer cannot be swapped between
+the check and the send, which a port snapshot taken on a separate connection
+(the old `_gateway_owns_port` pre-check) could not rule out.
+
+Both arms start from the same record: `_recorded_gateway_pid(port)` reads
+`run/gateway-<port>.pid` and its `.start` token, and returns the pid only when
+the token still matches the live pid's (`run_marker.pid_start_token`). A
+missing record, an empty token or a recycled pid gives no pid, and the send is
+refused.
+
+- **Unix arm** — taken whenever `dashboard_socket_path(port)` exists. The send
+  uses `unix_socket_urlopen`, which has no TCP handler, so a stale or refused
+  socket raises `URLError` and is never retried over TCP. The hook requires
+  `check_peer_is_self` to return `MATCH` (`SO_PEERCRED` on Linux,
+  `LOCAL_PEERCRED` on macOS; `UNVERIFIABLE` refuses) AND the socket's peer pid
+  (`get_peer_pid`) to equal the recorded pid
+  (`_connected_unix_peer_is_recorded_gateway`).
+- **TCP arm** — taken when there is no socket (a TCP-only gateway, native
+  Windows, which has no `AF_UNIX`). The send uses `tcp_verified_urlopen`
+  (`ProxyHandler({})`, so no proxy is consulted), and the hook runs inside
+  `connect()`; on any exception the fd is closed. `_connected_peer_verdict`
+  resolves the pid that owns the GATEWAY's end of this exact 4-tuple via
+  `platform_compat.get_tcp_peer_pid` (`/proc` on Linux, `lsof` on macOS,
+  `GetExtendedTcpTable` on Windows), retrying for up to 1 s while the
+  connection is still in the accept queue. That pid must equal the recorded
+  pid and be owned by this account: uid on POSIX, access-token owner SID on
+  Windows. Every other outcome, including any exception, is `MISMATCH`.
+
+**Refusal on mismatch.** A failed proof emits a SEL `denied` event and raises
+`_GatewayPeerRefused` before the secret is written; a passed proof emits SEL
+`allowed`. `_GatewayPeerRefused` is not an `OSError`, so urllib does not wrap
+it into `URLError` and the caller never reports a live-but-refused gateway as
+"not running". Each refusal message ends with the remedy to restart the
+gateway so it re-publishes `run/gateway-<port>.pid`. Callers:
+
+| Caller | On refusal |
+|---|---|
+| `_token`, `_logout`, `_update_approve` | ownership message on stderr, exit 1 |
+| `_print_token_url` | caught in its retry loop, then the `kirocrew token` hint |
+| `_request_gateway_shutdown` | returns `False`; `stop` keeps its no-target diagnostic |
+| `_revalidate_gateway_update_check` | prints its one fallback line |
+
+**Fails closed.** These all refuse rather than send: no socket on Windows plus
+an unresolvable TCP peer; a missing pid record or start token (for example, the
+marker lock was busy at boot); `get_peer_pid` returning `None` (FreeBSD and
+other platforms); macOS with no trusted `lsof`; `/proc` restricted by
+`hidepid`, or a socket inode held by more than one process; a failed SID read;
+a peer still in the accept queue after 1 s.
+
+**Gateway side.** `/api/logout`, `/api/shutdown` and `/api/update/revalidate`
+admit a kernel-attested same-user unix peer (`_unix_peer_is_self`, kernel
+`MATCH` only), as `/api/token/local` already did. The `X-Local-Secret`
+comparison is unchanged.
+
+**Upgrade window.** A gateway still running pre-change code admits only
+loopback peers on those three routes, and a unix request has no remote
+address. Until it restarts, a new CLI gets `HTTP 403` from `logout`, the `stop`
+API fallback reports its no-target diagnostic, and the badge poke prints its
+fallback line. This fails closed and ends at the next gateway restart.
+
+**Out of scope.** The same value is also the gateway's `X-Internal-Secret`.
+Other senders of it do not yet use this proof: `cli_commands.py` spawn,
+spawn-run and spawn poll, `_artifact`, the no-socket arm of
+`_file_delivery_approve`, `pod/runtime_client.py`'s Windows mint and
+`app_lifecycle_client.py`. Those are tracked as follow-ups.
+
 ## Gateway PID Command
 
 `kirocrew gateway-pid` is a read-only probe that prints who holds this home's
@@ -1561,10 +1647,16 @@ no signal and exit 1. Without `--expect-pid` the command is unchanged:
    `reason=<tool>_outside_trusted_dirs`, distinct from `<tool>_not_found`, so
    the two are separable in the audit log.
    When the trusted lookup tool exists but returns no pid, stop makes one
-   fixed-loopback `POST /api/shutdown` request carrying the gateway generation's
-   local secret. That handler independently requires loopback origin and a
-   constant-time secret match, then triggers the same graceful shutdown event as
-   SIGTERM. The acknowledgement body is capped at 4 KiB before JSON parsing;
+   `POST /api/shutdown` request carrying the gateway generation's local secret,
+   through `_owner_verified_secret_urlopen`
+   ([Owner-verified secret sends](#owner-verified-secret-sends)). It prefers the
+   gateway's owner-only unix socket with the connected-peer proof, which needs
+   no port tool; with no socket it falls back to loopback TCP with the
+   connected-peer proof. A peer that cannot be proven gets nothing and the
+   request returns `False`. The handler independently requires a same-machine
+   peer (a loopback address, or a kernel-attested same-user unix peer via
+   `_unix_peer_is_self`) and a constant-time secret match, then triggers the
+   same graceful shutdown event as SIGTERM. The acknowledgement body is capped at 4 KiB before JSON parsing;
    excessive nesting is treated as malformed input. A successful acknowledgement
    ends the stop command; a missing secret, refusal, malformed response, or
    transport failure retains the ordinary no-gateway diagnostic. This fallback never converts the pid sidecar into

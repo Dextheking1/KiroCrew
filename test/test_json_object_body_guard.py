@@ -307,6 +307,12 @@ _CAP_REGISTER: dict[str, tuple[str, str]] = {
     # boolean and an optional expected_created stamp -- a fixed set of control
     # fields, so the shared default cap is right.
     "chat_folders.py::_toggle_slot_user_flag": ("<default>", _BOUNDED_CONTROL_FIELDS),
+    # The pinned-session reorder carries a bounded list of slot keys, sized
+    # from the key-count and key-length ceilings in pinned_session_order.
+    "chat_folders.py::api_chat_pinned_order": (
+        "_MAX_PINNED_ORDER_BODY_BYTES",
+        _BOUNDED_EXPLICIT,
+    ),
     # ---- tranche 3 ----
     # chat_handlers.py and its chat_api owners: control-field slot mutations take
     # the cap; the sites that carry a chat message, queued-edit text, follow-up
@@ -385,15 +391,15 @@ _CAP_REGISTER: dict[str, tuple[str, str]] = {
     # handlers/files.py and its file_api owners: bodies name paths and routing
     # fields -- the file bytes travel in api_file_write's body, which is the one
     # uncapped site.
-    "handlers/files.py::api_reveal_path": ("<default>", _BOUNDED_CONTROL_FIELDS),
-    "handlers/files.py::api_outbox_notify": ("<default>", _BOUNDED_CONTROL_FIELDS),
-    "handlers/files.py::api_slack_upload_file": ("<default>", _BOUNDED_CONTROL_FIELDS),
-    "handlers/files.py::api_channel_upload_file": ("<default>", _BOUNDED_CONTROL_FIELDS),
+    "file_api/desktop.py::api_reveal_path": ("<default>", _BOUNDED_CONTROL_FIELDS),
+    "file_api/outbox.py::api_outbox_notify": ("<default>", _BOUNDED_CONTROL_FIELDS),
+    "file_api/channel_upload.py::api_slack_upload_file": ("<default>", _BOUNDED_CONTROL_FIELDS),
+    "file_api/channel_upload.py::api_channel_upload_file": ("<default>", _BOUNDED_CONTROL_FIELDS),
     "file_api/workspaces.py::api_workspaces_create": ("<default>", _BOUNDED_CONTROL_FIELDS),
     "file_api/workspaces.py::api_workspaces_update": ("<default>", _BOUNDED_CONTROL_FIELDS),
-    "handlers/files.py::api_file_write": ("None", _UNBOUNDED_USER_CONTENT),
+    "file_api/editor.py::api_file_write": ("None", _UNBOUNDED_USER_CONTENT),
     # a root path and a query the handler caps at 200 characters
-    "handlers/files.py::api_file_grep": ("<default>", _BOUNDED_CONTROL_FIELDS),
+    "file_api/grep.py::api_file_grep": ("<default>", _BOUNDED_CONTROL_FIELDS),
     # a capped list of paths, each a FILE_READ_SCHEMA path
     "file_api/pinned_io.py::api_file_kinds": ("<default>", _BOUNDED_CONTROL_FIELDS),
     "file_api/dashboard_config.py::api_dashboard_config": ("<default>", _BOUNDED_CONTROL_FIELDS),

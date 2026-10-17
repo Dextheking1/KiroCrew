@@ -84,6 +84,17 @@ Both operator-facing surfaces read that one verdict:
   `keeps the current backend listed even if it reads as unselectable` and
   `saves the Claude Code selection the shipped build offers`.
 
+### Stale cloud credentials
+
+When the adapter answers a prompt with `data.errorKind: cloud_credential_error`
+(Bedrock credentials the process cached can no longer be loaded), every turn
+surface recycles the process once and replays the turn, the same way it
+recovers a lost session; if the fresh process fails too, the give-up line shows
+the provider's own remedy. See the Lost backend session entry in
+[error handling](../common/error-handling.md). The trigger is the provider's
+`errorKind`, not a harness check, so any backend that emits that kind is
+recycled the same way.
+
 ### What Crew gates on this harness, and what a pre-approval skips
 
 Start from what is NOT broken, because the difference is narrow and easy to overstate.
