@@ -464,7 +464,7 @@ doc stored as `widget` renders as raw inner HTML).
 | `artifact_reply_comment` | Reply to an existing comment thread; a reply to a provider-origin parent posts back to the provider |
 | `artifact_delete_comment` | Delete a fully-applied comment thread (root cascades to replies); provider-synced comments refused; SEL-audited with a `reason` |
 
-Schemas live in `validation.py` (`ARTIFACT_*_SCHEMA`) and are registered in
+Schemas live in `validation_parts/artifact_schemas.py` (`ARTIFACT_*_SCHEMA`) and are registered in
 `MCP_CORE_SCHEMAS`. The MCP tool layer always proxies through the HTTP API so
 SEL audit, restricted-session enforcement, and any future authorization
 middleware live in one place. The `tags` and `tag` arguments are checked by the
@@ -668,6 +668,22 @@ remote list (`ArtifactsPageSections.tsx`); the Add Artifact and New Artifact
 doors (`useArtifactsPageCreate.ts`); and the React-free list logic, the kind
 options, column sort and import-refusal wording (`artifactsPageModel.ts`).
 Every other module imports the page, never an owner.
+
+The `/artifacts/<slug>` page is `website/src/pages/ArtifactDetailPage.tsx`
+(the pop-out window renders the same page). It calls the owner hooks beside it in
+the page's hook order, which `ArtifactDetailPage.owners.test.tsx` pins, and keeps
+the comment counts and the side-panel state machine, the revert, the
+companion-chat open path with its context entry, and the upstream sync banner.
+Its owners take new work for their part: the route, the edit buffer and the
+artifact with its versions and events (`useArtifactDetailPageDocument.ts`); the
+record writes the header and the editor make and the editor lifecycle, including
+the fresh-blank clean-up and the leave guards (`useArtifactDetailPageEditor.ts`);
+the comment reads and writes, the anchored-selection composer with its draft
+guards, and thread read state (`useArtifactDetailPageComments.ts`); the companion
+chat session and the batch submit (`useArtifactDetailPageCompanion.ts`); the
+sticky header and its More menu (`ArtifactDetailPageHeader.tsx`); and everything
+below the header (`ArtifactDetailPageBody.tsx`). Every other module imports the
+page, never an owner.
 
 ### Publish panel (`PublishHub`) — reading a publish outcome
 
@@ -914,7 +930,7 @@ treated as reachable.
 
 **Every `<mcwidget>` the agent emits becomes an artifact automatically** — no
 user gesture required. Registration happens on the backend when the assistant
-segment is finalized (`chat_runner._flush_segment` →
+segment is finalized (`chat_turn.segment_flush._flush_segment` →
 `widget_artifacts.register_widgets_off_loop`), and the record is created
 **unpinned**: it is a *record*, not a library entry. The star on a rendered
 widget is therefore a pure `pinned` flip, not a create.

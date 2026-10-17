@@ -475,7 +475,7 @@ _REDACTION_SINKS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "Azure DevOps comment bodies",
-        "apps/builtins/issue_radar/backend/azure_client.py",
+        "apps/builtins/issue_radar/backend/azure_client_writes.py",
         "The text Issue Radar posts as a work-item or pull-request comment on Azure "
         "DevOps. A comment body is frequently model-authored -- a crew's reply, or an "
         "AI summary the user accepted -- and publishing it is irreversible: it lands "
@@ -2264,13 +2264,18 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         "dashboard/session_control_parts/session_create.py",
         # The owners composed into dashboard/chat_runner.py: the redactor calls of the
         # runner's helpers that moved into them (deny rows, file-change snapshots, the MCP
-        # sign-in banner, native cards, tool rows, spec-hook notices, the stats footer),
-        # unchanged. Their output reaches the surfaces it reached from the runner: the
-        # call sites moved, the set of egress paths did not.
+        # sign-in banner, native cards, tool rows, spec-hook notices, the stats footer,
+        # the cross-surface legs, prompt and skill mentions, the segment flush, the
+        # eager-spawn error detail), unchanged. Their output reaches the surfaces it
+        # reached from the runner: the call sites moved, the set of egress paths did not.
         "dashboard/chat_turn/deny_chokepoints.py",
+        "dashboard/chat_turn/eager_spawn.py",
         "dashboard/chat_turn/file_changes.py",
         "dashboard/chat_turn/mcp_session.py",
         "dashboard/chat_turn/native_cards.py",
+        "dashboard/chat_turn/prompt_assembly.py",
+        "dashboard/chat_turn/recipient.py",
+        "dashboard/chat_turn/segment_flush.py",
         "dashboard/chat_turn/tool_rows.py",
         "dashboard/chat_turn/turn_spec_hooks.py",
         "dashboard/chat_turn/turn_stats.py",
@@ -2376,7 +2381,8 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         "dashboard/handlers/knowledge.py",
         "dashboard/handlers/memory.py",
         "dashboard/handlers/optimizer.py",
-        "dashboard/handlers/prompts.py",
+        "dashboard/handlers/prompts_authoring.py",
+        "dashboard/handlers/prompts_reading.py",
         "dashboard/handlers/taskrunner.py",
         "dashboard/handlers/terminal.py",
         "dashboard/handlers/themes.py",

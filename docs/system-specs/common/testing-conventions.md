@@ -1548,7 +1548,7 @@ measures, never above.
   directory that also contains sibling tools.
 
 - **Bootstrap fixtures must match the child's libc target.** In
-  `test_playwright_cli_installer.py`, `_expected_node_base` uses native
+  `playwright_cli_installer_helpers.py`, `_expected_node_base` uses native
   `os.confstr("CS_GNU_LIBC_VERSION")` on Linux/x64 to select `glibc-217` below
   glibc 2.28. OS and architecture alone give the fake mirror the wrong archive,
   failing before checksum and cleanup assertions. Keep the real platform tool
@@ -2263,7 +2263,7 @@ carrying forward:
   window.**
 
 - **A production timeout the test never asserts on is paid in full, ~11 times over.**
-  Eleven `test_slack_gateway.py::TestAutoApplyUpdate*` tests measured **30.02–30.16s
+  Eleven `test_slack_gateway_update_*.py::TestAutoApplyUpdate*` tests measured **30.02–30.16s
   each, identically in all five runs**: `_auto_apply_update` awaits
   `_drain_update_callback_work(timeout=30.0)`, nothing in those tests makes the drain
   condition true, and it polls at 10ms to the deadline. That is **~330s of pure sleeping
@@ -3423,7 +3423,16 @@ that survives neither is the probe's.
   may get, and `a-ratchet-may-only-tighten` forbids raising it to fit -- concurrency fixes
   the budget, a looser cap would only hide the stall. Every nested run gets `--basetemp`
   under `tmp_path` (the rule from the fifth pass). Why one collect passed 60 s on this host
-  is NOT explained by this pass; the design defect was real regardless.
+  is NOT explained by this pass; the design defect was real regardless. A later pass found
+  most of the child's work: given three file arguments, pytest still walks every sibling in
+  `test/` (about 4,600 entries) through `pytest_ignore_collect` and `pytest_collect_file`.
+  Each child now passes `--ignore-glob=*`, which pytest never applies to a named argument,
+  so it reads only the three files and collects the same nodes in about 60% of the time
+  (Linux, six children in series: 26.3 s -> 15.7 s). The 60 s cap stays.
+  `test_a_nested_collection_reads_only_the_named_files` pins that only the named files
+  reach `pytest_collect_file`. A Windows runner is slower at the per-entry `stat` and
+  `relative_to` work this removes, so the saving is likely larger there; this pass did not
+  measure it on Windows.
 - **Reading a claim's task after the POST names whichever task won the race.**
   `test_cron_manual_run_claim_window.py::test_the_manual_wrappers_backstop_leaves_a_replacement_claim_alone`
   took `first = svc._claims[job.id].task` after the route answered; when the first run's
@@ -5024,7 +5033,7 @@ only — the dashboard's `notif-io` pool
 runs. The fix that removes the race rather than draining it is the one in
 [the classes it found](#the-classes-it-found-and-the-one-correct-fix-for-each): resolve
 every path when the work is queued. For the member log that means threading a home
-through `crew_log/store.py`, which derives it at each of the log, lease, segment and
+through `crew_log/store_paths.py`, which derives it at each of the log, lease, segment and
 checkpoint paths; production never moves its home, so only the suite pays. A new
 fire-and-forget writer resolves at queue time AND joins a drain.
 
