@@ -406,9 +406,9 @@ async def admitted_cron_dispatch(job: Any, dispatch: Coroutine[Any, Any, Any]) -
     admission is on.
     """
     from kiro_crew.shared_crew.enterprise import OperationKind as BudgetOperation
-    from kiro_crew.shared_crew.enterprise_gates import check_background_inference
+    from kiro_crew.shared_crew.enterprise_gates import check_background_inference_off_loop
 
-    verdict = check_background_inference(BudgetOperation.AUTOMATION_RUN)
+    verdict = await check_background_inference_off_loop(BudgetOperation.AUTOMATION_RUN)
     if not verdict.allowed:
         dispatch.close()
         job.last_status = "error"

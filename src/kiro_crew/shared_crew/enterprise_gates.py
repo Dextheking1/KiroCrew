@@ -24,6 +24,7 @@ request serves the next.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import threading
@@ -166,6 +167,11 @@ def check_background_inference(
     return current.check_inference(operation)
 
 
+async def check_background_inference_off_loop(operation: OperationKind) -> GateVerdict:
+    """:func:`check_background_inference` with the seam read (config, files) off the loop."""
+    return await asyncio.to_thread(check_background_inference, operation)
+
+
 def is_shared_access(principal: Principal) -> bool:
     """A person reaching the Crew through a tailnet or enterprise identity."""
     return principal.kind is PrincipalKind.HUMAN and principal.provenance in SHARED_PROVENANCE
@@ -241,6 +247,7 @@ def install(app: web.Application) -> None:
 __all__ = [
     "CHARGEABLE_ROUTES",
     "check_background_inference",
+    "check_background_inference_off_loop",
     "EnterpriseGates",
     "GateVerdict",
     "chargeable_operation",

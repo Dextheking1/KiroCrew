@@ -155,7 +155,7 @@ def capacity_note(reason: object) -> str:
 _BUDGET_REASON_PREFIX = "inference_budget"
 
 
-def inference_refusal(operation: OperationKind) -> str | None:
+async def inference_refusal(operation: OperationKind) -> str | None:
     """The budget reason refusing a channel turn's model work, or None to proceed.
 
     Only channel turns are asked here: every other turn ``run_admitted`` serves
@@ -164,9 +164,9 @@ def inference_refusal(operation: OperationKind) -> str | None:
     if operation is not OperationKind.CHANNEL_TURN:
         return None
     from kiro_crew.shared_crew.enterprise import OperationKind as BudgetOperation
-    from kiro_crew.shared_crew.enterprise_gates import check_background_inference
+    from kiro_crew.shared_crew.enterprise_gates import check_background_inference_off_loop
 
-    verdict = check_background_inference(BudgetOperation.NEW_TURN)
+    verdict = await check_background_inference_off_loop(BudgetOperation.NEW_TURN)
     return None if verdict.allowed else verdict.reason
 
 
@@ -372,7 +372,7 @@ async def run_admitted(
         except Exception:  # noqa: BLE001 -- the note is best effort
             logger.debug("shared crew: refusal note failed", exc_info=True)
 
-    spent = None if _ADMITTED_WORK.get() else inference_refusal(operation)
+    spent = None if _ADMITTED_WORK.get() else await inference_refusal(operation)
     if spent is not None:
         work.close()
         await _tell(spent)
@@ -446,7 +446,7 @@ async def run_channel_turn(
     *refused* answers a turn that was refused or ended before it ran.
     """
     budget = _gate.AUTOMATION_PRINCIPAL.id if automation else Principal.unknown().id
-    spent = inference_refusal(OperationKind.CHANNEL_TURN)
+    spent = await inference_refusal(OperationKind.CHANNEL_TURN)
     if spent is not None:
         return await refused(spent)
 
