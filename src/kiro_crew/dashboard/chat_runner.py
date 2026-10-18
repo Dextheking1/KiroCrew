@@ -4740,7 +4740,7 @@ async def _drain_parked_queues(state: DashboardState, slot_keys: list[str]) -> N
                     or slot._stop_state != "idle"
                 ):
                     continue
-                if not _parked_queue_drain_admitted():
+                if not _memory_preparation_pending(state) and not _parked_queue_drain_admitted():
                     return
                 started = await _start_next_queued_turn(state, slot)
             if started:

@@ -73,5 +73,13 @@ export function usePresenceReporter(sessionKey: string | null | undefined, enabl
     }, TYPING_HOLD_MS)
   }, [enabled, report])
 
-  return { noteTyping }
+  /** Call when the composer's draft is sent: typing ends now, not after the
+   *  hold, so collaborators never read "typing" beside the turn it produced. */
+  const noteSent = useCallback(() => {
+    if (typingTimer.current) { clearTimeout(typingTimer.current); typingTimer.current = null }
+    if (!enabled || !keyRef.current || current.current !== 'typing') return
+    report('viewing')
+  }, [enabled, report])
+
+  return { noteTyping, noteSent }
 }

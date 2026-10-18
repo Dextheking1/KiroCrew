@@ -1072,6 +1072,12 @@ class AdmissionService:
         live.failure = (detail or "failed")[:200]
         return True
 
+    def note_cancelled(self, work_id: str) -> None:
+        """Record a turn's acknowledged user stop without cancelling its cleanup."""
+        live = self._live.get(work_id)
+        if live is not None and live.work.state is S.RUNNING and live.cancel_reason is None:
+            live.cancel_reason = ReasonCode.CANCELLED_BY_USER
+
     async def _settle(self, live: _Live, outcome: OperationState) -> None:
         """Record *live*'s terminal state and release its slot once allowed."""
         assert self._store is not None

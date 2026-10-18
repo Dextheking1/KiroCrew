@@ -215,17 +215,23 @@ def _rows_since(slot: Any, start_total: int) -> list[object]:
 def _judge_turn(
     slot: Any, work_id: str, start_total: int, stop_reason: Callable[[], str | None] | None
 ) -> None:
-    """Report a failed turn to its admitted work, so it settles ``failed``."""
+    """Report a failed or cancelled turn to its admitted work before settlement."""
     if not work_id or stop_reason is None:
         return
+    from kiro_crew.metrics.turns import turn_outcome
+
     try:
-        detail = turn_failure(stop_reason(), _rows_since(slot, start_total))
+        reason = stop_reason()
+        detail = turn_failure(reason, _rows_since(slot, start_total))
     except Exception:  # noqa: BLE001 -- judging is best effort; the turn already ended
         logger.debug("shared crew: could not judge a turn's outcome", exc_info=True)
         return
     service = _gate.installed_service()
-    if detail and service is not None:
-        service.note_failure(work_id, detail)
+    if service is not None:
+        if turn_outcome(reason) == "cancelled":
+            service.note_cancelled(work_id)
+        elif detail:
+            service.note_failure(work_id, detail)
 
 
 def _note_not_started(slot: Any, reason: ReasonCode | None) -> None:

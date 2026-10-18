@@ -24,6 +24,8 @@ import { WorkStatusList } from './WorkStatusList'
  *  keystrokes without ever reading what was typed. */
 export interface TypingSignal {
   subscribe(listener: () => void): () => void
+  /** Fires when the composer's draft is sent, ending this tab's typing. */
+  subscribeSent?(listener: () => void): () => void
 }
 
 export function SessionCollabStrip({ sessionKey, typing }: { sessionKey: string | null | undefined; typing?: TypingSignal }) {
@@ -40,8 +42,9 @@ export function SessionCollabStrip({ sessionKey, typing }: { sessionKey: string 
   // every open session: the host settles every send against it, whichever
   // capabilities the Crew reports, and app or automation sends count too.
   useSessionSendState(sessionKey)
-  const { noteTyping } = usePresenceReporter(sessionKey, presenceOn)
+  const { noteTyping, noteSent } = usePresenceReporter(sessionKey, presenceOn)
   useEffect(() => typing?.subscribe(noteTyping), [typing, noteTyping])
+  useEffect(() => typing?.subscribeSent?.(noteSent), [typing, noteSent])
 
   const entries = presence.data?.entries ?? []
   const workItems = work.data?.items ?? []

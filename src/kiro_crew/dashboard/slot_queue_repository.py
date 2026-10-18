@@ -455,6 +455,46 @@ def sanitize_restored_queue(raw: object) -> list[dict[str, Any]]:
     return entries
 
 
+async def drain_restored_parked_sends(state: Any) -> None:
+    """Resume accepted parked sends after slot restore, through the ordinary drain.
+
+    Ordinary restored cards still wait for a person. A durable parked work row
+    proves this card was accepted for dispatch; it grants no authority to its
+    restored metadata. The drain revalidates containment and admits it afresh.
+    """
+    from kiro_crew.dashboard.chat_runner import _drain_parked_queues
+    from kiro_crew.dashboard.chat_utils import effective_session_key
+    from kiro_crew.shared_crew import admission_gate, host_hooks
+    from kiro_crew.shared_crew.admission import OperationState, ReasonCode
+    from kiro_crew.shared_crew.admission_entry import queued_work_ids
+
+    service = admission_gate.installed_service()
+    if service is None or not service.enabled:
+        return
+    await service.ensure_ready()
+    await host_hooks.deliver_owed_notes(state)
+    keys: list[str] = []
+    for slot in list(state._slots.values()):
+        for entry in list(slot._queue):
+            if not entry.get(RESTORED_QUEUE_KEY):
+                continue
+            for work_id in queued_work_ids([entry]):
+                work = await service.current_work(work_id)
+                if (
+                    work is not None
+                    and work.session_key == effective_session_key(slot)
+                    and work.extra.get(admission_gate.PARKED_KEY)
+                    and work.runtime is None
+                    and work.state is OperationState.CANCELLED
+                    and work.reason in (None, ReasonCode.CANCELLED_BY_USER)
+                ):
+                    keys.append(slot.key)
+                    break
+            if keys and keys[-1] == slot.key:
+                break
+    await _drain_parked_queues(state, keys)
+
+
 def _delivery_key(content: str) -> str:
     """Return a compact identity that survives queue-entry ID replacement."""
     return hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()[:32]

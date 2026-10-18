@@ -63,6 +63,10 @@ async def _restore_dashboard_sessions(state: DashboardState, cfg: KiroCrewConfig
         # the restore builds exist (``shared_crew.host_hooks``).
         mark_sessions_restored(state)
 
+    from kiro_crew.dashboard.slot_queue_repository import drain_restored_parked_sends
+
+    await drain_restored_parked_sends(state)
+
     if state._dynamic_cards is not None:
         state._dynamic_cards.seed_open_sessions()
 

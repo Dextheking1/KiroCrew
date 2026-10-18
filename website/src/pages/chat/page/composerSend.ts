@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, type MutableRefObject, type Dispatch, t
 import { refusalMessage } from '../shared-crew/overloadCopy'
 import { baseRevisionFor, clearSendRaceNotice, isSendRaceConflict, noteSendRevision, sendIdempotencyKey, setSendRaceNotice } from '../../../api/sendRace'
 import { ensureSendRevision } from '../../../hooks/sharedCrew/sendRevisionSeed'
+import { noteComposerSent } from '../shared-crew/typingSignal'
 import type { CapacityResponse } from '../../../api/sharedCrew'
 import type { UseMessageQuote } from '../../../chat-core/composer/useMessageQuote'
 import { store, type AppDispatch } from '../../../store'
@@ -565,6 +566,7 @@ export function useComposerSend({
     sendingRef.current = false
     setTimeout(() => scrollBottom(), SCROLL_AFTER_RENDER_MS)
     if (slot) dispatch(startLocalTurn(slot))
+    noteComposerSent()
     /**
      * Put the composer back the way it was before this send.
      *
