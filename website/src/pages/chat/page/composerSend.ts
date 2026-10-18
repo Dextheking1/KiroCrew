@@ -3,6 +3,7 @@ import { refusalMessage } from '../shared-crew/overloadCopy'
 import { baseRevisionFor, clearSendRaceNotice, isSendRaceConflict, noteSendRevision, sendIdempotencyKey, setSendRaceNotice } from '../../../api/sendRace'
 import { baseRevisionForPress } from '../../../hooks/sharedCrew/sendRevisionSeed'
 import { noteComposerSent } from '../shared-crew/typingSignal'
+import { isComposerLocked, noteComposerLocked } from '../../../api/typingLease'
 import type { CapacityResponse } from '../../../api/sharedCrew'
 import type { UseMessageQuote } from '../../../chat-core/composer/useMessageQuote'
 import { store, type AppDispatch } from '../../../store'
@@ -766,6 +767,16 @@ export function useComposerSend({
       // now. Not an error row: nothing failed, and an overload refusal (below)
       // reads differently on purpose.
       setSendRaceNotice(slot, receipt.body)
+      dispatch(resolveOptimisticSteer({ slot, sendId, outcome: 'queued' }))
+      dispatch(endLocalTurn(slot))
+      restoreComposerAfterFailedSend()
+      return false
+    }
+    if (receipt.status === 'refused' && slot && !isolated && isComposerLocked(receipt.body)) {
+      // Someone else started typing first and holds the session's typing lease.
+      // Nothing was accepted: the bubble goes, the draft returns, and the
+      // composer locks with their name until the lease ends. Not an error row.
+      noteComposerLocked(receipt.body)
       dispatch(resolveOptimisticSteer({ slot, sendId, outcome: 'queued' }))
       dispatch(endLocalTurn(slot))
       restoreComposerAfterFailedSend()

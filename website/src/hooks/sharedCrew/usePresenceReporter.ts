@@ -7,8 +7,13 @@
  * `MIN_SPACING_MS` apart to stay under the server's per-connection rate limit,
  * except the frame that ends a reported typing, which the server exempts and
  * which therefore goes at once. A keep-alive repeats the current activity
- * before the server's presence expiry. Typing never locks the composer for
- * anyone.
+ * before the server's presence expiry.
+ *
+ * The same reports drive the session's typing lease. While keystrokes keep
+ * coming, `typing` is repeated once per spacing, so the lease is renewed and a
+ * trailing report lands after the last keystroke; the host ends the lease after
+ * its idle window. A draft that goes empty (cleared, or sent) is reported at
+ * once with the content-free `draft: 'empty'` flag, which releases the lease.
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { Activity } from '../../api/sharedCrew'
@@ -31,6 +36,22 @@ export function usePresenceReporter(sessionKey: string | null | undefined, enabl
 
   /** The activity and session of the last frame that left this tab. */
   const sent = useRef<{ key: string; activity: Activity } | null>(null)
+  /** Whether this tab has drafted since its last empty-draft report, so only a
+   *  tab that may hold the typing lease reports releasing it. */
+  const drafting = useRef(false)
+
+  /** Report that this tab's draft is empty: releases its typing lease at once. */
+  const sendCleared = useCallback(() => {
+    if (!drafting.current) return
+    drafting.current = false
+    if (pending.current) { clearTimeout(pending.current); pending.current = null }
+    current.current = 'viewing'
+    if (!keyRef.current) return
+    if (sendActivity(keyRef.current, 'viewing', { draftEmpty: true })) {
+      lastSent.current = Date.now()
+      sent.current = { key: keyRef.current, activity: 'viewing' }
+    }
+  }, [])
 
   const flush = useCallback(() => {
     pending.current = null
@@ -74,25 +95,34 @@ export function usePresenceReporter(sessionKey: string | null | undefined, enabl
     }
   }, [enabled, sessionKey, report])
 
-  /** Call on composer input. Carries no text by design. */
-  const noteTyping = useCallback(() => {
+  /** Call on composer input. Carries no text by design: only whether the draft
+   *  is now empty, which releases the typing lease instead of renewing it. */
+  const noteTyping = useCallback((draftEmpty?: boolean) => {
     if (!enabled || !keyRef.current) return
-    report('typing')
+    if (draftEmpty === true) {
+      if (typingTimer.current) { clearTimeout(typingTimer.current); typingTimer.current = null }
+      sendCleared()
+      return
+    }
+    // Forced: while keystrokes continue, `typing` repeats once per spacing, so
+    // the lease stays renewed and its idle window starts at the last keystroke.
+    drafting.current = true
+    report('typing', true)
     if (typingTimer.current) clearTimeout(typingTimer.current)
     typingTimer.current = setTimeout(() => {
       typingTimer.current = null
       report('viewing')
     }, TYPING_HOLD_MS)
-  }, [enabled, report])
+  }, [enabled, report, sendCleared])
 
   /** Call when the composer's draft is sent: typing ends now, not after the
    *  hold or the send spacing, so collaborators never read "typing" beside
-   *  the turn it produced. */
+   *  the turn it produced, and the typing lease is released. */
   const noteSent = useCallback(() => {
     if (typingTimer.current) { clearTimeout(typingTimer.current); typingTimer.current = null }
-    if (!enabled || !keyRef.current || current.current !== 'typing') return
-    report('viewing')
-  }, [enabled, report])
+    if (!enabled || !keyRef.current) return
+    sendCleared()
+  }, [enabled, sendCleared])
 
   return { noteTyping, noteSent }
 }

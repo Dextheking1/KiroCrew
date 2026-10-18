@@ -1,6 +1,6 @@
 /**
  * Shared Crew first submit wins: two verified principals send into one idle
- * session at the same time.
+ * session at the same time, the backstop behind the typing lease.
  *
  * Not part of the default gate, for the same reason as shared-crew-collab: it
  * needs a gateway with Shared Crew wired and two storage states for two
@@ -33,26 +33,26 @@ test.describe('Shared Crew send race @shared-crew', () => {
     const b = await open(browser, STATE_B)
     const composerA = a.getByLabel('Message input')
     const composerB = b.getByLabel('Message input')
-    // No input lock: both compose at once.
-    await composerA.fill('first from A')
-    await composerB.fill('first from B')
-    // Each person sees the other typing before pressing, as two people racing
-    // do. That line is also the sign each tab has finished handling its own
-    // typing, so both presses land at the same moment; a press that lands after
-    // the tab already showed the other's accepted send is a later send, not a
-    // race, and is accepted by design.
-    await expect(a.getByTestId('presence-typing')).toContainText(/typing/)
-    await expect(b.getByTestId('presence-typing')).toContainText(/typing/)
+    // Both fill at the same moment, before either tab has seen the other's
+    // typing lease: the typing lease then holds one of them, and the race
+    // check is the backstop for the sends that land together.
+    await Promise.all([composerA.fill('first from A'), composerB.fill('first from B')])
     await Promise.all([composerA.press('Enter'), composerB.press('Enter')])
 
-    // Exactly one tab shows the race notice; that tab keeps its draft.
-    const noticeA = a.getByTestId('send-race-notice')
-    const noticeB = b.getByTestId('send-race-notice')
-    // A locator belongs to one page, so poll both pages for the one notice.
-    await expect
-      .poll(async () => (await noticeA.count()) + (await noticeB.count()))
-      .toBe(1)
-    const aLost = (await noticeA.count()) === 1
+    // Exactly one tab was refused, by the lease or by the race; it keeps its
+    // draft. A locator belongs to one page, so poll both pages.
+    const refusedOn = async (p: Page) =>
+      (await p.getByTestId('send-race-notice').count()) + (await p.getByTestId('composer-typing-lock').count())
+    await expect.poll(async () => (await refusedOn(a)) + (await refusedOn(b))).toBe(1)
+    const aLost = (await refusedOn(a)) === 1
+    const loserPage = aLost ? a : b
+    if ((await loserPage.getByTestId('send-race-notice').count()) === 0) {
+      // Refused by the lease: it lifts once the winner's send ends it, and the
+      // draft is still there to send. That path ends here.
+      await expect(loserPage.getByTestId('composer-typing-lock')).toHaveCount(0)
+      await expect(loserPage.getByLabel('Message input')).toHaveValue(aLost ? 'first from A' : 'first from B')
+      return
+    }
     const loser = aLost ? a : b
     const winner = aLost ? b : a
     await expect(winner.getByTestId('send-race-notice')).toHaveCount(0)

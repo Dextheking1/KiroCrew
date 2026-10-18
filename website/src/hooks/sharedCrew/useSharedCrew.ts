@@ -93,6 +93,17 @@ export function useSessionSendState(sessionKey: string | null | undefined, enabl
   return query
 }
 
+/** Who holds the session's composer typing lease, read on open and after every
+ *  reconnect, then kept current by `shared_crew.typing_lease` frames. */
+export function useSessionTypingLease(sessionKey: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: sharedCrewKeys.typingLease(sessionKey ?? ''),
+    queryFn: () => api.sharedCrewTypingLease(sessionKey ?? ''),
+    enabled: enabled && !!sessionKey,
+    retry: false,
+  })
+}
+
 /** One server-filtered page per cursor; the caller holds the cursor list. */
 export function useSharedCrewSessionsPage(creator: CreatorFilter, q: string, cursor: string, enabled = true) {
   return useQuery({

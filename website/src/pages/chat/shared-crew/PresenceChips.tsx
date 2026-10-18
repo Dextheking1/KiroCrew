@@ -1,6 +1,7 @@
 /** Who else is in this session right now. One chip per person, however many
  *  tabs they have open; initials only (no avatar is ever fetched); the viewer
- *  is left out. Typing is a word, not an animation, and locks nothing. */
+ *  is left out. Typing is a word, not an animation; the composer's typing
+ *  lease (useComposerTypingLock) is what locks the box. */
 import type { PresenceEntry, PublicPrincipal } from '../../../api/sharedCrew'
 import { principalInitials, principalName } from '../../../api/sharedCrewUi'
 import { fmtNumber } from '../../../i18n/format'

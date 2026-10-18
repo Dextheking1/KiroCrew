@@ -1,7 +1,9 @@
 """First-submit-wins for collaborators sending into one session.
 
-Nothing locks the composer: every collaborator types and sends independently.
-When two of them send against the same session state, the host settles it here.
+The typing lease (``typing_lease``) keeps a second collaborator from sending
+while someone else types. This is the backstop for the moment a lease ends, or
+for a send that never held one: when two collaborators send against the same
+session state, the host settles it here.
 Each session has a *send revision*, a counter of accepted sends. A send carries
 ``base_revision``, the revision its tab last saw. :meth:`SendRaceRegistry.claim`
 compares it with the current revision and, when someone else's send was accepted
@@ -364,7 +366,18 @@ def commit_request(request: Any, *, message_id: str = "") -> AcceptedSend | None
     claim = request.get(CLAIM_REQUEST_KEY) if hasattr(request, "get") else None
     if not isinstance(claim, Claim):
         return None
-    return send_race_for(request.app["state"]).commit(claim, message_id=message_id)
+    state = request.app["state"]
+    first = claim.result is None
+    accepted = send_race_for(state).commit(claim, message_id=message_id)
+    if first:
+        # The sender's typing lease ends with the send, for everyone at once.
+        from kiro_crew.shared_crew import typing_lease
+
+        try:
+            typing_lease.note_sent(state, claim.session_key, claim.principal)
+        except Exception:
+            pass
+    return accepted
 
 
 def release_request(request: Any) -> None:

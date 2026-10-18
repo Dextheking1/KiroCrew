@@ -32,6 +32,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/shared-crew/presence", routes_collab.api_shared_crew_presence)
     app.router.add_get("/api/shared-crew/decisions", routes_collab.api_shared_crew_decisions)
     app.router.add_get("/api/shared-crew/send-state", routes_collab.api_shared_crew_send_state)
+    app.router.add_get("/api/shared-crew/typing-lease", routes_collab.api_shared_crew_typing_lease)
     app.router.add_get(
         "/api/shared-crew/capabilities", routes_capabilities.api_shared_crew_capabilities
     )

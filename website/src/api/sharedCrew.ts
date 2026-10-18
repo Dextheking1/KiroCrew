@@ -337,6 +337,7 @@ export type ReasonCode =
   | 'invalid_transition'
   | 'not_found'
   | 'send_race'
+  | 'composer_locked'
 
 /** `AcceptedWork.to_public_dict`. */
 export interface AcceptedWork {
@@ -407,6 +408,33 @@ export interface SendRaceConflictBody {
   winner: AcceptedSend
 }
 
+/** Who holds a session's composer typing lease: the GET
+ *  `/api/shared-crew/typing-lease` body and the `shared_crew.typing_lease`
+ *  frame. While someone else holds it this tab's composer is read-only and the
+ *  host refuses its send with `composer_locked`. `holder_ids` lists every id
+ *  that counts as the holder (one operator's local sign-ins fold into one). */
+export interface TypingLease {
+  schema_version: number
+  session_key: string
+  holder: PublicPrincipal | null
+  holder_ids: string[]
+  /** Wall-clock seconds when the lease ends unless renewed; null when free. */
+  expires_at: number | null
+  idle_seconds: number
+  /** Why the lease just ended (`sent`, `cleared`, `idle`, `disconnected`), or ''. */
+  ended: string
+}
+
+/** The 409 answer to a send while someone else holds the typing lease. Nothing
+ *  was accepted and the draft stays with the sender. */
+export interface ComposerLockedBody {
+  error: string
+  code: 'composer_locked'
+  session_key: string
+  holder: PublicPrincipal
+  lease: TypingLease
+}
+
 export type Activity = 'viewing' | 'typing' | 'idle'
 
 export interface PresenceEntry {
@@ -440,10 +468,14 @@ export type SharedCrewServerFrame =
   | { type: 'shared_crew.decision'; schema_version: number; decision: SharedDecision }
   | { type: 'shared_crew.capacity'; schema_version: number; capacity: CapacityResponse }
   | ({ type: 'shared_crew.send_state' } & SendState)
+  | ({ type: 'shared_crew.typing_lease' } & TypingLease)
 
 /** Client activity report. Carries no principal: the server stamps the connection's actor. */
 export interface SharedCrewActivityFrame {
   type: 'shared_crew.activity'
   session_key: string
   activity: Activity
+  /** Set when this tab's draft is empty, which releases its typing lease. A
+   *  content-free flag: the draft itself never leaves the tab. */
+  draft?: 'empty'
 }

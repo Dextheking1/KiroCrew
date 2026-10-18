@@ -19008,6 +19008,8 @@
     "people_unnamed_title": "このマシンではユーザーを特定できません",
     "person_typing": "{{name}} が入力中",
     "person_viewing": "{{name}} がここにいます",
+    "composer_locked": "{{name}} が入力中…",
+    "composer_locked_hint": "相手が送信するか手を止めると、もう一度入力できます。",
     "question_waiting": "ここにいる誰かの回答待ちの質問",
     "queued_crew": "この Crew の共有上限に空きが出るのを待っています",
     "queued_generic": "順番を待っています",

@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from kiro_crew.shared_crew import typing_lease
 from kiro_crew.shared_crew.collab import (
     ACTIVITY_MIN_INTERVAL_SECONDS,
     PRESENCE_TTL_SECONDS,
@@ -73,6 +74,15 @@ class ReportResult:
     #: Sessions whose folded presence changed and need a new frame.
     changed: tuple[str, ...] = ()
     reason: str = ""
+
+
+def parse_draft_empty(frame: object) -> bool:
+    """Whether a client frame says this tab's draft is empty (``"draft": "empty"``).
+
+    A content-free flag: the frame never carries the draft, only whether there
+    is one. Any other value reads as "not said".
+    """
+    return isinstance(frame, dict) and frame.get("draft") == "empty"
 
 
 def parse_activity_frame(frame: object) -> tuple[str, Activity] | None:
@@ -254,16 +264,37 @@ def handle_activity_frame(
     registry = presence_for(state)
     result = registry.report(conn_id, principal, session_key, activity)
     _broadcast(state, registry, result.changed)
+    draft_empty = parse_draft_empty(frame)
+    # The typing lease rides the same report. A typing report renews it only
+    # when the presence registry accepted it (so the lease keeps the presence
+    # rate limit); an empty-draft report only ever releases, so it applies even
+    # inside the spacing.
+    if result.accepted or draft_empty:
+        try:
+            typing_lease.note_activity(
+                state,
+                conn_id,
+                principal,
+                session_key,
+                typing=result.accepted and activity is Activity.TYPING,
+                draft_empty=draft_empty,
+            )
+        except Exception:
+            log = getattr(state, "_log", None)
+            if log is not None:
+                log.debug("typing lease update failed", exc_info=True)
     return result
 
 
 def release_connection(state: Any, conn_id: str) -> None:
-    """Drop a closed socket's presence and push the sessions it left."""
+    """Drop a closed socket's presence and lease and push the sessions it left."""
     registry = presence_for(state)
     _broadcast(state, registry, registry.disconnect(conn_id))
+    typing_lease.release_connection(state, conn_id)
 
 
 def sweep_and_broadcast(state: Any) -> None:
-    """Expire stale presence and push the sessions it changed."""
+    """Expire stale presence and idle leases and push the sessions they changed."""
     registry = presence_for(state)
     _broadcast(state, registry, registry.sweep())
+    typing_lease.sweep_and_broadcast(state)

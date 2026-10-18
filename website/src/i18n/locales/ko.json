@@ -19008,6 +19008,8 @@
     "people_unnamed_title": "이 컴퓨터에서는 사람을 식별할 수 없습니다",
     "person_typing": "{{name}} 님이 입력 중",
     "person_viewing": "{{name}} 님이 여기 있음",
+    "composer_locked": "{{name}} 님이 입력 중…",
+    "composer_locked_hint": "상대가 보내거나 잠시 멈추면 다시 입력할 수 있습니다.",
     "question_waiting": "여기 있는 누군가의 답변을 기다리는 질문",
     "queued_crew": "해당 Crew의 공유 한도에 자리가 나기를 기다리는 중",
     "queued_generic": "차례를 기다리는 중",

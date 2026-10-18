@@ -19291,6 +19291,8 @@
     "people_unnamed_title": "इस मशीन पर लोगों की पहचान नहीं हो सकती",
     "person_typing": "{{name}} लिख रहे हैं",
     "person_viewing": "{{name}} यहाँ हैं",
+    "composer_locked": "{{name}} टाइप कर रहे हैं…",
+    "composer_locked_hint": "उनके भेजने या रुकने पर तुम फिर से टाइप कर सकोगे।",
     "question_waiting": "प्रश्न यहाँ मौजूद किसी के जवाब का इंतज़ार कर रहा है",
     "queued_crew": "इस Crew की साझा सीमा में जगह का इंतज़ार",
     "queued_generic": "अपनी बारी का इंतज़ार",

@@ -19574,6 +19574,8 @@
     "people_unnamed_title": "Impossible de nommer les personnes sur cette machine",
     "person_typing": "{{name}} écrit",
     "person_viewing": "{{name}} est là",
+    "composer_locked": "{{name}} est en train d’écrire…",
+    "composer_locked_hint": "Tu pourras écrire à nouveau dès que cette personne envoie ou fait une pause.",
     "question_waiting": "Question en attente de quelqu'un ici",
     "queued_crew": "attend une place dans la limite partagée de ce Crew",
     "queued_generic": "attend son tour",

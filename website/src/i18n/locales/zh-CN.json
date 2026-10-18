@@ -19008,6 +19008,8 @@
     "people_unnamed_title": "此计算机无法识别成员身份",
     "person_typing": "{{name}} 正在输入",
     "person_viewing": "{{name}} 在这里",
+    "composer_locked": "{{name}} 正在输入…",
+    "composer_locked_hint": "对方发送或停下后，你就可以再次输入了。",
     "question_waiting": "等待在场任何人回答的问题",
     "queued_crew": "正在等待此 Crew 共享限额的空位",
     "queued_generic": "正在排队等候",

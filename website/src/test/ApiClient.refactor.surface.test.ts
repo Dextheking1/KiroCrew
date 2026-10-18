@@ -195,7 +195,7 @@ const API_KEY_ORDER = [
   'researchDelete', 'invokeFileMenuItem', 'artifactTeardown', 'publishProviders',
   'publishArtifactToCoreProvider', 'publishToProvider', 'deploySites', 'tipsNext', 'tipsStatus',
   'tipsFeedback', 'sharedCrewCapabilities', 'sharedCrewSessions', 'sharedCrewPeople', 'sharedCrewMode', 'sharedCrewViewer',
-  'sharedCrewCapacity', 'sharedCrewWork', 'sharedCrewPresence', 'sharedCrewDecisions', 'sharedCrewSendState',
+  'sharedCrewCapacity', 'sharedCrewWork', 'sharedCrewPresence', 'sharedCrewDecisions', 'sharedCrewSendState', 'sharedCrewTypingLease',
   'tailscaleInvites', 'tailscaleConnect', 'tailscaleDisconnect', 'tailscaleCreateInvites', 'tailscaleResendInvite',
   'tailscaleRevokeInvite', 'tailscaleUploadAvatar',
   'sharedCrewCancelWork',
