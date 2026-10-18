@@ -293,3 +293,44 @@ describe('PeoplePanel modes', () => {
     expect(screen.getByTestId('remote-control-setup')).toBeInTheDocument()
   })
 })
+
+describe('PeoplePanel direct tailnet link', () => {
+  const EMPTY: PeopleResponse = { schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] }
+  const DIRECT = {
+    state: 'active' as const, reason: '', method: 'localapi_unix', owner_login: 'owner@example.test',
+    urls: ['http://crew.tail1234.ts.net:5476/', 'http://100.64.0.1:5476/'], addresses: ['100.64.0.1'],
+  }
+
+  it('shows the plain link with copy, the allowlist note and the device-owner caveat', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'available', attribution_via: 'tailscale_direct', tailnet_direct: DIRECT })
+    people.mockResolvedValue({ ...EMPTY, people: [row('p_b', 'Bob')] })
+    modeApi.mockResolvedValue(modeBody('network'))
+    mount()
+    const link = await screen.findByTestId('tailnet-direct-link')
+    const field = link.querySelector('input') as HTMLInputElement
+    expect(field.value).toBe('http://crew.tail1234.ts.net:5476/')
+    expect(field.value).not.toMatch(/token/)
+    expect(screen.getByText('Only people on your Tailscale allowlist can open this.')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Copy' }).length).toBeGreaterThan(0)
+    expect(screen.getByTestId('people-direct-caveat').textContent).toMatch(/owns each device/)
+  })
+
+  it('shows no link when the direct listener is not active', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'available', tailnet_direct: { ...DIRECT, state: 'unavailable', reason: 'tailscale_not_running', urls: [] } })
+    people.mockResolvedValue({ ...EMPTY, people: [row('p_b', 'Bob')] })
+    modeApi.mockResolvedValue(modeBody('network'))
+    mount()
+    expect(await screen.findByTestId('people-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('tailnet-direct-link')).toBeNull()
+    expect(screen.queryByTestId('people-direct-caveat')).toBeNull()
+  })
+
+  it('points the macOS empty state at the direct link', async () => {
+    caps.mockResolvedValue({ ...SHARED, attribution: 'unavailable', reasons: { attribution: 'platform_unprovable' } })
+    people.mockResolvedValue(EMPTY)
+    mount()
+    expect(await screen.findByTestId('people-unnamed')).toBeInTheDocument()
+    expect(screen.getByText(/Share the direct Tailscale link instead to see their names/)).toBeInTheDocument()
+  })
+})
+

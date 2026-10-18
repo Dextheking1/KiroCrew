@@ -19292,7 +19292,7 @@
     "people_seen_title": "In dieser Crew gesehen",
     "people_unavailable_body": "Diese Crew zeichnet nicht auf, wer was tut, daher gibt es niemanden aufzulisten.",
     "people_unavailable_title": "Diese Crew erfasst keine Personen",
-    "people_unnamed_platform_body": "Teammitglieder auf der Tailscale-Zulassungsliste können diese Crew über Tailscale Serve nutzen, aber dieses Betriebssystem kann nicht nachweisen, wer sie sind, daher erscheint ihre Arbeit als Nicht zugeordnet. Wer nicht auf der Liste steht, wird abgewiesen.",
+    "people_unnamed_platform_body": "Teammitglieder auf der Tailscale-Zulassungsliste können diese Crew über Tailscale Serve nutzen, aber dieses Betriebssystem kann nicht nachweisen, wer sie sind, daher erscheint ihre Arbeit als Nicht zugeordnet. Teilen Sie stattdessen den direkten Tailscale-Link, um ihre Namen zu sehen. Wer nicht auf der Liste steht, wird abgewiesen.",
     "people_unnamed_same_user_body": "Teammitglieder auf der Tailscale-Zulassungsliste können diese Crew über Tailscale Serve nutzen, aber Tailscale läuft unter demselben Benutzer wie diese Crew und kann daher nicht nachweisen, wer sie sind; ihre Arbeit erscheint als Nicht zugeordnet. Wer nicht auf der Liste steht, wird abgewiesen.",
     "people_unnamed_title": "Personen können auf diesem Rechner nicht benannt werden",
     "person_typing": "{{name}} schreibt",
@@ -19380,6 +19380,15 @@
     "remote_control_body": "Erreiche deine eigene Crew vom Handy aus. Das ist nur für dich und gibt niemand anderem Zugriff.",
     "remote_control_open": "Fernsteuerung einrichten",
     "remote_control_unavailable": "Fernsteuerung ist für diese Crew nicht verfügbar.",
-    "started_by_configured": "Gestartet von {{name}}, eingerichtet von {{by}}"
+    "started_by_configured": "Gestartet von {{name}}, eingerichtet von {{by}}",
+    "direct_share_title": "Diese Crew teilen",
+    "direct_link_title": "Tailscale-Link",
+    "direct_link_label": "Tailscale-Link zu dieser Crew",
+    "direct_link_copy": "Kopieren",
+    "direct_link_copy_failed": "Kopieren fehlgeschlagen. Markieren Sie den Link und kopieren Sie ihn selbst.",
+    "direct_link_fallbacks": "Weitere Adressen",
+    "direct_link_note": "Nur Personen auf Ihrer Tailscale-Zulassungsliste können ihn öffnen.",
+    "direct_link_advanced": "Erweitert: Anmeldelinks für Geräte ohne Tailscale",
+    "people_direct_caveat": "Tailscale nennt die Person, der ein Gerät gehört, nicht die Person, die es gerade benutzt. Wer sich ein Gerät teilt, erscheint als eine Person; jede kann sich stattdessen mit einem eigenen Dashboard-Link anmelden."
   }
 }

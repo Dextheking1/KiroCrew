@@ -19292,7 +19292,7 @@
     "people_seen_title": "इस Crew में देखे गए",
     "people_unavailable_body": "यह Crew दर्ज नहीं करता कि कौन क्या करता है, इसलिए दिखाने के लिए कोई नहीं है।",
     "people_unavailable_title": "यह Crew लोगों को ट्रैक नहीं करता",
-    "people_unnamed_platform_body": "Tailscale अनुमति सूची के साथी Tailscale Serve से इस Crew का उपयोग कर सकते हैं, लेकिन यह ऑपरेटिंग सिस्टम साबित नहीं कर सकता कि हर व्यक्ति कौन है, इसलिए उनका काम अनिर्दिष्ट दिखता है। सूची में न होने वाले लोगों को मना कर दिया जाता है।",
+    "people_unnamed_platform_body": "Tailscale अनुमति सूची के साथी Tailscale Serve से इस Crew का उपयोग कर सकते हैं, लेकिन यह ऑपरेटिंग सिस्टम साबित नहीं कर सकता कि हर व्यक्ति कौन है, इसलिए उनका काम अनिर्दिष्ट दिखता है। उनके नाम देखने के लिए सीधा Tailscale लिंक साझा करें। सूची में न होने वाले लोगों को मना कर दिया जाता है।",
     "people_unnamed_same_user_body": "Tailscale अनुमति सूची के साथी Tailscale Serve से इस Crew का उपयोग कर सकते हैं, लेकिन Tailscale इसी Crew वाले उपयोगकर्ता के रूप में चलता है, इसलिए वह साबित नहीं कर सकता कि हर व्यक्ति कौन है और उनका काम अनिर्दिष्ट दिखता है। सूची में न होने वाले लोगों को मना कर दिया जाता है।",
     "people_unnamed_title": "इस मशीन पर लोगों की पहचान नहीं हो सकती",
     "person_typing": "{{name}} लिख रहे हैं",
@@ -19380,6 +19380,15 @@
     "remote_control_body": "अपने फ़ोन से अपनी Crew तक पहुँचो। यह सिर्फ़ तुम्हारे लिए है और किसी और को एक्सेस नहीं देता।",
     "remote_control_open": "रिमोट कंट्रोल सेट करें",
     "remote_control_unavailable": "इस Crew पर रिमोट कंट्रोल उपलब्ध नहीं है।",
-    "started_by_configured": "{{name}} ने शुरू किया, {{by}} ने सेट किया"
+    "started_by_configured": "{{name}} ने शुरू किया, {{by}} ने सेट किया",
+    "direct_share_title": "इस Crew को साझा करें",
+    "direct_link_title": "Tailscale लिंक",
+    "direct_link_label": "इस Crew का Tailscale लिंक",
+    "direct_link_copy": "कॉपी करें",
+    "direct_link_copy_failed": "कॉपी नहीं हो सका। लिंक चुनें और खुद कॉपी करें।",
+    "direct_link_fallbacks": "अन्य पते",
+    "direct_link_note": "इसे केवल आपकी Tailscale अनुमति सूची के लोग खोल सकते हैं।",
+    "direct_link_advanced": "उन्नत: बिना Tailscale वाले डिवाइस के लिए साइन-इन लिंक",
+    "people_direct_caveat": "Tailscale हर डिवाइस के मालिक का नाम बताता है, उसे इस्तेमाल कर रहे व्यक्ति का नहीं। एक डिवाइस साझा करने वाले लोग एक ही व्यक्ति के रूप में दिखते हैं; हर कोई अपने डैशबोर्ड लिंक से साइन इन कर सकता है।"
   }
 }

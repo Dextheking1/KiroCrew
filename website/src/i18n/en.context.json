@@ -801,6 +801,15 @@
     "sharedCrew.remote_control_body": "Explanation under the Remote Control heading: personal, grants nobody else access.",
     "sharedCrew.remote_control_open": "Button opening the existing connect-your-phone dialog.",
     "sharedCrew.remote_control_unavailable": "Note under Remote Control when this Crew offers no phone-connection method.",
-    "sharedCrew.started_by_configured": "Hover text on a session-list byline naming the trigger that started the session ({{name}}) and the verified person who set it up ({{by}})."
+    "sharedCrew.started_by_configured": "Hover text on a session-list byline naming the trigger that started the session ({{name}}) and the verified person who set it up ({{by}}).",
+    "sharedCrew.direct_share_title": "People settings section heading above the plain Tailscale share link of this Crew.",
+    "sharedCrew.direct_link_title": "Label above the plain Tailscale URL that opens this Crew without a token.",
+    "sharedCrew.direct_link_label": "Screen-reader label of the read-only field holding the Tailscale URL.",
+    "sharedCrew.direct_link_copy": "Button that copies the Tailscale URL to the clipboard.",
+    "sharedCrew.direct_link_copy_failed": "Error shown when copying the Tailscale URL to the clipboard failed.",
+    "sharedCrew.direct_link_fallbacks": "Fold that reveals the same link spelled with this machine's Tailscale IP addresses.",
+    "sharedCrew.direct_link_note": "One-line note under the Tailscale URL: only allowlisted Tailscale logins can open it.",
+    "sharedCrew.direct_link_advanced": "Fold in the phone dialog holding the older one-time sign-in links that carry a token.",
+    "sharedCrew.people_direct_caveat": "Note under the People list: Tailscale identifies a device's owner, so people sharing a device look like one person."
   }
 }

@@ -19575,7 +19575,7 @@
     "people_seen_title": "Vues dans ce Crew",
     "people_unavailable_body": "Ce Crew n'enregistre pas qui fait quoi, il n'y a donc personne à afficher.",
     "people_unavailable_title": "Ce Crew ne suit pas les personnes",
-    "people_unnamed_platform_body": "Les coéquipiers de la liste autorisée Tailscale peuvent utiliser ce Crew via Tailscale Serve, mais ce système d’exploitation ne peut pas prouver qui ils sont, leur travail apparaît donc comme Non attribué. Toute personne absente de la liste est refusée.",
+    "people_unnamed_platform_body": "Les coéquipiers de la liste autorisée Tailscale peuvent utiliser ce Crew via Tailscale Serve, mais ce système d’exploitation ne peut pas prouver qui ils sont, leur travail apparaît donc comme Non attribué. Partagez plutôt le lien Tailscale direct pour voir leurs noms. Toute personne absente de la liste est refusée.",
     "people_unnamed_same_user_body": "Les coéquipiers de la liste autorisée Tailscale peuvent utiliser ce Crew via Tailscale Serve, mais Tailscale s’exécute sous le même utilisateur que ce Crew : il ne peut pas prouver qui ils sont et leur travail apparaît comme Non attribué. Toute personne absente de la liste est refusée.",
     "people_unnamed_title": "Impossible de nommer les personnes sur cette machine",
     "person_typing": "{{name}} écrit",
@@ -19663,6 +19663,15 @@
     "remote_control_body": "Accède à ta propre Crew depuis ton téléphone. C’est pour toi seul et ne donne accès à personne d’autre.",
     "remote_control_open": "Configurer le contrôle à distance",
     "remote_control_unavailable": "Le contrôle à distance n’est pas disponible sur cette Crew.",
-    "started_by_configured": "Lancé par {{name}}, configuré par {{by}}"
+    "started_by_configured": "Lancé par {{name}}, configuré par {{by}}",
+    "direct_share_title": "Partager ce Crew",
+    "direct_link_title": "Lien Tailscale",
+    "direct_link_label": "Lien Tailscale vers ce Crew",
+    "direct_link_copy": "Copier",
+    "direct_link_copy_failed": "La copie a échoué. Sélectionnez le lien et copiez-le vous-même.",
+    "direct_link_fallbacks": "Autres adresses",
+    "direct_link_note": "Seules les personnes de votre liste autorisée Tailscale peuvent l’ouvrir.",
+    "direct_link_advanced": "Avancé : liens de connexion pour les appareils sans Tailscale",
+    "people_direct_caveat": "Tailscale nomme la personne à qui appartient chaque appareil, pas celle qui l’utilise. Les personnes qui partagent un appareil apparaissent comme une seule ; chacune peut plutôt se connecter avec son propre lien du tableau de bord."
   }
 }

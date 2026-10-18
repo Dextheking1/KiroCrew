@@ -25,6 +25,7 @@ import { effectiveMode } from '../../api/sharedCrewMode'
 import { useSharedCrewCapabilities, useSharedCrewMode, useSharedCrewPeople } from '../../hooks/sharedCrew/useSharedCrew'
 import { fmtDateTime, fmtNumber } from '../../i18n/format'
 import { i18nT } from '../../i18n/t'
+import { TailnetDirectLink, tailnetDirectActive } from '../../components/TailnetDirectLink'
 
 /** The one fixed, public page where a tailnet's users are managed. */
 const TAILSCALE_USERS_URL = 'https://login.tailscale.com/admin/users'
@@ -119,8 +120,16 @@ export function PeoplePanel() {
   }
   const attributionReason = capabilities.reasons?.attribution
   const adapters = modeData?.adapters ?? capabilities.setup_paths ?? {}
+  const direct = capabilities.tailnet_direct
   const networkExtras = (
     <>
+      {tailnetDirectActive(direct) && (
+        <SettingsSection title={i18nT('sharedCrew.direct_share_title')}>
+          <SettingsCard>
+            <TailnetDirectLink direct={direct} />
+          </SettingsCard>
+        </SettingsSection>
+      )}
       <NetworkAdapters adapters={adapters} />
       <RemoteControlCard />
     </>
@@ -158,6 +167,9 @@ export function PeoplePanel() {
             </ul>
           )}
           {!usageAvailable && <p className="text-[12px] text-muted pt-2">{i18nT('sharedCrew.usage_unavailable')}</p>}
+          {capabilities.attribution_via === 'tailscale_direct' && (
+            <p className="text-[12px] text-muted pt-2" data-testid="people-direct-caveat">{i18nT('sharedCrew.people_direct_caveat')}</p>
+          )}
           {attributionReason === 'daemon_not_found' && (
             <p className="text-[12px] text-muted pt-2" data-testid="people-daemon-not-found">{i18nT('sharedCrew.people_daemon_not_found')}</p>
           )}

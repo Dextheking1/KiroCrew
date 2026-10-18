@@ -19009,7 +19009,7 @@
     "people_seen_title": "この Crew で確認された人",
     "people_unavailable_body": "この Crew は誰が何をしたかを記録しないため、表示できる人はいません。",
     "people_unavailable_title": "この Crew ではユーザーを記録していません",
-    "people_unnamed_platform_body": "Tailscale の許可リストにあるメンバーは Tailscale Serve 経由でこの Crew を使えますが、この OS では各メンバーが誰かを証明できないため、作業は「帰属なし」と表示されます。リストにない人は拒否されます。",
+    "people_unnamed_platform_body": "Tailscale の許可リストにあるメンバーは Tailscale Serve 経由でこの Crew を使えますが、この OS では各メンバーが誰かを証明できないため、作業は「帰属なし」と表示されます。名前を表示するには、直接の Tailscale リンクを共有してください。リストにない人は拒否されます。",
     "people_unnamed_same_user_body": "Tailscale の許可リストにあるメンバーは Tailscale Serve 経由でこの Crew を使えますが、Tailscale がこの Crew と同じユーザーで動いているため誰かを証明できず、作業は「帰属なし」と表示されます。リストにない人は拒否されます。",
     "people_unnamed_title": "このマシンではユーザーを特定できません",
     "person_typing": "{{name}} が入力中",
@@ -19097,6 +19097,15 @@
     "remote_control_body": "スマートフォンから自分の Crew に接続します。自分専用で、他の人にはアクセスを与えません。",
     "remote_control_open": "リモートコントロールを設定",
     "remote_control_unavailable": "この Crew ではリモートコントロールを利用できません。",
-    "started_by_configured": "{{name}} が開始、{{by}} が設定"
+    "started_by_configured": "{{name}} が開始、{{by}} が設定",
+    "direct_share_title": "この Crew を共有",
+    "direct_link_title": "Tailscale リンク",
+    "direct_link_label": "この Crew への Tailscale リンク",
+    "direct_link_copy": "コピー",
+    "direct_link_copy_failed": "コピーできませんでした。リンクを選択して手動でコピーしてください。",
+    "direct_link_fallbacks": "その他のアドレス",
+    "direct_link_note": "Tailscale の許可リストにいる人だけが開けます。",
+    "direct_link_advanced": "詳細: Tailscale のないデバイス用のサインインリンク",
+    "people_direct_caveat": "Tailscale が示すのは各デバイスの所有者で、実際に使っている人ではありません。1 台のデバイスを共有する人は 1 人として表示されます。それぞれが自分のダッシュボードリンクでサインインすることもできます。"
   }
 }

@@ -19292,7 +19292,7 @@
     "people_seen_title": "এই Crew-এ দেখা গেছে",
     "people_unavailable_body": "এই Crew কে কী করে তা রেকর্ড করে না, তাই দেখানোর মতো কেউ নেই।",
     "people_unavailable_title": "এই Crew লোকদের ট্র্যাক করে না",
-    "people_unnamed_platform_body": "Tailscale অনুমতি তালিকার সহকর্মীরা Tailscale Serve দিয়ে এই Crew ব্যবহার করতে পারেন, কিন্তু এই অপারেটিং সিস্টেম প্রমাণ করতে পারে না কে কে, তাই তাঁদের কাজ অনির্ধারিত হিসেবে দেখায়। তালিকায় না থাকা কাউকে প্রত্যাখ্যান করা হয়।",
+    "people_unnamed_platform_body": "Tailscale অনুমতি তালিকার সহকর্মীরা Tailscale Serve দিয়ে এই Crew ব্যবহার করতে পারেন, কিন্তু এই অপারেটিং সিস্টেম প্রমাণ করতে পারে না কে কে, তাই তাঁদের কাজ অনির্ধারিত হিসেবে দেখায়। তাঁদের নাম দেখতে সরাসরি Tailscale লিংক শেয়ার করুন। তালিকায় না থাকা কাউকে প্রত্যাখ্যান করা হয়।",
     "people_unnamed_same_user_body": "Tailscale অনুমতি তালিকার সহকর্মীরা Tailscale Serve দিয়ে এই Crew ব্যবহার করতে পারেন, কিন্তু Tailscale এই Crew-এর একই ব্যবহারকারী হিসেবে চলে, তাই এটি প্রমাণ করতে পারে না কে কে এবং তাঁদের কাজ অনির্ধারিত হিসেবে দেখায়। তালিকায় না থাকা কাউকে প্রত্যাখ্যান করা হয়।",
     "people_unnamed_title": "এই মেশিনে মানুষদের শনাক্ত করা যায় না",
     "person_typing": "{{name}} লিখছেন",
@@ -19380,6 +19380,15 @@
     "remote_control_body": "ফোন থেকে আপনার নিজের Crew-এ পৌঁছান। এটি শুধু আপনার জন্য, অন্য কাউকে অ্যাক্সেস দেয় না।",
     "remote_control_open": "রিমোট কন্ট্রোল সেট আপ করুন",
     "remote_control_unavailable": "এই Crew-এ রিমোট কন্ট্রোল উপলব্ধ নয়।",
-    "started_by_configured": "{{name}} শুরু করেছে, সেট আপ করেছেন {{by}}"
+    "started_by_configured": "{{name}} শুরু করেছে, সেট আপ করেছেন {{by}}",
+    "direct_share_title": "এই Crew শেয়ার করুন",
+    "direct_link_title": "Tailscale লিংক",
+    "direct_link_label": "এই Crew-এর Tailscale লিংক",
+    "direct_link_copy": "কপি করুন",
+    "direct_link_copy_failed": "কপি করা যায়নি। লিংকটি বেছে নিয়ে নিজে কপি করুন।",
+    "direct_link_fallbacks": "অন্যান্য ঠিকানা",
+    "direct_link_note": "শুধু আপনার Tailscale অনুমতি তালিকার লোকেরা এটি খুলতে পারবেন।",
+    "direct_link_advanced": "উন্নত: Tailscale ছাড়া ডিভাইসের জন্য সাইন-ইন লিংক",
+    "people_direct_caveat": "Tailscale প্রতিটি ডিভাইসের মালিকের নাম জানায়, যিনি ব্যবহার করছেন তাঁর নয়। এক ডিভাইস ভাগ করা লোকেরা একজন হিসেবে দেখান; প্রত্যেকে নিজের ড্যাশবোর্ড লিংক দিয়ে সাইন ইন করতে পারেন।"
   }
 }

@@ -10388,7 +10388,7 @@
     "people_seen_title": "Seen in this Crew",
     "people_unavailable_body": "This Crew does not record who does what, so there is no one to list.",
     "people_unavailable_title": "People are not tracked on this Crew",
-    "people_unnamed_platform_body": "Teammates on the Tailscale allowlist can use this Crew through Tailscale Serve, but this operating system cannot prove who each one is, so their work shows as Unattributed. Anyone not on the allowlist is refused.",
+    "people_unnamed_platform_body": "Teammates on the Tailscale allowlist can use this Crew through Tailscale Serve, but this operating system cannot prove who each one is, so their work shows as Unattributed. Share the direct Tailscale link instead to see their names. Anyone not on the allowlist is refused.",
     "people_unnamed_same_user_body": "Teammates on the Tailscale allowlist can use this Crew through Tailscale Serve, but Tailscale runs as the same user as this Crew, so it cannot prove who each one is and their work shows as Unattributed. Anyone not on the allowlist is refused.",
     "people_unnamed_title": "People cannot be named on this machine",
     "person_typing": "{{name}} is typing",
@@ -10476,6 +10476,15 @@
     "remote_control_body": "Reach your own Crew from your phone. It is for you only and gives no one else access.",
     "remote_control_open": "Set up Remote Control",
     "remote_control_unavailable": "Remote Control is not available on this Crew.",
-    "started_by_configured": "Started by {{name}}, set up by {{by}}"
+    "started_by_configured": "Started by {{name}}, set up by {{by}}",
+    "direct_share_title": "Share this Crew",
+    "direct_link_title": "Tailscale link",
+    "direct_link_label": "Tailscale link to this Crew",
+    "direct_link_copy": "Copy",
+    "direct_link_copy_failed": "Copy failed. Select the link and copy it yourself.",
+    "direct_link_fallbacks": "Other addresses",
+    "direct_link_note": "Only people on your Tailscale allowlist can open this.",
+    "direct_link_advanced": "Advanced: sign-in links for devices without Tailscale",
+    "people_direct_caveat": "Tailscale names the person who owns each device, not whoever is using it. People who share one device show as one person; each can sign in with their own dashboard link instead."
   }
 }

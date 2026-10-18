@@ -99,6 +99,24 @@ export interface SharedCrewCapabilities {
   access_modes?: AccessModes
   /** The hosted platforms workload identity supports, and this host. */
   workload_identity?: WorkloadIdentityHost
+  /** The direct tailnet listener. An older gateway omits it. */
+  tailnet_direct?: TailnetDirect
+  /** Which verified path names people: `tailscale_direct`, or empty. */
+  attribution_via?: '' | 'tailscale_direct'
+}
+
+export type TailnetDirectState = 'active' | 'off' | 'unavailable'
+
+/** The direct tailnet listener as the gateway started it. `urls` are plain
+ *  share links (no token); `method` is how the gateway reaches the local
+ *  Tailscale daemon. */
+export interface TailnetDirect {
+  state: TailnetDirectState
+  reason: string
+  method: string
+  urls: string[]
+  owner_login: string
+  addresses: string[]
 }
 
 export type SetupPath =
