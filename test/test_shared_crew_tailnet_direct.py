@@ -798,3 +798,51 @@ def test_macsys_localapi_reads_a_root_owned_port_and_token(monkeypatch):
     assert answer is not None and answer.method == "localapi_macsys"
     assert (seen["host"], seen["port"]) == ("127.0.0.1", 41112)
     assert seen["auth"] == "Basic OnRvaw=="
+
+
+# -- in-Crew invites (the live allowlist overlay) ------------------------------ #
+
+
+@pytest.fixture()
+def _live():
+    from kiro_crew.dashboard import tailnet_live_allowlist
+
+    tailnet_live_allowlist.reset_for_tests()
+    yield tailnet_live_allowlist
+    tailnet_live_allowlist.reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_an_invited_login_is_admitted_token_free_without_a_restart(_live):
+    client = await _client(_gate())
+    try:
+        before, _ = await _get(client, _direct("100.64.0.5", port=41000))
+        _live.grant("alice@example.com")
+        after, body = await _get(client, _direct("100.64.0.5", port=41000))
+    finally:
+        await client.close()
+    assert before == 403
+    assert after == 200 and body["login"] == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_a_revoked_login_is_refused_on_its_next_request_inside_the_cache_window(_live):
+    whois = FakeWhois()
+    client = await _client(_gate(("alice@example.com",), whois))
+    try:
+        ok, _ = await _get(client, _direct("100.64.0.5", port=41001))
+        _live.revoke("alice@example.com")
+        refused, body = await _get(client, _direct("100.64.0.5", port=41001))
+    finally:
+        await client.close()
+    assert ok == 200
+    assert refused == 403 and body["reason"] == "login_not_allowed"
+    assert whois.calls == ["100.64.0.5:41001"]
+
+
+def test_a_live_grant_never_admits_a_tagged_node(_live):
+    _live.grant("tagged-devices")
+    assert (
+        admission_refusal(_peer("100.64.0.9"), allowed_logins=(), owner=OWNER)
+        == "tagged_node_not_allowed"
+    )

@@ -900,8 +900,32 @@ http://<this-machine>.<your-tailnet>.ts.net:<port>/
 ```
 
 The link carries no token. Tailscale tells the gateway who is connecting, and
-only people on the allowlist get in. With no allowlist, only you do. List each
-teammate's Tailscale login:
+only people on the allowlist get in. With no allowlist, only you do.
+
+The easiest way to add a teammate is to invite them from Crew:
+
+1. In the Tailscale admin console, signed in as an Owner, Admin or IT admin, open
+   [Settings > Keys](https://login.tailscale.com/admin/settings/keys) and generate
+   an **API access key**. An OAuth client will not work: Tailscale only lets a
+   user's own key create share invites. The key expires (you choose 1 to 90 days);
+   Crew warns a week before.
+2. In Crew, open **Settings > People > Invite over Tailscale**, paste the key and
+   select **Connect**. Crew stores it in its protected vault and never shows it
+   again. **Remove key** deletes it.
+3. Type one or more email addresses and select **Send invite**, or switch to
+   **Invite link** for a single-use link (or a reusable one, up to 1,000 people).
+   You can add a name and picture to show for that person.
+4. When the teammate accepts, Crew adds the Tailscale login they accepted with to
+   `dashboard.tailscale.allowed_logins` and lets it in. That may be a different
+   account than the email you typed. The first accepted invite turns on identity
+   trust and asks for one restart; later teammates get in without one. An
+   invited login opens the direct link without a token right away.
+5. **Revoke** removes the share in Tailscale, takes the login off the allowlist
+   and closes that person's open Crew tabs.
+
+Without a key, the card links the admin console's Machines page, where you can
+share this machine by hand (**Share**). To manage the allowlist yourself instead,
+list each person's tailnet login:
 
 ```bash
 kirocrew config set dashboard.tailscale.allowed_logins '["alice@example.com", "bob@example.com"]'
@@ -985,8 +1009,9 @@ a setting (3 to 60 seconds):
 kirocrew config set dashboard.shared_crew.typing_idle_seconds 15
 ```
 
-Who can connect is managed in Tailscale, not in Kiro Crew: Settings > People is
-read-only and has no invite, remove or role controls. Teammates who reach a
+Who can connect is decided by Tailscale and the allowlist. The invite card is
+the one place in Kiro Crew that changes it, and only the Crew's owner sees it;
+there are no role controls. Teammates who reach a
 cloud-hosted Crew through AWS Systems Manager are governed by IAM and Session
 Manager; their connections arrive as local connections, so their work reads
 Unattributed. A Crew managed through an organization Console shows its Team

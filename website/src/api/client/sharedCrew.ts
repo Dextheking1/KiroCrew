@@ -1,5 +1,5 @@
 /**
- * Shared Crew reads and the one Shared Crew write the dashboard makes (cancel).
+ * Shared Crew reads, the cancel write, and the owner's Tailscale invite calls.
  *
  * Every read except the mode degrades: a gateway that does not serve a route
  * answers 404 and the method resolves `null`, which the UI renders as "not
@@ -19,6 +19,7 @@ import type {
   WorkListResponse,
 } from '../sharedCrewUi'
 import type { CrewModeResponse } from '../sharedCrewMode'
+import type { CreateInvitesBody, TailscaleInvite, TailscaleInvitesStatus } from '../sharedCrewInvites'
 import type { ClientTransport } from './transport'
 
 export interface SharedCrewSessionQuery {
@@ -33,7 +34,7 @@ export type CancelWorkResult =
   | { ok: true; work: AcceptedWork | null }
   | { ok: false; conflict: true; current: AcceptedWork | null; code: string }
 
-export function createSharedCrewEndpoints({ get, post, j }: ClientTransport) {
+export function createSharedCrewEndpoints({ get, post, del, j }: ClientTransport) {
   const read = async <T,>(url: string): Promise<Maybe<T>> => {
     const r = await get(url)
     if (r.status === 404) return null
@@ -71,6 +72,22 @@ export function createSharedCrewEndpoints({ get, post, j }: ClientTransport) {
       read<SendState>('/api/shared-crew/send-state?' + new URLSearchParams({ session_key: sessionKey })),
     sharedCrewTypingLease: (sessionKey: string) =>
       read<TypingLease>('/api/shared-crew/typing-lease?' + new URLSearchParams({ session_key: sessionKey })),
+    /** In-Crew Tailscale invites. Owner-only on the server; a 404 means this
+     *  gateway has no invite routes, read as "not available". */
+    tailscaleInvites: () => read<TailscaleInvitesStatus>('/api/shared-crew/tailscale/invites'),
+    tailscaleConnect: async (key: string): Promise<TailscaleInvitesStatus> =>
+      await j(await post('/api/shared-crew/tailscale/credential', { key })) as TailscaleInvitesStatus,
+    tailscaleDisconnect: async (): Promise<TailscaleInvitesStatus> =>
+      await j(await del('/api/shared-crew/tailscale/credential')) as TailscaleInvitesStatus,
+    tailscaleCreateInvites: async (body: CreateInvitesBody): Promise<{ invites: TailscaleInvite[] }> =>
+      await j(await post('/api/shared-crew/tailscale/invites', body)) as { invites: TailscaleInvite[] },
+    tailscaleResendInvite: async (id: string): Promise<void> => {
+      await j(await post('/api/shared-crew/tailscale/invites/' + encodeURIComponent(id) + '/resend'))
+    },
+    tailscaleRevokeInvite: async (id: string): Promise<{ revoked: string; member_removed: boolean }> =>
+      await j(await del('/api/shared-crew/tailscale/invites/' + encodeURIComponent(id))) as { revoked: string; member_removed: boolean },
+    tailscaleUploadAvatar: async (dataBase64: string): Promise<{ avatar_id: string }> =>
+      await j(await post('/api/shared-crew/tailscale/avatars', { data_base64: dataBase64 })) as { avatar_id: string },
     /** Cancel exactly one work item at the revision the UI showed. A 409 is not
      *  an error: it carries the item's current state, which the UI adopts. */
     sharedCrewCancelWork: async (workId: string, expectedRevision: number): Promise<CancelWorkResult> => {

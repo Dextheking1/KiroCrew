@@ -730,6 +730,18 @@ Security properties:
   under the `.env` lock); a refused `.env` write restores the vault entry it
   replaced, by compare-and-swap under the vault's store lock, so a value
   another writer stored since is kept.
+- **Tailscale invite key.** The Shared Crew invite card's Tailscale API access key
+  is a user-owned key that acts as its creator (an Owner, Admin or IT admin) and can
+  share this machine. It lives in its own `SecretVault` at
+  `.vault/shared-crew-tailscale/` (`shared_crew.tailscale_invite_store`), apart from
+  the user vault, so no `secret://` reference can name it and no `/api/secrets` call
+  lists it. The invite records and avatars sit beside it, so an agent can neither
+  read the key nor plant an accepted invite or swap a teammate's avatar. The key is
+  sent only to `api.tailscale.com` with redirects refused, never logged and never
+  returned by a route; `test_shared_crew_tailscale_invites.py` pins that the path is
+  under the masked `.vault` and fenced by `is_sensitive_path`, and that the key is
+  absent from responses, records and logs. See
+  [shared-crew](shared-crew.md#tailscale-invites).
 
 ### OS-Level Sandbox (`sandbox.py`)
 

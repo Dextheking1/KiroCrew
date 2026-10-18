@@ -16,8 +16,11 @@ and the existing dashboard auth in `dashboard.token_auth`, including the direct
 tailnet listener's `whois` and allowlist gate (section 2), decide who may connect;
 Shared Crew never admits a request auth refused, and never refuses one auth admitted
 because an identity lookup failed. Every authorized collaborator has the same
-application rights. There are no roles, no per-session ACLs, no invitations and no
-in-Crew member management.
+application rights. There are no roles and no per-session ACLs. The one in-Crew
+membership action is the owner's Tailscale invite (§2 Tailscale invites), which
+shares this machine through Tailscale and admits the login that accepted; by user
+decision it replaces the earlier non-goal of no in-Crew invitation, for Tailscale
+mode only.
 
 No permission scoping in this release: every collaborator a Crew admits has the same
 rights, and no code path reads a role or an ACL. The enterprise `GrantGate` decides
@@ -321,7 +324,80 @@ so Session Manager access to the host is the operator's own identity; People say
 Identity is never inferred from the OS user or a typed label, and loopback alone
 yields the local operator only together with a dashboard token.
 
-People has no invite, revoke or role control in any mode.
+People has no role control in any mode. Its one invite and revoke control is the
+Tailscale invite card below, shown in `personal` and `network` mode to the owner only;
+`console` mode never shows it.
+
+### Tailscale invites
+
+The owner invites a teammate in one step: emails, or a link, with an optional alias
+and avatar. Crew calls Tailscale's device-invite API, and when the teammate accepts it
+learns their real Tailscale login and admits it. This replaces a separate member list
+and a hand-edited trust list (`shared_crew.tailscale_invites`,
+`shared_crew.routes_invites`, `website/src/pages/settings/TailscaleInvites.tsx`).
+
+**Credential.** A user-owned Tailscale API access key (`tskey-api-...`), made by an
+Owner, Admin or IT admin. An OAuth-client token cannot create or resend device
+invites (the share belongs to a user), so no OAuth path exists. The key is entered
+once through `POST /api/shared-crew/tailscale/credential` and stored in a dedicated
+`SecretVault` at `<data_home>/.vault/shared-crew-tailscale/`
+(`shared_crew.tailscale_invite_store`); never in `config.json`, never logged, never in
+a response. The status read reports `connected`, the tailnet name, the key's
+`expires` (from `GET /tailnet/-/keys/{keyId}`) and `key_expires_soon` (within 7
+days) or `key_expired`. `DELETE .../credential` removes it.
+
+**This machine's device.** `connect` matches the local daemon's `Self.PublicKey`
+against `devices[].nodeKey`, then `Self.TailscaleIPs` against `devices[].addresses`,
+and keeps the `nodeId`. Never by name; no match refuses `device_not_found`.
+
+**API calls.** Only to `https://api.tailscale.com/api/v2`, basic auth with the key,
+redirects refused (`shared_crew.tailscale_api`):
+
+| Call | Use |
+|---|---|
+| `POST /device/{id}/device-invites` | body a JSON array of `{email?, multiUse, allowExitNode}`; `allowExitNode` is always `false`, `multiUse` is `false` unless the owner turns on a reusable link (email invites are always single-use) |
+| `GET /device/{id}/device-invites` | read back each invite's `accepted` and `acceptedBy {id, loginName, profilePicUrl}` |
+| `POST /device-invites/{id}/resend` | Resend; Tailscale allows one per minute |
+| `DELETE /device-invites/{id}` | Revoke; a 404 counts as already gone |
+
+**Accept.** `sync` runs when the owner opens People (at most every 15 s) and from a
+gateway poller while any invite is pending (60 s, doubling on failure to 15 min, never
+sooner than a 429's `Retry-After`; a backed-off sync makes no call). Each newly
+accepted invite binds `acceptedBy.id` (the stable Tailscale user id) to `loginName`
+and the invite's alias and avatar, adds the login to
+`dashboard.tailscale.allowed_logins` with `enabled` and `trust_identity` on and the
+machine owner's own login kept (`shared_crew.tailscale_allowlist`), and grants it
+live (`dashboard.tailnet_live_allowlist`, read by `tailnet.login_allowed`), so no
+restart is needed once identity trust was already on; the first accept that turns it
+on reports `restart_required`. The accepting login is used even when it differs from
+the invited email: Tailscale lets an invite be accepted from any account. An invite
+made in the admin console that Tailscale reports accepted is admitted the same way. An
+unaccepted invite Tailscale no longer lists is dropped.
+
+**Display only.** Alias (printable, 64 characters) and avatar (PNG, JPEG, GIF or
+WebP by magic bytes, at most 256 KiB, named by digest, served same-origin with
+`nosniff` and a sandbox CSP) never decide access. People rows whose provenance is a
+verified tailnet peer show the alias and avatar bound to that login; a session
+creator read back from stored attribution never borrows one.
+
+**Revoke.** Delete the invite at Tailscale, remove the login from the allowlist
+(never the machine owner's own), refuse it live, and close that person's dashboard
+sockets (`_shared_crew_actor` on each socket). Revoking an accepted invite is assumed
+to end the share (Tailscale's sharing guide says so; the API schema does not); Crew's
+own refusal holds either way.
+
+**Owner gate.** Every route but the avatar read requires a dashboard user, a
+non-restricted session, `is_owner_dashboard_request`, and a viewer who is the local
+operator or this machine's own tailnet login, so an admitted teammate cannot invite or
+revoke. An upstream Tailscale failure answers 502 `tailscale_<code>` (429
+`tailscale_rate_limited` with `Retry-After`), never 401.
+
+**Without a key.** The card explains the manual step and links the admin console's
+Machines page; nothing else changes.
+
+**Audit.** Every connect, create, resend, accept and revoke writes one SEL
+`shared_crew.invite.<op>` record with the actor, `email_sha256:<16 hex>` of the
+invited email (never the address) and the outcome.
 
 Share link. While the direct tailnet listener is active, People (`network` mode) and
 the phone dialog show its plain URL, `http://<magicdns-name>:<port>/` first and each
@@ -953,6 +1029,13 @@ that never learned a revision sends none and is not compared.
 | a chat send with `base_revision` | 409 `send_race` with `winner` and `current_revision` when another principal's send was accepted after it |
 | `GET /api/shared-crew/typing-lease?session_key=` | who holds the session's typing lease (dashboard users only) |
 | a chat send while someone else types | 409 `composer_locked` with `holder` and `lease`; a steer into a running turn is not held |
+| `GET /api/shared-crew/tailscale/invites` | owner: `connected`, `tailnet`, key expiry, `invites`, `members`, `sync` (§2 Tailscale invites) |
+| `POST /api/shared-crew/tailscale/invites` `{emails, multi_use, alias, avatar_id}` | owner: the created `invites` |
+| `POST /api/shared-crew/tailscale/invites/{id}/resend` | owner: `{resent: true}` |
+| `DELETE /api/shared-crew/tailscale/invites/{id}` | owner: `{revoked, member_removed, closed_connections}` |
+| `POST` / `DELETE /api/shared-crew/tailscale/credential` | owner: connect `{key}` or remove the key; the status body, never the key |
+| `POST /api/shared-crew/tailscale/avatars` `{data_base64}` | owner: `{avatar_id}` |
+| `GET /api/shared-crew/tailscale/avatars/{avatar_id}` | any dashboard user: the image |
 
 Browser-bound principals use `to_public_dict` (no issuer or subject); browser-bound
 work uses `AcceptedWork.to_public_dict` (no idempotency scope, lease or fencing ids).

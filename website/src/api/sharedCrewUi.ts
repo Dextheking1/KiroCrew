@@ -54,6 +54,9 @@ export interface PeopleRow {
   is_viewer?: boolean
   /** `null` when this Crew cannot report usage for the person. */
   usage?: { active: number; queued: number } | null
+  /** The alias and avatar the owner gave an invited teammate, bound by the
+   *  server to this row's verified tailnet login. Display only. */
+  member?: { alias: string; avatar_id: string; profile_pic_url: string }
 }
 
 /** `GET /api/shared-crew/people`. The directory is a separate, authoritative list. */

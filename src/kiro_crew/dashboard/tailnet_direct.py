@@ -13,17 +13,20 @@ authenticated by the daemon, never by a header:
    tailnet ranges and carry no forwarding header;
 2. the daemon's ``whois`` of that ``ip:port`` must name a node and a user
    (:func:`parse_whois`); any failure rejects the request;
-3. the user must be admitted by :func:`admission_refusal`: a login on
-   ``dashboard.tailscale.allowed_logins``, or, when that list names no login,
-   only the Crew owner (the login of this machine's own node). An ACL-tagged
-   node is admitted only when the list names one of its tags.
+3. the user must be admitted by :func:`admission_refusal`: the Crew owner
+   (the login of this machine's own node), or a login
+   :func:`tailnet.login_allowed` admits, which covers
+   ``dashboard.tailscale.allowed_logins`` and logins an in-Crew invite granted
+   or revoked since startup. With no login listed or granted, only the owner
+   gets in. An ACL-tagged node is admitted only when the list names one of
+   its tags.
 
 An admitted request needs no dashboard token. Its principal is keyed by the
 stable Tailscale user id, so every node of one user, including a re-created
 node and a node shared in from another tailnet, maps to one person.
 
 ``whois`` runs once per connection and is cached per ``ip:port`` for
-:data:`WHOIS_TTL_SECS`; a cache refresh that finds a different node key on the
+:data:`WHOIS_TTL_SECS`; the admission rule is applied again on every request; a cache refresh that finds a different node key on the
 same connection rejects it. A WebSocket upgrade always asks again, and an open
 WebSocket is re-verified every :data:`WEBSOCKET_REVERIFY_SECS`.
 
@@ -51,6 +54,7 @@ from kiro_crew.dashboard.tailnet import (
     TAGGED_DEVICES_LOGIN,
     _valid_identity,
     _valid_magicdns_name,
+    login_allowed,
 )
 from kiro_crew.executors import subprocess_executor
 
@@ -250,10 +254,12 @@ def admission_refusal(
 ) -> str | None:
     """Why *peer* may not use the direct listener, or ``None`` when it may.
 
-    Matching is by login (case-insensitive); the owner is matched by stable
-    user id. ``allowed_logins`` entries of the form ``tag:<name>`` admit an
-    ACL-tagged node carrying that tag and are never a login. A list naming no
-    login admits only the owner. An unreadable allowlist admits nobody.
+    Matching is by login through :func:`tailnet.login_allowed`, so a login an
+    in-Crew invite granted or revoked since startup is followed here too; the
+    owner is matched by stable user id. ``allowed_logins`` entries of the form
+    ``tag:<name>`` admit an ACL-tagged node carrying that tag and are never a
+    login. With no login listed or granted, only the owner is admitted. An
+    unreadable allowlist admits nobody.
     """
     if identity_unknown:
         return REFUSE_ALLOWLIST_UNREADABLE
@@ -268,7 +274,7 @@ def admission_refusal(
         and peer.login.lower() == owner.login.lower()
     ):
         return None
-    if logins and peer.login.lower() in logins:
+    if login_allowed(peer.login, tuple(sorted(logins))):
         return None
     return REFUSE_NOT_ALLOWED
 
@@ -310,7 +316,7 @@ class DirectGate:
             hit = self._cache.get(key)
             if hit is not None and hit.expires > now and not fresh:
                 self._cache.move_to_end(key)
-                return hit.peer, hit.reason
+                return hit.peer, hit.reason or self._refusal(hit.peer)
             previous = hit.peer if hit is not None else None
         answer = self.whois_fn(f"{_host_for_whois(address)}:{port}")
         peer = parse_whois(answer.data, address, port, answer.method)
@@ -319,23 +325,31 @@ class DirectGate:
             self.last_method = answer.method
             if previous is not None and previous.node_key != peer.node_key:
                 peer, reason = None, REFUSE_NODE_CHANGED
-        if peer is not None:
-            reason = (
-                admission_refusal(
-                    peer,
-                    allowed_logins=self.allowed_logins,
-                    owner=self.owner,
-                    identity_unknown=self.identity_unknown,
-                )
-                or ""
-            )
         ttl = WHOIS_TTL_SECS if answer.data is not None else WHOIS_FAILURE_TTL_SECS
         with self._lock:
             self._cache[key] = _CacheEntry(self.clock() + ttl, peer, reason)
             self._cache.move_to_end(key)
             while len(self._cache) > WHOIS_CACHE_MAX_ENTRIES:
                 self._cache.popitem(last=False)
-        return peer, reason
+        return peer, reason or self._refusal(peer)
+
+    def _refusal(self, peer: DirectPeer | None) -> str:
+        """The admission answer for a cached ``whois``, decided again on every request.
+
+        Only the daemon's answer is cached, so a login an invite revokes is
+        refused on its next request rather than when the cache entry expires.
+        """
+        if peer is None:
+            return REFUSE_WHOIS_FAILED
+        return (
+            admission_refusal(
+                peer,
+                allowed_logins=self.allowed_logins,
+                owner=self.owner,
+                identity_unknown=self.identity_unknown,
+            )
+            or ""
+        )
 
     async def verify(
         self, request: web.Request, *, fresh: bool = False

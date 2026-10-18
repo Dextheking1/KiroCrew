@@ -84,8 +84,11 @@ async def api_shared_crew_people(request: web.Request) -> web.Response:
     refused = _refusal(request)
     if refused is not None:
         return refused
+    from kiro_crew.shared_crew.routes_invites import decorate_people
+
     rows = [r for r in await _catalog_rows(request) if not _machine_only(str(r.get("key") or ""))]
-    return web.json_response(people_view(viewer_principal(request), rows))
+    body = people_view(viewer_principal(request), rows)
+    return web.json_response(await asyncio.to_thread(decorate_people, body))
 
 
 def _observed_principals() -> list[Principal]:
