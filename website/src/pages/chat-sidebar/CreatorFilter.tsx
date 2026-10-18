@@ -121,7 +121,7 @@ function CreatorFilterSelect({ value, onChange }: { value: CreatorFilterValue; o
         value={current}
         onChange={v => onChange(v as CreatorFilterValue)}
         aria-label={i18nT('sharedCrew.filter_label')}
-        className="h-7 text-[12px] py-0 min-w-0 flex-1"
+        className="h-7 min-w-0 flex-1"
       />
     </div>
   )
