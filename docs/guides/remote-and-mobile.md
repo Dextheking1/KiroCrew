@@ -891,34 +891,79 @@ The proxy strips the prefix before forwarding, relays cookies, and rewrites
 
 ### Share one Crew with teammates
 
-Several people can use one Crew over Tailscale. Turn on identity trust and list
-each person's tailnet login, so the gateway names who did what:
+Several people can use one Crew over Tailscale. While Tailscale runs on the
+Crew's machine, the gateway also listens on that machine's own Tailscale
+addresses, and Settings > People shows a plain link to share:
+
+```text
+http://<this-machine>.<your-tailnet>.ts.net:<port>/
+```
+
+The link carries no token. Tailscale tells the gateway who is connecting, and
+only people on the allowlist get in. With no allowlist, only you do. List each
+teammate's Tailscale login:
 
 ```bash
-kirocrew config set dashboard.tailscale.trust_identity true
 kirocrew config set dashboard.tailscale.allowed_logins '["alice@example.com", "bob@example.com"]'
 ```
 
-The allowlist always holds: a tailnet login not on the list is refused, on
-every platform. Naming each person is a separate question. Behind
-`tailscale serve` the gateway only sees a local connection, so it names the
-person only when the operating system can prove that connection came from the
+A tagged device (a CI runner, a server) gets in only when one of its tags is
+listed, for example `"tag:ci"`. Restart the gateway after changing the list.
+Everyone else sees a page saying why they were refused. Each person is named by
+their Tailscale account, on Linux, macOS and Windows alike. Tailscale names the
+owner of a device, not whoever is typing on it: people who share one device
+show as one person, and each of them can sign in with their own dashboard link
+instead.
+
+To turn the direct link off and keep only the loopback listener:
+
+```bash
+kirocrew config set dashboard.shared_crew.tailnet_direct false
+```
+
+The gateway binds only the Tailscale addresses (`100.x` and `fd7a:`), never your
+LAN or every interface. It does not start beside `KIROCREW_BIND`, or when
+Tailscale is not running; `GET /api/shared-crew/capabilities` then reports
+`tailnet_direct.state` and the reason.
+
+Check what the Mac sees (the second form is for the Tailscale app with no CLI
+on `PATH`):
+
+```bash
+which tailscale
+tailscale version
+tailscale ip -4
+tailscale whois --help
+tailscale whois <teammate-tailscale-ip>
+/Applications/Tailscale.app/Contents/MacOS/Tailscale version
+/Applications/Tailscale.app/Contents/MacOS/Tailscale whois <teammate-tailscale-ip>
+```
+
+The same commands are in `scripts/tailnet-direct-check.sh`.
+
+`tailscale serve` still works. Through it the gateway sees only a local
+connection, so it needs identity trust and a dashboard token, and it names each
+person only where the operating system can prove that connection came from the
 Tailscale daemon:
 
-| Host | Through `tailscale serve` | Gateway bound to its tailnet address |
+```bash
+kirocrew config set dashboard.tailscale.trust_identity true
+```
+
+| Host | Direct Tailscale link | Through `tailscale serve` |
 |---|---|---|
 | Linux, `tailscaled` as root or its own user | Each person is named | Each person is named |
-| Linux, `tailscaled` as the gateway's user | Allowed people get in, shown as Unattributed | Each person is named |
-| macOS | Allowed people get in, shown as Unattributed | Each person is named |
-| Windows | Allowed people get in, shown as Unattributed | Each person is named |
+| Linux, `tailscaled` as the gateway's user | Each person is named | Allowed people get in, shown as Unattributed |
+| macOS | Each person is named | Allowed people get in, shown as Unattributed |
+| Windows | Each person is named | Allowed people get in, shown as Unattributed |
 
-On a Mac, then, teammates on the allowlist can use the Crew through
-`tailscale serve`, but their sessions and messages read Unattributed, and
-Settings > People says that people cannot be named on this machine. Anyone not
-on the list is refused. `GET /api/shared-crew/capabilities` reports the same
-thing: `attribution` is `unavailable` with reason `platform_unprovable` (macOS,
-Windows) or `daemon_same_user`, and `degraded` with `daemon_not_found` when no
-`tailscaled` was running when the gateway started.
+Through `tailscale serve` on a Mac, teammates on the allowlist get in but their
+sessions and messages read Unattributed, and Settings > People points at the
+direct link. `GET /api/shared-crew/capabilities` reports the serve-only case as
+`attribution` `unavailable` with reason `platform_unprovable` (macOS, Windows)
+or `daemon_same_user`, and `degraded` with `daemon_not_found` when no
+`tailscaled` was running when the gateway started; with the direct link active
+it reports `available` and `attribution_via: tailscale_direct`.
 
 Where people are named, each session shows its creator (You for yourself), each
 message its author, and the People settings page lists who has connected. The

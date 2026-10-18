@@ -315,11 +315,12 @@ def unregister_setup_path_source(path: str) -> None:
 
 
 def _reset_setup_paths_for_tests() -> None:
-    global _forwarded_attribution, _identity_config_unreadable
+    global _forwarded_attribution, _identity_config_unreadable, _direct_tailnet
     with _LOCK:
         _SOURCES.clear()
         _forwarded_attribution = ForwardedAttribution()
         _identity_config_unreadable = False
+        _direct_tailnet = DirectTailnet()
 
 
 def _tailnet_state(enabled: bool, host: str, identity_trust: bool) -> SetupPathState:
@@ -393,6 +394,53 @@ def note_tailnet(
         _identity_config_unreadable = bool(identity_config_unreadable)
 
 
+@dataclass(frozen=True)
+class DirectTailnet:
+    """The direct tailnet listener as the gateway started it.
+
+    ``state`` is ``active``, ``off`` or ``unavailable``; ``reason`` says why it
+    is not active; ``method`` is how the daemon was reached (a
+    ``tailnet_localapi`` method name); ``urls`` are the plain share links.
+    """
+
+    state: str = "off"
+    reason: str = "not_started"
+    method: str = "none"
+    urls: tuple[str, ...] = ()
+    owner_login: str = ""
+    addresses: tuple[str, ...] = ()
+
+    @property
+    def active(self) -> bool:
+        return self.state == "active"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "reason": self.reason,
+            "method": self.method,
+            "urls": list(self.urls),
+            "owner_login": self.owner_login,
+            "addresses": list(self.addresses),
+        }
+
+
+_direct_tailnet = DirectTailnet()
+
+
+def note_tailnet_direct(answer: DirectTailnet) -> None:
+    """Record what the direct tailnet listener resolved to at gateway start."""
+    global _direct_tailnet
+    with _LOCK:
+        _direct_tailnet = answer
+
+
+def tailnet_direct() -> DirectTailnet:
+    """The direct tailnet listener :func:`note_tailnet_direct` last recorded."""
+    with _LOCK:
+        return _direct_tailnet
+
+
 def tailnet_identity_config_unreadable() -> bool:
     """Whether :func:`note_tailnet` last recorded an unreadable tailnet allowlist."""
     with _LOCK:
@@ -424,6 +472,9 @@ def setup_paths_dict() -> dict[str, dict[str, str]]:
             logger.warning("setup path source %s failed", path, exc_info=True)
             answer = SetupPathState(CapabilityState.UNAVAILABLE, REASON_SOURCE_FAILED)
         out[path] = answer.to_dict()
+    if tailnet_direct().active:
+        # The direct tailnet listener is itself a Tailscale sharing path.
+        out[SETUP_TAILSCALE] = SetupPathState(CapabilityState.AVAILABLE).to_dict()
     return out
 
 
@@ -437,6 +488,7 @@ __all__ = [
     "SUPPORTED_WORKLOAD_HOSTS",
     "Eligibility",
     "EligibilityReason",
+    "DirectTailnet",
     "ForwardedAttribution",
     "IdentityClass",
     "SetupPathState",
@@ -445,11 +497,13 @@ __all__ = [
     "forwarded_attribution",
     "identity_class_of",
     "note_tailnet",
+    "note_tailnet_direct",
     "parse_identity_class",
     "register_setup_path_source",
     "remote_control_eligibility",
     "setup_paths_dict",
     "shared_access_eligibility",
+    "tailnet_direct",
     "tailnet_identity_config_unreadable",
     "unregister_setup_path_source",
     "workload_host_dict",

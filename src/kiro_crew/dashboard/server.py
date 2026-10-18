@@ -1958,6 +1958,11 @@ async def start_dashboard(
             proof_gap=await asyncio.to_thread(proof_support),
             identity_config_unreadable=tailnet_identity_unknown(_cfg.degraded_sections),
         )
+        # Direct tailnet listener: whois-verified, token-free, on this machine's
+        # own tailnet addresses only. Resolved here because the chain carries it.
+        from kiro_crew.dashboard.server_runtime import tailnet_direct_listener
+
+        _direct = await tailnet_direct_listener.resolve(_cfg, port, local_only)
         if _tailnet_host:
             logger.info(
                 "tailnet access enabled: trusting origin https://%s (bind and auth unchanged)",
@@ -2029,6 +2034,7 @@ async def start_dashboard(
             tailnet_host=_tailnet_host,
             configured_host=configured_host,
             dashboard_url=dashboard_url,
+            tailnet_direct=_direct.gate,
         )
 
         # Register only after the final allowed-origin set is selected.  The startup
@@ -2145,6 +2151,8 @@ async def start_dashboard(
     # nothing listens on and leave the real one free for anyone to take.
     _bound_port = _resolved_bound_port(runner, port)
     _second_loopback = await _start_secondary_loopback_site(runner, _bound_port, _bind_ip)
+    # The direct tailnet sites, on the same port; nothing when the gate is off.
+    await tailnet_direct_listener.start(app, runner, _bound_port, _direct)
 
     # Port bind succeeded — now safe to write the secret file. Offloaded:
     # _write_secret_file does blocking fs I/O (os.open/os.close, plus the

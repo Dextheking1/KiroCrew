@@ -32,6 +32,7 @@ from kiro_crew.shared_crew.access import (
     access_modes_dict,
     detect_workload_host,
     setup_paths_dict,
+    tailnet_direct,
     workload_host_dict,
 )
 from kiro_crew.shared_crew.contracts import (
@@ -171,6 +172,10 @@ class CapabilityReport:
             eligibility_reason=grants["reason"],
         )
         body["workload_identity"] = workload_host_dict(self.workload_host)
+        direct = tailnet_direct()
+        body["tailnet_direct"] = direct.to_dict()
+        # Which verified path names people, when attribution is available.
+        body["attribution_via"] = "tailscale_direct" if direct.active else ""
         return body
 
 

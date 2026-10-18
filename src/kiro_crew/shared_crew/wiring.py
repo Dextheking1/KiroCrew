@@ -69,7 +69,13 @@ def forwarded_identity_source() -> CapabilityContribution:
     ``unavailable`` (or ``degraded``) with the proof's reason where a person
     reaching the Crew through ``tailscale serve`` can never be named on this
     host; ``available`` otherwise, so it never weakens a host it does not describe.
+
+    When the direct tailnet listener is active, people reaching the Crew over it
+    are named by the daemon's ``whois`` of their own connection on every
+    platform, so attribution is ``available`` via ``tailscale_direct``.
     """
+    if access.tailnet_direct().active:
+        return CapabilityContribution(states={"attribution": CapabilityState.AVAILABLE})
     answer = access.forwarded_attribution()
     reasons = {"attribution": answer.reason} if answer.reason else {}
     return CapabilityContribution(states={"attribution": answer.state}, reasons=reasons)

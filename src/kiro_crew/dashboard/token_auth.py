@@ -30,6 +30,7 @@ from kiro_crew.dashboard.origin import (
     is_https_request,
     is_loopback,
     is_proxied_request,
+    mark_audit_claimed,
     request_is_unix_socket,
 )
 from kiro_crew.dashboard.refresh_tokens import (
@@ -66,6 +67,9 @@ from kiro_crew.dashboard.tailnet import (
     peer_pin_key_for_claim,
     resolve_forwarded_peer,
 )
+from kiro_crew.dashboard.tailnet_direct import DIRECT_PEER_REQUEST_KEY, DirectGate
+from kiro_crew.dashboard.tailnet_direct import refusal_response as tailnet_direct_refusal
+from kiro_crew.dashboard.tailnet_direct import run_with_reverify
 
 # Canonical HMAC-secret definitions live in token_secret to break the import
 # cycle between token_auth and refresh_tokens. Re-exported here for backwards
@@ -2753,6 +2757,7 @@ def token_auth_middleware(
     local_only: bool = True,
     spa_shell_handler: Callable[..., Any] | None = None,
     tailnet_trust: TailnetTrust | None = None,
+    tailnet_direct: DirectGate | None = None,
 ) -> Callable[..., Any]:
     """Factory returning aiohttp middleware for token-based dashboard auth.
 
@@ -2781,6 +2786,13 @@ def token_auth_middleware(
     resolution) behaviour is byte-for-byte the existing token+IP path, except
     for sessions carrying ``require_peer=1``: those explicitly opt out of the
     fallback and fail closed until the daemon verifies an allowed peer.
+
+    *tailnet_direct* is the gate of the direct tailnet listener
+    (:mod:`kiro_crew.dashboard.tailnet_direct`). It decides only requests whose
+    local socket address is one of this machine's tailnet addresses: those are
+    authenticated by the daemon's ``whois`` of the TCP peer and the login
+    allowlist, with no dashboard token. Every other request, loopback and
+    ``tailscale serve`` alike, runs the token flow unchanged.
     """
 
     # NOTE: the signing-secret and revoked-nonce singletons are NOT warmed
@@ -2835,8 +2847,77 @@ def token_auth_middleware(
         valid, uid, reason, app = validate_token_with_app(cookie_token, use_session_exp=True)
         return valid, uid, reason, app, cookie_token, False
 
+    async def _direct_tailnet_gate(
+        request: web.Request, handler: object
+    ) -> tuple[web.StreamResponse | None, object]:
+        """Decide a request on the direct tailnet listener before any token is read.
+
+        Returns ``(response, handler)``. A response is final: a refusal, or the
+        handler's answer for a token-free request the daemon admitted. ``None``
+        hands the request to the token flow, which then also enforces its own
+        credential: that is only an APP token, so an app keeps its scope. A
+        human token or cookie on this listener is ignored, never required.
+        """
+        assert tailnet_direct is not None
+        path = request.path
+        is_ws = (request.headers.get("Upgrade") or "").lower() == "websocket"
+        direct_peer, refusal = await tailnet_direct.verify(request, fresh=is_ws)
+        if refusal or direct_peer is None:
+            refusal = refusal or "whois_failed"
+            mark_audit_claimed(request)
+            _sel_fn().log_api_access(
+                caller=direct_peer.login if direct_peer is not None else (request.remote or ""),
+                forwarded=is_proxied_request(request),
+                operation="tailnet_direct_auth",
+                outcome="denied",
+                source="token_auth",
+                resources=path,
+                error=refusal,
+            )
+            return tailnet_direct_refusal(request, refusal), handler
+        request[DIRECT_PEER_REQUEST_KEY] = direct_peer
+        wrapped: object = handler
+        if is_ws:
+
+            async def _reverified(req: web.Request) -> Any:
+                return await run_with_reverify(req, tailnet_direct, direct_peer, handler)  # type: ignore[arg-type]
+
+            wrapped = _reverified
+        # Machine-to-machine paths stay loopback-only, and the internal secret
+        # is never accepted off loopback.
+        strict = internal_path_matches(path, internal_paths) and not internal_path_matches(
+            path, mixed_internal_paths
+        )
+        if strict or "X-Internal-Secret" in request.headers:
+            mark_audit_claimed(request)
+            _log_auth(request, direct_peer.login, "denied", "tailnet direct: internal path")
+            return _deny(request, "Forbidden"), wrapped
+        query_token = request.query.get("token") or ""
+        if query_token and claims_an_app_unverified(query_token):
+            return None, wrapped
+        request["user"] = (
+            f"tailnet:uid:{direct_peer.user_id}"
+            if direct_peer.user_id
+            else f"tailnet:node:{direct_peer.node}"
+        )
+        request["app"] = ""
+        request["auth_token"] = ""
+        request["auth_tailnet_direct"] = True
+        request["is_dashboard_user"] = True
+        request["auth_from_query_token"] = False
+        _log_auth(request, direct_peer.login, "granted", "tailnet direct whois")
+        await publish_actor(request, trust=tailnet_trust, serve_peer=None)
+        return await wrapped(request), wrapped  # type: ignore[operator]
+
     @web.middleware
     async def middleware(request: web.Request, handler: object) -> web.StreamResponse:
+        if tailnet_direct is not None and tailnet_direct.owns(request):
+            response, handler = await _direct_tailnet_gate(request, handler)
+            if response is not None:
+                return response
+        return await _token_flow(request, handler)
+
+    async def _token_flow(request: web.Request, handler: object) -> web.StreamResponse:
         path = request.path
 
         # Forwarded-peer resolution (RFC §2), once per request — the WebSocket

@@ -10,11 +10,14 @@ An owner of the :mod:`kiro_crew.config.sections` facade; it never imports the fa
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from kiro_crew.config.fields import _meta, _safe_bool, _safe_dict, _safe_int
 from kiro_crew.config.sections_defaults import SectionReader
+
+logger = logging.getLogger("kiro_crew.config.loader")
 
 #: Bounds for every integer knob, ``(lo, hi)``. A value outside is clamped.
 SHARED_CREW_BOUNDS: dict[str, tuple[int, int]] = {
@@ -190,10 +193,27 @@ class SharedCrewConfig:
             "CPUQuota of this Crew's agents slice, in percent of one core. 0 emits none.",
         ),
     )
+    tailnet_direct: bool = field(
+        default=True,
+        metadata=_meta(
+            "Direct Tailnet Link",
+            "While Tailscale runs, also listen on this machine's own Tailscale "
+            "addresses (100.x and fd7a:) on the dashboard port, and let in only "
+            "people Tailscale names whose login is on dashboard.tailscale."
+            "allowed_logins (only you when that list is empty), without a "
+            "dashboard token. Never binds any other address. Off restores the "
+            "loopback-only listener. A value that is not true or false reads as "
+            "off. Takes effect on the next gateway start.",
+            restart=True,
+        ),
+    )
 
 
 #: The boolean knobs; every other field is an integer bounded by SHARED_CREW_BOUNDS.
 SHARED_CREW_FLAGS = ("admission_enabled", "containment_enabled", "hard_limits")
+#: Flags that widen what can reach this machine. A value that is not a boolean
+#: reads as False, so a typo can only narrow exposure.
+SHARED_CREW_EXPOSURE_FLAGS = ("tailnet_direct",)
 
 
 def shared_crew_config_from(raw: object) -> SharedCrewConfig:
@@ -208,6 +228,19 @@ def shared_crew_config_from(raw: object) -> SharedCrewConfig:
     values: dict[str, Any] = {}
     for name in SHARED_CREW_FLAGS:
         values[name] = section.read(name, _safe_bool)
+    for name in SHARED_CREW_EXPOSURE_FLAGS:
+        if name not in data:
+            values[name] = section.default(name)
+            continue
+        raw = data.get(name)
+        if not isinstance(raw, bool):
+            logger.warning(
+                "config: 'dashboard.shared_crew.%s' is not true or false (got %s); "
+                "reading it as false",
+                name,
+                type(raw).__name__,
+            )
+        values[name] = raw is True
     for name in SHARED_CREW_BOUNDS:
         lo, hi = SHARED_CREW_BOUNDS[name]
         values[name] = section.read(name, _safe_int, lo, hi)
@@ -298,6 +331,7 @@ def load_shared_crew_config() -> SharedCrewConfig:
 __all__ = [
     "EffectiveLimits",
     "SHARED_CREW_BOUNDS",
+    "SHARED_CREW_EXPOSURE_FLAGS",
     "SHARED_CREW_FLAGS",
     "SharedCrewConfig",
     "effective_limits",

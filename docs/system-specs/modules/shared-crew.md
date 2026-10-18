@@ -12,7 +12,8 @@ It attributes what each person does, charges execution to the person who asked f
 it, keeps one person from exhausting the host, and shows collaborators to each other.
 
 It is an attribution and fairness layer, not an access layer. The network (Tailscale)
-and the existing dashboard auth in `dashboard.token_auth` decide who may connect;
+and the existing dashboard auth in `dashboard.token_auth`, including the direct
+tailnet listener's `whois` and allowlist gate (section 2), decide who may connect;
 Shared Crew never admits a request auth refused, and never refuses one auth admitted
 because an identity lookup failed. Every authorized collaborator has the same
 application rights. There are no roles, no per-session ACLs, no invitations and no
@@ -112,7 +113,8 @@ Evidence, strongest first (`identity.derive_principal`):
 | An app identity (an app token, or an internal caller the middleware derived an app for) | `system`, component `app:<name>` | `internal` |
 | The internal loopback secret (kiro-cli, MCP, doctor) | `system`, component `internal` | `internal` |
 | Loopback peer forwarded by local `tailscale serve`, resolved and allowlisted by `tailnet.resolve_forwarded_peer` | `human` keyed by tailnet login; `machine` keyed by node for a tagged node | `tailscale_serve` |
-| Tailnet peer connecting to the gateway's tailnet address directly, no forwarding header, resolved by daemon `whois` of the socket address (`tailnet.resolve_direct_peer`) | as above | `tailscale_direct` |
+| Tailnet peer on the direct tailnet listener, admitted by daemon `whois` of its own TCP `ip:port` and the login allowlist (`tailnet_direct.DirectGate`) | `human` keyed by stable Tailscale user id; `machine` keyed by node for a tagged node | `tailscale_direct` |
+| Tailnet peer reaching a widened bind on its tailnet address, no forwarding header, resolved by daemon `whois` of the socket address (`tailnet.resolve_direct_peer`) | `human` keyed by tailnet login; `machine` keyed by node | `tailscale_direct` |
 | Loopback socket with no forwarding header at all | `human`, the local operator, keyed by the token subject | `local_operator` |
 | Anything else auth admitted | `Principal.unknown()` | `none` |
 
@@ -121,14 +123,95 @@ A tailnet principal's subject is the lowercased daemon login under provider
 tagged node reports the login `tagged-devices`. The display snapshot is the login
 (or node name) as the daemon reported it, so a rename never changes the id.
 
-Supported topologies: exactly the two tailnet rows, and both require the existing
-identity-trust opt-in (`dashboard.tailscale.trust_identity` with a non-empty
-`allowed_logins`, i.e. `TailnetTrust.enforces_identity`). Without it no daemon
-lookup runs and tailnet callers are Unknown. The serve row reuses the
-middleware's existing resolution, allowlist deny and pin unchanged. The direct
-row is attribution only: its lookup runs after the auth decision, shares the
-whois cache and executor, and is read by neither the pin (a direct peer stays
-`ip:`-pinned) nor the allowlist, so it cannot admit or refuse a request.
+A person on the direct tailnet listener is keyed by the stable Tailscale user id
+(`whois` `UserProfile.ID`, subject `uid:<id>`), never by a display name: every node
+of one user, a re-created node and a node shared in from another tailnet
+(`Node.Sharer` set; the principal is the node's owner, never the sharer) map to one
+principal. The login is the allowlist key and the label; the display name is a
+label only. The device a person was seen from is the node key.
+
+#### Direct tailnet listener
+
+With `dashboard.shared_crew.tailnet_direct` on (the default; a value that is not a
+boolean reads as off) and Tailscale running, the gateway also listens on this
+machine's own tailnet addresses (`100.64.0.0/10` and `fd7a:115c:a1e0::/48`, from
+the daemon's `status`) on the dashboard port (`server_runtime.tailnet_direct_listener`).
+It never binds a wildcard, a LAN address or any non-tailnet interface, and it does
+not start beside a widened bind (`KIROCREW_BIND`), under a governance ceiling that
+pins `capabilities.tailnet_origin` off, or when the daemon names no address or no
+owner login. Loopback is unchanged. Off restores the loopback-only listener at the
+next gateway start. The bind is fixed at start; a Tailscale that starts later, or
+an address change, needs a gateway restart.
+
+The operator approved this default-on tailnet exposure, gated by verified identity
+and the allowlist, as the Shared Crew sharing path.
+
+A request is on the direct listener when the local end of its TCP connection is one
+of those addresses (`DirectGate.owns`). `token_auth_middleware` decides it before
+any token is read:
+
+| Check | Refusal (403, `code: tailnet_direct_refused`) |
+|---|---|
+| Socket peer is a tailnet address | `not_tailnet_peer` |
+| No `Forwarded`, `X-Forwarded-*` or `X-Real-IP` header | `forwarded_header` |
+| Daemon `whois` of the peer `ip:port` names a node key and a user with a stable id | `whois_failed` |
+| Same node key as the connection's earlier answer | `node_changed` |
+| Allowlist readable | `allowlist_unreadable` |
+| Tagged node: one of its tags is listed as `tag:<name>` in `allowed_logins` | `tagged_node_not_allowed` |
+| Person: the Crew owner (the login and user id of this machine's own node), or a login on `dashboard.tailscale.allowed_logins`; with no login listed, only the owner | `login_not_allowed` |
+
+`allowed_logins` is read whether or not `trust_identity` is on. An admitted request
+needs no dashboard token: it is the dashboard user `tailnet:uid:<id>` (a tagged node
+`tailnet:node:<name>`), which never matches the owner subject, so owner-gated
+routes refuse it. A token or cookie it carries is ignored, except an app token,
+which runs the ordinary token flow so the app keeps its scope. Strict internal
+paths and the internal secret are refused on this listener. It cannot mint a
+bearer link (`_caller_bounds` lends no lifetime), and `/api/auth/me` reports
+`auth_method: tailnet_direct`. A `Tailscale-User-*` header is never read here.
+Browsers get the refusal as a page, everything else as JSON.
+
+`whois` is not run per HTTP request. It runs once per connection and is cached per
+`ip:port` for `WHOIS_TTL_SECS` (30 s; a failure for 2 s; at most
+`WHOIS_CACHE_MAX_ENTRIES` entries). A WebSocket upgrade always asks again, and an
+open WebSocket is re-verified every `WEBSOCKET_REVERIFY_SECS` and closed when its
+peer stops verifying. Any `whois` failure rejects the request; there is no
+Unattributed fallback on this listener.
+
+The daemon is reached with `tailnet_localapi`, LocalAPI first, then the CLI. Every
+location is one the gateway user cannot write: a socket or token file must be
+root-owned in a root-owned directory, and a CLI found on `PATH` is used only when
+it resolves to a vetted install location (`tailnet._CLI_CANDIDATE_PATHS`). Nothing
+is installed. The method used is reported in the capabilities
+(`tailnet_direct.method`).
+
+| Platform | Order | Status |
+|---|---|---|
+| Linux | LocalAPI unix socket (`/var/run/tailscale/tailscaled.sock`, `/run/tailscale/tailscaled.sock`), then the CLI | code path and tests; live check on a host with Tailscale pending |
+| macOS | open-source daemon socket (`/var/run/tailscaled.socket`), standalone app LocalAPI (`/Library/Tailscale/ipnport` and `sameuserproof-<port>`), CLI on `PATH`, CLI in `/Applications/Tailscale.app/Contents/MacOS/Tailscale` | code path and tests with fakes; unverified on macOS |
+| Windows | CLI in `C:\Program Files\Tailscale` | code path and tests with fakes; unverified on Windows |
+
+`whois` names the user who owns the Tailscale node, not the operating-system user
+at that machine. Several people sharing one node are one principal; each of them
+needs the token path to be told apart. People says so.
+
+Supported topologies:
+
+| Topology | Names people | Admission |
+|---|---|---|
+| Direct tailnet listener (default on), Linux | yes, by stable user id | `whois` plus allowlist, no token |
+| Direct tailnet listener, macOS and Windows | yes (code path, unverified on those systems) | same |
+| `tailscale serve` to loopback, Linux with `tailscaled` as another user | yes, by login | token plus allowlist |
+| `tailscale serve` to loopback, macOS, Windows, same-user Linux | no, Unattributed | token plus allowlist |
+| Widened bind reached on a tailnet address | yes, by login, attribution only | token |
+
+The serve and widened-bind rows require the existing identity-trust opt-in
+(`dashboard.tailscale.trust_identity` with a non-empty `allowed_logins`, i.e.
+`TailnetTrust.enforces_identity`). Without it no daemon lookup runs on those paths
+and tailnet callers are Unknown. The serve row reuses the middleware's existing
+resolution, allowlist deny and pin unchanged. The widened-bind row is attribution
+only: its lookup runs after the auth decision, shares the whois cache and executor,
+and is read by neither the pin (a direct peer stays `ip:`-pinned) nor the
+allowlist, so it cannot admit or refuse a request.
 
 Loopback alone is not proof of a trusted proxy: a loopback request carrying any
 forwarding header (`origin.is_proxied_request`) is never the local operator, and
@@ -148,7 +231,10 @@ user than the gateway names people; Linux with a same-user `tailscaled`, macOS a
 Windows admit allowlisted people as Unknown. macOS gives an unprivileged process no
 owner for another user's loopback socket, Windows has no such check in this build,
 and `tailscale serve` does not register its loopback connections for a `whois` by
-port. The direct row names people on every platform. When identity trust is on and
+port. The direct tailnet listener names people on every platform. When it is active,
+`attribution` is `available` and the capabilities carry `attribution_via:
+tailscale_direct` and `tailnet_direct` (`state`, `reason`, `method`, `urls`,
+`owner_login`, `addresses`). Otherwise, when identity trust is on and
 the gateway listens on loopback only, `access.note_tailnet` records
 `tailnet_proxy_proof.proof_support()` at start and `attribution` reports
 `unavailable` (`platform_unprovable`, `daemon_same_user`) or `degraded`
@@ -236,6 +322,14 @@ Identity is never inferred from the OS user or a typed label, and loopback alone
 yields the local operator only together with a dashboard token.
 
 People has no invite, revoke or role control in any mode.
+
+Share link. While the direct tailnet listener is active, People (`network` mode) and
+the phone dialog show its plain URL, `http://<magicdns-name>:<port>/` first and each
+tailnet address as a fallback, with a copy button and the note that only people on
+the Tailscale allowlist can open it (`TailnetDirectLink`). The URL carries no token.
+The phone dialog keeps its token-carrying QR and sign-in link under an Advanced fold
+for devices without Tailscale. People adds the device-owner caveat under the list,
+and the macOS empty state (`platform_unprovable`) points at the direct link.
 
 ## 3. Session attribution and records
 

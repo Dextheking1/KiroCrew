@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from aiohttp import web
 
     from kiro_crew.dashboard.tailnet import ForwardedPeer, TailnetTrust
+    from kiro_crew.dashboard.tailnet_direct import DirectPeer
 
 logger = logging.getLogger(__name__)
 
@@ -76,18 +77,30 @@ _CORRELATION_RE = re.compile(r"\A[A-Za-z0-9._\-]{1,64}\Z")
 DEVICE_REQUEST_KEY = "shared_crew_device"
 
 
-def tailnet_principal(login: str, node: str, provenance: Provenance) -> Principal:
+def tailnet_principal(
+    login: str,
+    node: str,
+    provenance: Provenance,
+    *,
+    user_id: str = "",
+    display_name: str = "",
+    tagged: bool = False,
+) -> Principal:
     """The principal for a daemon-verified tailnet peer.
 
     A person is keyed by their login, so every device and tab they use maps to
-    one id. An ACL-tagged node reports the same ``tagged-devices`` login as
-    every other tagged node, so it is a ``machine`` keyed by its node name
-    instead, and two tagged nodes never share a budget or a byline.
+    one id. When the daemon gave a stable Tailscale user id (the direct
+    listener's ``whois``), the person is keyed by that id instead, so a renamed
+    login or a re-created node stays one principal; the login stays the
+    allowlist key and the display label. An ACL-tagged node reports the same
+    ``tagged-devices`` login as every other tagged node, so it is a ``machine``
+    keyed by its node name instead, and two tagged nodes never share a budget
+    or a byline. A display name is a label only and never part of the key.
     """
     from kiro_crew.dashboard.tailnet import TAGGED_DEVICES_LOGIN
 
     node_name = node.rstrip(".").lower()
-    if login == TAGGED_DEVICES_LOGIN:
+    if login == TAGGED_DEVICES_LOGIN or tagged:
         subject = f"node:{node_name}"
         return Principal(
             id=principal_id_for(PROVIDER_TAILSCALE, TAILNET_ISSUER, subject),
@@ -98,7 +111,7 @@ def tailnet_principal(login: str, node: str, provenance: Provenance) -> Principa
             provenance=provenance,
             display=DisplaySnapshot(name=node_name, login=""),
         )
-    subject = login.strip().lower()
+    subject = f"uid:{user_id}" if user_id else login.strip().lower()
     return Principal(
         id=principal_id_for(PROVIDER_TAILSCALE, TAILNET_ISSUER, subject),
         kind=PrincipalKind.HUMAN,
@@ -106,7 +119,19 @@ def tailnet_principal(login: str, node: str, provenance: Provenance) -> Principa
         issuer=TAILNET_ISSUER,
         subject=subject,
         provenance=provenance,
-        display=DisplaySnapshot(name=login.strip(), login=login.strip()),
+        display=DisplaySnapshot(name=(display_name or login).strip(), login=login.strip()),
+    )
+
+
+def direct_principal(peer: DirectPeer) -> Principal:
+    """The principal of a peer the direct tailnet listener verified."""
+    return tailnet_principal(
+        peer.login,
+        peer.node,
+        Provenance.TAILSCALE_DIRECT,
+        user_id=peer.user_id,
+        display_name=peer.display_name,
+        tagged=peer.tagged,
     )
 
 
@@ -246,8 +271,21 @@ async def _derive_actor(
 ) -> ActorContext:
     from kiro_crew.dashboard.origin import is_proxied_request
     from kiro_crew.dashboard.tailnet import resolve_direct_peer
+    from kiro_crew.dashboard.tailnet_direct import DIRECT_PEER_REQUEST_KEY, DirectPeer
 
     app = str(request.get("app") or "")
+    verified = request.get(DIRECT_PEER_REQUEST_KEY)
+    if not internal and not app and isinstance(verified, DirectPeer):
+        principal = direct_principal(verified)
+        request[DEVICE_REQUEST_KEY] = f"node:{verified.node_key}"
+        request_id = uuid.uuid4().hex
+        return ActorContext(
+            principal=principal,
+            request_id=request_id,
+            transport=_transport_of(request),
+            correlation_id=_correlation_of(request, request_id),
+            auth=_auth_snapshot(request, "" if trust is None else trust.pin_scope),
+        )
     direct_peer: ForwardedPeer | None = None
     if not internal and not app and serve_peer is None and trust is not None:
         direct_peer = await resolve_direct_peer(request, trust)

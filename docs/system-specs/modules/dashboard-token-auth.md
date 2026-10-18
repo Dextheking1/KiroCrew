@@ -355,6 +355,40 @@ Request flow:
 8. Publish the Shared Crew actor (`shared_crew.identity.publish_actor`) under `request[ACTOR_REQUEST_KEY]`, after every decision above and before the handler, on each path that admits a request: the internal-secret grant, both mixed-internal cookie branches and the main path. It is attribution only. It runs only for an admitted request, never raises (a failure publishes the Unknown principal), and its daemon lookup for a directly connected tailnet peer (`tailnet.resolve_direct_peer`) is not consulted by the pin or the allowlist, so it can neither admit nor refuse anything. Bypassed routes publish no actor and read as Unknown. Derivation rules are in [shared-crew.md](shared-crew.md) section 2.
 9. Return 403 with JSON for `/api/*`, HTML for pages — **except** non-API `GET`/`HEAD` navigations, which are served the public SPA shell (see below)
 
+#### Direct tailnet listener: daemon identity instead of a token
+
+A request whose LOCAL socket address is one of this machine's tailnet addresses
+arrived on the direct tailnet listener (`tailnet_direct.DirectGate.owns`; the
+listener exists only while `dashboard.shared_crew.tailnet_direct` is on, the
+default, and Tailscale runs). `token_auth_middleware(tailnet_direct=...)` decides
+it before step 1, and no other request is affected: loopback, the unix socket and
+`tailscale serve` run the steps above unchanged.
+
+1. The TCP peer must be a tailnet address with no forwarding header, and the
+   daemon's `whois` of that peer `ip:port` must name a node and a user with a
+   stable id. A `Tailscale-User-*` header is never read. Any failure is a 403
+   (`code: tailnet_direct_refused` with a `reason`); there is no fallback.
+2. The user must be the Crew owner (the login and user id of this machine's own
+   node) or a login on `dashboard.tailscale.allowed_logins`; with no login listed,
+   only the owner. A tagged node needs one of its tags listed as `tag:<name>`. An
+   unreadable allowlist admits nobody.
+3. Strict internal paths and `X-Internal-Secret` are refused on this listener.
+4. An app token (`?token=` claiming an app) runs the token flow so its scope holds.
+   Any other token or cookie is ignored: the request is the dashboard user
+   `tailnet:uid:<id>` with `auth_tailnet_direct` set, `auth_token` empty, no cookie
+   minted, and the Shared Crew actor is the verified person. That subject never
+   matches the owner subject, so owner-gated routes refuse it, and
+   `_caller_bounds` lends it no lifetime, so it cannot mint a bearer link.
+5. `whois` is cached per `ip:port` (30 s, failures 2 s, bounded), asked again on
+   every WebSocket upgrade, and repeated on an open WebSocket every 60 s; a
+   failure or a different node key closes it.
+
+The CSRF origin check still applies: the listener's own origins
+(`http://<magicdns-name>:<port>` and `http://<tailnet-ip>:<port>`) join
+`allowed_origins` after the listener binds, so the `Host` barrier and `Origin`
+check accept exactly those. Rules and platform status are in
+[shared-crew.md](shared-crew.md) section 2.
+
 #### Link re-exchange is deliberately allowed (the link is not single-use)
 
 Presenting the same `?token=` link again within its link click window succeeds, and each presentation re-exchanges it for a fresh session cookie bound to the presenting peer (`test_link_token_still_reusable_via_query_param_after_exchange`; `test_url_token_exchanged_for_distinct_session_cookie`). This is deliberate: remote-instance iframes re-derive `/?token=` on navigation, and self-nudge polling re-opens the same URL, so refusing the second presentation would break both.

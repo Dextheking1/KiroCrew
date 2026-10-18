@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 
 if TYPE_CHECKING:
+    from kiro_crew.dashboard import tailnet_direct as tailnet_direct_mod
     from kiro_crew.dashboard.server import (
         _STRICT_INTERNAL_API_PATHS,
         AMBIGUOUS_LOOPBACK_HOSTS,
@@ -118,6 +119,7 @@ def _install_dashboard_middlewares(
     tailnet_host: str,
     configured_host: str,
     dashboard_url: str,
+    tailnet_direct: tailnet_direct_mod.DirectGate | None = None,
 ) -> None:
     """Install the dashboard's middleware chain on *app*, outermost first.
 
@@ -231,6 +233,7 @@ def _install_dashboard_middlewares(
             local_only=local_only,
             spa_shell_handler=handlers.index,
             tailnet_trust=tailnet_trust,
+            tailnet_direct=tailnet_direct,
         ),
         sel_audit_middleware,
         # Inner to token auth (it reads the ``app`` claim) and to the audit
