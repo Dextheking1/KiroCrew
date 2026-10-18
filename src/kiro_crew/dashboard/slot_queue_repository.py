@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -492,6 +493,32 @@ async def drain_restored_parked_sends(state: Any) -> None:
                     break
             if keys and keys[-1] == slot.key:
                 break
+    from kiro_crew.memory_startup import memory_startup_preparing
+
+    if keys and state.memory_startup_task is None and memory_startup_preparing():
+        task = asyncio.create_task(_drain_after_memory_task_publication(state, keys))
+        state._background_tasks.add(task)
+        task.add_done_callback(state._background_tasks.discard)
+    else:
+        await _drain_parked_queues(state, keys)
+
+
+# Startup publishes the memory task after restoring slots; there is no event for that assignment.
+_MEMORY_TASK_POLL_SECONDS = 0.1
+
+
+async def _drain_after_memory_task_publication(state: Any, keys: list[str]) -> None:
+    """Hand restored sends to the ordinary memory wait once startup publishes its task."""
+    from kiro_crew import shutdown_event
+    from kiro_crew.dashboard.chat_runner import _drain_parked_queues
+    from kiro_crew.memory_startup import memory_startup_preparing
+
+    while state.memory_startup_task is None and memory_startup_preparing():
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=_MEMORY_TASK_POLL_SECONDS)
+            return
+        except asyncio.TimeoutError:
+            pass
     await _drain_parked_queues(state, keys)
 
 

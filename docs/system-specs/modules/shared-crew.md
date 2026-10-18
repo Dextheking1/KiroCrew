@@ -187,7 +187,7 @@ setup guidance and session list follow it, and the modes never mix:
 
 | Mode | When | People shows | Session list |
 |---|---|---|---|
-| `personal` | no setup path is available or degraded, and no principal but the local operator viewing has been seen | setup guidance with each adapter's honest status, personal Remote Control | no creator bylines, no All/Mine control |
+| `personal` | no setup path is available or degraded, and no principal but the local operator viewing has been seen (the operator's bootstrap subjects `local-app`, `local-startup` and the configured owner are the same person; session creators are matched by id, never by a stored provenance) | setup guidance with each adapter's honest status, personal Remote Control | no creator bylines, no All/Mine control |
 | `network` | a Tailscale or Systems Manager path is on, or a network person or another operator has been seen | who has been seen (labelled as seen), each adapter read-only, personal Remote Control | bylines, filter |
 | `console` | the enterprise provider backs a sign-in seam (`human_credentials` or `human_sign_in`) and `individual_grants` | read-only Team Access (people seen signing in) and the Console link; no share, Remote Control or Tailscale setup | bylines, filter |
 | `invalid` | a team configuration exists but is refused | one error state with the reason code | bylines, filter |
@@ -655,7 +655,7 @@ admission, the slot detail (`GET /api/chat/slots/{slot}`) and the slot list repo
 Presence (`collab.PresenceEntry`) is telemetry. It is bound to the connection's
 verified actor, folds every tab of one principal into one entry, expires after
 `PRESENCE_TTL_SECONDS` without a refresh, is rate-limited to one activity frame per
-`ACTIVITY_MIN_INTERVAL_SECONDS` per connection, and is never persisted. It never
+`ACTIVITY_MIN_INTERVAL_SECONDS` per connection (the one step down from a reported `typing` in the same session is exempt and goes at once, so a send ends typing for everyone), and is never persisted. It never
 grants access or frees a slot. Draft text is never sent.
 
 `presence.PresenceRegistry` implements it in memory. `dashboard.ws` reads the

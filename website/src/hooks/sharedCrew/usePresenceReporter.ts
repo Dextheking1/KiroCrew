@@ -5,8 +5,10 @@
  * The report is an activity enum and a session key, nothing else: no draft text,
  * no keystroke and no principal ever leave the tab. Sends are spaced at least
  * `MIN_SPACING_MS` apart to stay under the server's per-connection rate limit,
- * and a keep-alive repeats the current activity before the server's presence
- * expiry. Typing never locks the composer for anyone.
+ * except the frame that ends a reported typing, which the server exempts and
+ * which therefore goes at once. A keep-alive repeats the current activity
+ * before the server's presence expiry. Typing never locks the composer for
+ * anyone.
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { Activity } from '../../api/sharedCrew'
@@ -27,10 +29,16 @@ export function usePresenceReporter(sessionKey: string | null | undefined, enabl
   const keyRef = useRef(sessionKey ?? '')
   keyRef.current = sessionKey ?? ''
 
+  /** The activity and session of the last frame that left this tab. */
+  const sent = useRef<{ key: string; activity: Activity } | null>(null)
+
   const flush = useCallback(() => {
     pending.current = null
     if (!keyRef.current) return
-    if (sendActivity(keyRef.current, current.current)) lastSent.current = Date.now()
+    if (sendActivity(keyRef.current, current.current)) {
+      lastSent.current = Date.now()
+      sent.current = { key: keyRef.current, activity: current.current }
+    }
   }, [])
 
   const report = useCallback((activity: Activity, force = false) => {
@@ -38,7 +46,11 @@ export function usePresenceReporter(sessionKey: string | null | undefined, enabl
     const changed = activity !== current.current
     current.current = activity
     if (!changed && !force) return
-    const wait = MIN_SPACING_MS - (Date.now() - lastSent.current)
+    // Ending a typing this tab already reported goes at once: the server
+    // exempts that one step down from its spacing, so collaborators stop
+    // reading "typing" the moment it ends.
+    const endsTyping = activity !== 'typing' && sent.current?.activity === 'typing' && sent.current.key === keyRef.current
+    const wait = endsTyping ? 0 : MIN_SPACING_MS - (Date.now() - lastSent.current)
     if (wait <= 0) {
       if (pending.current) { clearTimeout(pending.current); pending.current = null }
       flush()
@@ -74,7 +86,8 @@ export function usePresenceReporter(sessionKey: string | null | undefined, enabl
   }, [enabled, report])
 
   /** Call when the composer's draft is sent: typing ends now, not after the
-   *  hold, so collaborators never read "typing" beside the turn it produced. */
+   *  hold or the send spacing, so collaborators never read "typing" beside
+   *  the turn it produced. */
   const noteSent = useCallback(() => {
     if (typingTimer.current) { clearTimeout(typingTimer.current); typingTimer.current = null }
     if (!enabled || !keyRef.current || current.current !== 'typing') return

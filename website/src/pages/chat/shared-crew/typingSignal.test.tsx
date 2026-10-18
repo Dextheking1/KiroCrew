@@ -54,14 +54,23 @@ describe('composer typing signal', () => {
     act(() => { vi.advanceTimersByTime(MIN_SPACING_MS) })
     act(() => { result.current('hello') })
     expect(sent.map(f => f.activity)).toEqual(['viewing', 'typing'])
+    // The send lands right after the keystroke, inside the send spacing: the
+    // frame ending typing still leaves in the same tick, not a spacing later.
+    act(() => { vi.advanceTimersByTime(100) })
     act(() => { noteComposerSent() })
-    // Only the server's rate limit spacing stands between the send and viewing.
-    act(() => { vi.advanceTimersByTime(MIN_SPACING_MS) })
-    expect(MIN_SPACING_MS).toBeLessThan(TYPING_HOLD_MS)
     expect(sent.map(f => f.activity)).toEqual(['viewing', 'typing', 'viewing'])
     // Past the hold and a keep-alive, the tab still reads viewing, never typing.
     act(() => { vi.advanceTimersByTime(TYPING_HOLD_MS) })
     expect(sent.slice(2).map(f => f.activity)).not.toContain('typing')
+  })
+
+  it('a send before the typing frame left keeps the server at viewing', () => {
+    const { result } = renderHook(() => useComposerWithPresence(vi.fn()))
+    // Typing inside the spacing after the open frame: held, not yet sent.
+    act(() => { result.current('h') })
+    act(() => { noteComposerSent() })
+    act(() => { vi.advanceTimersByTime(MIN_SPACING_MS) })
+    expect(sent.map(f => f.activity)).not.toContain('typing')
   })
 
   it('a send while not typing sends nothing', () => {

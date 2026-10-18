@@ -52,6 +52,21 @@ class _Connection:
     refreshed_wall: float
 
 
+def _ends_typing(prior: _Connection, session_key: str, activity: Activity) -> bool:
+    """Whether a report only ends this connection's typing in the same session.
+
+    Such a report is exempt from the per-connection spacing, so a send clears
+    "typing" for collaborators at once. It stays bounded: it can only follow an
+    accepted ``typing`` report, which is itself spaced, so a connection still
+    lands at most two frames per interval.
+    """
+    return (
+        prior.activity is Activity.TYPING
+        and prior.session_key == session_key
+        and activity is not Activity.TYPING
+    )
+
+
 @dataclass(frozen=True)
 class ReportResult:
     accepted: bool
@@ -114,7 +129,11 @@ class PresenceRegistry:
         with self._lock:
             changed = set(self._expire_locked(now))
             prior = self._conns.get(conn_id)
-            if prior is not None and now - prior.refreshed < self._min_interval:
+            if (
+                prior is not None
+                and now - prior.refreshed < self._min_interval
+                and not _ends_typing(prior, session_key, activity)
+            ):
                 return ReportResult(False, tuple(sorted(changed)), REFUSED_RATE)
             if prior is None and len(self._conns) >= self._max:
                 return ReportResult(False, tuple(sorted(changed)), REFUSED_FULL)

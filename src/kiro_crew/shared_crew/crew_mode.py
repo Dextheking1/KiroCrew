@@ -45,6 +45,7 @@ from kiro_crew.shared_crew.enterprise import (
     EnterpriseSeams,
     UnavailableReason,
 )
+from kiro_crew.shared_crew.identity import PROVIDER_LOCAL, local_operator_principal
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,10 @@ _LINK_MAX = 512
 
 #: The ``workload_identity_ref`` an audit record carries when the Crew has none.
 WORKLOAD_UNAVAILABLE = "unavailable"
+
+#: Token subjects of the gateway's machine-local bootstrap tokens, minted as
+#: ``owner_id or <subject>``: the one local operator when no owner is configured.
+LOCAL_BOOTSTRAP_SUBJECTS: tuple[str, ...] = ("local-app", "local-startup")
 
 
 @dataclass(frozen=True)
@@ -177,21 +182,57 @@ def team_config_problem(
     return None
 
 
+def operator_ids(viewer: Principal, owner_id: str = "") -> frozenset[str]:
+    """The principal ids that name *viewer* themself.
+
+    The viewer's own id, and, for a local operator holding a machine-local
+    bootstrap subject (:data:`LOCAL_BOOTSTRAP_SUBJECTS`) or the configured
+    *owner_id*, the ids of those subjects too: they are the one operator of
+    this machine signing in through different local tokens. Derived from the
+    viewer the auth middleware published, never from a stored record.
+    """
+    if viewer.is_unknown:
+        return frozenset()
+    ids = {viewer.id}
+    if viewer.provenance is Provenance.LOCAL_OPERATOR and viewer.provider == PROVIDER_LOCAL:
+        subjects = set(LOCAL_BOOTSTRAP_SUBJECTS)
+        owner = owner_id.strip()
+        if owner:
+            subjects.add(owner)
+        if viewer.subject in subjects:
+            ids.update(local_operator_principal(subject).id for subject in subjects)
+    return frozenset(ids)
+
+
 def others_observed(
     viewer: Principal,
     observed: Iterable[Principal],
+    *,
+    creators: Iterable[Principal] = (),
+    owner_id: str = "",
 ) -> bool:
     """Whether anyone but the local operator viewing now has been seen.
 
-    A person who reached the Crew over a network path counts, the viewer
-    included, because their being here means a team path exists.
+    *observed* holds principals the server derived (their provenance is
+    trusted). A person who reached the Crew over a network path counts, the
+    viewer included, because their being here means a team path exists.
+
+    *creators* are session creators read back from public attribution, which
+    carries no provenance. One counts unless its id is one of
+    :func:`operator_ids`; a stored record never makes anyone the operator.
     """
+    mine = operator_ids(viewer, owner_id)
     for principal in observed:
         if principal.kind in (PrincipalKind.UNKNOWN, PrincipalKind.SYSTEM):
             continue
         if principal.provenance is not Provenance.LOCAL_OPERATOR:
             return True
-        if not viewer.is_unknown and principal.id != viewer.id:
+        if mine and principal.id not in mine:
+            return True
+    for creator in creators:
+        if creator.kind in (PrincipalKind.UNKNOWN, PrincipalKind.SYSTEM):
+            continue
+        if creator.id not in mine:
             return True
     return False
 
@@ -318,9 +359,12 @@ def mode_view(
     crew_id: str,
     provider: Optional[object] = None,
     network_identity_unreadable: Optional[bool] = None,
+    creators: Iterable[Principal] = (),
+    owner_id: str = "",
 ) -> dict[str, Any]:
     """The ``GET /api/shared-crew/mode`` body.
 
+    *observed* and *creators* are read as :func:`others_observed` reads them.
     ``crew_id`` keys the browser's remembered list filter. ``team_config``
     states whether a team configuration exists and whether it is refused.
     ``console`` carries a validated link only in ``console`` mode.
@@ -331,7 +375,7 @@ def mode_view(
     mode, problem = resolve_mode(
         seams,
         setup_paths,
-        others_seen=others_observed(viewer, observed),
+        others_seen=others_observed(viewer, observed, creators=creators, owner_id=owner_id),
         network_identity_unreadable=network_identity_unreadable,
     )
     if problem is not None:
@@ -389,6 +433,7 @@ def validate_at_startup(
 __all__ = [
     "CONSOLE_REQUIRED",
     "ERROR_TEAM_CONFIG_INVALID",
+    "LOCAL_BOOTSTRAP_SUBJECTS",
     "MODES",
     "MODE_CONSOLE",
     "MODE_INVALID",
@@ -403,6 +448,7 @@ __all__ = [
     "current_workload_identity_ref",
     "mode_view",
     "network_configured",
+    "operator_ids",
     "others_observed",
     "resolve_mode",
     "team_config_problem",

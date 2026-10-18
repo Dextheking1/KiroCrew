@@ -1,22 +1,13 @@
 """The one admission call every execution entry point makes.
 
-An entry point builds nothing itself. It asks :func:`current_service` for the
-gateway's :class:`AdmissionService` and calls :meth:`AdmissionService.admit`
-(work a person starts) or :meth:`AdmissionService.admit_child` (work running
-work starts). The answer is an :class:`Admission`:
+Entry points use :func:`current_service`, then ``admit`` or ``admit_child``:
 
-* ``passthrough`` -- fair admission is off (``dashboard.shared_crew``); nothing
-  is recorded and :meth:`Admission.run` just awaits the work. This is the
-  single-operator default and it changes no existing behaviour.
-* ``rejected`` -- refused with a :class:`ReasonCode`; nothing was accepted.
-  :meth:`Admission.refusal_response` is the HTTP answer (``error_body``,
-  ``Retry-After``).
-* ``admitted`` or ``queued`` -- durably accepted (``work_store``) before the
-  caller hears about it. :meth:`Admission.run` waits for a slot, revalidates
-  expiry, policy and the caller's own check right before starting, runs the
-  work inside its principal's containment slice with a deadline, records the
-  terminal state and releases the slot once the work and its descendants are
-  proven stopped.
+* ``passthrough`` -- fair admission is off; :meth:`Admission.run` awaits the work.
+* ``rejected`` -- nothing accepted; :meth:`Admission.refusal_response` answers HTTP.
+* ``admitted`` or ``queued`` -- durable before acknowledgment. The caller owns
+  the reservation until handoff; interrupted acceptance cancels its own row and
+  releases its ticket. :meth:`Admission.run` revalidates, runs within containment
+  and a deadline, then releases capacity once the work and descendants stop.
 
 Budget: the INITIATOR's principal (``ActorContext`` published by the auth
 middleware under ``ACTOR_REQUEST_KEY``; Unknown when absent, so every
@@ -584,54 +575,64 @@ class AdmissionService:
                     budget_key,
                     scope=result.limiting_scope,
                 )
-            if lim.hard_limits and not park and not await self.prepare_principal_slice(budget_key):
-                self._undo(ticket)
-                self._schedule_promotions(result.also_admitted)
-                return self._refusal(ReasonCode.CONTAINMENT_UNAVAILABLE, budget_key)
             state = S.ADMITTED if result.decision is Decision.ADMITTED else S.QUEUED
             root = self.root_for_session(session_key) if work_class is WorkClass.CHILD else ""
             accept_extra: dict[str, Any] = {"root_work_id": root} if root else {}
             if park:
                 accept_extra[PARKED_KEY] = True
+            handed_off = False
             try:
-                work, inserted = await self._store.accept(
-                    request,
-                    state=state,
-                    payload=payload,
-                    work_id=work_id,
-                    deadline_at=(
-                        self._deadline_for(work_class, now) if state is S.ADMITTED else None
-                    ),
-                    extra=accept_extra or None,
-                )
-            except IdempotencyConflict as exc:
-                self._undo(ticket)
-                return Admission(
-                    self,
-                    Decision.REJECTED.value,
-                    work=exc.current,
-                    reason=ReasonCode.IDEMPOTENCY_CONFLICT,
-                    capacity=self.capacity(budget_key, reason=ReasonCode.IDEMPOTENCY_CONFLICT),
-                )
-            except Exception:
-                logger.warning("shared crew: accepting work failed", exc_info=True)
-                self._undo(ticket)
-                return Admission(self, Decision.REJECTED.value, store_unavailable=True)
-            if not inserted:
-                self._undo(ticket)
-                return self._replay(work)
-            live = _Live(work=work, ticket=ticket, request=request, root_work_id=root)
-            self._live[work_id] = live
-            if root and root in self._live:
-                self._live[root].children.add(work_id)
-            if state is S.ADMITTED:
-                live.admitted.set()
-            if request_bytes > 0 and self._storage is not None:
+                if (
+                    lim.hard_limits
+                    and not park
+                    and not await self.prepare_principal_slice(budget_key)
+                ):
+                    return self._refusal(ReasonCode.CONTAINMENT_UNAVAILABLE, budget_key)
                 try:
-                    await self._storage.charge(budget_key, request_bytes)
+                    work, inserted = await self._store.accept(
+                        request,
+                        state=state,
+                        payload=payload,
+                        work_id=work_id,
+                        deadline_at=(
+                            self._deadline_for(work_class, now) if state is S.ADMITTED else None
+                        ),
+                        extra=accept_extra or None,
+                    )
+                except IdempotencyConflict as exc:
+                    return Admission(
+                        self,
+                        Decision.REJECTED.value,
+                        work=exc.current,
+                        reason=ReasonCode.IDEMPOTENCY_CONFLICT,
+                        capacity=self.capacity(budget_key, reason=ReasonCode.IDEMPOTENCY_CONFLICT),
+                    )
                 except Exception:
-                    logger.debug("shared crew: storage charge failed", exc_info=True)
-        self._schedule_promotions(result.also_admitted)
+                    logger.warning("shared crew: accepting work failed", exc_info=True)
+                    return Admission(self, Decision.REJECTED.value, store_unavailable=True)
+                if not inserted:
+                    return self._replay(work)
+                live = _Live(work=work, ticket=ticket, request=request, root_work_id=root)
+                self._live[work_id] = live
+                if root and root in self._live:
+                    self._live[root].children.add(work_id)
+                if state is S.ADMITTED:
+                    live.admitted.set()
+                if request_bytes > 0 and self._storage is not None:
+                    try:
+                        await self._storage.charge(budget_key, request_bytes)
+                    except Exception:
+                        logger.debug("shared crew: storage charge failed", exc_info=True)
+                handed_off = True
+            finally:
+                if not handed_off:
+                    from kiro_crew.dashboard.chat_utils import run_to_completion
+
+                    try:
+                        await run_to_completion(self._abandon_reservation(ticket))
+                    finally:
+                        self._undo(ticket)
+                self._schedule_promotions(result.also_admitted)
         return Admission(
             self,
             Decision.ADMITTED.value if state is S.ADMITTED else Decision.QUEUED.value,
@@ -641,6 +642,18 @@ class AdmissionService:
                 budget_key, reason=result.reason, limiting_scope=result.limiting_scope
             ),
         )
+
+    async def _abandon_reservation(self, ticket: Ticket) -> None:
+        """Settle this reservation's write before returning its unclaimed capacity."""
+        assert self._store is not None
+        # The same writer serializes this read after an interrupted accept.
+        work = await self._store.get(ticket.work_id)
+        if work is not None and work.state not in TERMINAL:
+            live = self._live.get(ticket.work_id)
+            if live is not None:
+                await self._end(live, S.CANCELLED, reason=None)
+            else:
+                await self._store.advance(work, S.CANCELLED)
 
     async def admit_child(
         self,

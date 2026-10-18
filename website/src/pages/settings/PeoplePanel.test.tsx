@@ -201,7 +201,7 @@ describe('PeoplePanel', () => {
 describe('PeoplePanel modes', () => {
   const EMPTY: PeopleResponse = { schema_version: 1, directory: { state: 'unavailable' }, usage_available: false, people: [] }
 
-  it('network: adapters are read-only, SSM points to IAM and Session Manager and says Unattributed, Remote Control shows', async () => {
+  it('network: adapters are read-only, SSM points to IAM and Session Manager and says its work is credited to whoever runs this Crew, Remote Control shows', async () => {
     caps.mockResolvedValue({ ...SHARED, attribution: 'available' })
     people.mockResolvedValue({ ...EMPTY, people: [row('p_b', 'Bob')] })
     modeApi.mockResolvedValue(modeBody('network'))
@@ -210,7 +210,8 @@ describe('PeoplePanel modes', () => {
     expect(screen.getByTestId('adapter-tailscale')).toHaveAttribute('data-state', 'available')
     expect(screen.getByTestId('adapter-tailscale-docs')).toHaveAttribute('href', 'https://tailscale.com/kb/1084/sharing')
     expect(screen.getByTestId('adapter-systems_manager').textContent).toMatch(/IAM and Session Manager/)
-    expect(screen.getByTestId('adapter-systems_manager').textContent).toMatch(/Unattributed/)
+    expect(screen.getByTestId('adapter-systems_manager').textContent).toMatch(/credited to whoever runs this Crew/)
+    expect(screen.getByTestId('adapter-systems_manager').textContent).not.toMatch(/Unattributed/)
     expect(screen.getByTestId('adapter-ssm-docs')).toHaveAttribute('href', expect.stringContaining('session-manager'))
     expect(screen.getByTestId('adapter-kiro_login').textContent).toContain('Not available in this build')
     expect(screen.getByTestId('remote-control-setup')).toBeInTheDocument()

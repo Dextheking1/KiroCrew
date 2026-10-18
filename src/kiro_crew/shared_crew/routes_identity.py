@@ -88,10 +88,19 @@ async def api_shared_crew_people(request: web.Request) -> web.Response:
     return web.json_response(people_view(viewer_principal(request), rows))
 
 
-def _observed_principals(rows: list[dict[str, Any]]) -> list[Principal]:
-    out = [obs.principal for obs in people_registry().snapshot()]
-    out.extend(creator_of_public(row.get("attribution")) for row in rows)
-    return out
+def _observed_principals() -> list[Principal]:
+    """People this process saw, each with the provenance the server derived."""
+    return [obs.principal for obs in people_registry().snapshot()]
+
+
+def _session_creators(rows: list[dict[str, Any]]) -> list[Principal]:
+    """Session creators read back from public attribution, which has no provenance."""
+    return [creator_of_public(row.get("attribution")) for row in rows]
+
+
+def _owner_id(request: web.Request) -> str:
+    state = request.app.get("state")
+    return str(getattr(state, "owner_id", "") or "") if state is not None else ""
 
 
 async def api_shared_crew_mode(request: web.Request) -> web.Response:
@@ -109,10 +118,12 @@ async def api_shared_crew_mode(request: web.Request) -> web.Response:
     crew_id = await asyncio.to_thread(gateway_id)
     body = mode_view(
         viewer_principal(request),
-        _observed_principals(rows),
+        _observed_principals(),
         seams=seams,
         setup_paths=setup_paths_dict(),
         crew_id=crew_id,
+        creators=_session_creators(rows),
+        owner_id=_owner_id(request),
     )
     return web.json_response(body)
 
