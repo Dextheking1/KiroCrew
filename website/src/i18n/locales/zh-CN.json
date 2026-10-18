@@ -9660,6 +9660,24 @@
       "fewerRows": "减少行",
       "moreRows": "增加行"
     },
+    "crewMode": {
+      "chip_off": "Crew Mode",
+      "chip_off_explained": "Crew Mode：拆成任务",
+      "chip_on": "Crew Mode 已开",
+      "chip_hint_off": "打开 Crew Mode：每个任务在单独的聊天中运行，并在这里汇报结果。",
+      "chip_hint_on": "关闭 Crew Mode。这个聊天会变回普通聊天；它已经打开的聊天会继续运行。",
+      "chip_hint_busy": "回复结束后可用。",
+      "chip_off_keeps_chats": "关闭 Crew Mode 后，这个聊天会变成普通聊天。它打开的聊天会继续运行。",
+      "title": "Crew Mode",
+      "tagline_lead": "你定目标。",
+      "tagline_strong": "你的团队来干活。",
+      "does_new_chat": "开新聊天",
+      "does_pass_notes": "互通进展",
+      "does_take_asks": "接新请求",
+      "does_check_in": "显示进度",
+      "side_panel_board": "你的任务看板显示在侧边面板中",
+      "side_panel_open": "打开任务看板"
+    },
     "guideLayer": {
       "region_label": "引导",
       "close": "关闭",

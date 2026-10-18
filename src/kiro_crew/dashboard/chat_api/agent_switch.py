@@ -1150,6 +1150,13 @@ async def switch_slot_agent(
         # (which the acting tab writes into its store) must name the slot's
         # newest reality, not a pre-await snapshot.
         workspace = slot.workspace or "default"
+    # Crew Mode is a chat on the conductor TEMPLATE. Landing on it puts the work-ledger
+    # board on a ROOT session's own page (its side panel Overview), so the board lives
+    # there and the per-turn [DASHBOARD] block names it. Only a page nothing was adopted
+    # on yet; leaving the conductor changes nothing on the page.
+    from kiro_crew.dashboard_agentic import adopt_crew_mode_board_on_switch
+
+    await adopt_crew_mode_board_on_switch(slot, agent_name, state)
     # The reset destroyed any eagerly created session; picking an agent is
     # itself a strong first-message intent signal (it also resets the
     # project), so re-arm the speculative spawn for the new bindings.

@@ -9944,6 +9944,24 @@
       "fewerRows": "meno righe",
       "moreRows": "più righe"
     },
+    "crewMode": {
+      "chip_off": "Crew Mode",
+      "chip_off_explained": "Crew Mode: dividi in attività",
+      "chip_on": "Crew Mode attivo",
+      "chip_hint_off": "Attiva Crew Mode: ogni attività gira in una chat a parte e riferisce qui.",
+      "chip_hint_on": "Disattiva Crew Mode. Questa chat torna a essere una chat normale; le chat che ha già aperto continuano.",
+      "chip_hint_busy": "Disponibile dopo la risposta.",
+      "chip_off_keeps_chats": "Disattivare Crew Mode rende questa chat una chat normale. Le chat che ha aperto continuano.",
+      "title": "Crew Mode",
+      "tagline_lead": "Tu fissi l'obiettivo.",
+      "tagline_strong": "La tua squadra fa il lavoro.",
+      "does_new_chat": "Apre chat",
+      "does_pass_notes": "Condivide gli aggiornamenti",
+      "does_take_asks": "Prende le richieste",
+      "does_check_in": "Mostra l'avanzamento",
+      "side_panel_board": "La tua bacheca delle attività è nel pannello laterale",
+      "side_panel_open": "Apri la bacheca delle attività"
+    },
     "guideLayer": {
       "region_label": "Guida",
       "close": "Chiudi",
