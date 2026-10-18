@@ -7,12 +7,13 @@ import type { CrewModeResponse } from '../../api/sharedCrewMode'
 import { PeoplePanel } from './PeoplePanel'
 
 vi.mock('../../api/client', () => ({
-  api: { sharedCrewPeople: vi.fn(), sharedCrewCapabilities: vi.fn(), sharedCrewMode: vi.fn(), mobileConnectMethods: vi.fn() },
+  api: { sharedCrewPeople: vi.fn(), sharedCrewCapabilities: vi.fn(), sharedCrewMode: vi.fn(), mobileConnectMethods: vi.fn(), tailscaleInvites: vi.fn() },
 }))
 const people = vi.mocked(api.sharedCrewPeople)
 const caps = vi.mocked(api.sharedCrewCapabilities)
 const modeApi = vi.mocked(api.sharedCrewMode)
 const mobile = vi.mocked(api.mobileConnectMethods)
+const invitesApi = vi.mocked(api.tailscaleInvites)
 
 function modeBody(mode: CrewModeResponse['mode'], over: Partial<CrewModeResponse> = {}): CrewModeResponse {
   return {
@@ -44,6 +45,8 @@ beforeEach(() => {
   // An older gateway: no mode route, so the mode is read from capabilities.
   modeApi.mockResolvedValue(null)
   mobile.mockResolvedValue({ methods: [] })
+  // Not the owner, or no invite routes: the invite card stays hidden.
+  invitesApi.mockResolvedValue(null)
 })
 
 /** A Crew with the tailnet path set up, so the People list itself renders. */
