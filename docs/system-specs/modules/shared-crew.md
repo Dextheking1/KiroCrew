@@ -161,9 +161,9 @@ any token is read:
 | Same node key as the connection's earlier answer | `node_changed` |
 | Allowlist readable | `allowlist_unreadable` |
 | Tagged node: one of its tags is listed as `tag:<name>` in `allowed_logins` | `tagged_node_not_allowed` |
-| Person: the Crew owner (the login and user id of this machine's own node), or a login on `dashboard.tailscale.allowed_logins`; with no login listed, only the owner | `login_not_allowed` |
+| Person: the Crew owner (the login and user id of this machine's own node), or a login `tailnet.login_allowed` admits (`dashboard.tailscale.allowed_logins` plus the in-Crew invite overlay, `tailnet_live_allowlist`); with no login listed or granted, only the owner | `login_not_allowed` |
 
-`allowed_logins` is read whether or not `trust_identity` is on. An admitted request
+`allowed_logins` is read whether or not `trust_identity` is on. Only the `whois` answer is cached; the admission rule runs on every request, so an accepted invite admits its login on the next request and a revoked one is refused on the next request, with no restart. An admitted request
 needs no dashboard token: it is the dashboard user `tailnet:uid:<id>` (a tagged node
 `tailnet:node:<name>`), which never matches the owner subject, so owner-gated
 routes refuse it. A token or cookie it carries is ignored, except an app token,
