@@ -104,7 +104,6 @@ function ConnectForm() {
             autoComplete="off"
             spellCheck={false}
             className="flex-1 min-w-[12rem]"
-            placeholder="tskey-api-…"
             value={key}
             onChange={e => setKey(e.target.value)}
             data-testid="invite-key-input"
@@ -183,7 +182,6 @@ function InviteForm() {
             aria-label={i18nT('sharedCrew.invite_emails_label')}
             rows={2}
             className="w-full min-w-0 rounded border border-border bg-bg text-text text-[13px] p-2"
-            placeholder="ann@example.com, bo@example.com"
             value={emails}
             onChange={e => setEmails(e.target.value)}
             data-testid="invite-emails"
