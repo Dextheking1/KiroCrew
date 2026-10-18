@@ -34,6 +34,7 @@ SHARED_CREW_BOUNDS: dict[str, tuple[int, int]] = {
     "principal_memory_max_mb": (0, 16 * 1024 * 1024),
     "principal_tasks_max": (0, 4194304),
     "crew_cpu_quota_percent": (0, 100000),
+    "typing_idle_seconds": (3, 60),
 }
 
 
@@ -188,6 +189,16 @@ class SharedCrewConfig:
         metadata=_meta(
             "CPU Crew-Wide",
             "CPUQuota of this Crew's agents slice, in percent of one core. 0 emits none.",
+        ),
+    )
+    typing_idle_seconds: int = field(
+        default=10,
+        metadata=_meta(
+            "Typing Lock Idle Window",
+            "Seconds a collaborator may pause typing before the other collaborators' "
+            "composers unlock. While someone types in a shared session, everyone "
+            "else's composer is read-only until that person sends, clears the "
+            "draft, or stays idle this long. 3 to 60.",
         ),
     )
 

@@ -19580,6 +19580,8 @@
     "people_unnamed_title": "No se puede identificar a las personas en este equipo",
     "person_typing": "{{name}} está escribiendo",
     "person_viewing": "{{name}} está aquí",
+    "composer_locked": "{{name}} está escribiendo…",
+    "composer_locked_hint": "Podrás volver a escribir cuando envíe o haga una pausa.",
     "question_waiting": "Pregunta pendiente de alguien de aquí",
     "queued_count": "En espera en esta sesión: {{n}}",
     "queued_crew": "esperando hueco en el límite compartido de este Crew",

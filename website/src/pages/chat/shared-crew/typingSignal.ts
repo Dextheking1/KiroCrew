@@ -1,12 +1,14 @@
 /** A content-free "the main composer changed" signal. The composer owner calls
- *  `noteComposerInput()` on the user's own edit and `noteComposerSent()` when
- *  that draft leaves as a send; the presence reporter subscribes to both.
- *  Nothing typed is passed along: only the fact that a change happened. */
+ *  `noteComposerInput(draftEmpty)` on the user's own edit and
+ *  `noteComposerSent()` when that draft leaves as a send; the presence reporter
+ *  subscribes to both. Nothing typed is passed along: only that a change
+ *  happened and whether the draft is now empty (which ends the typing lease). */
 import { useCallback } from 'react'
 
-type Listener = () => void
+type Listener = (draftEmpty?: boolean) => void
+type SentListener = () => void
 const listeners = new Set<Listener>()
-const sentListeners = new Set<Listener>()
+const sentListeners = new Set<SentListener>()
 
 export const composerTypingSignal = {
   subscribe(listener: Listener): () => void {
@@ -14,14 +16,14 @@ export const composerTypingSignal = {
     return () => { listeners.delete(listener) }
   },
   /** Called when the composer's draft is sent: the typing it announced is over. */
-  subscribeSent(listener: Listener): () => void {
+  subscribeSent(listener: SentListener): () => void {
     sentListeners.add(listener)
     return () => { sentListeners.delete(listener) }
   },
 }
 
-export function noteComposerInput(): void {
-  for (const listener of listeners) listener()
+export function noteComposerInput(draftEmpty = false): void {
+  for (const listener of listeners) listener(draftEmpty)
 }
 
 /** The composer's draft left as a send, so this tab is no longer typing. */
@@ -35,5 +37,5 @@ export function noteComposerSent(): void {
  *  handler is the one signal that means "someone is typing". The draft store
  *  itself is not: its identity never changes, and a restore writes it too. */
 export function useComposerEditWithTyping(edit: (value: string) => void): (value: string) => void {
-  return useCallback((value: string) => { noteComposerInput(); edit(value) }, [edit])
+  return useCallback((value: string) => { noteComposerInput(value.trim() === ''); edit(value) }, [edit])
 }

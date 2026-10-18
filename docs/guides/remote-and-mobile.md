@@ -928,6 +928,18 @@ schedule or a webhook started reads `Scheduled: <job name>` or `Webhook: <name>`
 never a person. Until anyone else connects and no sharing path is set up, the
 Crew is personal: the list shows no creator names and no filter.
 
+Only one person types in a session at a time. When a teammate starts typing,
+your message box turns read-only and its buttons give way to "<name> is
+typing…". Anything you had already written stays in the box. It unlocks the
+moment they send, clear their draft, or pause for 10 seconds, and you can carry
+on where you were. Stop and Steer still work on a turn that is running. Your own
+tabs never lock each other, and a personal Crew never locks. The pause length is
+a setting (3 to 60 seconds):
+
+```bash
+kirocrew config set dashboard.shared_crew.typing_idle_seconds 15
+```
+
 Who can connect is managed in Tailscale, not in Kiro Crew: Settings > People is
 read-only and has no invite, remove or role controls. Teammates who reach a
 cloud-hosted Crew through AWS Systems Manager are governed by IAM and Session

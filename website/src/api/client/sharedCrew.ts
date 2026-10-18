@@ -8,7 +8,7 @@
  * Filtering, paging and counting happen on the server; the client sends the
  * query and renders the page it gets back.
  */
-import type { AcceptedWork, CapacityResponse, CreatorFilter, PublicPrincipal, SendState, SharedCrewCapabilities } from '../sharedCrew'
+import type { AcceptedWork, CapacityResponse, CreatorFilter, PublicPrincipal, SendState, SharedCrewCapabilities, TypingLease } from '../sharedCrew'
 import { isAcceptedWork } from '../sharedCrewUi'
 import type {
   DecisionsResponse,
@@ -69,6 +69,8 @@ export function createSharedCrewEndpoints({ get, post, j }: ClientTransport) {
       read<DecisionsResponse>('/api/shared-crew/decisions?' + new URLSearchParams({ session_key: sessionKey })),
     sharedCrewSendState: (sessionKey: string) =>
       read<SendState>('/api/shared-crew/send-state?' + new URLSearchParams({ session_key: sessionKey })),
+    sharedCrewTypingLease: (sessionKey: string) =>
+      read<TypingLease>('/api/shared-crew/typing-lease?' + new URLSearchParams({ session_key: sessionKey })),
     /** Cancel exactly one work item at the revision the UI showed. A 409 is not
      *  an error: it carries the item's current state, which the UI adopts. */
     sharedCrewCancelWork: async (workId: string, expectedRevision: number): Promise<CancelWorkResult> => {

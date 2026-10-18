@@ -224,6 +224,28 @@ def _committed_if_accepted(request: web.Request, resp: Any, user_meta: dict | No
     return resp
 
 
+def _composer_locked_answer(
+    request: web.Request, state: Any, slot: Any, steer: object
+) -> web.StreamResponse | None:
+    """409 ``composer_locked`` when someone else holds the session's typing lease.
+
+    Only a dashboard user's send is held: an app or automation send has no
+    composer and no lease. A steer into a running turn passes, so a locked
+    collaborator can still steer or stop the turn that is running.
+    """
+    if not request.get("is_dashboard_user", False):
+        return None
+    if steer and getattr(slot, "turn_running", False):
+        return None
+    from kiro_crew.shared_crew import typing_lease
+    from kiro_crew.shared_crew.identity import actor_of
+
+    body = typing_lease.refuse_if_locked(state, slot.key, actor_of(request).principal)
+    if body is None:
+        return None
+    return web.json_response(body, status=409)
+
+
 async def _settle_send_race(
     request: web.Request, state: Any, slot: Any, body: dict, message: str
 ) -> web.StreamResponse | None:
@@ -761,6 +783,13 @@ async def api_chat(request: web.Request) -> web.StreamResponse:
         return web.json_response(
             {"error": "message is required", "code": "message_required"}, status=400
         )
+
+    # The typing lease (Shared Crew): while another collaborator is typing in
+    # this session, a send from anyone else is refused with the typist named,
+    # and the sender keeps the draft. Steering a running turn is never refused.
+    _locked = _composer_locked_answer(request, state, slot, steer)
+    if _locked is not None:
+        return _locked
 
     # First submit wins (Shared Crew): settle this send against the session's
     # send revision before any branch can queue, steer or start it. A loser is

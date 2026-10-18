@@ -19580,6 +19580,8 @@
     "people_unnamed_title": "Não é possível identificar as pessoas nesta máquina",
     "person_typing": "{{name}} está digitando",
     "person_viewing": "{{name}} está aqui",
+    "composer_locked": "{{name}} está digitando…",
+    "composer_locked_hint": "Você poderá digitar de novo quando a pessoa enviar ou fizer uma pausa.",
     "question_waiting": "Pergunta aguardando alguém aqui",
     "queued_count": "Aguardando nesta sessão: {{n}}",
     "queued_crew": "aguardando vaga no limite compartilhado deste Crew",

@@ -19297,6 +19297,8 @@
     "people_unnamed_title": "এই মেশিনে মানুষদের শনাক্ত করা যায় না",
     "person_typing": "{{name}} লিখছেন",
     "person_viewing": "{{name}} এখানে আছেন",
+    "composer_locked": "{{name}} টাইপ করছেন…",
+    "composer_locked_hint": "তিনি পাঠালে বা থামলে আপনি আবার টাইপ করতে পারবেন।",
     "question_waiting": "প্রশ্ন এখানে থাকা যে কারও উত্তরের অপেক্ষায়",
     "queued_count": "এই সেশনে অপেক্ষায়: {{n}}",
     "queued_crew": "এই Crew-এর ভাগ করা সীমায় জায়গার অপেক্ষায়",

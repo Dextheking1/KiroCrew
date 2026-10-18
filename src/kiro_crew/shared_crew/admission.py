@@ -158,6 +158,9 @@ class ReasonCode(str, enum.Enum):
     NOT_FOUND = "not_found"
     #: A send lost a first-submit-wins race (``send_race``): nothing was accepted.
     SEND_RACE = "send_race"
+    #: Someone else holds the session's typing lease (``typing_lease``): the
+    #: send was refused and the sender keeps the draft.
+    COMPOSER_LOCKED = "composer_locked"
 
 
 #: HTTP status a handler answers for each refusal reason.
@@ -182,6 +185,7 @@ REASON_HTTP_STATUS: Mapping[ReasonCode, int] = {
     ReasonCode.INVALID_TRANSITION: 409,
     ReasonCode.NOT_FOUND: 404,
     ReasonCode.SEND_RACE: 409,
+    ReasonCode.COMPOSER_LOCKED: 409,
 }
 
 

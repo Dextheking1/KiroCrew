@@ -19297,6 +19297,8 @@
     "people_unnamed_title": "Personen können auf diesem Rechner nicht benannt werden",
     "person_typing": "{{name}} schreibt",
     "person_viewing": "{{name}} ist hier",
+    "composer_locked": "{{name}} tippt…",
+    "composer_locked_hint": "Sie können wieder tippen, sobald die Person sendet oder pausiert.",
     "question_waiting": "Frage wartet auf jemanden hier",
     "queued_count": "Wartend in dieser Sitzung: {{n}}",
     "queued_crew": "wartet auf Platz im gemeinsamen Limit dieser Crew",

@@ -42,6 +42,7 @@ import { ProjectAwsProfileSection } from '../../../components/ProjectAwsProfile'
 import ModelEffortDropdown from '../../../components/ModelEffortDropdown'
 import ChatInput from '../../../components/ChatInput'
 import { useStableCallbackProps } from '../useStableCallbackProps'
+import { useComposerTypingLock } from '../shared-crew/useComposerTypingLock'
 import SessionControlHost from '../../../components/SessionControlHost'
 import ErrorNotice from '../../../components/ErrorNotice'
 import { pinIsWithheld } from '../../../lib/model'
@@ -272,6 +273,8 @@ export default function ComposerDockView({
   queuePendingIds, steer, stopTurn, systemDeliveryCount, handleEditLastRequest, composerOptimizing, handleOptimizingChange, memorySwitching, showComposerMemoryChip, switchMemoryMode, composerAbove,
   composerSessionControls,
 }: ComposerDockViewProps) {
+  // Someone else typing in this shared session locks the composer read-only.
+  const typingLock = useComposerTypingLock(activeSlot)
   return (
     <>
             {/* Composer dock. Floats over the bottom of the transcript scroller
@@ -471,6 +474,7 @@ export default function ComposerDockView({
               onFollowUpSend={(text?: string) => send(text)}
               // Streaming, compaction and stopping keep the input interactive (api_chat queues on slot.running and stop preserves the
               // queue, so Enter queues a follow-up during the stop window). Only a memory-mode switch locks it, the reason as placeholder.
+              typingLock={typingLock}
               disabled={memorySwitching} lockedPlaceholder={memorySwitching ? i18nT('components.welcomeView.switching_memory_mode') : undefined}
               autoFocusKey={activeSlot}
               prefillHint={prefillHint}

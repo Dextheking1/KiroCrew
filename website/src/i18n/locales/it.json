@@ -19580,6 +19580,8 @@
     "people_unnamed_title": "Su questa macchina le persone non possono essere identificate",
     "person_typing": "{{name}} sta scrivendo",
     "person_viewing": "{{name}} è qui",
+    "composer_locked": "{{name}} sta scrivendo…",
+    "composer_locked_hint": "Potrai scrivere di nuovo quando invia o fa una pausa.",
     "question_waiting": "Domanda in attesa di qualcuno qui",
     "queued_count": "In attesa in questa sessione: {{n}}",
     "queued_crew": "in attesa di posto nel limite condiviso di questo Crew",

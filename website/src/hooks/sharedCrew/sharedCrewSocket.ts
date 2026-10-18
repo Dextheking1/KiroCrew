@@ -5,12 +5,13 @@
  * Frames are whole values, so a frame replaces what it names, keyed by id and
  * revision: a replay after a reconnect, or an HTTP read that lands after a newer
  * frame, can never move an item backwards or show it twice. On every (re)open the
- * HTTP reads are invalidated and refetched, and the next frames are authoritative.
+ * HTTP reads are invalidated and refetched (the typing lease among them, so a
+ * reconnecting tab learns who is typing), and the next frames are authoritative.
  * Nothing here ever resubmits a send.
  */
 import type { QueryClient } from '@tanstack/react-query'
 import { noteSendRevision } from '../../api/sendRace'
-import type { Activity, SendState, SharedCrewActivityFrame, SharedCrewServerFrame } from '../../api/sharedCrew'
+import type { Activity, SendState, SharedCrewActivityFrame, SharedCrewServerFrame, TypingLease } from '../../api/sharedCrew'
 import { mergeDecision, mergeWork, type DecisionsResponse, type PresenceResponse, type WorkListResponse } from '../../api/sharedCrewUi'
 
 export const sharedCrewKeys = {
@@ -25,6 +26,7 @@ export const sharedCrewKeys = {
   presence: (sessionKey: string) => ['shared-crew', 'presence', sessionKey] as const,
   decisions: (sessionKey: string) => ['shared-crew', 'decisions', sessionKey] as const,
   sendState: (sessionKey: string) => ['shared-crew', 'send-state', sessionKey] as const,
+  typingLease: (sessionKey: string) => ['shared-crew', 'typing-lease', sessionKey] as const,
 }
 
 /** Fold one server frame into the cache. `data` is the frame the gateway sent. */
@@ -70,6 +72,24 @@ export function applySharedCrewFrame(queryClient: QueryClient, data: unknown): v
         prev && prev.revision > value.revision ? prev : value)
       return
     }
+    case 'shared_crew.typing_lease': {
+      if (!frame.session_key) return
+      queryClient.setQueryData<TypingLease | null>(sharedCrewKeys.typingLease(frame.session_key), typingLeaseOf(frame))
+      return
+    }
+  }
+}
+
+/** A lease value from a frame or a refusal body: whole-value, so it replaces. */
+export function typingLeaseOf(raw: TypingLease): TypingLease {
+  return {
+    schema_version: raw.schema_version,
+    session_key: raw.session_key,
+    holder: raw.holder ?? null,
+    holder_ids: Array.isArray(raw.holder_ids) ? raw.holder_ids : [],
+    expires_at: raw.expires_at ?? null,
+    idle_seconds: raw.idle_seconds,
+    ended: raw.ended ?? '',
   }
 }
 
@@ -90,9 +110,10 @@ export function setSharedCrewSender(next: Sender | null): void {
  * Report this tab's activity in one session. The frame names no principal and
  * carries no text: the server stamps the connection's verified actor.
  */
-export function sendActivity(sessionKey: string, activity: Activity): boolean {
+export function sendActivity(sessionKey: string, activity: Activity, { draftEmpty = false }: { draftEmpty?: boolean } = {}): boolean {
   if (!sender || !sessionKey) return false
   const frame: SharedCrewActivityFrame = { type: 'shared_crew.activity', session_key: sessionKey, activity }
+  if (draftEmpty) frame.draft = 'empty'
   sender(frame)
   return true
 }

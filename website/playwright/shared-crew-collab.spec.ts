@@ -29,7 +29,7 @@ async function open(browser: Browser, storageState: string): Promise<Page> {
 test.describe('Shared Crew collaboration @shared-crew', () => {
   test.skip(!STATE_A || !STATE_B || !SESSION, 'needs two principals and a session')
 
-  test('each person sees the other, typing locks nobody, one approval wins', async ({ browser }) => {
+  test('each person sees the other, one typist locks the rest, one approval wins', async ({ browser }) => {
     const a = await open(browser, STATE_A)
     const b = await open(browser, STATE_B)
 
@@ -37,14 +37,24 @@ test.describe('Shared Crew collaboration @shared-crew', () => {
     await expect(a.getByTestId('presence-chips')).toBeVisible()
     await expect(b.getByTestId('presence-chips')).toBeVisible()
 
-    // Concurrent typing: both composers stay editable; typing shows as a word.
-    const composerA = a.getByRole('textbox').last()
-    const composerB = b.getByRole('textbox').last()
+    // A types first and holds the typing lease: B's composer turns read-only
+    // with A named, and B's own draft (none here) is left alone.
+    const composerA = a.getByLabel('Message input')
+    const composerB = b.getByLabel('Message input')
     await composerA.fill('draft from A')
-    await composerB.fill('draft from B')
-    await expect(b.getByTestId('presence-typing')).toContainText(/typing/)
+    await expect(b.getByTestId('composer-typing-lock')).toContainText(/is typing/)
+    await expect(composerB).toHaveAttribute('readonly', '')
+    await expect(a.getByTestId('composer-typing-lock')).toHaveCount(0)
     await expect(composerA).toHaveValue('draft from A')
-    await expect(composerB).toHaveValue('draft from B')
+
+    // A clears the draft: B unlocks at once and can type.
+    await composerA.fill('')
+    await expect(b.getByTestId('composer-typing-lock')).toHaveCount(0)
+    await expect(composerB).not.toHaveAttribute('readonly', '')
+    await composerB.fill('draft from B')
+    await expect(a.getByTestId('composer-typing-lock')).toContainText(/is typing/)
+    await composerB.fill('')
+    await expect(a.getByTestId('composer-typing-lock')).toHaveCount(0)
 
     // Racing an approval: whichever lands first wins; the other tab shows who.
     const approveA = a.getByRole('button', { name: /^Allow|^Approve/ }).first()
@@ -58,6 +68,18 @@ test.describe('Shared Crew collaboration @shared-crew', () => {
     // Reconnect after acceptance: a reload shows the same decision once.
     await b.reload()
     await expect(b.getByTestId('decision-attribution').getByRole('listitem')).toHaveCount(1)
+  })
+
+  test('the lock ends on its own after the idle window', async ({ browser }) => {
+    const a = await open(browser, STATE_A)
+    const b = await open(browser, STATE_B)
+    await a.getByLabel('Message input').fill('A pauses mid-thought')
+    const lock = b.getByTestId('composer-typing-lock')
+    await expect(lock).toBeVisible()
+    // The default idle window is 10 s; the lock must lift without any report.
+    await expect(lock).toHaveCount(0, { timeout: 20_000 })
+    await expect(b.getByLabel('Message input')).not.toHaveAttribute('readonly', '')
+    await expect(a.getByLabel('Message input')).toHaveValue('A pauses mid-thought')
   })
 
   test('cancelling queued work cancels only that item', async ({ browser }) => {

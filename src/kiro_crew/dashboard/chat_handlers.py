@@ -98,6 +98,7 @@ from kiro_crew.dashboard.chat_api.app_admission import (  # noqa: F401
 )
 from kiro_crew.dashboard.chat_api.chat_send import (  # noqa: F401
     _committed_if_accepted,
+    _composer_locked_answer,
     _send_binds_agent,
     _send_harness_command,
     _send_id_of,

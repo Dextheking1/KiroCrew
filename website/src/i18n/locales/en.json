@@ -10393,6 +10393,8 @@
     "people_unnamed_title": "People cannot be named on this machine",
     "person_typing": "{{name}} is typing",
     "person_viewing": "{{name}} is here",
+    "composer_locked": "{{name}} is typing…",
+    "composer_locked_hint": "You can type again when they send or pause.",
     "question_waiting": "Question waiting for anyone here",
     "queued_count": "Waiting in this session: {{n}}",
     "queued_crew": "waiting for room in this Crew's shared limit",
