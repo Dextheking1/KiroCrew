@@ -1662,11 +1662,11 @@ def installed_service() -> AdmissionService | None:
 
 
 def _load_limits() -> EffectiveLimits:
-    from kiro_crew.acp.runtime_start import _resolve_session_start_concurrency
+    from kiro_crew.agent_sdk import session_start_concurrency
     from kiro_crew.config.sections_shared_crew import effective_limits, load_shared_crew_config
 
     return effective_limits(
-        load_shared_crew_config(), auto_crew_concurrency=_resolve_session_start_concurrency()
+        load_shared_crew_config(), auto_crew_concurrency=session_start_concurrency()
     )
 
 
