@@ -191,8 +191,12 @@ export function FeaturePreviewsSection() {
       {writeError && (
         <ErrorNotice
           testId="feature-previews-save-error"
+          // A carry refused as owner-only names the owner rather than a reload:
+          // a reload sends the same carry and gets the same 403.
           message={writeError.carry
-            ? i18nT('pages.settings.developerPanel.feature_previews_carry_failed', { name: previewFlagLabel(writeError.flag) })
+            ? writeError.denied
+              ? i18nT('pages.settings.developerPanel.feature_previews_carry_denied', { name: previewFlagLabel(writeError.flag) })
+              : i18nT('pages.settings.developerPanel.feature_previews_carry_failed', { name: previewFlagLabel(writeError.flag) })
             : writeError.denied
               ? i18nT('pages.settings.developerPanel.feature_previews_save_denied', { name: previewFlagLabel(writeError.flag) })
               : i18nT('pages.settings.developerPanel.feature_previews_save_failed', { name: previewFlagLabel(writeError.flag) })}

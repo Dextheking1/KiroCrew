@@ -98,6 +98,18 @@ describe('Feature previews section, refused toggles', () => {
     expect(localStorage.getItem(PREVIEW_WEBHOOKS)).toBe('1')
     expect(screen.getAllByRole('switch', { name: /webhooks/i })[0].getAttribute('aria-checked')).toBe('true')
   })
+
+  it('names the owner, not a reload, when a one-time carry is refused as owner-only', async () => {
+    localStorage.removeItem(PREVIEW_FLAGS_SYNCED_KEY)
+    localStorage.setItem(PREVIEW_WEBHOOKS, '1')
+    vi.spyOn(api, 'patchConfig').mockRejectedValue(Object.assign(new Error('owner only'), { status: 403 }))
+    renderSection()
+    await waitFor(() => expect(notice()).toMatch(/only the owner of this Kiro Crew can save “Webhooks” for everyone/i))
+    expect(notice()).toMatch(/stays on in this browser only/i)
+    expect(notice()).not.toMatch(/reload/i)
+    await waitFor(() => expect(api.kirocrewConfig).toHaveBeenCalledTimes(2))
+    expect(screen.getAllByRole('switch', { name: /webhooks/i })[0].getAttribute('aria-checked')).toBe('true')
+  })
 })
 
 describe('Feature previews section, ingress links', () => {

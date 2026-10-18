@@ -16537,7 +16537,8 @@
         "turn_it_off_only_when_a_gateway_already_answers": "Startet ein Gateway auf diesem Rechner. Lass es an, außer der Port dieser App erreicht bereits eine Crew auf einem anderen Rechner – sonst kann die App beim nächsten Öffnen, wenn dies wirksam wird, keine Verbindung herstellen. Dazu muss die Crew für diesen Port mit „Set Remote Host…“ im Menü Connection gespeichert sein, plus ein Tunnel: kreuz dort „Keep an SSH tunnel to this crew open“ an (macOS und Linux) oder lass einen eigenen SSH-Tunnel laufen. Verbindungen unter Einstellungen → Remote-Crew enden, wenn dies aus ist, und zählen daher nicht.",
         "feature_previews_save_denied": "Nur der Besitzer dieser {{productName}} kann Funktionsvorschauen ändern, daher wurde „{{name}}“ zurückgesetzt.",
         "feature_previews_save_failed": "„{{name}}“ konnte nicht gespeichert werden und wurde zurückgesetzt. Versuch es noch einmal.",
-        "feature_previews_carry_failed": "„{{name}}“ ist nur in diesem Browser aktiv: Es konnte nicht für alle gespeichert werden, die diese {{productName}} nutzen. Lade die Seite neu, um es noch einmal zu versuchen."
+        "feature_previews_carry_failed": "„{{name}}“ ist nur in diesem Browser aktiv: Es konnte nicht für alle gespeichert werden, die diese {{productName}} nutzen. Lade die Seite neu, um es noch einmal zu versuchen.",
+        "feature_previews_carry_denied": "Nur der Besitzer dieser {{productName}} kann „{{name}}“ für alle speichern, daher bleibt es nur in diesem Browser aktiv."
       },
       "discordPanel": {
         "allowed_server_channel_ids": "Erlaubte Server-Kanal-IDs",

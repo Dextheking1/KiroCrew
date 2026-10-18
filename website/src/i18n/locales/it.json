@@ -16802,7 +16802,8 @@
         "turn_it_off_only_when_a_gateway_already_answers": "Avvia un gateway su questa macchina. Lascialo attivo a meno che la porta di questa app non raggiunga già una Crew su un'altra macchina; altrimenti l'app non potrà connettersi alla prossima apertura, che è quando questa impostazione ha effetto. Serve che la Crew sia salvata per questa porta con “Set Remote Host…” nel menu Connection, più un tunnel: spunta “Keep an SSH tunnel to this crew open” lì (macOS e Linux) oppure mantieni attivo un tuo tunnel SSH. Le connessioni di Impostazioni → Crew remota si fermano quando questa opzione è disattivata, quindi non contano.",
         "feature_previews_save_denied": "Solo il proprietario di questo {{productName}} può modificare le anteprime delle funzionalità, quindi «{{name}}» è stato ripristinato.",
         "feature_previews_save_failed": "Impossibile salvare «{{name}}», quindi è stato ripristinato. Riprova.",
-        "feature_previews_carry_failed": "«{{name}}» è attivo solo in questo browser: non è stato possibile salvarlo per tutti quelli che usano questo {{productName}}. Ricarica la pagina per riprovare."
+        "feature_previews_carry_failed": "«{{name}}» è attivo solo in questo browser: non è stato possibile salvarlo per tutti quelli che usano questo {{productName}}. Ricarica la pagina per riprovare.",
+        "feature_previews_carry_denied": "Solo il proprietario di questo {{productName}} può salvare «{{name}}» per tutti, quindi resta attivo solo in questo browser."
       },
       "discordPanel": {
         "allowed_server_channel_ids": "ID dei canali del server consentiti",
