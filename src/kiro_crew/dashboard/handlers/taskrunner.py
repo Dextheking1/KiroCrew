@@ -483,30 +483,34 @@ async def api_taskrunner_start(request: web.Request) -> web.Response:
     )
     if run_admission.rejected:
         return run_admission.refusal_response()
+    if run_admission.replayed:
+        from kiro_crew.shared_crew.admission_entry import background_replay_response
+
+        return background_replay_response(run_admission, execution_key="task_id")
     run_principal = None if run_admission.work is None else run_admission.work.budget_key
 
     # Handle inline spec content
     created_spec: Path | None = None
     inline_content: str | None = None
-    if spec_path.startswith("__inline__:"):
-        content = spec_path[len("__inline__:") :]
-        if not content.strip():
-            return web.json_response({"error": "empty spec content"}, status=400)
-        work_dir = state.task_runner._work_dir
-        if execution.memory_mode == "persistent":
-            # The write goes through the shielded helper so a cancelled request
-            # cannot orphan a half-written spec in the work dir.
-            created_spec = await _materialize_inline_spec(work_dir, content)
-            fpath = created_spec
-        else:
-            # A restricted run keeps the body in memory and must leave no
-            # TASK_*.md behind, so this name is never written -- it only gives
-            # ``spec_path`` below a value, as it had before the off-loop move.
-            inline_content = content
-            fpath = Path(work_dir) / f"TASK_{uuid.uuid4().hex[:8]}.md"
-        spec_path = str(fpath)
-
     try:
+        if spec_path.startswith("__inline__:"):
+            content = spec_path[len("__inline__:") :]
+            if not content.strip():
+                await run_admission.abandon()
+                return web.json_response({"error": "empty spec content"}, status=400)
+            work_dir = state.task_runner._work_dir
+            if execution.memory_mode == "persistent":
+                # The write goes through the shielded helper so a cancelled request
+                # cannot orphan a half-written spec in the work dir.
+                created_spec = await _materialize_inline_spec(work_dir, content)
+                fpath = created_spec
+            else:
+                # A restricted run keeps the body in memory and must leave no
+                # TASK_*.md behind; the unwritten path identifies its spec.
+                inline_content = content
+                fpath = Path(work_dir) / f"TASK_{uuid.uuid4().hex[:8]}.md"
+            spec_path = str(fpath)
+
         agent = body.get("agent", "")
         task_name = body.get("name", "")
         workspace_dir = body.get("workspace_dir", "")
@@ -776,6 +780,10 @@ async def api_taskrunner_retry(request: web.Request) -> web.Response:
     run_admission = await _admit_existing_run(request, state, task_id)
     if run_admission.rejected:
         return run_admission.refusal_response()
+    if run_admission.replayed:
+        from kiro_crew.shared_crew.admission_entry import background_replay_response
+
+        return background_replay_response(run_admission, execution_key="task_id")
     try:
         await state.task_runner.retry_from_task(
             task_id, from_step, agent=state.task_runner._agent or ""
@@ -1155,6 +1163,10 @@ async def api_taskrunner_execute_plan(request: web.Request) -> web.Response:
     run_admission = await _admit_existing_run(request, state, task_id)
     if run_admission.rejected:
         return run_admission.refusal_response()
+    if run_admission.replayed:
+        from kiro_crew.shared_crew.admission_entry import background_replay_response
+
+        return background_replay_response(run_admission, execution_key="task_id")
     try:
         await state.task_runner.execute_plan(
             task_id,

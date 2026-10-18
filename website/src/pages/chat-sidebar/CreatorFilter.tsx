@@ -9,7 +9,8 @@
  *
  *  The selection is remembered per Crew (keyed by the mode route's `crew_id`). A
  *  personal Crew shows neither the control nor creator bylines, and neither
- *  does a Crew that cannot attribute sessions. */
+ *  does a Crew that cannot attribute sessions. A Crew whose mode cannot be read
+ *  shows the error where the control would be, and no bylines. */
 import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { Users } from 'lucide-react'
 import SimpleSelect from '../../components/SimpleSelect'
@@ -25,7 +26,8 @@ import { fmtRelativeTime } from '../chat/sessionOrder'
 import { SharedCrewBylineContext, type SharedCrewBylineView } from './SessionCreatorByline'
 
 export interface SharedCrewListView {
-  /** Whether the creator filter control renders. */
+  /** Whether the creator filter bar renders: the control on a team Crew, or the
+   *  mode-read error in its place. The filter stays All while the mode is unread. */
   filterAvailable: boolean
   filter: CreatorFilterValue
   setFilter: (v: CreatorFilterValue) => void
@@ -39,12 +41,14 @@ export function useSharedCrewListView(): SharedCrewListView {
   const attributes = capabilityUsable(capabilities.attribution)
   const modeQuery = useSharedCrewMode(attributes)
   const people = useSharedCrewPeople(attributes)
-  const modeKnown = attributes && (modeQuery.isSuccess || modeQuery.isError)
+  // An unreadable mode is an error: bylines and the control stay hidden and the
+  // bar shows the error in the control's place, never a guessed mode.
+  const modeFailed = attributes && modeReadFailed(modeQuery)
   const mode = effectiveMode(modeQuery.data, {
     teamPath: sharedAccessConfigured(capabilities),
     othersSeen: (people.data?.people ?? []).some(row => !row.is_viewer),
   })
-  const team = modeKnown && !hidesTeamAttribution(mode)
+  const team = attributes && modeQuery.isSuccess && !hidesTeamAttribution(mode)
   const crewId = modeQuery.data?.crew_id ?? ''
   const viewer = modeQuery.data?.viewer
   const viewerId = viewer && !isUnknownPrincipal(viewer) ? viewer.id : ''
@@ -56,10 +60,36 @@ export function useSharedCrewListView(): SharedCrewListView {
     saveCreatorFilter(crewId, next)
   }, [crewId])
   const bylines = useMemo(() => ({ hidden: !team, viewerId }), [team, viewerId])
-  return { filterAvailable: team, filter: team ? filter : 'all', setFilter, bylines }
+  return { filterAvailable: team || modeFailed, filter: team ? filter : 'all', setFilter, bylines }
+}
+
+/** The mode read failed and has not succeeded since. A retry of a failed read
+ *  (a reconnect, a refocus) passes through `pending` without data; it still
+ *  counts as failed, so the error does not blink out while the retry runs. */
+function modeReadFailed(q: { isError: boolean; isPending: boolean; errorUpdateCount: number }): boolean {
+  return q.isError || (q.isPending && q.errorUpdateCount > 0)
 }
 
 export function CreatorFilterBar({ value, onChange }: { value: CreatorFilterValue; onChange: (v: CreatorFilterValue) => void }) {
+  // The list view's observer owns fetching the mode; this one only reads it, so
+  // mounting the error in place of the control never re-asks the route.
+  const modeQuery = useSharedCrewMode(true, { fetchOnMount: false })
+  if (modeReadFailed(modeQuery)) {
+    return (
+      <div className="mx-2 mb-1 min-w-0" data-testid="creator-filter-mode-error">
+        <ErrorNotice
+          message={modeQuery.error instanceof Error ? modeQuery.error.message : i18nT('sharedCrew.mode_failed')}
+          variant="inline"
+          askAgent
+          testId="creator-filter-mode-error-notice"
+        />
+      </div>
+    )
+  }
+  return <CreatorFilterSelect value={value} onChange={onChange} />
+}
+
+function CreatorFilterSelect({ value, onChange }: { value: CreatorFilterValue; onChange: (v: CreatorFilterValue) => void }) {
   const people = useSharedCrewPeople(true)
   const current = normalizeCreatorFilter(value)
   const { options, labels } = useMemo(() => {

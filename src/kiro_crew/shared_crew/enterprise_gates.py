@@ -388,6 +388,33 @@ def make_enterprise_gate_middleware(
     return enterprise_gate_middleware
 
 
+SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 10
+
+
+def install_lifecycle(app: web.Application) -> None:
+    """Wire admission before traffic on both dashboard and API-only gateways."""
+
+    async def _shared_crew_startup(app_: web.Application) -> None:
+        # Defer admission imports until startup; registering hooks performs no I/O.
+        from kiro_crew.shared_crew import wiring
+        from kiro_crew.shared_crew.admission_gate import startup_check
+
+        wiring.install(app_["state"])
+        await startup_check()
+
+    async def _shared_crew_cleanup(_app: web.Application) -> None:
+        # Cleanup is optional until startup has built an admission service.
+        from kiro_crew.shared_crew.admission_gate import shutdown_cleanup
+
+        try:
+            await asyncio.wait_for(shutdown_cleanup(), timeout=SHUTDOWN_CLEANUP_TIMEOUT_SECONDS)
+        except Exception:  # noqa: BLE001 -- cleanup never blocks the stop
+            logger.debug("shared crew: slice cleanup at stop failed", exc_info=True)
+
+    app.on_startup.append(_shared_crew_startup)
+    app.on_cleanup.append(_shared_crew_cleanup)
+
+
 def install(app: web.Application) -> None:
     """Append the gate middleware, inner to token auth and the slot checkpoint."""
     app.middlewares.append(make_enterprise_gate_middleware())

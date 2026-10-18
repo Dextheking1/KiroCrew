@@ -1,7 +1,7 @@
 /**
- * React Query reads for Shared Crew. Each answers `null` when the gateway does
- * not serve the route, so a consumer renders "not available" rather than an
- * error. Live updates arrive as socket frames (./sharedCrewSocket) into these
+ * React Query reads for Shared Crew. Each except the mode answers `null` when
+ * the gateway does not serve the route, so a consumer renders "not available"
+ * rather than an error. Live updates arrive as socket frames (./sharedCrewSocket) into these
  * same cache entries.
  */
 import { useQuery } from '@tanstack/react-query'
@@ -28,9 +28,18 @@ export function useSharedCrewViewer(enabled = true) {
   return useQuery({ queryKey: sharedCrewKeys.viewer, queryFn: () => api.sharedCrewViewer(), enabled, staleTime: 60_000, retry: false })
 }
 
-/** This Crew's People/setup mode; `null` from a gateway without the route. */
-export function useSharedCrewMode(enabled = true) {
-  return useQuery({ queryKey: sharedCrewKeys.mode, queryFn: () => api.sharedCrewMode(), enabled, staleTime: 60_000, retry: false })
+/** This Crew's People/setup mode. A missing or failing route is a query error,
+ *  which every consumer renders as an error, never as a personal Crew. */
+export function useSharedCrewMode(enabled = true, { fetchOnMount = true }: { fetchOnMount?: boolean } = {}) {
+  return useQuery({
+    queryKey: sharedCrewKeys.mode,
+    queryFn: () => api.sharedCrewMode(),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+    refetchOnMount: fetchOnMount,
+    retryOnMount: fetchOnMount,
+  })
 }
 
 export function useSharedCrewPeople(enabled = true) {

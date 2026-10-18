@@ -4975,6 +4975,17 @@ async def _start_next_queued_turn(
     if await _drop_revoked_replays(state, slot):
         return False
 
+    from kiro_crew.shared_crew.admission_entry import queued_work_ids
+    from kiro_crew.shared_crew.admission_gate import installed_service
+
+    service = installed_service()
+    if service is not None:
+        for item in list(slot._queue):
+            work_ids = queued_work_ids([item])
+            if work_ids and await service._cancelled_parked(work_ids) is not None:
+                slot.queue_remove_by_id(item["id"])
+                state.broadcast_ws("queue_pop", {"slot": slot.key, "queue_id": item["id"]})
+
     try:
         merge = KiroCrewConfig.load().dashboard.merge_queued_messages
     except Exception:

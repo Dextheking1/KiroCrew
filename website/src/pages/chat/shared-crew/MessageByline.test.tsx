@@ -4,9 +4,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Provider } from 'react-redux'
 import type { ReactNode } from 'react'
 import { api } from '../../../api/client'
+import { ALL_UNAVAILABLE } from '../../../api/sharedCrewUi'
+import type { CrewModeResponse } from '../../../api/sharedCrewMode'
 import { MessageByline } from './MessageByline'
 
-vi.mock('../../../api/client', () => ({ api: { sharedCrewViewer: vi.fn() } }))
+vi.mock('../../../api/client', () => ({ api: { sharedCrewViewer: vi.fn(), sharedCrewCapabilities: vi.fn(), sharedCrewMode: vi.fn(), sharedCrewPeople: vi.fn() } }))
 const viewer = vi.mocked(api.sharedCrewViewer)
 
 const person = (id: string, name: string, kind: 'human' | 'unknown' = 'human') => ({ id, kind, display: { name, login: '', captured_at: null } })
@@ -29,6 +31,14 @@ const SLOT = { key: 's1', attribution: { creator: person('p_ann', 'Ann'), availa
 beforeEach(() => {
   vi.clearAllMocks()
   viewer.mockResolvedValue(person('p_bob', 'Bob'))
+  // A team (network) Crew: the mode in which bylines render at all.
+  vi.mocked(api.sharedCrewCapabilities).mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available' })
+  vi.mocked(api.sharedCrewPeople).mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, people: [] })
+  vi.mocked(api.sharedCrewMode).mockResolvedValue({
+    schema_version: 1, mode: 'network', crew_id: 'crew-a', viewer: person('p_bob', 'Bob'),
+    team_config: { state: 'not_configured', reason: '', capability: '', cause: '' },
+    console: { state: 'not_offered', url: '' }, adapters: {}, systems_manager_attribution: 'unavailable', workload_identity_ref: 'unavailable',
+  } satisfies CrewModeResponse)
 })
 
 describe('MessageByline', () => {

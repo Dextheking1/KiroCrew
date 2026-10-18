@@ -276,9 +276,23 @@ def effective_limits(cfg: SharedCrewConfig, *, auto_crew_concurrency: int) -> Ef
 
 def load_shared_crew_config() -> SharedCrewConfig:
     """Read ``dashboard.shared_crew`` from ``config.json`` now. Synchronous file I/O."""
-    from kiro_crew.config.loader import _raw_config
+    import json
 
-    return shared_crew_config_from(_safe_dict(_raw_config().get("dashboard")).get("shared_crew"))
+    from kiro_crew.config.loader import config_path, read_config_text
+
+    try:
+        raw = json.loads(read_config_text(config_path()))
+    except FileNotFoundError:
+        return SharedCrewConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("config must be an object")
+    dashboard = raw.get("dashboard", {})
+    if not isinstance(dashboard, dict):
+        raise ValueError("dashboard must be an object")
+    section = dashboard.get("shared_crew", {})
+    if not isinstance(section, dict):
+        raise ValueError("dashboard.shared_crew must be an object")
+    return shared_crew_config_from(section)
 
 
 __all__ = [

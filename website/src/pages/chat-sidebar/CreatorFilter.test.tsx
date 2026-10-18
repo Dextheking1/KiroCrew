@@ -118,6 +118,41 @@ describe('useSharedCrewListView', () => {
     expect(result.current.filter).toBe('all')
   })
 
+  it('never guesses a mode it could not read: no bylines, no filter, the bar shows the error', async () => {
+    // A team path is set up and another person is seen, so a guessed mode would be network.
+    caps.mockResolvedValue({
+      ...ALL_UNAVAILABLE,
+      attribution: 'available',
+      setup_paths: {
+        tailscale: { state: 'available', reason: '' },
+        kiro_login: { state: 'unavailable', reason: 'not_in_this_build' },
+        systems_manager: { state: 'unavailable', reason: 'not_in_this_build' },
+      },
+    })
+    people.mockResolvedValue({ schema_version: 1, directory: { state: 'unavailable' }, people: [
+      { principal: human('p_b', 'Bob'), sources: ['observed'], is_viewer: false },
+    ] })
+    modeApi.mockRejectedValue(new Error('mode route missing'))
+    window.localStorage.setItem('kc.sharedCrew.creatorFilter.crew-a', 'mine')
+    const W = wrapper()
+    function Probe() {
+      const view = useSharedCrewListView()
+      return (
+        <>
+          <span data-testid="probe">{`${view.bylines.hidden}|${view.filter}|${view.filterAvailable}`}</span>
+          {view.filterAvailable && <CreatorFilterBar value={view.filter} onChange={view.setFilter} />}
+        </>
+      )
+    }
+    render(<W><Probe /></W>)
+    await waitFor(() => expect(screen.getByTestId('creator-filter-mode-error')).toBeInTheDocument())
+    expect(screen.getByTestId('probe').textContent).toBe('true|all|true')
+    expect(screen.queryByTestId('creator-filter')).toBeNull()
+    expect(screen.getByTestId('creator-filter-mode-error').textContent).toContain('mode route missing')
+    // Showing the error does not re-ask the route.
+    expect(modeApi).toHaveBeenCalledTimes(1)
+  })
+
   it('remembers the selection per Crew and labels the viewer', async () => {
     modeApi.mockResolvedValue(modeBody('network', 'crew-a'))
     const first = renderHook(() => useSharedCrewListView(), { wrapper: wrapper() })

@@ -510,6 +510,10 @@ async def _start_admitted(
     run_admission = await _admit_workflow_run(request, svc)
     if run_admission.rejected:
         return run_admission.refusal_response()
+    if run_admission.replayed:
+        from kiro_crew.shared_crew.admission_entry import background_replay_response
+
+        return background_replay_response(run_admission)
     try:
         with principal_scope(None if run_admission.work is None else run_admission.work.budget_key):
             out = await start()
@@ -562,6 +566,10 @@ async def api_workflow_run(request: web.Request) -> web.Response:
     run_admission = await _admit_workflow_run(request, svc)
     if run_admission.rejected:
         return run_admission.refusal_response()
+    if run_admission.replayed:
+        from kiro_crew.shared_crew.admission_entry import background_replay_response
+
+        return background_replay_response(run_admission)
     try:
         with principal_scope(None if run_admission.work is None else run_admission.work.budget_key):
             out = await svc.start(

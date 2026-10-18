@@ -31,9 +31,11 @@ export interface CrewModeResponse {
 
 const MODES: ReadonlySet<string> = new Set<CrewMode>(['personal', 'network', 'console', 'invalid'])
 
-/** The mode to render. An older gateway without the route answers `null`; its
- *  mode is read from what it does report, never assumed personal when a team
- *  path or another person is visible. */
+/** The mode to render from a mode body the route answered. The route never
+ *  answers `null` (a missing route is a query error, which the caller renders as
+ *  an error before reaching here); without a body the mode is read from what
+ *  the Crew does report, never assumed personal when a team path or another
+ *  person is visible. */
 export function effectiveMode(resp: CrewModeResponse | null | undefined, fallback: { teamPath: boolean; othersSeen: boolean }): CrewMode {
   if (resp && MODES.has(resp.mode)) return resp.mode
   return fallback.teamPath || fallback.othersSeen ? 'network' : 'personal'

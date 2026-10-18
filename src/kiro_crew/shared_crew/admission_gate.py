@@ -584,6 +584,10 @@ class AdmissionService:
                     budget_key,
                     scope=result.limiting_scope,
                 )
+            if lim.hard_limits and not park and not await self.prepare_principal_slice(budget_key):
+                self._undo(ticket)
+                self._schedule_promotions(result.also_admitted)
+                return self._refusal(ReasonCode.CONTAINMENT_UNAVAILABLE, budget_key)
             state = S.ADMITTED if result.decision is Decision.ADMITTED else S.QUEUED
             root = self.root_for_session(session_key) if work_class is WorkClass.CHILD else ""
             accept_extra: dict[str, Any] = {"root_work_id": root} if root else {}
@@ -736,6 +740,12 @@ class AdmissionService:
         """
         if not self.enabled or self._store is None:
             return None
+        refused = await self._cancelled_parked(work_ids)
+        if refused is not None:
+            for work_id in work_ids:
+                if (live := self._live.get(work_id)) is not None:
+                    await self._end(live, S.CANCELLED, reason=ReasonCode.CANCELLED_BY_USER)
+            return refused
         primary: _Live | None = None
         followers: list[_Live] = []
         for work_id in work_ids:
@@ -782,17 +792,22 @@ class AdmissionService:
         )
 
     async def _cancelled_parked(self, work_ids: list[str]) -> Admission | None:
-        """A refusal when a person cancelled every one of *work_ids*, else None."""
-        assert self._store is not None
+        """Refuse a merged prompt containing any work cancelled by a person."""
+        if self._store is None:
+            return None
+        lives = [self._live.get(work_id) for work_id in work_ids]
+        works = [
+            live.work if live is not None else await self._store.get(work_id)
+            for work_id, live in zip(work_ids, lives)
+        ]
         cancelled: AcceptedWork | None = None
-        for work_id in work_ids:
-            try:
-                work = await self._store.get(work_id)
-            except Exception:
-                return None
-            if work is None or work.reason is not ReasonCode.CANCELLED_BY_USER:
-                return None
-            cancelled = cancelled or work
+        for live, work in zip(lives, works):
+            if work is not None and (
+                work.reason is ReasonCode.CANCELLED_BY_USER
+                or (live is not None and live.cancel_reason is ReasonCode.CANCELLED_BY_USER)
+            ):
+                cancelled = work
+                break
         if cancelled is None:
             return None
         return Admission(
@@ -969,7 +984,11 @@ class AdmissionService:
             terminal = S.EXPIRED if refusal is ReasonCode.QUEUE_EXPIRED else S.CANCELLED
             await self._end(live, terminal, reason=refusal)
             raise AdmissionEnded(live.work)
-        unit = await self._prepare_slice(live)
+        unit = await self.prepare_principal_slice(live.work.budget_key)
+        if self._limits.hard_limits and not unit:
+            coro.close()
+            await self._end(live, S.CANCELLED, reason=ReasonCode.CONTAINMENT_UNAVAILABLE)
+            raise AdmissionEnded(live.work)
         runtime = RuntimeOwnershipRef(
             execution_id=work_id,
             root_execution_id=live.root_work_id or work_id,
@@ -1034,35 +1053,11 @@ class AdmissionService:
                 return ReasonCode.GRANT_REVOKED
         return None
 
-    async def _prepare_slice(self, live: _Live) -> str:
-        """Apply the principal's slice off-loop; return its unit name, or "" if not applied."""
-        return await self.prepare_principal_slice(live.work.budget_key)
-
     async def prepare_principal_slice(self, budget_key: str) -> str:
         """Size *budget_key*'s slice off-loop so its spawns land there; "" when not applied."""
-        lim = self._limits
-        if not lim.enabled or self._slices is None or not lim.containment_enabled:
-            return ""
-        report = await self.containment_report()
-        if not report.available:
-            return ""
-        name = _containment.principal_slice_name(budget_key)
-        limits = _containment.SliceLimits(
-            cpu_quota_percent=lim.principal_cpu_quota_percent,
-            memory_max_mb=lim.principal_memory_max_mb,
-            tasks_max=lim.principal_tasks_max,
+        return await _containment.prepare_slices(
+            self._slices, budget_key, self._limits, await self.containment_report()
         )
-        crew = _containment.SliceLimits(cpu_quota_percent=lim.crew_cpu_quota_percent)
-        slices = self._slices
-
-        def _apply() -> bool:
-            # The Crew's own CPUQuota sits on the instance slice, above every principal's.
-            if crew.cpu_quota_percent > 0 and report.cpu:
-                slices.apply(_containment.instance_slice_name(), crew, cpu_delegated=True)
-            return slices.apply(name, limits, cpu_delegated=report.cpu)
-
-        ok = await asyncio.to_thread(_apply)
-        return name if ok else ""
 
     def note_failure(self, work_id: str, detail: str) -> bool:
         """Mark running work *work_id* as failed when it settles, with *detail*.
@@ -1222,6 +1217,9 @@ class AdmissionService:
             # Being resolved against runtime ownership; its outcome is not ours to pick.
             raise InvalidTransition(current.state, S.CANCELLED)
         live.cancel_reason = ReasonCode.CANCELLED_BY_USER
+        if live.merged_into and (primary := self._live.get(live.merged_into)) is not None:
+            await self.cancel(primary.work.work_id, expected_revision=primary.work.revision)
+            return live.work
         if current.state in (S.QUEUED, S.ADMITTED):
             await self._end(live, S.CANCELLED, reason=ReasonCode.CANCELLED_BY_USER)
             return live.work
@@ -1706,9 +1704,7 @@ async def current_service() -> AdmissionService:
         logger.warning("shared crew: config unreadable; keeping the current limits", exc_info=True)
         if service is not None:
             return service
-        from kiro_crew.config.sections_shared_crew import SharedCrewConfig, effective_limits
-
-        limits = effective_limits(SharedCrewConfig(), auto_crew_concurrency=2)
+        raise
     if service is None:
         store = await asyncio.to_thread(_open_default_store) if limits.enabled else None
         service = AdmissionService(store, limits=limits, slices=_containment.SliceManager())
@@ -1828,13 +1824,13 @@ async def shutdown_cleanup(
 
 
 def _configured_hard_limits() -> bool:
-    """Whether config asks for hard limits; off when it cannot be read."""
+    """Whether config asks for hard limits; unreadable configuration refuses work."""
     try:
         from kiro_crew.config.sections_shared_crew import load_shared_crew_config
 
         cfg = load_shared_crew_config()
-    except Exception:  # noqa: BLE001 -- unreadable config keeps the default (off)
-        return False
+    except Exception:  # noqa: BLE001 -- unknown configuration cannot authorize work
+        return True
     return bool(cfg.hard_limits)
 
 

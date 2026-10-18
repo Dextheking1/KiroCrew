@@ -43,6 +43,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Iterator, TypeVar
 
+from kiro_crew.config.sections_shared_crew import EffectiveLimits
 from kiro_crew.shared_crew.contracts import CapabilityState, EnforcementLevel
 
 logger = logging.getLogger(__name__)
@@ -228,7 +229,9 @@ def probe_containment(*, hard_limits: bool, slices_enabled: bool) -> Containment
     reason = "" if available else classify_probe_reason(prose)
     if available and not systemctl_ok:
         reason = REASON_NO_SYSTEMCTL
-    usable = available and systemctl_ok
+    if available and systemctl_ok and not slices_enabled:
+        reason = REASON_SLICE_FAILED
+    usable = available and systemctl_ok and slices_enabled
     return ContainmentReport(
         platform=platform,
         available=usable,
@@ -557,6 +560,30 @@ class SliceManager:
             return self._runner([systemctl, "--user", "stop", slice_name]).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             return False
+
+
+async def prepare_slices(
+    slices: SliceManager | None, budget_key: str, lim: EffectiveLimits, report: ContainmentReport
+) -> str:
+    """Apply the Crew and principal ceilings; hard mode requires both to succeed."""
+    if not lim.enabled or slices is None or not lim.containment_enabled or not report.available:
+        return ""
+    name = principal_slice_name(budget_key)
+    limits = SliceLimits(
+        cpu_quota_percent=lim.principal_cpu_quota_percent,
+        memory_max_mb=lim.principal_memory_max_mb,
+        tasks_max=lim.principal_tasks_max,
+    )
+    crew = SliceLimits(cpu_quota_percent=lim.crew_cpu_quota_percent)
+
+    def apply() -> bool:
+        if crew.cpu_quota_percent > 0 and report.cpu:
+            crew_ok = slices.apply(instance_slice_name(), crew, cpu_delegated=True)
+            if not crew_ok and lim.hard_limits:
+                return False
+        return slices.apply(name, limits, cpu_delegated=report.cpu)
+
+    return name if await asyncio.to_thread(apply) else ""
 
 
 # -- the hard-limit backstop ---------------------------------------------------

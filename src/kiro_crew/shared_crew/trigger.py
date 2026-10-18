@@ -7,9 +7,9 @@ already records about the session:
 
 * ``created_by`` of ``cron:<job id>``, which the chat routes stamp only for a
   caller the transport attests as that cron run (``cron_slot_creator``);
-* a session key in the ``cron`` or ``hook`` namespace, either separator spelling
-  (``cron:<id>`` live, ``cron_<id>`` as a persisted file stem);
-* a slot origin of ``system``.
+* a session key in the ``cron`` or ``hook`` namespace (``cron:<id>`` live,
+  ``cron_<id>`` as a persisted file stem, ``cron-<id>`` as a dashboard tab);
+* a slot origin of ``cron`` or ``system``.
 
 A trigger is a display label. It is derived from records an agent's file tools
 can edit, so it grants nothing and is never read by authorization.
@@ -42,8 +42,9 @@ TRIGGER_WEBHOOK = "webhook"
 TRIGGER_SYSTEM = "system"
 TRIGGER_KINDS: tuple[str, ...] = (TRIGGER_SCHEDULED, TRIGGER_WEBHOOK, TRIGGER_SYSTEM)
 
-#: The slot origin a gateway-internal slot carries (``dashboard.state.SlotOrigin.SYSTEM``).
+#: The slot origins recorded by ``dashboard.state.SlotOrigin``.
 ORIGIN_SYSTEM = "system"
+ORIGIN_CRON = "cron"
 
 _NAME_MAX = 128
 _REF_MAX = 128
@@ -113,8 +114,8 @@ def _strip_dashboard(key: str) -> str:
 
 
 def _cron_job_id(value: str) -> str:
-    """The job id of ``cron:<id>[...]`` or ``cron_<id>[...]``, else ``""``."""
-    for sep in (":", "_"):
+    """The job id from a cron session, persisted stem or dashboard tab, else ``""``."""
+    for sep in (":", "_", "-"):
         prefix = f"cron{sep}"
         if value.startswith(prefix):
             job_id = re.split(r"[:_]", value[len(prefix) :], maxsplit=1)[0]
@@ -142,7 +143,7 @@ def trigger_of(
     bare = _strip_dashboard(str(key or ""))
     if not job_id:
         job_id = _cron_job_id(bare)
-    if job_id:
+    if job_id or origin == ORIGIN_CRON:
         return SessionTrigger(
             TRIGGER_SCHEDULED, ref=job_id, name=_resolve_name(TRIGGER_SCHEDULED, job_id)
         )
@@ -155,6 +156,7 @@ def trigger_of(
 
 
 __all__ = [
+    "ORIGIN_CRON",
     "ORIGIN_SYSTEM",
     "SessionTrigger",
     "TRIGGER_KINDS",

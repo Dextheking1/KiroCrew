@@ -1803,30 +1803,9 @@ async def start_dashboard(
     # slices in the table's original sequence -- see that package's docstring.
     register_all(app)
 
-    async def _shared_crew_startup(_app: web.Application) -> None:
-        # Shared Crew: probe containment once at start, so hard-limit mode fails
-        # closed before the first runtime spawns (shared_crew.admission_gate).
-        from kiro_crew.shared_crew import wiring
-        from kiro_crew.shared_crew.admission_gate import startup_check
+    from kiro_crew.shared_crew import enterprise_gates
 
-        wiring.install(state)
-        try:
-            await startup_check()
-        except Exception:  # noqa: BLE001 - a probe failure must not stop the gateway
-            logger.warning("shared crew: startup containment check failed", exc_info=True)
-
-    app.on_startup.append(_shared_crew_startup)
-
-    async def _shared_crew_cleanup(_app: web.Application) -> None:
-        # Release the idle per-principal slices this process sized.
-        from kiro_crew.shared_crew.admission_gate import shutdown_cleanup
-
-        try:
-            await asyncio.wait_for(shutdown_cleanup(), timeout=10)
-        except Exception:  # noqa: BLE001 - cleanup never blocks the stop
-            logger.debug("shared crew: slice cleanup at stop failed", exc_info=True)
-
-    app.on_cleanup.append(_shared_crew_cleanup)
+    enterprise_gates.install_lifecycle(app)
 
     # Register built-in apps (idempotent — surfaces baked-in features in App Store).
     # Runs on the executor: escalation cleanup can traverse/delete legacy app
@@ -2679,6 +2658,10 @@ async def start_api_server(
         tailnet_trust=_tailnet_trust,
     )
 
+    from kiro_crew.shared_crew import enterprise_gates
+
+    enterprise_gates.install(app)
+    enterprise_gates.install_lifecycle(app)
     _register_mcp_routes(app)
 
     # Probe parity with the full dashboard server. Headless gateways are often

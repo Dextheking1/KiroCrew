@@ -527,12 +527,36 @@ async def admit_background_run(
         digest=_gate.request_digest(operation.value, session_key),
         allow_queue=False,
     )
-    if admission.admitted and admission.work is not None:
+    if admission.admitted and not admission.replayed and admission.work is not None:
         await service.prepare_principal_slice(admission.work.budget_key)
     return admission
 
 
+def background_replay_response(admission: _gate.Admission, *, execution_key: str = "run_id") -> Any:
+    """Return the recorded run, or an accepted receipt while its start is in flight.
+
+    A retry owns neither the original start nor its capacity and must not start,
+    attach or abandon it. The work receipt remains available after a failed start.
+    """
+    from aiohttp import web
+
+    body: dict[str, Any] = {"ok": True, "replayed": True}
+    receipt = admission_receipt(admission)
+    if receipt is not None:
+        body["admission"] = receipt
+    work = admission.work
+    execution_id = str(work.extra.get("execution_id") or "") if work is not None else ""
+    if execution_id:
+        body[execution_key] = execution_id
+    pending = work is not None and work.state in {
+        OperationState.ADMITTED,
+        OperationState.QUEUED,
+    }
+    return web.json_response(body, status=202 if pending and not execution_id else 200)
+
+
 __all__ = [
+    "background_replay_response",
     "CHAT_AUTHOR_PAYLOAD_KEY",
     "CHAT_PROMPT_PAYLOAD_KEY",
     "QUEUED_WORK_META_KEY",

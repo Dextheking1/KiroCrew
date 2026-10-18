@@ -1,9 +1,10 @@
 /**
  * Shared Crew reads and the one Shared Crew write the dashboard makes (cancel).
  *
- * Every read degrades: a gateway that does not serve a route answers 404 and the
- * method resolves `null`, which the UI renders as "not available on this Crew"
- * rather than as an error. Any other failure throws through `j` as usual.
+ * Every read except the mode degrades: a gateway that does not serve a route
+ * answers 404 and the method resolves `null`, which the UI renders as "not
+ * available on this Crew" rather than as an error. Any other failure, and any
+ * failure of the mode read, throws through `j` as usual.
  * Filtering, paging and counting happen on the server; the client sends the
  * query and renders the page it gets back.
  */
@@ -48,7 +49,9 @@ export function createSharedCrewEndpoints({ get, post, j }: ClientTransport) {
       return read<SharedCrewSessionPage>('/api/shared-crew/sessions?' + params)
     },
     sharedCrewPeople: () => read<PeopleResponse>('/api/shared-crew/people'),
-    sharedCrewMode: () => read<CrewModeResponse>('/api/shared-crew/mode'),
+    /** The mode route is the one read that never degrades: a 404 throws like any
+     *  other failure, because an unreadable mode is an error, never a personal Crew. */
+    sharedCrewMode: async (): Promise<CrewModeResponse> => await j(await get('/api/shared-crew/mode')) as CrewModeResponse,
     /** The viewer's server-derived principal from `/api/auth/me`, or `null` when
      *  this gateway does not report one. Never sent back as "who I am". */
     sharedCrewViewer: async (): Promise<Maybe<PublicPrincipal>> => {

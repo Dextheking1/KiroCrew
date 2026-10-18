@@ -24,6 +24,7 @@ def register(app: web.Application) -> None:
     """Register the Shared Crew routes on *app*."""
     app.router.add_get("/api/shared-crew/sessions", routes_identity.api_shared_crew_sessions)
     app.router.add_get("/api/shared-crew/people", routes_identity.api_shared_crew_people)
+    app.router.add_get("/api/shared-crew/mode", routes_identity.api_shared_crew_mode)
     app.router.add_get("/api/shared-crew/capacity", routes_admission.api_capacity)
     app.router.add_get("/api/shared-crew/work", routes_admission.api_work)
     app.router.add_post("/api/shared-crew/work/{work_id}/cancel", routes_admission.api_work_cancel)
