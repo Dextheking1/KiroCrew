@@ -72,11 +72,20 @@ class TestReapStaleTmpPacks:
         assert fresh.exists(), "a possibly in-flight pack must survive"
         assert keeper.exists(), "finished packs are not the janitor's business"
 
-    def test_custom_threshold_shrinks_the_backlog_window(self, tmp_path: Path) -> None:
+    def test_the_threshold_is_the_boundary(self, tmp_path: Path) -> None:
         clone, pack_dir = _plain_clone(tmp_path)
-        _plant(pack_dir, "tmp_pack_abc123", age_s=120.0)
+        target = _plant(pack_dir, "tmp_pack_abc123")
+        mtime = target.stat().st_mtime
+        assert reap_stale_tmp_packs(clone, now=mtime + TMP_PACK_MAX_AGE_S - 1.0) == []
+        assert reap_stale_tmp_packs(clone, now=mtime + TMP_PACK_MAX_AGE_S + 1.0) == [str(target)]
+
+    def test_checkout_project_objects_dir_is_never_swept(self, tmp_path: Path) -> None:
+        # A checkout that happens to hold its own ``objects/pack`` directory:
+        # only ``.git``'s store is git's, the project's copy is user data.
+        clone, _pack_dir = _plain_clone(tmp_path)
+        project = _plant(clone / "objects" / "pack", "tmp_pack_project_file", age_s=_OLD)
         assert reap_stale_tmp_packs(clone) == []
-        assert reap_stale_tmp_packs(clone, max_age_s=60.0) != []
+        assert project.exists()
 
     def test_directory_named_like_a_tmp_pack_is_skipped(self, tmp_path: Path) -> None:
         clone, pack_dir = _plain_clone(tmp_path)
@@ -156,9 +165,9 @@ class TestReapStaleTmpPacks:
         clone, pack_dir = _plain_clone(tmp_path)
         target = _plant(pack_dir, "tmp_pack_frozen")
         # A file planted "now" is stale from the vantage of a far-future clock,
-        # and a zero threshold reaps everything -- both via the same entry
-        # point, so tests never sleep to make a file old.
-        assert reap_stale_tmp_packs(clone, max_age_s=0.0, now=time.time() + 1.0) == [str(target)]
+        # so tests never sleep to make a file old.
+        later = time.time() + 2 * TMP_PACK_MAX_AGE_S
+        assert reap_stale_tmp_packs(clone, now=later) == [str(target)]
 
 
 @pytest.mark.asyncio
@@ -233,7 +242,7 @@ class TestStatusRefresherCallSite:
 def test_threshold_is_twice_the_largest_bounded_calling_fetch() -> None:
     # The safety argument for reaping is "no fetch of ours can still own this
     # file", and it only holds for the BOUNDED callers: clone_setup's ceiling
-    # is 300s, pr_watchers' fetch runs at 120s, dev-fleet's at 90s, so the
+    # is 300s and dev-fleet's fetch runs at 90s, so the
     # threshold must stay above that largest bound. (spine/driver's fetch
     # carries no timeout parameter; there the threshold is documented as
     # vouching for a 10-minute-inert transfer, a weaker claim.) Pin the ratio

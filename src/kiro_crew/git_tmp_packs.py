@@ -10,9 +10,10 @@ hundreds of GB of ``tmp_pack_*`` until the disk fills) — the file is simply
 left behind. Git itself never reclaims it. This module is the one
 reclamation path, called from the fetches that run PERIODICALLY into
 long-lived clones, where orphans would pile up without bound — the
-auto-improvement watcher/clone-setup/commit/driver sites and the dev-fleet
+auto-improvement clone-setup/commit/driver sites and the dev-fleet
 status refresher. The tree's remaining fetch sites do NOT call it
-(``cli_server``, ``ops_mission_control``'s ledger sync, ``md_notebook``,
+(``pr_watchers``' base-ref fetch, which lands in a clone each setup
+recreates, ``cli_server``, ``ops_mission_control``'s ledger sync, ``md_notebook``,
 ``registry_pipeline``, the sync/rebase fetches inside ``dev_fleet`` itself,
 and the ``kirocrew-prepare-pr`` builtin scripts): dev-fleet's two land in the
 operator's checkout whose object store the refresher sweeps every cycle
@@ -24,8 +25,7 @@ Why an mtime threshold, and why this number
 A live fetch touches its temp pack continuously while receiving, so an
 in-flight pack's mtime is always recent; a killed one's is frozen at the
 kill. Almost every calling fetch runs under a total-duration bound —
-:func:`pr_watchers._git` defaults to 60s and its fetch passes 120s,
-``clone_setup._run`` to 300s, the dev-fleet fetches to 90s — so any
+``clone_setup._run`` at 300s, the dev-fleet fetches at 90s — so any
 ``tmp_pack_*`` untouched for longer than :data:`TMP_PACK_MAX_AGE_S`, twice
 that largest bound, belongs to a fetch of ours that has stopped making
 progress. The exception is ``spine/driver_git._git``, whose ``subprocess.run``
@@ -64,8 +64,8 @@ from pathlib import Path
 TMP_PACK_PREFIX = "tmp_pack_"
 
 #: A ``tmp_pack_*`` older than this is orphaned. Twice the largest total-time
-#: bound any CALLING fetch runs under (``clone_setup._run``'s 300s; the other
-#: bounded callers run 90-120s) — see the module docstring for why the number
+#: bound any CALLING fetch runs under (``clone_setup._run``'s 300s; the
+#: dev-fleet fetches run 90s) — see the module docstring for why the number
 #: is the safety argument, not bookkeeping.
 TMP_PACK_MAX_AGE_S = 600.0
 
@@ -93,9 +93,10 @@ def _pack_dirs(clone: Path) -> list[Path]:
                 # A linked worktree's gitdir holds no objects: they live in the
                 # common dir, and that is where its fetches write temp packs.
                 candidates.append(common / "objects" / "pack")
-    bare = clone / "objects" / "pack"
-    if bare.is_dir():
-        candidates.append(bare)
+    elif (clone / "objects" / "pack").is_dir():
+        # Bare layout only when there is no ``.git`` at all: a checkout's own
+        # ``objects/pack`` is project data, never git's object store.
+        candidates.append(clone / "objects" / "pack")
     unique: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -135,12 +136,7 @@ def _commondir_target(gitdir: Path) -> Path | None:
     return target
 
 
-def reap_stale_tmp_packs(
-    clone: str | os.PathLike,
-    *,
-    max_age_s: float = TMP_PACK_MAX_AGE_S,
-    now: float | None = None,
-) -> list[str]:
+def reap_stale_tmp_packs(clone: str | os.PathLike, *, now: float | None = None) -> list[str]:
     """Unlink every stale ``tmp_pack_*`` under *clone*'s object store.
 
     Best-effort and silent by design — see the module docstring for the safety
@@ -164,7 +160,7 @@ def reap_stale_tmp_packs(
                 age = now - entry.stat(follow_symlinks=False).st_mtime
             except OSError:
                 continue  # vanished / unreadable mid-scan: skip, never raise
-            if age < max_age_s:
+            if age < TMP_PACK_MAX_AGE_S:
                 continue  # possibly still in flight — the threshold is the guard
             try:
                 os.unlink(entry.path)

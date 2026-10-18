@@ -2975,7 +2975,9 @@ async def _status_refresher() -> None:
                     "dev-fleet: background fetch of %s from %s failed: %s",
                     repo,
                     remote,
-                    runtime._redact(fetched[2].strip()[-200:]),
+                    # Redact the whole text first: a cut made before redaction
+                    # can drop a credential's prefix and leak the rest.
+                    runtime._redact(fetched[2].strip())[-200:],
                 )
             # This loop is the only thing that fetches into the operator's
             # checkout every minute, so orphaned ``tmp_pack_*`` from killed
@@ -2983,7 +2985,11 @@ async def _status_refresher() -> None:
             # after a fetch that may itself just have been killed by the 90s
             # timeout, send the reaper over the object store. The mtime
             # threshold is what keeps this from touching an in-flight pack.
-            reap_stale_tmp_packs(repo)
+            # The sweep stats and unlinks files that can total hundreds of GB,
+            # so it runs off the event loop.
+            await asyncio.get_running_loop().run_in_executor(
+                subprocess_executor(), reap_stale_tmp_packs, repo
+            )
             await fleet_state._fleet_refresh()
         except Exception:
             runtime.logger.exception("dev-fleet status refresher failed")
