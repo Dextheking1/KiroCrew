@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { OPERATION_TRANSITIONS, type AcceptedWork, type OperationState, type SharedDecision } from './sharedCrew'
+import type { AcceptedWork, SharedDecision } from './sharedCrew'
 import {
   isAcceptedWork,
   isUnknownPrincipal,
@@ -15,8 +15,6 @@ import {
   ALL_UNAVAILABLE,
   principalInitials,
   principalName,
-  workCancellable,
-  workView,
 } from './sharedCrewUi'
 
 const work = (over: Partial<AcceptedWork> = {}): AcceptedWork => ({
@@ -25,26 +23,6 @@ const work = (over: Partial<AcceptedWork> = {}): AcceptedWork => ({
 })
 
 const person = (name: string, login = '') => ({ id: 'p_' + 'a'.repeat(32), kind: 'human' as const, display: { name, login, captured_at: null } })
-
-describe('workView', () => {
-  it('maps every operation state to one distinct on-screen state (spec section 7)', () => {
-    const expected: Record<OperationState, string> = {
-      submitted: 'sending', queued: 'queued', admitted: 'running', running: 'running',
-      cancelling: 'cancelling', reconciling: 'checking', completed: 'done', rejected: 'refused',
-      failed: 'ended', expired: 'ended', cancelled: 'ended', unknown_outcome: 'ended',
-    }
-    for (const state of Object.keys(OPERATION_TRANSITIONS) as OperationState[]) {
-      expect(workView(state), state).toBe(expected[state])
-    }
-  })
-
-  it('offers cancel only while work can still be stopped', () => {
-    expect(workCancellable(work({ state: 'queued' }))).toBe(true)
-    expect(workCancellable(work({ state: 'running' }))).toBe(true)
-    expect(workCancellable(work({ state: 'cancelling' }))).toBe(false)
-    expect(workCancellable(work({ state: 'completed' }))).toBe(false)
-  })
-})
 
 describe('mergeWork', () => {
   it('keeps one row per work id and never moves backwards', () => {

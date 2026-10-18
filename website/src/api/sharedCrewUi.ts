@@ -8,12 +8,10 @@
  */
 import {
   UNKNOWN_PRINCIPAL_ID,
-  TERMINAL_STATES,
   type AcceptedWork,
   type CapabilityState,
   type CapacityResponse,
   type MembershipLink,
-  type OperationState,
   type PresenceEntry,
   type PublicPrincipal,
   type ReasonCode,
@@ -198,32 +196,6 @@ export function setupPathStates(capabilities: SharedCrewCapabilities): Record<Se
 export function sharedAccessConfigured(capabilities: SharedCrewCapabilities): boolean {
   const states = setupPathStates(capabilities)
   return SETUP_PATH_ORDER.some(path => states[path].state === 'available')
-}
-
-/** What a work item looks like on screen (spec section 7). */
-export type WorkView = 'sending' | 'queued' | 'running' | 'cancelling' | 'checking' | 'done' | 'refused' | 'ended'
-
-export function workView(state: OperationState): WorkView {
-  switch (state) {
-    case 'submitted': return 'sending'
-    case 'queued': return 'queued'
-    case 'admitted':
-    case 'running': return 'running'
-    case 'cancelling': return 'cancelling'
-    case 'reconciling': return 'checking'
-    case 'completed': return 'done'
-    case 'rejected': return 'refused'
-    default: return 'ended'
-  }
-}
-
-export function isTerminal(state: OperationState): boolean {
-  return TERMINAL_STATES.has(state)
-}
-
-/** Cancel is offered while the work has not ended and is not already stopping. */
-export function workCancellable(work: AcceptedWork): boolean {
-  return work.state === 'queued' || work.state === 'admitted' || work.state === 'running'
 }
 
 /**
