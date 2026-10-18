@@ -38,10 +38,11 @@ ALICE, MALLORY, NOBODY = "100.64.0.11", "100.64.0.13", "100.64.0.99"
 
 
 @pytest.fixture(autouse=True)
-def _isolated(tmp_path, monkeypatch):
+def _isolated(tmp_path, _floor_monkeypatch):
     import kiro_crew.dashboard.revocation_gen as rg
     import kiro_crew.dashboard.token_auth as ta
 
+    monkeypatch = _floor_monkeypatch
     monkeypatch.setattr("kiro_crew.config.loader.config_dir", lambda: tmp_path)
     monkeypatch.setattr(rg, "_gen", 0)
     monkeypatch.setattr(ta, "_revoked_store_singleton", None)

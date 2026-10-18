@@ -33,7 +33,7 @@ from kiro_crew.shared_crew.work_store import WorkStore
 from kiro_crew.taskq import lanes
 from kiro_crew.taskq.store import TaskStore
 from kiro_crew.testing.clock import ManualClock
-from kiro_crew.testing.wait import await_until
+from kiro_crew.testing.wait import async_wait_until, await_until
 
 ALICE = tailnet_principal("alice@example.com", "laptop.tail.ts.net", Provenance.TAILSCALE_SERVE)
 BOB = tailnet_principal("bob@example.com", "phone.tail.ts.net", Provenance.TAILSCALE_SERVE)
@@ -145,10 +145,10 @@ async def test_drained_turn_is_charged_to_its_author_and_queues_at_the_limit(ser
 
     with turn_gate.initiated_by(ALICE.id):
         first = asyncio.create_task(turn_gate.gate_turn(_STATE, _Slot("a"), "one", {}, turn("a1")))
-    await asyncio.sleep(0.05)
+    await async_wait_until(lambda: order == ["a1:start"], describe=lambda: order)
     with turn_gate.initiated_by(ALICE.id):
         second = asyncio.create_task(turn_gate.gate_turn(_STATE, _Slot("b"), "two", {}, turn("a2")))
-    await asyncio.sleep(0.05)
+    await async_wait_until(lambda: entry.admission_pending("b"), describe=lambda: order)
     # Alice's own limit is one: her second turn waits, and is marked pending so a
     # later send cannot steer into it.
     assert order == ["a1:start"]

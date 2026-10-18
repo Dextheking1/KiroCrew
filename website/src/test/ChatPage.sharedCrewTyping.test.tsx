@@ -113,10 +113,9 @@ describe('ChatPage: Shared Crew typing signal', { timeout: 15_000 }, () => {
       const input = screen.getByLabelText('Message input') as HTMLTextAreaElement
       fireEvent.change(input, { target: { value: 'h' } })
       fireEvent.change(input, { target: { value: 'hi' } })
-      // Let the edit's own follow-up renders land before asserting.
-      await act(async () => { await new Promise(r => setTimeout(r, 50)) })
-      expect(input.value).toBe('hi')
-      expect(heard).toHaveBeenCalledTimes(2)
+      // Wait for the edit's own follow-up render to land the value before asserting.
+      await waitFor(() => expect(input.value).toBe('hi'))
+      await waitFor(() => expect(heard).toHaveBeenCalledTimes(2))
       for (const call of heard.mock.calls) expect(call).toEqual([])
     } finally {
       off()

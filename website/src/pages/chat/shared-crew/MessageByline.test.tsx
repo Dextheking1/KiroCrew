@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Provider } from 'react-redux'
 import type { ReactNode } from 'react'
@@ -26,6 +26,8 @@ function mount(node: ReactNode, slots: Array<Record<string, unknown>> | null) {
   return render(slots ? <Provider store={storeWith(slots) as any}>{tree}</Provider> : tree)
 }
 
+const bylines = () => screen.queryAllByTestId('message-byline').map(el => el.textContent)
+
 const SLOT = { key: 's1', attribution: { creator: person('p_ann', 'Ann'), availability: 'recorded', created_at: 1 } }
 
 beforeEach(() => {
@@ -43,10 +45,13 @@ beforeEach(() => {
 
 describe('MessageByline', () => {
   it('shows no label on a message from the session creator', async () => {
-    mount(<MessageByline meta={authored('p_ann', 'Ann')} slotKey="s1" />, [SLOT])
+    // A sibling message from another participant in the same session is the
+    // witness: its byline renders only once the mode and owner are known, so the
+    // creator's missing label is then a decision, not a not-yet-loaded state.
+    mount(<><MessageByline meta={authored('p_ann', 'Ann')} slotKey="s1" /><MessageByline meta={authored('p_cy', 'Cy')} slotKey="s1" /></>, [SLOT])
     await waitFor(() => expect(viewer).toHaveBeenCalled())
-    await act(() => new Promise(r => setTimeout(r, 20)))
-    expect(screen.queryByTestId('message-byline')).toBeNull()
+    await screen.findByTestId('message-byline')
+    expect(bylines()).toEqual(['Cy'])
   })
 
   it('names a message from any other participant, the viewer included', async () => {
@@ -60,11 +65,11 @@ describe('MessageByline', () => {
   })
 
   it('treats the viewer as owner in a session with no recorded creator', async () => {
-    mount(<MessageByline meta={authored('p_bob', 'Bob')} slotKey="s2" />, [{ key: 's2', attribution: null }])
-    await act(() => new Promise(r => setTimeout(r, 20)))
-    expect(screen.queryByTestId('message-byline')).toBeNull()
-    mount(<MessageByline meta={authored('p_cy', 'Cy')} slotKey="s2" />, [{ key: 's2', attribution: null }])
+    // Cy's byline needs the viewer as owner, so once it renders the viewer's own
+    // message has been judged against a known owner.
+    mount(<><MessageByline meta={authored('p_bob', 'Bob')} slotKey="s2" /><MessageByline meta={authored('p_cy', 'Cy')} slotKey="s2" /></>, [{ key: 's2', attribution: null }])
     expect((await screen.findByTestId('message-byline')).textContent).toBe('Cy')
+    expect(bylines()).toEqual(['Cy'])
   })
 
   it('renders without a store and renders nothing for an unstamped message', async () => {
