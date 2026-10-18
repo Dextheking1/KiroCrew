@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { QueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { baseRevisionFor, noteSendRevision, resetSendRaceForTests } from '../../api/sendRace'
-import { ensureSendRevision, resetSendRevisionSeedForTests } from './sendRevisionSeed'
+import { baseRevisionForPress, ensureSendRevision, resetSendRevisionSeedForTests } from './sendRevisionSeed'
+import { sharedCrewKeys } from './sharedCrewSocket'
 
 vi.mock('../../api/client', () => ({ api: { sharedCrewSendState: vi.fn() } }))
 const sendState = vi.mocked(api.sharedCrewSendState)
@@ -38,11 +40,24 @@ describe('ensureSendRevision', () => {
     expect(baseRevisionFor('s')).toBe(2)
   })
 
+  it('joins the read the open session already started instead of reading after the press', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let answer: (v: ReturnType<typeof body>) => void = () => {}
+    sendState.mockReturnValue(new Promise(resolve => { answer = resolve }))
+    // The open session's own read (the collaboration strip's query), in flight.
+    const opened = client.fetchQuery({ queryKey: sharedCrewKeys.sendState('s'), queryFn: () => api.sharedCrewSendState('s') })
+    const waiting = ensureSendRevision('s', { client })
+    answer(body(0))
+    await Promise.all([opened, waiting])
+    expect(sendState).toHaveBeenCalledTimes(1)
+    expect(baseRevisionFor('s')).toBe(0)
+  })
+
   it('stops waiting at the bound and still records a late answer', async () => {
     vi.useFakeTimers()
     let answer: (v: ReturnType<typeof body>) => void = () => {}
     sendState.mockReturnValue(new Promise(resolve => { answer = resolve }))
-    const waiting = ensureSendRevision('s', 1000)
+    const waiting = ensureSendRevision('s', { waitMs: 1000 })
     await vi.advanceTimersByTimeAsync(1000)
     await waiting
     expect(baseRevisionFor('s')).toBeUndefined()
@@ -57,5 +72,20 @@ describe('ensureSendRevision', () => {
     sendState.mockRejectedValueOnce(new Error('offline'))
     await ensureSendRevision('s')
     expect(baseRevisionFor('s')).toBeUndefined()
+  })
+})
+
+describe('baseRevisionForPress', () => {
+  it('keeps the revision known at the press even after a later frame raised it', async () => {
+    noteSendRevision('s', 2)
+    const atPress = baseRevisionFor('s')
+    noteSendRevision('s', 3)
+    expect(await baseRevisionForPress('s', atPress)).toBe(2)
+    expect(sendState).not.toHaveBeenCalled()
+  })
+
+  it('reads the session when nothing was known at the press', async () => {
+    sendState.mockResolvedValue(body(5))
+    expect(await baseRevisionForPress('s', undefined)).toBe(5)
   })
 })

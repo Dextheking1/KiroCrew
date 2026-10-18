@@ -23,6 +23,8 @@ import dashboardReducer from '../store/dashboardSlice'
 import notificationsReducer from '../store/notificationsSlice'
 import { baseRevisionFor, noteSendRevision, resetSendRaceForTests } from '../api/sendRace'
 import { resetSendRevisionSeedForTests } from '../hooks/sharedCrew/sendRevisionSeed'
+import { createChatEndpoints } from '../api/client/chat'
+import { api } from '../api/client'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent }: { data?: unknown[]; itemContent: (index: number, item: unknown) => ReactNode }) => (
@@ -31,7 +33,7 @@ vi.mock('react-virtuoso', () => ({
 }))
 const sendChat = vi.fn()
 const sendState = vi.fn()
-vi.mock('../api/client', () => ({
+vi.mock('../api/client', async () => ({
   api: {
     chatSlots: vi.fn().mockResolvedValue([]),
     chatSlotDetail: vi.fn().mockResolvedValue({ messages: [], running: false, has_more: false, total: 0 }),
@@ -78,19 +80,21 @@ Object.defineProperty(window, 'matchMedia', {
 
 import ChatPage from '../pages/ChatPage'
 
-function makeStore() {
+function makeStore({ running = false }: { running?: boolean } = {}) {
+  // The slot detail read agrees with the preloaded state, so a running turn stays running.
+  vi.mocked(api.chatSlotDetail).mockResolvedValue({ messages: [], running, has_more: false, total: 0 } as unknown as Awaited<ReturnType<typeof api.chatSlotDetail>>)
   return configureStore({
     reducer: { dashboard: dashboardReducer, chat: chatReducer, notifications: notificationsReducer },
     preloadedState: {
       dashboard: {
         status: null, connected: true, slotsLoaded: true,
-        slots: [{ key: 'slot-a', messages: 0, running: false, mode: '', pending_approval: false, waiting_for_input: false, last_activity_ts: undefined }],
+        slots: [{ key: 'slot-a', messages: 0, running, mode: '', pending_approval: false, waiting_for_input: false, last_activity_ts: undefined }],
         unreadSlots: [], refreshTrigger: 0, approvalMode: 'normal',
         subagentRunning: {}, subagentDetails: {}, subagentText: {},
       } as unknown as RootState['dashboard'],
       chat: {
         activeSlot: 'slot-a', messages: [],
-        slotRunning: false, slotStopping: false, slotState: 'idle',
+        slotRunning: running, slotStopping: false, slotState: 'idle',
         history: [], historyHasMore: false, pendingInput: '',
         subagents: {}, toolLog: [], activityOpen: false, activityTab: 'tools',
         slotHasMore: false, slotOldestIndex: 0, loadingOlder: false,
@@ -273,5 +277,84 @@ describe('a send the host refuses for another reason', { timeout: 20_000 }, () =
     await waitFor(() => expect(store.getState().chat.messages.some(m => m.role === 'error')).toBe(true))
     expect(input().value).toBe('never left')
     expect(userRow(store)).toBeUndefined()
+  })
+})
+
+/** `api.sendChat` as the app builds it, over a fetch that records each POST body
+ *  and answers with *answer*, so a test reads what reaches the wire. */
+function wireSendChat(answer: (body: Record<string, unknown>) => { status: number; body: unknown }) {
+  const posts: Record<string, unknown>[] = []
+  const endpoints = createChatEndpoints({
+    jfetch: (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      posts.push(body)
+      const a = answer(body)
+      return Promise.resolve(new Response(JSON.stringify(a.body), { status: a.status, headers: { 'Content-Type': 'application/json' } }))
+    },
+    sessionKeyHeader: {},
+    sendResponseAuthRecovery: (r: Response) => r,
+  } as unknown as Parameters<typeof createChatEndpoints>[0])
+  sendChat.mockImplementation((...a: unknown[]) => (endpoints.send.sendChat as (...b: unknown[]) => Promise<Response>)(...a))
+  return posts
+}
+
+const RACE_BODY = { error: 'someone else sent first', code: 'send_race', session_key: 'slot-a', current_revision: 1, winner: { ...WINNER, revision: 1 } }
+
+describe('what a send into an open session puts on the wire', { timeout: 20_000 }, () => {
+  it('an idle session with no revision learned yet: the send carries the revision the read answers', async () => {
+    sendState.mockResolvedValue({ schema_version: 1, session_key: 'slot-a', revision: 0, last: null })
+    const posts = wireSendChat(() => ({ status: 200, body: { ok: true } }))
+    const store = makeStore()
+    await renderPage(store)
+    await sendText('first from B')
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].base_revision).toBe(0)
+  })
+
+  it('a running session with no revision learned yet: the steer carries the revision too', async () => {
+    sendState.mockResolvedValue({ schema_version: 1, session_key: 'slot-a', revision: 0, last: null })
+    const posts = wireSendChat(() => ({ status: 200, body: { ok: true, steered: true } }))
+    const store = makeStore({ running: true })
+    await renderPage(store)
+    await sendText('first from B')
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].steer).toBe(true)
+    expect(posts[0].base_revision).toBe(0)
+  })
+
+  it('a frame for a collaborator\'s send landing after the press does not raise the base', async () => {
+    noteSendRevision('slot-a', 0)
+    let answerRead: (v: unknown) => void = () => {}
+    // Hold the POST's start behind the send's own wait: the tab knows revision 0,
+    // the person presses, then the collaborator's frame (revision 1) lands.
+    const posts = wireSendChat(() => ({ status: 409, body: RACE_BODY }))
+    sendState.mockReturnValue(new Promise(resolve => { answerRead = resolve }))
+    const store = makeStore()
+    await renderPage(store)
+    const box = screen.getByLabelText('Message input')
+    fireEvent.change(box, { target: { value: 'first from B' } })
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' })
+      noteSendRevision('slot-a', 1)
+    })
+    answerRead({ schema_version: 1, session_key: 'slot-a', revision: 1, last: null })
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].base_revision).toBe(0)
+    await waitFor(() => expect(screen.getByTestId('send-race-notice')).toBeTruthy())
+  })
+
+  it('a steer that loses the race keeps its text, drops its bubble and names who sent first', async () => {
+    noteSendRevision('slot-a', 0)
+    const posts = wireSendChat(() => ({ status: 409, body: RACE_BODY }))
+    const store = makeStore({ running: true })
+    await renderPage(store)
+    await sendText('steer from B')
+    await waitFor(() => expect(screen.getByTestId('send-race-notice')).toBeTruthy())
+    expect(posts[0].steer).toBe(true)
+    expect(posts[0].base_revision).toBe(0)
+    expect(screen.getByTestId('send-race-notice').textContent).toContain('alice sent first')
+    expect(input().value).toBe('steer from B')
+    expect(userRow(store)).toBeUndefined()
+    expect(store.getState().chat.messages.some(m => m.role === 'error')).toBe(false)
   })
 })

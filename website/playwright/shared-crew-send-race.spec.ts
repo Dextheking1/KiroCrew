@@ -36,6 +36,13 @@ test.describe('Shared Crew send race @shared-crew', () => {
     // No input lock: both compose at once.
     await composerA.fill('first from A')
     await composerB.fill('first from B')
+    // Each person sees the other typing before pressing, as two people racing
+    // do. That line is also the sign each tab has finished handling its own
+    // typing, so both presses land at the same moment; a press that lands after
+    // the tab already showed the other's accepted send is a later send, not a
+    // race, and is accepted by design.
+    await expect(a.getByTestId('presence-typing')).toContainText(/typing/)
+    await expect(b.getByTestId('presence-typing')).toContainText(/typing/)
     await Promise.all([composerA.press('Enter'), composerB.press('Enter')])
 
     // Exactly one tab shows the race notice; that tab keeps its draft.

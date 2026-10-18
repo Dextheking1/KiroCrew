@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, type MutableRefObject, type Dispatch, type SetStateAction, type RefObject } from 'react'
 import { refusalMessage } from '../shared-crew/overloadCopy'
 import { baseRevisionFor, clearSendRaceNotice, isSendRaceConflict, noteSendRevision, sendIdempotencyKey, setSendRaceNotice } from '../../../api/sendRace'
-import { ensureSendRevision } from '../../../hooks/sharedCrew/sendRevisionSeed'
+import { baseRevisionForPress } from '../../../hooks/sharedCrew/sendRevisionSeed'
 import { noteComposerSent } from '../shared-crew/typingSignal'
 import type { CapacityResponse } from '../../../api/sharedCrew'
 import type { UseMessageQuote } from '../../../chat-core/composer/useMessageQuote'
@@ -216,6 +216,10 @@ export function useComposerSend({
     // capture: the server retires it when this send's user row lands and
     // announces it with `question_card_resolved`.
     const entrySendSlot = targetSlot ?? uiSlot
+    // The send revision this press is based on (first submit wins): what this
+    // tab had seen when the person pressed, read before any await below, so a
+    // collaborator's send accepted while this one is on its way is still unseen.
+    const baseAtPress = baseRevisionFor(entrySendSlot)
     // An app's supplied text is not the human's answer to a pending card.
     // Null captures keep all composer-owned completion effects inert.
     const askAtSend = isolated ? null : capturePendingAskId(store.getState().chat.pendingQuestions, entrySendSlot)
@@ -634,9 +638,9 @@ export function useComposerSend({
       // fresh bookkeeping (fork GPT review; same rule as the text above).
       if (sentSlotTokens) mergeSlotTokens(slot, sentSlotTokens)
     }
-    // A send carries the revision it is based on (first submit wins), so one
-    // leaving before this tab has read it waits for that read, bounded.
-    await ensureSendRevision(slot)
+    // A send carries the revision it is based on (first submit wins); one
+    // pressed before this tab learned it waits for the session's read, bounded.
+    const baseRevision = await baseRevisionForPress(slot, slot === entrySendSlot ? baseAtPress : baseRevisionFor(slot))
     // The POST, its 10 s deadline, the resolves-not-rejects trap and the body
     // classification all live in the chat-core transport now; this surface
     // only decides how to REACT to the receipt. `sendTurn` never rejects.
@@ -646,7 +650,7 @@ export function useComposerSend({
       meta: metaPayload,
       steer: sendNow ? undefined : steerNow,
       colorTheme: colorThemeRef.current,
-      race: { baseRevision: baseRevisionFor(slot), sendNow, idempotencyKey: sendIdempotencyKey(sendId) },
+      race: { baseRevision, sendNow, idempotencyKey: sendIdempotencyKey(sendId) },
     })
     const { body } = receipt
     // - `transport-error`: the fetch rejected. Restore and report only when

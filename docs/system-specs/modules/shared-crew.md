@@ -735,9 +735,10 @@ Each session (keyed by slot) has a send revision, the count of accepted sends.
 `GET /api/shared-crew/send-state?session_key=` answers `{schema_version,
 session_key, revision, last}` and every accepted send pushes the same body as a
 `shared_crew.send_state` frame. A send carries the revision its tab last saw as
-`base_revision` and a per-send `Idempotency-Key`. A tab reads the send state for
-every open session whatever the capabilities, and a send whose revision is still
-unknown waits for that read (`ensureSendRevision`, up to 1.5 s), then goes without a
+`base_revision` and a per-send `Idempotency-Key`. A send's base is the revision its tab knew at the press, for a steer into a
+running turn too, so a frame that lands after the press never raises it. A tab reads
+the send state for every open session whatever the capabilities, and a send whose
+revision was unknown at the press joins that read (`ensureSendRevision`, up to 1.5 s), then goes without a
 base. A session the send itself creates starts at revision 0.
 
 `chat_send` settles the race (`_settle_send_race`) after the empty-message guard
