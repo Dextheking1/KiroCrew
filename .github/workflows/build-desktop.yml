@@ -13,6 +13,9 @@ name: Build Desktop (reusable)
 #   - Linux arm64:  shipped (AppImage + deb + rpm — Graviton, Raspberry Pi, ARM laptops)
 #   - macOS arm64-only / x86_64-only: shipped, opt-in (`mac_single_arch`).
 #     Two extra DMGs beside the universal one, each about half its size.
+#     These two KEEP the bundled KAS engine; the universal one does not, so
+#     that its update ZIP stays under the 1 GiB the macOS autoUpdater can
+#     install (#21738, and the `bundle_kas` note on that leg).
 #     nightly.yml and release.yml both turn it on. Each is signed, notarized
 #     and fed by its OWN sign-and-notarize.yml call (`mac_variant`), under
 #     feed/<channel>/<arch>/; the universal call excludes these two artifacts
@@ -210,6 +213,30 @@ jobs:
             # hides which leg the switch was meant for. `soft_fail_arm64` can
             # relax exactly the leg that says true here.
             soft_fail_eligible: false
+            # The ONE leg that ships without the bundled KAS engine, because it
+            # is the one artifact that cannot afford it. Electron's macOS
+            # autoUpdater buffers the whole update ZIP in memory, so a ZIP over
+            # 1 GiB kills the app mid-install (#21738): past 1 GiB CFData's
+            # doubling asks for 2 GiB, which PartitionAlloc refuses by design.
+            # The universal ZIP crossed that line when 0.11.0 started bundling
+            # KAS, and `kas-arm64` + `kas-x64` -- ~219 MiB compressed, both
+            # slices, since a universal build carries both -- is the largest
+            # thing removable without changing what the app DOES: KAS then
+            # comes from `kirocrew kas install`, exactly as every release up to
+            # and including v0.10.0-insider.4 already works.
+            #
+            # Only this leg. The single-arch artifacts are ~0.6 GiB with room
+            # to spare and keep the bundle (`build-desktop-mac-single-arch`
+            # below states `BUNDLE_KAS: "1"` for that reason). The cost of that
+            # asymmetry is real and belongs in release notes: two macOS
+            # artifacts of ONE version differ in whether KAS is bundled.
+            #
+            # NOT a fix for the size trend, and must not be read as one. It
+            # buys ~54 MiB of headroom against a universal ZIP that grew ~13 MB
+            # compressed in 25 hours. A release-time size budget derived from
+            # the transport limit is the actual answer; #21741 is its
+            # regression half.
+            bundle_kas: "0"
             # On macOS, `make desktop` builds the universal app by default:
             # universal Electron shell + both per-arch PBS backends in one
             # DMG. The x86_64 backend slice builds and gates under Rosetta 2,
@@ -228,6 +255,10 @@ jobs:
             # leg's package, so relaxing it would only move the same hold from
             # the aggregate result onto the gate.
             soft_fail_eligible: false
+            # Unchanged behaviour, stated rather than defaulted: Linux has no
+            # in-memory-buffering updater to outgrow, and omitting the engine
+            # here would cost a feature for no benefit.
+            bundle_kas: "1"
             # 22.04 (not 24.04) on BOTH Linux legs: the AppImage links against
             # the builder's glibc, so the runner's glibc IS the floor for every
             # user. 22.04 ships 2.35, which covers the long-support distros ARM
@@ -242,6 +273,7 @@ jobs:
             # A missing artifact failing that lane loudly is the point --
             # nothing skips quietly, and no arm64 key or feed is written.
             soft_fail_eligible: true
+            bundle_kas: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -318,6 +350,12 @@ jobs:
           # Unsigned here by design: the signing service signs the .app downstream in
           # sign-and-notarize.yml. Local certificate discovery must stay off.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # Per leg, from the matrix: "0" only on the macOS universal artifact
+          # (see the reason on that leg). build-desktop.sh defaults this to 1,
+          # so passing it explicitly changes nothing for the Linux legs and
+          # makes the one exception visible where the legs are declared instead
+          # of hiding it in a default.
+          BUNDLE_KAS: ${{ matrix.bundle_kas }}
 
       - name: Record symbols manifest
         # Records WHICH Electron build these bytes were packaged against, plus
@@ -445,6 +483,11 @@ jobs:
           UNIVERSAL: "0"
           TARGET_ARCH: ${{ matrix.target-arch }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # These two legs KEEP the bundled KAS engine, unlike the universal
+          # one. Stated rather than left to build-desktop.sh's default so the
+          # asymmetry is readable at the point where it exists: ~0.6 GiB
+          # artifacts have the room the universal one ran out of.
+          BUNDLE_KAS: "1"
 
       - name: Record symbols manifest
         shell: bash
