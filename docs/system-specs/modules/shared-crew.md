@@ -640,8 +640,8 @@ restart it counts work whose runtime is still alive, and answers `CapacityRespon
 resolved limit), `containment` (`ContainmentReport.to_dict`) and `fairness`.
 `GET /api/shared-crew/work?session_key=` lists public records (the viewer's own without
 `session_key`). The key may be a dashboard tab's slot key: it is read as the session
-that tab's turns run on (`routes_admission.work_session_keys`), so the chat's work list
-sees its own queued and running work. Every accepted-work write is pushed as a
+that tab's turns run on (`routes_admission.work_session_keys`), so the chat sees its own
+queued work. Every accepted-work write is pushed as a
 `shared_crew.work` frame carrying `slot_key`, the tab that shows the session. `POST /api/shared-crew/work/{id}/cancel {expected_revision}` cancels a
 queued or admitted record at once and moves running work to `cancelling`; a stale
 revision or a terminal record is 409 with `current`. A chat send answers 202 with
@@ -821,17 +821,23 @@ authoritative. It never resubmits a send on its own.
 
 ## 7. UI states
 
-| `OperationState` | Shown as | Draft |
+No list of accepted work renders above the composer, in any state or Crew mode. A
+running turn shows as the chat's own running turn (its stop button), and a finished
+or ended one as its transcript. The one Shared Crew work state with its own line is a
+chat turn the host holds for capacity: while the session has no queue-stack rows,
+its newest user message carries a small "Queued" line with its own Cancel (`QueuedSendLabel`), whose
+tooltip names the personal or Crew-wide limit. Cancel sends `POST
+/api/shared-crew/work/{id}/cancel` at the shown revision once; a stale click adopts
+the current record. A busy session's queued sends stay the queue stack's rows.
+
+| State | Shown as | Draft |
 |---|---|---|
-| `submitted` | sending | kept |
-| `queued` | queued, with personal or Crew-wide limit named | sent |
-| `admitted`, `running` | running | sent |
-| `cancelling` | cancelling | sent |
-| `reconciling` | checking | sent |
-| `completed` | done | cleared |
-| `rejected` | refused, with the reason and next step | restored |
+| `submitted` | the sent bubble | sent |
+| `queued` (chat turn, no queue-stack rows) | "Queued" and Cancel on the newest user bubble | sent |
+| `admitted`, `running`, `cancelling`, `reconciling` | the chat's running turn | sent |
+| `completed`, `failed`, `expired`, `cancelled`, `unknown_outcome` | the transcript; no extra label | sent |
+| `rejected` | refusal notice by the composer, with whose limit and the next step | restored |
 | lost send race (`send_race`, never an `OperationState`) | notice above the composer: "X sent first", Send now, Dismiss; no bubble or error row | restored |
-| `failed`, `expired`, `cancelled`, `unknown_outcome` | ended, with the reason | sent |
 
 ## 8. Capabilities
 
@@ -1215,8 +1221,8 @@ or `crew`) and the viewer's active and queued counts. `GET /api/shared-crew/peop
 shows each observed person's usage when admission is on. Work records carry
 `budget_key`, the opaque principal id charged.
 
-Cancellation and recovery. Cancel a queued or admitted item from the work list in the
-chat, or by the cancel route with its `expected_revision`; a stale revision answers
+Cancellation and recovery. Cancel a queued chat turn from its "Queued" line in the
+chat, or any queued or admitted item by the cancel route with its `expected_revision`; a stale revision answers
 409 with the current record. A restart reconciles accepted work before admitting new
 work (section 4): nothing that may have run is replayed, and a chat turn queued across
 a restart ends `cancelled` with its user row in the transcript to resend.
