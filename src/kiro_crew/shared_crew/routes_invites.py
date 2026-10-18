@@ -42,7 +42,9 @@ AVATAR_PATH = f"{BASE}/avatars/{{avatar_id}}"
 WS_ACTOR_KEY = "_shared_crew_actor"
 _MAX_JSON_BYTES = 16 * 1024
 _POLLER_KEY: web.AppKey[Any] = web.AppKey("shared_crew_invite_poller", object)
-_TAILNET_PROVENANCE = frozenset({Provenance.TAILSCALE_SERVE.value, Provenance.TAILSCALE_DIRECT.value})
+_TAILNET_PROVENANCE = frozenset(
+    {Provenance.TAILSCALE_SERVE.value, Provenance.TAILSCALE_DIRECT.value}
+)
 
 
 def _error(status: int, code: str, *, retry_after: float = 0.0) -> web.Response:

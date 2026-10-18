@@ -334,7 +334,9 @@ async def resend(invite_id: str, actor: str) -> None:
     try:
         await api.resend_invite(invite_id)
     except TailscaleApiError as exc:
-        await _audit_async("resend", "error", actor, email=(row or {}).get("email", ""), detail=exc.code)
+        await _audit_async(
+            "resend", "error", actor, email=(row or {}).get("email", ""), detail=exc.code
+        )
         raise
     await _audit_async("resend", "granted", actor, email=(row or {}).get("email", ""))
 
@@ -355,7 +357,9 @@ async def _default_allowlist_writer(login: str, add: bool) -> bool:
 allowlist_writer: Callable[[str, bool], Any] = _default_allowlist_writer
 
 
-def _new_accepts(state: dict[str, Any], invites: list[DeviceInvite]) -> list[tuple[DeviceInvite, dict[str, Any]]]:
+def _new_accepts(
+    state: dict[str, Any], invites: list[DeviceInvite]
+) -> list[tuple[DeviceInvite, dict[str, Any]]]:
     out = []
     for invite in invites:
         if not (invite.accepted and invite.accepted_by):
@@ -402,7 +406,9 @@ async def sync(*, actor: str = "crew", force: bool = False) -> dict[str, Any]:
             restart = bool(await allowlist_writer(by.login, True)) or restart
         except Exception as exc:  # noqa: BLE001 -- not admitted is the safe failure
             logger.warning("adding an accepted login to the allowlist failed", exc_info=True)
-            await _audit_async("accept", "error", actor, email=row.get("email", ""), detail=type(exc).__name__)
+            await _audit_async(
+                "accept", "error", actor, email=row.get("email", ""), detail=type(exc).__name__
+            )
             continue
         from kiro_crew.dashboard import tailnet_live_allowlist
 
@@ -418,7 +424,13 @@ async def sync(*, actor: str = "crew", force: bool = False) -> dict[str, Any]:
                 "accepted_at": store.now(),
             }
         )
-        await _audit_async("accept", "granted", actor, email=row.get("email", ""), detail=f"login_sha256:{store.email_hash(by.login)}")
+        await _audit_async(
+            "accept",
+            "granted",
+            actor,
+            email=row.get("email", ""),
+            detail=f"login_sha256:{store.email_hash(by.login)}",
+        )
     live_ids = {i.id for i in invites}
 
     def _mutate(s: dict[str, Any]) -> None:
@@ -431,8 +443,8 @@ async def sync(*, actor: str = "crew", force: bool = False) -> dict[str, Any]:
             row = s["invites"].get(member["invite_id"])
             if row is not None:
                 row["accepted_user_id"] = member["user_id"]
-        # An invite Tailscale no longer lists and nobody accepted has expired or
-        # was revoked in the console.
+        # An invite absent from Tailscale's list that nobody accepted has expired
+        # or was revoked in the console.
         for invite_id in list(s["invites"]):
             if invite_id not in live_ids and not s["invites"][invite_id].get("accepted_user_id"):
                 del s["invites"][invite_id]
@@ -467,7 +479,11 @@ async def revoke(invite_id: str, actor: str) -> dict[str, Any]:
     member_id = str(row.get("accepted_user_id") or "")
     if not member_id:
         member_id = next(
-            (uid for uid, m in (state.get("members") or {}).items() if m.get("invite_id") == invite_id),
+            (
+                uid
+                for uid, m in (state.get("members") or {}).items()
+                if m.get("invite_id") == invite_id
+            ),
             "",
         )
     member = (state.get("members") or {}).get(member_id)
@@ -475,7 +491,9 @@ async def revoke(invite_id: str, actor: str) -> dict[str, Any]:
         await api.delete_invite(invite_id)
     except TailscaleApiError as exc:
         if exc.code != CODE_NOT_FOUND:
-            await _audit_async("revoke", "error", actor, email=row.get("email", ""), detail=exc.code)
+            await _audit_async(
+                "revoke", "error", actor, email=row.get("email", ""), detail=exc.code
+            )
             raise
     closed = 0
     if member:
@@ -496,7 +514,10 @@ async def revoke(invite_id: str, actor: str) -> dict[str, Any]:
 
     await asyncio.to_thread(store.update_state, _mutate)
     await _audit_async(
-        "revoke", "granted", actor, email=row.get("email", ""),
+        "revoke",
+        "granted",
+        actor,
+        email=row.get("email", ""),
         detail=f"closed_connections:{closed}",
     )
     return {"revoked": invite_id, "member_removed": bool(member), "closed_connections": closed}

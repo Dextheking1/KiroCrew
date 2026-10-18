@@ -25,13 +25,17 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from kiro_crew.dashboard import tailnet, tailnet_live_allowlist
-from kiro_crew.shared_crew import routes_invites
-from kiro_crew.shared_crew import tailscale_allowlist
+from kiro_crew.shared_crew import routes_invites, tailscale_allowlist
 from kiro_crew.shared_crew import tailscale_invite_store as store
 from kiro_crew.shared_crew import tailscale_invites as invites
 from kiro_crew.shared_crew.contracts import ACTOR_REQUEST_KEY, ActorContext, Provenance, Transport
 from kiro_crew.shared_crew.identity import local_operator_principal, tailnet_principal
-from kiro_crew.shared_crew.tailscale_api import TailscaleApi, TailscaleApiError, api_key_id, basic_auth
+from kiro_crew.shared_crew.tailscale_api import (
+    TailscaleApi,
+    TailscaleApiError,
+    api_key_id,
+    basic_auth,
+)
 
 KEY = "tskey-api-kAbC123CNTRL-Zz9yYxXwWvV"
 OTHER_KEY = "tskey-api-kOther1CNTRL-Qq1"
@@ -49,13 +53,22 @@ class FakeTailscale:
         self.rate_limit = 0
         self.next_id = 100
         self.devices = [
-            {"id": "111", "nodeId": "nOther", "nodeKey": "nodekey:zzz", "addresses": ["100.64.0.9"]},
+            {
+                "id": "111",
+                "nodeId": "nOther",
+                "nodeKey": "nodekey:zzz",
+                "addresses": ["100.64.0.9"],
+            },
             {"id": "222", "nodeId": "nSelf", "nodeKey": NODE_KEY, "addresses": ["100.64.0.1"]},
         ]
 
     def accept(self, invite_id: str, user_id: str, login: str, pic: str = "") -> None:
         self.invites[invite_id]["accepted"] = True
-        self.invites[invite_id]["acceptedBy"] = {"id": user_id, "loginName": login, "profilePicUrl": pic}
+        self.invites[invite_id]["acceptedBy"] = {
+            "id": user_id,
+            "loginName": login,
+            "profilePicUrl": pic,
+        }
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -68,7 +81,9 @@ class FakeTailscale:
                 return web.json_response({"message": "unauthorized"}, status=401)
             if self.rate_limit:
                 self.rate_limit -= 1
-                return web.json_response({"message": "slow down"}, status=429, headers={"Retry-After": "42"})
+                return web.json_response(
+                    {"message": "slow down"}, status=429, headers={"Retry-After": "42"}
+                )
             return await handler(request)
 
         app.middlewares.append(auth)
@@ -240,7 +255,15 @@ async def test_connect_falls_back_to_tailnet_address(fake: FakeTailscale, monkey
 
 @pytest.mark.asyncio
 async def test_connect_never_matches_by_name(fake: FakeTailscale) -> None:
-    fake.devices = [{"id": "1", "nodeId": "nX", "nodeKey": "nodekey:q", "addresses": ["100.1.1.1"], "hostname": "example"}]
+    fake.devices = [
+        {
+            "id": "1",
+            "nodeId": "nX",
+            "nodeKey": "nodekey:q",
+            "addresses": ["100.1.1.1"],
+            "hostname": "example",
+        }
+    ]
     with pytest.raises(invites.InviteError) as err:
         await invites.connect(KEY, "owner")
     assert err.value.code == "device_not_found"
@@ -298,13 +321,22 @@ async def test_email_invites_never_allow_exit_node(fake: FakeTailscale) -> None:
 
 
 @pytest.mark.asyncio
-async def test_link_invite_single_use_by_default_and_reusable_on_request(fake: FakeTailscale) -> None:
+async def test_link_invite_single_use_by_default_and_reusable_on_request(
+    fake: FakeTailscale,
+) -> None:
     await invites.connect(KEY, "owner")
-    single = (await invites.create_invites([], multi_use=False, alias="", avatar_id="", actor="o"))[0]
+    single = (await invites.create_invites([], multi_use=False, alias="", avatar_id="", actor="o"))[
+        0
+    ]
     multi = (await invites.create_invites([], multi_use=True, alias="", avatar_id="", actor="o"))[0]
     bodies = [b for m, p, b in fake.requests if m == "POST" and p.endswith("/device-invites")]
-    assert bodies == [[{"multiUse": False, "allowExitNode": False}], [{"multiUse": True, "allowExitNode": False}]]
-    assert single["kind"] == "link" and single["invite_url"].startswith("https://login.tailscale.com/")
+    assert bodies == [
+        [{"multiUse": False, "allowExitNode": False}],
+        [{"multiUse": True, "allowExitNode": False}],
+    ]
+    assert single["kind"] == "link" and single["invite_url"].startswith(
+        "https://login.tailscale.com/"
+    )
     assert multi["multi_use"] is True
 
 
@@ -312,14 +344,20 @@ async def test_link_invite_single_use_by_default_and_reusable_on_request(fake: F
 async def test_accept_adds_login_to_allowlist_and_binds_alias_by_user_id(fake, config_file) -> None:
     await invites.connect(KEY, "owner")
     avatar = store.save_avatar(PNG)
-    made = await invites.create_invites(["ann@example.com"], multi_use=False, alias="Ann", avatar_id=avatar, actor="o")
+    made = await invites.create_invites(
+        ["ann@example.com"], multi_use=False, alias="Ann", avatar_id=avatar, actor="o"
+    )
     assert tailnet.login_allowed("ann@example.com", ()) is False
     fake.accept(made[0]["id"], "u-42", "ann@example.com", "https://pic/a.png")
     result = await invites.sync(force=True)
     assert result["admitted"] == ["ann@example.com"]
     assert result["restart_required"] is True
     member = store.load_state()["members"]["u-42"]
-    assert (member["login"], member["alias"], member["avatar_id"]) == ("ann@example.com", "Ann", avatar)
+    assert (member["login"], member["alias"], member["avatar_id"]) == (
+        "ann@example.com",
+        "Ann",
+        avatar,
+    )
     assert _logins(config_file) == [OWNER_LOGIN, "ann@example.com"]
     cfg = json.loads(config_file.read_text())["dashboard"]["tailscale"]
     assert cfg["trust_identity"] is True and cfg["enabled"] is True
@@ -332,7 +370,9 @@ async def test_accept_adds_login_to_allowlist_and_binds_alias_by_user_id(fake, c
 @pytest.mark.asyncio
 async def test_accept_from_another_account_uses_the_accepting_login(fake, config_file) -> None:
     await invites.connect(KEY, "owner")
-    made = await invites.create_invites(["ann@work.example"], multi_use=False, alias="Ann", avatar_id="", actor="o")
+    made = await invites.create_invites(
+        ["ann@work.example"], multi_use=False, alias="Ann", avatar_id="", actor="o"
+    )
     fake.accept(made[0]["id"], "u-7", "ann.personal@gmail.example")
     await invites.sync(force=True)
     assert "ann.personal@gmail.example" in _logins(config_file)
@@ -344,7 +384,9 @@ async def test_accept_from_another_account_uses_the_accepting_login(fake, config
 @pytest.mark.asyncio
 async def test_sync_is_idempotent(fake, config_file) -> None:
     await invites.connect(KEY, "owner")
-    made = await invites.create_invites(["a@example.com"], multi_use=False, alias="", avatar_id="", actor="o")
+    made = await invites.create_invites(
+        ["a@example.com"], multi_use=False, alias="", avatar_id="", actor="o"
+    )
     fake.accept(made[0]["id"], "u-1", "a@example.com")
     await invites.sync(force=True)
     again = await invites.sync(force=True)
@@ -387,7 +429,9 @@ async def test_poller_waits_longer_after_failure(fake, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_expired_invite_disappears_but_accepted_stays(fake, config_file) -> None:
     await invites.connect(KEY, "owner")
-    a, b = await invites.create_invites(["a@x.example", "b@x.example"], multi_use=False, alias="", avatar_id="", actor="o")
+    a, b = await invites.create_invites(
+        ["a@x.example", "b@x.example"], multi_use=False, alias="", avatar_id="", actor="o"
+    )
     fake.accept(a["id"], "u-a", "a@x.example")
     fake.invites.pop(b["id"])
     await invites.sync(force=True)
@@ -399,9 +443,13 @@ async def test_expired_invite_disappears_but_accepted_stays(fake, config_file) -
 
 
 @pytest.mark.asyncio
-async def test_revoke_deletes_share_removes_allowlist_and_closes_sockets(fake, config_file, monkeypatch) -> None:
+async def test_revoke_deletes_share_removes_allowlist_and_closes_sockets(
+    fake, config_file, monkeypatch
+) -> None:
     await invites.connect(KEY, "owner")
-    made = await invites.create_invites(["a@example.com"], multi_use=False, alias="A", avatar_id="", actor="o")
+    made = await invites.create_invites(
+        ["a@example.com"], multi_use=False, alias="A", avatar_id="", actor="o"
+    )
     fake.accept(made[0]["id"], "u-1", "a@example.com")
     await invites.sync(force=True)
     closed: list[str] = []
@@ -433,7 +481,9 @@ async def test_revoke_never_removes_the_owner_login(fake, config_file) -> None:
 @pytest.mark.asyncio
 async def test_revoke_tolerates_an_invite_already_gone(fake) -> None:
     await invites.connect(KEY, "owner")
-    made = await invites.create_invites(["a@example.com"], multi_use=False, alias="", avatar_id="", actor="o")
+    made = await invites.create_invites(
+        ["a@example.com"], multi_use=False, alias="", avatar_id="", actor="o"
+    )
     fake.invites.clear()
     assert (await invites.revoke(made[0]["id"], "owner"))["revoked"] == made[0]["id"]
 
@@ -463,7 +513,15 @@ async def test_socket_closer_closes_only_that_person() -> None:
 
 
 def test_allowlist_writer_keeps_owner_and_skips_duplicates() -> None:
-    data: dict[str, Any] = {"dashboard": {"tailscale": {"allowed_logins": ["Owner@Example.com"], "enabled": True, "trust_identity": True}}}
+    data: dict[str, Any] = {
+        "dashboard": {
+            "tailscale": {
+                "allowed_logins": ["Owner@Example.com"],
+                "enabled": True,
+                "trust_identity": True,
+            }
+        }
+    }
     out: dict[str, bool] = {}
     tailscale_allowlist._mutate(data, "a@x.example", True, OWNER_LOGIN, out)
     assert data["dashboard"]["tailscale"]["allowed_logins"] == ["Owner@Example.com", "a@x.example"]
@@ -475,7 +533,9 @@ def test_allowlist_writer_keeps_owner_and_skips_duplicates() -> None:
 
 def test_allowlist_writer_refuses_a_malformed_list() -> None:
     with pytest.raises(ValueError):
-        tailscale_allowlist._mutate({"dashboard": {"tailscale": {"allowed_logins": "x"}}}, "a@x", True, "", {})
+        tailscale_allowlist._mutate(
+            {"dashboard": {"tailscale": {"allowed_logins": "x"}}}, "a@x", True, "", {}
+        )
 
 
 # ── avatars, alias ──
@@ -513,7 +573,9 @@ def _route_app(principal: Any, *, user: str = "local-app") -> web.Application:
         request["app"] = ""
         request["user"] = user
         request["is_dashboard_user"] = True
-        request[ACTOR_REQUEST_KEY] = ActorContext(principal=principal, request_id="r", transport=Transport.HTTP)
+        request[ACTOR_REQUEST_KEY] = ActorContext(
+            principal=principal, request_id="r", transport=Transport.HTTP
+        )
         return await handler(request)
 
     app = web.Application(middlewares=[as_viewer])
@@ -556,7 +618,9 @@ async def test_routes_connect_invite_and_never_echo_key(fake, not_restricted) ->
         resp = await client.post(routes_invites.CREDENTIAL_PATH, json={"key": KEY})
         text = await resp.text()
         assert resp.status == 200 and KEY not in text and "Zz9" not in text
-        resp = await client.post(routes_invites.STATUS_PATH, json={"emails": [], "multi_use": False, "alias": "Ann"})
+        resp = await client.post(
+            routes_invites.STATUS_PATH, json={"emails": [], "multi_use": False, "alias": "Ann"}
+        )
         assert resp.status == 200
         resp = await client.get(routes_invites.STATUS_PATH)
         text = await resp.text()
@@ -576,7 +640,11 @@ async def test_routes_wrong_key_is_502_not_401(fake, not_restricted) -> None:
 async def test_routes_refuse_a_teammate(fake, not_restricted) -> None:
     teammate = tailnet_principal("ann@example.com", "phone", Provenance.TAILSCALE_DIRECT)
     async with TestClient(TestServer(_route_app(teammate))) as client:
-        for method, path in (("GET", routes_invites.STATUS_PATH), ("POST", routes_invites.CREDENTIAL_PATH), ("DELETE", "/api/shared-crew/tailscale/invites/1")):
+        for method, path in (
+            ("GET", routes_invites.STATUS_PATH),
+            ("POST", routes_invites.CREDENTIAL_PATH),
+            ("DELETE", "/api/shared-crew/tailscale/invites/1"),
+        ):
             resp = await client.request(method, path, json={"key": KEY})
             assert resp.status == 403, (method, path)
     assert store.credential_present() is False
@@ -599,20 +667,28 @@ async def test_routes_refuse_a_non_owner_token(fake, not_restricted) -> None:
 @pytest.mark.asyncio
 async def test_routes_avatar_upload_and_safe_serving(fake, not_restricted) -> None:
     async with TestClient(TestServer(_route_app(local_operator_principal("local-app")))) as client:
-        resp = await client.post(routes_invites.AVATARS_PATH, json={"data_base64": base64.b64encode(PNG).decode()})
+        resp = await client.post(
+            routes_invites.AVATARS_PATH, json={"data_base64": base64.b64encode(PNG).decode()}
+        )
         avatar_id = (await resp.json())["avatar_id"]
         resp = await client.get(f"/api/shared-crew/tailscale/avatars/{avatar_id}")
         assert resp.status == 200 and resp.content_type == "image/png"
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         assert "sandbox" in resp.headers["Content-Security-Policy"]
-        resp = await client.post(routes_invites.AVATARS_PATH, json={"data_base64": base64.b64encode(b"<html>").decode()})
+        resp = await client.post(
+            routes_invites.AVATARS_PATH, json={"data_base64": base64.b64encode(b"<html>").decode()}
+        )
         assert resp.status == 400
         resp = await client.post(routes_invites.AVATARS_PATH, json={"data_base64": "!!"})
         assert resp.status == 400
 
 
 def test_people_rows_show_alias_by_verified_login(fake) -> None:
-    store.update_state(lambda s: s["members"].update({"u-1": {"user_id": "u-1", "login": "ann@example.com", "alias": "Ann", "avatar_id": ""}}))
+    store.update_state(
+        lambda s: s["members"].update(
+            {"u-1": {"user_id": "u-1", "login": "ann@example.com", "alias": "Ann", "avatar_id": ""}}
+        )
+    )
     ann = tailnet_principal("ann@example.com", "phone", Provenance.TAILSCALE_SERVE).to_public_dict()
     bob = tailnet_principal("bob@example.com", "phone", Provenance.TAILSCALE_SERVE).to_public_dict()
     rows = [

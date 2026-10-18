@@ -17,7 +17,9 @@ import asyncio
 from typing import Any
 
 
-def _mutate(data: dict[str, Any], login: str, add: bool, owner_login: str, out: dict[str, bool]) -> dict[str, Any] | None:
+def _mutate(
+    data: dict[str, Any], login: str, add: bool, owner_login: str, out: dict[str, bool]
+) -> dict[str, Any] | None:
     dashboard = data.setdefault("dashboard", {})
     if not isinstance(dashboard, dict):
         raise ValueError("config section 'dashboard' is not an object")
@@ -31,7 +33,9 @@ def _mutate(data: dict[str, Any], login: str, add: bool, owner_login: str, out: 
     lower = {e.strip().lower() for e in logins}
     before = list(logins)
     if add:
-        out["restart"] = tailscale.get("enabled") is not True or tailscale.get("trust_identity") is not True
+        out["restart"] = (
+            tailscale.get("enabled") is not True or tailscale.get("trust_identity") is not True
+        )
         for wanted in (owner_login, login):
             if wanted and wanted.strip().lower() not in lower:
                 logins.append(wanted.strip())

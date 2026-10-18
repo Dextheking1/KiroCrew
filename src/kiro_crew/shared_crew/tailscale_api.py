@@ -147,9 +147,9 @@ def _parse_device(raw: object) -> Optional[Device]:
         node_id=node_id,
         legacy_id=_str(raw.get("id")),
         node_key=_str(raw.get("nodeKey")),
-        addresses=tuple(a for a in addresses if isinstance(a, str))
-        if isinstance(addresses, list)
-        else (),
+        addresses=(
+            tuple(a for a in addresses if isinstance(a, str)) if isinstance(addresses, list) else ()
+        ),
         hostname=_str(raw.get("hostname")),
     )
 
@@ -260,9 +260,7 @@ class TailscaleApi:
             if emails
             else [{"multiUse": bool(multi_use), "allowExitNode": False}]
         )
-        body = await self._call(
-            "POST", f"/device/{self._id(device_id)}/device-invites", entries
-        )
+        body = await self._call("POST", f"/device/{self._id(device_id)}/device-invites", entries)
         if not isinstance(body, list):
             raise TailscaleApiError(CODE_BAD_RESPONSE)
         return [parse_invite(r) for r in body]
