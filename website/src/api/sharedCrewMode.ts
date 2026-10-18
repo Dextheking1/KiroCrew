@@ -64,7 +64,7 @@ export function normalizeCreatorFilter(value: CreatorFilter): CreatorFilter {
   return value === 'unknown' ? 'unattributed' : value
 }
 
-const FILTER_KEY_PREFIX = 'kc.sharedCrew.creatorFilter.'
+const FILTER_KEY_PREFIX = 'kc.shared-crew.creator-filter.'
 const PRINCIPAL_ID = /^p_[a-z0-9_]{1,64}$/
 
 function storage(): Storage | null {

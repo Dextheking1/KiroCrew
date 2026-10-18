@@ -327,7 +327,7 @@ only; every session stays reachable with All.
 
 The browser shows All by default, Mine, each person seen and Unattributed, labels
 the verified viewer You, and remembers the choice per Crew in local storage keyed
-by the mode route's `crew_id` (`kc.sharedCrew.creatorFilter.<crew id>`). A
+by the mode route's `crew_id` (`kc.shared-crew.creator-filter.<crew id>`). A
 personal Crew, or one that cannot attribute, hides the control and the bylines
 (`useSharedCrewListView`, `SharedCrewBylineContext`).
 
@@ -542,8 +542,12 @@ after its own task ended and every child it started settled; a child's slot only
 after its owner (subagent manager, task runner, workflow registry) reports it
 terminal.
 
-At gateway start (`startup_check`), and in any case before the first admission or
-capacity read of a process, `ensure_ready` reconciles every non-terminal row:
+Both server entry points (the dashboard and the API-only server) register the same
+startup lifecycle. Before the socket binds, `startup_check` runs only the bounded
+containment probe and publishes the hard-mode refusal; reconciliation and the stale
+slice sweep run as a maintenance task after the socket is ready, and the shutdown
+cancels it. Before the first admission or capacity read of a process, `ensure_ready`
+reconciles every non-terminal row:
 
 | Found | Becomes | Capacity |
 |---|---|---|
@@ -605,7 +609,11 @@ delegated on the supported profile and is `unavailable`. Disk is `app_accounting
 `systemctl_untrusted`, `no_user_session`, `user_bus_unreachable`, `not_cgroup_v2`,
 `controllers_not_delegated`, `controllers_unreadable`, or `containment_probe_failed`
 when the probe or the startup check raised) into `containment_unavailable`
-(503) at admission, and `runtime_start` refuses every runtime spawn and `session/new`
+(503) at admission. In hard mode slices must be enabled and both the Crew slice and
+the principal slice must apply; an accepted turn whose slice setup fails settles
+without running instead of starting in the instance slice. In either mode, an
+unreadable or malformed `config.json` keeps the limits already in force, and a
+process with no valid limits yet fails closed. With a prerequisite missing, `runtime_start` refuses every runtime spawn and `session/new`
 with `ContainmentUnavailable` (the backstop for entry points that do not reach the
 gate). With it off the gate admits and the capacity answer says what holds.
 `hard_limits` needs fair admission, which applies the limits: with
@@ -727,7 +735,10 @@ Each session (keyed by slot) has a send revision, the count of accepted sends.
 `GET /api/shared-crew/send-state?session_key=` answers `{schema_version,
 session_key, revision, last}` and every accepted send pushes the same body as a
 `shared_crew.send_state` frame. A send carries the revision its tab last saw as
-`base_revision` and a per-send `Idempotency-Key`.
+`base_revision` and a per-send `Idempotency-Key`. A tab reads the send state for
+every open session whatever the capabilities, and a send whose revision is still
+unknown waits for that read (`ensureSendRevision`, up to 1.5 s), then goes without a
+base. A session the send itself creates starts at revision 0.
 
 `chat_send` settles the race (`_settle_send_race`) after the empty-message guard
 and before the responsive, steer, busy-queue, sub-agent-hold and new-turn branches,
@@ -964,7 +975,10 @@ from `RevocationFeed.removals_since` (read off the event loop when due) or by
 every `EnforcementPoint`: `cookie`, `websocket`, `relay_connection`, `reconnect`,
 `approval_submission` and `queued_dispatch` (`member_removed`). When the feed has not
 been read within the bound (a partition or outage), every member it admitted is refused
-`authority_stale`, so the bound holds without the feed. An unexpired offline ID token is
+`authority_stale`, so the bound holds without the feed. A configured feed whose policy cannot be built (its
+`policy()` raises or answers a policy `RevocationPolicy` rejects) is not cached: shared
+access, approvals and queued starts are refused `authority_stale` until a later read of
+the same feed builds, with no restart needed. An unexpired offline ID token is
 never proof of membership (`is_current_member` reads the enforcer). The dashboard gate
 checks the cookie, WebSocket upgrade and approval-submission points; queued work is
 rechecked in `AdmissionService._revalidate` through `queued_dispatch_recheck`, which is

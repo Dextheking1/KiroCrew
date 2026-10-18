@@ -133,7 +133,7 @@ describe('useSharedCrewListView', () => {
       { principal: human('p_b', 'Bob'), sources: ['observed'], is_viewer: false },
     ] })
     modeApi.mockRejectedValue(new Error('mode route missing'))
-    window.localStorage.setItem('kc.sharedCrew.creatorFilter.crew-a', 'mine')
+    window.localStorage.setItem('kc.shared-crew.creator-filter.crew-a', 'mine')
     const W = wrapper()
     function Probe() {
       const view = useSharedCrewListView()
