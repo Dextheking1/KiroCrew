@@ -17,6 +17,7 @@ from kiro_crew.shared_crew import (
     routes_capabilities,
     routes_collab,
     routes_identity,
+    routes_invites,
 )
 
 
@@ -34,3 +35,18 @@ def register(app: web.Application) -> None:
     app.router.add_get(
         "/api/shared-crew/capabilities", routes_capabilities.api_shared_crew_capabilities
     )
+    app.router.add_get("/api/shared-crew/tailscale/invites", routes_invites.api_status)
+    app.router.add_post("/api/shared-crew/tailscale/invites", routes_invites.api_create)
+    app.router.add_delete(
+        "/api/shared-crew/tailscale/invites/{invite_id}", routes_invites.api_revoke
+    )
+    app.router.add_post(
+        "/api/shared-crew/tailscale/invites/{invite_id}/resend", routes_invites.api_resend
+    )
+    app.router.add_post("/api/shared-crew/tailscale/credential", routes_invites.api_connect)
+    app.router.add_delete("/api/shared-crew/tailscale/credential", routes_invites.api_disconnect)
+    app.router.add_post("/api/shared-crew/tailscale/avatars", routes_invites.api_upload_avatar)
+    app.router.add_get(
+        "/api/shared-crew/tailscale/avatars/{avatar_id}", routes_invites.api_avatar
+    )
+    routes_invites.install_poller(app)

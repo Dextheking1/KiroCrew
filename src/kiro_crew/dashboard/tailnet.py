@@ -1402,11 +1402,18 @@ def login_allowed(login: str, allowed_logins: tuple[str, ...]) -> bool:
     """Whether *login* is on the operator's allowlist. Case-insensitive.
 
     Deny-by-default: an empty allowlist allows no one (and also disables
-    resolution upstream — see :func:`_forwarded_peer_candidate`).
+    resolution upstream — see :func:`_forwarded_peer_candidate`). A login an
+    in-Crew invite granted or revoked since startup follows
+    :mod:`kiro_crew.dashboard.tailnet_live_allowlist`.
     """
+    from kiro_crew.dashboard import tailnet_live_allowlist
+
     candidate = login.strip().lower()
     if not candidate:
         return False
+    live = tailnet_live_allowlist.decision(candidate)
+    if live is not None:
+        return live
     return any(candidate == entry.strip().lower() for entry in allowed_logins if entry.strip())
 
 
