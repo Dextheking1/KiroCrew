@@ -20,7 +20,7 @@ import { sharedCrewKeys } from './sharedCrewSocket'
 /** How long a send waits for the session's send-state read (ms). */
 export const SEND_REVISION_SEED_WAIT_MS = 1500
 
-async function readSendRevision(client: QueryClient, sessionKey: string): Promise<void> {
+async function readSendRevision(client: QueryClient, sessionKey: string): Promise<number | undefined> {
   try {
     // staleTime 0: an answer already cached is re-read, while a read in flight
     // is joined rather than repeated.
@@ -30,23 +30,31 @@ async function readSendRevision(client: QueryClient, sessionKey: string): Promis
       staleTime: 0,
       retry: false,
     })
-    if (state) noteSendRevision(sessionKey, state.revision)
+    if (!state) return undefined
+    noteSendRevision(sessionKey, state.revision)
+    return Number.isInteger(state.revision) && state.revision >= 0 ? state.revision : undefined
   } catch {
     // No revision learned: the send goes without a base.
+    return undefined
   }
 }
 
 /** Resolve once *sessionKey*'s send revision is known, or the read failed, or
- *  *waitMs* passed. Never rejects. */
+ *  *waitMs* passed, with the revision that read answered (`undefined` when it
+ *  was already known, failed, or ran out of time). Never rejects. */
 export async function ensureSendRevision(
   sessionKey: string | null | undefined,
   { waitMs = SEND_REVISION_SEED_WAIT_MS, client = appQueryClient }: { waitMs?: number; client?: QueryClient } = {},
-): Promise<void> {
-  if (!sessionKey || baseRevisionFor(sessionKey) !== undefined) return
+): Promise<number | undefined> {
+  if (!sessionKey || baseRevisionFor(sessionKey) !== undefined) return undefined
+  return boundedRead(sessionKey, waitMs, client)
+}
+
+async function boundedRead(sessionKey: string, waitMs: number, client: QueryClient): Promise<number | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined
-  const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, waitMs) })
+  const bound = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), waitMs) })
   try {
-    await Promise.race([readSendRevision(client, sessionKey), bound])
+    return await Promise.race([readSendRevision(client, sessionKey), bound])
   } finally {
     clearTimeout(timer)
   }
@@ -63,8 +71,10 @@ export async function baseRevisionForPress(
   options?: { waitMs?: number; client?: QueryClient },
 ): Promise<number | undefined> {
   if (atPress !== undefined) return atPress
-  await ensureSendRevision(sessionKey, options)
-  return baseRevisionFor(sessionKey)
+  if (!sessionKey) return undefined
+  // The base is the read's own answer, never the shared store afterwards: a
+  // frame for a send accepted after the press may already have raised that.
+  return boundedRead(sessionKey, options?.waitMs ?? SEND_REVISION_SEED_WAIT_MS, options?.client ?? appQueryClient)
 }
 
 /** Test seam: forget every send-state read on the app's query client. */

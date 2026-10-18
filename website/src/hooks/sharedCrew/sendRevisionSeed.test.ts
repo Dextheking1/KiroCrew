@@ -88,4 +88,23 @@ describe('baseRevisionForPress', () => {
     sendState.mockResolvedValue(body(5))
     expect(await baseRevisionForPress('s', undefined)).toBe(5)
   })
+
+  it('bases an unknown press on its read even when a frame lands while the read is pending', async () => {
+    let answer: (v: ReturnType<typeof body>) => void = () => {}
+    sendState.mockReturnValue(new Promise(resolve => { answer = resolve }))
+    const base = baseRevisionForPress('s', undefined)
+    noteSendRevision('s', 1)
+    answer(body(0))
+    expect(await base).toBe(0)
+  })
+
+  it('bases an unknown press on its read even when a frame landed before the helper ran', async () => {
+    let answer: (v: ReturnType<typeof body>) => void = () => {}
+    sendState.mockReturnValue(new Promise(resolve => { answer = resolve }))
+    const atPress = baseRevisionFor('s')
+    noteSendRevision('s', 1)
+    const base = baseRevisionForPress('s', atPress)
+    answer(body(0))
+    expect(await base).toBe(0)
+  })
 })
