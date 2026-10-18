@@ -9,7 +9,7 @@
  *
  *   SHARED_CREW_STATE_A=<state-a.json> SHARED_CREW_STATE_B=<state-b.json> \
  *   SHARED_CREW_SESSION=<slot key> \
- *   npx playwright test shared-crew-collab --grep @shared-crew --grep-invert '^$'
+ *   PLAYWRIGHT_RUN_SHARED_CREW=1 npx playwright test shared-crew-collab
  *
  * Every wait is on a visible state, never a timer.
  */
@@ -26,7 +26,7 @@ async function open(browser: Browser, storageState: string): Promise<Page> {
   return page
 }
 
-test.describe('Shared Crew collaboration @shared-crew @needs-live-agent', () => {
+test.describe('Shared Crew collaboration @shared-crew', () => {
   test.skip(!STATE_A || !STATE_B || !SESSION, 'needs two principals and a session')
 
   test('each person sees the other, typing locks nobody, one approval wins', async ({ browser }) => {

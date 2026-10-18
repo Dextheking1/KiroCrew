@@ -18,7 +18,7 @@ import { consoleUrl, type CrewModeResponse } from '../../api/sharedCrewMode'
 import { SETUP_PATH_ORDER } from '../../api/sharedCrewUi'
 import { SettingsCard, SettingsSection } from '../../components/settings'
 import { Badge, Btn, EmptyState } from '../../components/ui'
-import { MobileConnectDialog, useMobileConnect } from '../../shell/nav/mobileConnect'
+import { MobileConnectDialog, useMobileConnect } from '../../components/mobileConnect'
 import { i18nT } from '../../i18n/t'
 
 /** Fixed public documentation pages, never configurable. */

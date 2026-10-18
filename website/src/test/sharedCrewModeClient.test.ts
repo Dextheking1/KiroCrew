@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createSharedCrewEndpoints } from './sharedCrew'
-import type { ClientTransport } from './transport'
+import { createSharedCrewEndpoints } from '../api/client/sharedCrew'
+import type { ClientTransport } from '../api/client/transport'
 
 function transport(status: number, body: unknown = {}): ClientTransport {
   const j = vi.fn(async (r: Response) => {

@@ -61,6 +61,7 @@ from kiro_crew.shared_crew.enterprise import (
 from kiro_crew.shared_crew.enterprise_revocation import (
     EnforcementPoint,
     RevocationEnforcer,
+    UnavailableRevocationEnforcer,
     install_enforcer,
 )
 
@@ -161,8 +162,11 @@ class EnterpriseGates:
                     crew_id=crew_id,
                     now=time.time() if now is None else now,
                 )
-            except Exception:  # noqa: BLE001 -- a feed with no policy enforces nothing
+            except Exception:  # noqa: BLE001 -- a composed but unreadable feed refuses access
                 logger.warning("revocation feed refused", exc_info=True)
+                self._revocation = UnavailableRevocationEnforcer(
+                    None, crew_id=crew_id, now=time.time() if now is None else now
+                )
         self._sign_in = seams.credential_verifier is not None or seams.sign_in is not None
 
     @property
@@ -299,7 +303,9 @@ def current_gates(resolver: Callable[[], EnterpriseSeams] = resolve_enterprise) 
         if _CACHED is not None and _CACHED[0] == key:
             return _CACHED[1]
         gates = EnterpriseGates(seams)
-        _CACHED = (key, gates)
+        _CACHED = (
+            None if isinstance(gates.revocation, UnavailableRevocationEnforcer) else (key, gates)
+        )
         install_enforcer(gates.revocation)
         return gates
 
@@ -391,8 +397,14 @@ def make_enterprise_gate_middleware(
 SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 10
 
 
-def install_lifecycle(app: web.Application) -> None:
-    """Wire admission before traffic on both dashboard and API-only gateways."""
+def install_lifecycle(app: web.Application) -> Callable[[], None]:
+    """Wire the safety probe before traffic; return the post-bind maintenance starter.
+
+    Reconciliation and orphan cleanup scale with durable state, so neither runs
+    in aiohttp's pre-bind startup hooks. Admission and capacity reads still await
+    ``ensure_ready`` themselves, sharing its reconciliation lock with maintenance.
+    """
+    maintenance: asyncio.Task[None] | None = None
 
     async def _shared_crew_startup(app_: web.Application) -> None:
         # Defer admission imports until startup; registering hooks performs no I/O.
@@ -402,10 +414,32 @@ def install_lifecycle(app: web.Application) -> None:
         wiring.install(app_["state"])
         await startup_check()
 
+    def start_maintenance() -> None:
+        nonlocal maintenance
+        from kiro_crew.shared_crew.admission_gate import installed_service
+
+        service = installed_service()
+        if maintenance is not None or service is None or not service.enabled:
+            return
+
+        async def maintain() -> None:
+            try:
+                await service.ensure_ready()
+                released = await service.release_stale_slices()
+                if released:
+                    logger.info("shared crew: released %d idle principal slice(s)", released)
+            except Exception:  # noqa: BLE001 -- admission keeps its own readiness fence
+                logger.warning("shared crew: startup maintenance failed", exc_info=True)
+
+        maintenance = asyncio.create_task(maintain())
+
     async def _shared_crew_cleanup(_app: web.Application) -> None:
         # Cleanup is optional until startup has built an admission service.
         from kiro_crew.shared_crew.admission_gate import shutdown_cleanup
 
+        if maintenance is not None:
+            maintenance.cancel()
+            await asyncio.gather(maintenance, return_exceptions=True)
         try:
             await asyncio.wait_for(shutdown_cleanup(), timeout=SHUTDOWN_CLEANUP_TIMEOUT_SECONDS)
         except Exception:  # noqa: BLE001 -- cleanup never blocks the stop
@@ -413,6 +447,7 @@ def install_lifecycle(app: web.Application) -> None:
 
     app.on_startup.append(_shared_crew_startup)
     app.on_cleanup.append(_shared_crew_cleanup)
+    return start_maintenance
 
 
 def install(app: web.Application) -> None:

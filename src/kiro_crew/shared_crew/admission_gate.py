@@ -1749,15 +1749,6 @@ async def startup_check() -> _containment.ContainmentReport | None:
             )
             return report
         report = await service.containment_report(refresh=True)
-        # Reconcile durable work now, so capacity reads the truth from the start,
-        # and release the per-principal slices an earlier process left behind.
-        await service.ensure_ready()
-        try:
-            released = await service.release_stale_slices()
-            if released:
-                logger.info("shared crew: released %d idle principal slice(s)", released)
-        except Exception:  # noqa: BLE001 -- cleanup never stops the gateway
-            logger.debug("shared crew: stale slice cleanup failed", exc_info=True)
     except Exception as exc:  # noqa: BLE001 -- fail closed below, never stop the gateway
         logger.warning("shared crew: startup containment check raised", exc_info=True)
         report = _containment.failed_report(

@@ -1805,7 +1805,7 @@ async def start_dashboard(
 
     from kiro_crew.shared_crew import enterprise_gates
 
-    enterprise_gates.install_lifecycle(app)
+    start_shared_crew_maintenance = enterprise_gates.install_lifecycle(app)
 
     # Register built-in apps (idempotent — surfaces baked-in features in App Store).
     # Runs on the executor: escalation cleanup can traverse/delete legacy app
@@ -2119,6 +2119,7 @@ async def start_dashboard(
     # The listener is up -- keep it up. One failed accept() on Windows would
     # otherwise close it for the life of the process (see listener_guard).
     _arm_listener_guard(state, runner, site)
+    start_shared_crew_maintenance()
     # One-time prune of the crewmates an enrol-on-mount agent sync generated
     # from the user's own specs (see crewmate_prune_migration). Kicked here,
     # right after the bind, as a tracked background task -- its cost scales
@@ -2661,7 +2662,7 @@ async def start_api_server(
     from kiro_crew.shared_crew import enterprise_gates
 
     enterprise_gates.install(app)
-    enterprise_gates.install_lifecycle(app)
+    start_shared_crew_maintenance = enterprise_gates.install_lifecycle(app)
     _register_mcp_routes(app)
 
     # Probe parity with the full dashboard server. Headless gateways are often
@@ -2717,6 +2718,7 @@ async def start_api_server(
     # Same listener guard as start_dashboard: a headless gateway loses its
     # listener to a failed accept() exactly the same way.
     _arm_listener_guard(state, runner, site)
+    start_shared_crew_maintenance()
     # Export the actually-bound port for child processes (parity with
     # start_dashboard — headless gateways spawn the same MCP stdio children).
     _export_bound_port(runner, port)

@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, type MutableRefObject, type Dispatch, type SetStateAction, type RefObject } from 'react'
 import { refusalMessage } from '../shared-crew/overloadCopy'
-import { baseRevisionFor, clearSendRaceNotice, isSendRaceConflict, sendIdempotencyKey, setSendRaceNotice } from '../../../api/sendRace'
+import { baseRevisionFor, clearSendRaceNotice, isSendRaceConflict, noteSendRevision, sendIdempotencyKey, setSendRaceNotice } from '../../../api/sendRace'
+import { ensureSendRevision } from '../../../hooks/sharedCrew/sendRevisionSeed'
 import type { CapacityResponse } from '../../../api/sharedCrew'
 import type { UseMessageQuote } from '../../../chat-core/composer/useMessageQuote'
 import { store, type AppDispatch } from '../../../store'
@@ -529,6 +530,8 @@ export function useComposerSend({
       }
       const result = created
       slot = result.key;
+      // A session this send just created has accepted nothing yet.
+      noteSendRevision(slot, 0)
       if (pendingProjectRef.current) {
         await api.chatSlotProject(result.key, pendingProjectRef.current).catch(e => {
           // eslint-disable-next-line no-console -- surface project-assign failures for debugging
@@ -629,6 +632,9 @@ export function useComposerSend({
       // fresh bookkeeping (fork GPT review; same rule as the text above).
       if (sentSlotTokens) mergeSlotTokens(slot, sentSlotTokens)
     }
+    // A send carries the revision it is based on (first submit wins), so one
+    // leaving before this tab has read it waits for that read, bounded.
+    await ensureSendRevision(slot)
     // The POST, its 10 s deadline, the resolves-not-rejects trap and the body
     // classification all live in the chat-core transport now; this surface
     // only decides how to REACT to the receipt. `sendTurn` never rejects.
@@ -664,6 +670,10 @@ export function useComposerSend({
     // slot-keyed inverse of the `startLocalTurn` above; `appendSlotMessage`
     // routes to the slot's own list, the active one included).
     const failLocalTurn = (message: ChatMessage) => {
+      // Nothing of this send was accepted, so its bubble goes: the draft comes
+      // back to the composer (or, for an app payload, into the error notice)
+      // and the error row says what happened.
+      if (slot) dispatch(resolveOptimisticSteer({ slot, sendId, outcome: 'queued' }))
       if (isolated) {
         if (slot) dispatch(endLocalTurn(slot))
         setActionError({ message: i18nT('appChatLaunch.unsent', { error: message.content, message: raw }), preserveOnSwitch: true })

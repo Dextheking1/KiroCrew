@@ -334,6 +334,21 @@ class RevocationEnforcer:
         return all(d <= bound for d in self.measured_propagation().values())
 
 
+class UnavailableRevocationEnforcer(RevocationEnforcer):
+    """Refuse access while a composed feed cannot supply a valid policy.
+
+    This enforcer has no invented propagation bound. It stays installed until
+    the gateway can build the authority's real enforcer on a later request.
+    """
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    def check(self, point: EnforcementPoint, principal_id: str, now: float) -> RevocationDecision:
+        return RevocationDecision(RevocationReason.AUTHORITY_STALE, point)
+
+
 _ACTIVE: Optional[RevocationEnforcer] = None
 _ACTIVE_LOCK = threading.Lock()
 

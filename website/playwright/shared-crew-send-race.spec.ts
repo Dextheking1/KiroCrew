@@ -8,7 +8,7 @@
  *
  *   SHARED_CREW_STATE_A=<state-a.json> SHARED_CREW_STATE_B=<state-b.json> \
  *   SHARED_CREW_SESSION=<idle slot key> \
- *   npx playwright test shared-crew-send-race --grep @shared-crew --grep-invert '^$'
+ *   PLAYWRIGHT_RUN_SHARED_CREW=1 npx playwright test shared-crew-send-race
  *
  * Every wait is on a visible state, never a timer.
  */
@@ -25,7 +25,7 @@ async function open(browser: Browser, storageState: string): Promise<Page> {
   return page
 }
 
-test.describe('Shared Crew send race @shared-crew @needs-live-agent', () => {
+test.describe('Shared Crew send race @shared-crew', () => {
   test.skip(!STATE_A || !STATE_B || !SESSION, 'needs two principals and an idle session')
 
   test('one send wins, the other keeps its draft and can Send now', async ({ browser }) => {
@@ -41,8 +41,11 @@ test.describe('Shared Crew send race @shared-crew @needs-live-agent', () => {
     // Exactly one tab shows the race notice; that tab keeps its draft.
     const noticeA = a.getByTestId('send-race-notice')
     const noticeB = b.getByTestId('send-race-notice')
-    await expect(noticeA.or(noticeB)).toBeVisible()
-    const aLost = await noticeA.isVisible()
+    // A locator belongs to one page, so poll both pages for the one notice.
+    await expect
+      .poll(async () => (await noticeA.count()) + (await noticeB.count()))
+      .toBe(1)
+    const aLost = (await noticeA.count()) === 1
     const loser = aLost ? a : b
     const winner = aLost ? b : a
     await expect(winner.getByTestId('send-race-notice')).toHaveCount(0)

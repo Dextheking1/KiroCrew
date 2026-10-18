@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../../api/client'
 import { ALL_UNAVAILABLE } from '../../../api/sharedCrewUi'
@@ -36,7 +36,8 @@ function Probe({ modeSettles }: { modeSettles: boolean }) {
   const people = useSharedCrewPeople(attributes)
   const viewerQuery = useSharedCrewViewer()
   const reads = attributes ? [caps.isSuccess, people.isSuccess, viewerQuery.isSuccess, !modeSettles || mode.isSuccess] : [caps.isSuccess, viewerQuery.isSuccess]
-  return reads.every(Boolean) ? <span data-testid="settled" /> : null
+  if (!reads.every(Boolean)) return null
+  return <><span data-testid="settled" />{mode.isError && <span data-testid="mode-failed" />}</>
 }
 
 function mount(modeSettles = true) {
@@ -71,6 +72,20 @@ describe('MessageByline follows the Crew mode', () => {
     modeApi.mockResolvedValue(modeBody('network'))
     mount()
     await screen.findByTestId('settled')
+    expect(screen.queryByTestId('message-byline')).toBeNull()
+  })
+
+  it('shows no byline when the mode read fails, even with a setup path available', async () => {
+    caps.mockResolvedValue({ ...ALL_UNAVAILABLE, attribution: 'available', setup_paths: {
+      tailscale: { state: 'available', reason: '' },
+      kiro_login: { state: 'unavailable', reason: 'not_in_this_build' },
+      systems_manager: { state: 'unavailable', reason: 'not_in_this_build' },
+    } })
+    modeApi.mockRejectedValue(new Error('mode unreadable'))
+    mount(false)
+    await screen.findByTestId('settled')
+    await waitFor(() => expect(modeApi).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByTestId('mode-failed')).toBeTruthy())
     expect(screen.queryByTestId('message-byline')).toBeNull()
   })
 

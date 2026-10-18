@@ -22,6 +22,7 @@ import chatReducer from '../store/chatSlice'
 import dashboardReducer from '../store/dashboardSlice'
 import notificationsReducer from '../store/notificationsSlice'
 import { baseRevisionFor, noteSendRevision, resetSendRaceForTests } from '../api/sendRace'
+import { resetSendRevisionSeedForTests } from '../hooks/sharedCrew/sendRevisionSeed'
 
 vi.mock('react-virtuoso', () => ({
   Virtuoso: ({ data, itemContent }: { data?: unknown[]; itemContent: (index: number, item: unknown) => ReactNode }) => (
@@ -29,11 +30,13 @@ vi.mock('react-virtuoso', () => ({
   ),
 }))
 const sendChat = vi.fn()
+const sendState = vi.fn()
 vi.mock('../api/client', () => ({
   api: {
     chatSlots: vi.fn().mockResolvedValue([]),
     chatSlotDetail: vi.fn().mockResolvedValue({ messages: [], running: false, has_more: false, total: 0 }),
     sendChat: (...a: unknown[]) => sendChat(...a),
+    sharedCrewSendState: (...a: unknown[]) => sendState(...a),
     chatHistory: vi.fn().mockResolvedValue({ sessions: [] }),
     models: vi.fn().mockResolvedValue([]),
     agents: vi.fn().mockResolvedValue([]),
@@ -143,7 +146,11 @@ beforeEach(() => {
   sessionStorage.clear()
   localStorage.clear()
   sendChat.mockReset()
+  sendState.mockReset()
+  // A gateway without the send-state route by default: the read answers nothing.
+  sendState.mockResolvedValue(null)
   resetSendRaceForTests()
+  resetSendRevisionSeedForTests()
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -211,5 +218,60 @@ describe('a send that loses a send race', { timeout: 20_000 }, () => {
     await waitFor(() => expect(store.getState().chat.messages.some(m => m.role === 'error')).toBe(true))
     expect(screen.queryByTestId('send-race-notice')).toBeNull()
     expect(input().value).toBe('over the limit')
+  })
+})
+
+describe('the send revision a send is based on', { timeout: 20_000 }, () => {
+  it('is read for an open session on a Crew reporting no presence or attribution', async () => {
+    sendState.mockResolvedValue({ schema_version: 1, session_key: 'slot-a', revision: 5, last: null })
+    const store = makeStore()
+    await renderPage(store)
+    await waitFor(() => expect(baseRevisionFor('slot-a')).toBe(5))
+    expect(sendState).toHaveBeenCalledWith('slot-a')
+  })
+
+  it('a first send waits for the read and carries the revision it answers', async () => {
+    let answer: (v: unknown) => void = () => {}
+    sendState.mockReturnValue(new Promise(resolve => { answer = resolve }))
+    sendChat.mockResolvedValue({ ok: true, json: () => Promise.resolve({ ok: true }) })
+    const store = makeStore()
+    await renderPage(store)
+    await sendText('first')
+    expect(sendChat).not.toHaveBeenCalled()
+    await act(async () => { answer({ schema_version: 1, session_key: 'slot-a', revision: 2, last: null }) })
+    await waitFor(() => expect(sendChat).toHaveBeenCalledTimes(1))
+    expect((sendChat.mock.calls[0][7] as RaceArg).baseRevision).toBe(2)
+  })
+
+  it('a failed read lets the send go without a base', async () => {
+    sendState.mockRejectedValue(new Error('offline'))
+    sendChat.mockResolvedValue({ ok: true, json: () => Promise.resolve({ ok: true }) })
+    const store = makeStore()
+    await renderPage(store)
+    await sendText('still sends')
+    await waitFor(() => expect(sendChat).toHaveBeenCalledTimes(1))
+    expect((sendChat.mock.calls[0][7] as RaceArg).baseRevision).toBeUndefined()
+  })
+})
+
+describe('a send the host refuses for another reason', { timeout: 20_000 }, () => {
+  it('drops its bubble while the draft comes back', async () => {
+    sendChat.mockResolvedValue({ ok: false, status: 503, json: () => Promise.resolve({ error: 'cannot run new work safely', code: 'containment_unavailable' }) })
+    const store = makeStore()
+    await renderPage(store)
+    await sendText('send under hard limits')
+    await waitFor(() => expect(store.getState().chat.messages.some(m => m.role === 'error')).toBe(true))
+    expect(input().value).toBe('send under hard limits')
+    expect(userRow(store)).toBeUndefined()
+  })
+
+  it('drops its bubble on a transport error while the draft comes back', async () => {
+    sendChat.mockRejectedValue(new TypeError('Failed to fetch'))
+    const store = makeStore()
+    await renderPage(store)
+    await sendText('never left')
+    await waitFor(() => expect(store.getState().chat.messages.some(m => m.role === 'error')).toBe(true))
+    expect(input().value).toBe('never left')
+    expect(userRow(store)).toBeUndefined()
   })
 })

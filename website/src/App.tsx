@@ -42,7 +42,7 @@ import { Rocket, Bell, Code, RefreshCw, Package, Download, Hammer, XCircle, Chec
 import { useFirstRunChapters, FirstRunChapters } from './shell/boot/firstRun'
 import ErrorNotice from './components/ErrorNotice'
 import { PREVIEW_EXPAND_EVENT } from './components/WebPreviewPanel'
-import { useMobileConnect, MobileConnectDialog } from './shell/nav/mobileConnect'
+import { useMobileConnect, MobileConnectDialog } from './components/mobileConnect'
 import { useMayLeaveForNavigation, useIsCurrentUrl } from './components/NavigationLeaveGuard'
 import { motion, useMotionValue, useTransform } from 'framer-motion'
 import { useDrawerSwipe, animateDrawer, registerDrawerTargets, takeOverDrawer, safeAreaLeft } from './hooks/useDrawerSwipe'

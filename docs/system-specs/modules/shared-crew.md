@@ -227,9 +227,13 @@ re-checks it. The Tailscale and Session Manager links are fixed public
 documentation pages.
 
 AWS Systems Manager governs its path through IAM and Session Manager. A port-forwarded
-Session Manager connection reaches the Crew as a local connection, and no verified
-connection-to-principal binding exists in this build, so its work is Unattributed.
-Identity is never inferred from the OS user, a loopback source or a typed label.
+Session Manager connection arrives on loopback with no forwarding header, so
+`derive_principal` cannot tell it from the operator's own browser: with a dashboard
+token it is the local operator, and its work is attributed to whoever runs the Crew.
+No verified connection-to-principal binding exists for Session Manager in this build,
+so Session Manager access to the host is the operator's own identity; People says so.
+Identity is never inferred from the OS user or a typed label, and loopback alone
+yields the local operator only together with a dashboard token.
 
 People has no invite, revoke or role control in any mode.
 

@@ -36,8 +36,10 @@ export function SessionCollabStrip({ sessionKey, typing }: { sessionKey: string 
   const work = useSessionWork(sessionKey, queueOn)
   const capacity = useSharedCrewCapacity(queueOn)
   const decisions = useSessionDecisions(sessionKey, attributionOn)
-  // The revision this tab's next send is based on (first submit wins).
-  useSessionSendState(sessionKey, presenceOn || attributionOn)
+  // The revision this tab's next send is based on (first submit wins). Read for
+  // every open session: the host settles every send against it, whichever
+  // capabilities the Crew reports, and app or automation sends count too.
+  useSessionSendState(sessionKey)
   const { noteTyping } = usePresenceReporter(sessionKey, presenceOn)
   useEffect(() => typing?.subscribe(noteTyping), [typing, noteTyping])
 

@@ -34,12 +34,13 @@ function useTeamAttribution(): boolean {
   const attributes = capabilityUsable(capabilities.attribution)
   const modeQuery = useSharedCrewMode(attributes)
   const people = useSharedCrewPeople(attributes)
-  const modeKnown = attributes && (modeQuery.isSuccess || modeQuery.isError)
+  // An unreadable mode is an error, not a guessed mode: no bylines until a read
+  // succeeds, the same as the session list.
   const mode = effectiveMode(modeQuery.data, {
     teamPath: sharedAccessConfigured(capabilities),
     othersSeen: (people.data?.people ?? []).some(row => !row.is_viewer),
   })
-  return modeKnown && !hidesTeamAttribution(mode)
+  return attributes && modeQuery.isSuccess && !hidesTeamAttribution(mode)
 }
 
 function SenderLine({ name }: { name: string }) {

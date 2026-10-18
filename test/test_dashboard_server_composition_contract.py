@@ -1412,6 +1412,7 @@ _API_CHAIN = (
     ("middleware", "token_auth_middleware.<locals>."),
     ("sel_audit_middleware", "_install_api_middlewares.<locals>."),
     ("slot_ownership_middleware", "slot_ownership_middleware"),
+    ("enterprise_gate_middleware", "make_enterprise_gate_middleware.<locals>."),
     ("_workflow_ready", "_register_workflow_lifecycle.<locals>."),
 )
 
@@ -1419,7 +1420,6 @@ _API_CHAIN = (
 #: route slices and handler modules register are not the server's and are left out.
 _DASHBOARD_HOOKS = {
     "on_startup": (
-        "_shared_crew_startup",
         "_hooks_startup",
         "_contrib_startup",
         "_stt_startup",
@@ -1430,7 +1430,6 @@ _DASHBOARD_HOOKS = {
     "on_cleanup": (
         "_tunnel_shutdown",
         "_status_sink_shutdown",
-        "_shared_crew_cleanup",
         "_hooks_shutdown",
         "_contrib_shutdown",
         "_watchdog_shutdown",
@@ -1506,7 +1505,7 @@ _DASHBOARD_BOOT = tuple("""
     _dist_file_handler _dist_file_handler _dist_file_handler discover_app_window_entries
     register_app_window_paths _install_asset_cache_control_finalizer
     tailnet_effective_allowed_logins tailnet_identity_unknown degraded_config_files
-    build_allowed_origins _make_host_validation_middleware _make_csrf_middleware
+    tailnet_identity_unknown build_allowed_origins _make_host_validation_middleware _make_csrf_middleware
     _make_deny_audit_middleware resolve_dashboard_host build_host_canonical_redirect
     warm_auth_singletons warm_sel_singleton make_route_latency_middleware
     _mixed_internal_api_paths safe_context_call current_context token_auth_middleware
