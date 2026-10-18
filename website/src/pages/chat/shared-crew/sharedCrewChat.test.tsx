@@ -3,16 +3,31 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AcceptedWork, CapacityResponse, PresenceEntry, SharedDecision } from '../../../api/sharedCrew'
 import { api } from '../../../api/client'
-import { WorkStatusList } from './WorkStatusList'
+import { ALL_UNAVAILABLE } from '../../../api/sharedCrewUi'
+import UserMessage from '../UserMessage'
+import { QueuedSendLabel, queuedChatTurn } from './QueuedSendLabel'
+import { SessionCollabStrip } from './SessionCollabStrip'
 import { PresenceChips } from './PresenceChips'
 import { DecisionAttributionList } from './DecisionAttributionList'
-import { endedReason, refusalMessage, queuedReason } from './overloadCopy'
+import { refusalMessage, queuedReason } from './overloadCopy'
 import { alreadyResolvedDecision, resolvedByLine } from '../../../components/chat-input/sharedDecision'
 import { readSendReceipt } from '../../../utils/sendDelivery'
 
-vi.mock('../../../api/client', () => ({ api: { sharedCrewCancelWork: vi.fn() } }))
+vi.mock('../../../api/client', () => ({
+  api: {
+    sharedCrewCancelWork: vi.fn(),
+    sharedCrewCapabilities: vi.fn(),
+    sharedCrewWork: vi.fn(),
+    sharedCrewCapacity: vi.fn(),
+    sharedCrewPresence: vi.fn(),
+    sharedCrewDecisions: vi.fn(),
+    sharedCrewSendState: vi.fn(),
+    sharedCrewViewer: vi.fn(),
+  },
+}))
 
 const cancel = vi.mocked(api.sharedCrewCancelWork)
+const workRead = vi.mocked(api.sharedCrewWork)
 
 const work = (over: Partial<AcceptedWork>): AcceptedWork => ({
   work_id: 'w1', session_key: 's1', operation: 'chat_turn', state: 'queued', revision: 1,
@@ -32,56 +47,88 @@ function mount(ui: React.ReactElement) {
   return { qc, ...render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>) }
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(api.sharedCrewCapabilities).mockResolvedValue({ ...ALL_UNAVAILABLE, presence: 'available', attribution: 'available', queueing: 'available' })
+  vi.mocked(api.sharedCrewCapacity).mockResolvedValue(capacity('principal'))
+  vi.mocked(api.sharedCrewPresence).mockResolvedValue({ entries: [] } as never)
+  vi.mocked(api.sharedCrewDecisions).mockResolvedValue({ items: [] } as never)
+  vi.mocked(api.sharedCrewSendState).mockResolvedValue({ schema_version: 1, session_key: 's1', revision: 0, last: null } as never)
+  vi.mocked(api.sharedCrewViewer).mockResolvedValue(null as never)
+})
 
-describe('WorkStatusList', () => {
-  it.each([
-    ['queued', 'Queued on the host'],
-    ['running', 'Running'],
-    ['cancelling', 'Cancelling'],
-    ['reconciling', 'Checking what happened'],
-    ['completed', 'Done'],
-    ['failed', 'Ended'],
-  ] as const)('shows %s as its own state', (state, label) => {
-    mount(<WorkStatusList sessionKey="s1" items={[work({ state })]} capacity={null} />)
-    expect(screen.getByText(label)).toBeInTheDocument()
+const STATES = ['submitted', 'queued', 'admitted', 'running', 'cancelling', 'reconciling', 'completed', 'failed', 'cancelled', 'expired'] as const
+
+describe('above the composer', () => {
+  it.each(STATES)('shows no work status for %s work', async (state) => {
+    workRead.mockResolvedValue({ items: [work({ state })] } as never)
+    const { container } = mount(<SessionCollabStrip sessionKey="s1" />)
+    await waitFor(() => expect(api.sharedCrewPresence).toHaveBeenCalled())
+    await new Promise(r => setTimeout(r, 0))
+    expect(screen.queryByTestId('work-status-list')).toBeNull()
+    expect(screen.queryByTestId('session-collab-strip')).toBeNull()
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('queued send on its bubble', () => {
+  it('picks the newest chat turn waiting for capacity', () => {
+    expect(queuedChatTurn([work({ work_id: 'a' }), work({ work_id: 'b' }), work({ work_id: 'c', state: 'running' })])?.work_id).toBe('b')
+    expect(queuedChatTurn([work({ operation: 'app_launch' as never })])).toBeNull()
+    expect(queuedChatTurn([work({ state: 'completed' })])).toBeNull()
   })
 
-  it('says whose limit holds queued work and never estimates a wait', () => {
-    const { unmount } = mount(<WorkStatusList sessionKey="s1" items={[work({ reason: 'principal_active_limit' })]} capacity={capacity('principal')} />)
-    expect(screen.getByText(/your personal limit/)).toBeInTheDocument()
-    unmount()
-    mount(<WorkStatusList sessionKey="s1" items={[work({})]} capacity={capacity('crew')} />)
-    const text = screen.getByTestId('work-status-list').textContent ?? ''
-    expect(text).toMatch(/shared limit/)
-    expect(text).not.toMatch(/second|minute|ETA/i)
+  it('shows Queued with its own Cancel, naming whose limit holds it', async () => {
+    workRead.mockResolvedValue({ items: [work({ reason: 'principal_active_limit' })] } as never)
+    mount(<QueuedSendLabel slotKey="s1" />)
+    expect(await screen.findByText('Queued')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Queued').closest('[title]')?.getAttribute('title')).toMatch(/your personal limit/))
+    expect(screen.getByRole('button', { name: 'Cancel this queued message' })).toBeInTheDocument()
   })
 
-  it('cancels exactly the shown item at its revision and adopts the result', async () => {
-    cancel.mockResolvedValue({ ok: true, work: work({ state: 'cancelled', revision: 2 }) })
-    const { qc } = mount(<WorkStatusList sessionKey="s1" items={[work({ revision: 1 })]} capacity={null} />)
-    fireEvent.click(screen.getByRole('button', { name: /Cancel this item/ }))
-    await waitFor(() => expect(cancel).toHaveBeenCalledWith('w1', 1))
-    await waitFor(() => expect((qc.getQueryData(['shared-crew', 'work', 's1']) as { items: AcceptedWork[] }).items[0].state).toBe('cancelled'))
+  it.each(['running', 'cancelling', 'completed', 'failed'] as const)('shows nothing for %s work', async (state) => {
+    workRead.mockResolvedValue({ items: [work({ state })] } as never)
+    const { container } = mount(<QueuedSendLabel slotKey="s1" />)
+    await waitFor(() => expect(workRead).toHaveBeenCalled())
+    await new Promise(r => setTimeout(r, 0))
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('cancel calls the API once at the shown revision and the label goes away', async () => {
+    workRead.mockResolvedValue({ items: [work({ revision: 1 })] } as never)
+    let settle: (v: Awaited<ReturnType<typeof api.sharedCrewCancelWork>>) => void = () => {}
+    cancel.mockReturnValue(new Promise(r => { settle = r }))
+    mount(<QueuedSendLabel slotKey="s1" />)
+    const btn = await screen.findByRole('button', { name: 'Cancel this queued message' })
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    settle({ ok: true, work: work({ state: 'cancelled', revision: 2 }) })
+    await waitFor(() => expect(screen.queryByTestId('queued-send')).toBeNull())
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalledWith('w1', 1)
   })
 
   it('a stale cancel adopts the server state and says so', async () => {
+    workRead.mockResolvedValue({ items: [work({ revision: 1 })] } as never)
     cancel.mockResolvedValue({ ok: false, conflict: true, current: work({ state: 'running', revision: 5 }), code: 'stale_revision' })
-    const { qc } = mount(<WorkStatusList sessionKey="s1" items={[work({ revision: 1 })]} capacity={null} />)
-    fireEvent.click(screen.getByRole('button', { name: /Cancel this item/ }))
+    const { qc } = mount(<QueuedSendLabel slotKey="s1" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel this queued message' }))
     expect(await screen.findByText(/changed before the cancel landed/)).toBeInTheDocument()
     expect((qc.getQueryData(['shared-crew', 'work', 's1']) as { items: AcceptedWork[] }).items[0].revision).toBe(5)
   })
 
-  it('shows only open work plus the latest settled item', () => {
-    mount(<WorkStatusList sessionKey="s1" items={[
-      work({ work_id: 'a', state: 'completed' }),
-      work({ work_id: 'b', state: 'completed' }),
-      work({ work_id: 'c', state: 'running' }),
-    ]} capacity={null} />)
-    expect(screen.queryByTestId('work-a')).toBeNull()
-    expect(screen.getByTestId('work-b')).toBeInTheDocument()
-    expect(screen.getByTestId('work-c')).toBeInTheDocument()
+  it('rides only the bubble the transcript flags, running turn or not', async () => {
+    workRead.mockResolvedValue({ items: [work({})] } as never)
+    const bubble = (show: boolean) => (
+      <UserMessage content="hi" renderContent={c => <p>{c}</p>} slotKey="s1" slotRunning showQueuedSend={show} />
+    )
+    const { unmount } = mount(bubble(true))
+    expect(await screen.findByTestId('queued-send')).toBeInTheDocument()
+    unmount()
+    mount(bubble(false))
+    await new Promise(r => setTimeout(r, 0))
+    expect(screen.queryByTestId('queued-send')).toBeNull()
   })
 })
 
@@ -145,10 +192,6 @@ describe('overload copy', () => {
       expect(s).toMatch(/still in the composer/)
       expect(s).not.toMatch(/second|minute/i)
     }
-  })
-
-  it('names a turn that ended in a runtime error', () => {
-    expect(endedReason('runtime_error')).toBe('stopped with an error')
   })
 
   it('leaves non Shared Crew refusals to the caller', () => {
