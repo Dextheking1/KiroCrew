@@ -891,8 +891,30 @@ The proxy strips the prefix before forwarding, relays cookies, and rewrites
 
 ### Share one Crew with teammates
 
-Several people can use one Crew over Tailscale. Turn on identity trust and list
-each person's tailnet login, so the gateway names who did what:
+Several people can use one Crew over Tailscale. The easiest way is to invite
+them from Crew:
+
+1. In the Tailscale admin console, signed in as an Owner, Admin or IT admin, open
+   [Settings > Keys](https://login.tailscale.com/admin/settings/keys) and generate
+   an **API access key**. An OAuth client will not work: Tailscale only lets a
+   user's own key create share invites. The key expires (you choose 1 to 90 days);
+   Crew warns a week before.
+2. In Crew, open **Settings > People > Invite over Tailscale**, paste the key and
+   select **Connect**. Crew stores it in its protected vault and never shows it
+   again. **Remove key** deletes it.
+3. Type one or more email addresses and select **Send invite**, or switch to
+   **Invite link** for a single-use link (or a reusable one, up to 1,000 people).
+   You can add a name and picture to show for that person.
+4. When the teammate accepts, Crew adds the Tailscale login they accepted with to
+   `dashboard.tailscale.allowed_logins` and lets it in. That may be a different
+   account than the email you typed. The first accepted invite turns on identity
+   trust and asks for one restart; later teammates get in without one.
+5. **Revoke** removes the share in Tailscale, takes the login off the allowlist
+   and closes that person's open Crew tabs.
+
+Without a key, the card links the admin console's Machines page, where you can
+share this machine by hand (**Share**). To manage the allowlist yourself instead,
+turn on identity trust and list each person's tailnet login:
 
 ```bash
 kirocrew config set dashboard.tailscale.trust_identity true
@@ -928,8 +950,9 @@ schedule or a webhook started reads `Scheduled: <job name>` or `Webhook: <name>`
 never a person. Until anyone else connects and no sharing path is set up, the
 Crew is personal: the list shows no creator names and no filter.
 
-Who can connect is managed in Tailscale, not in Kiro Crew: Settings > People is
-read-only and has no invite, remove or role controls. Teammates who reach a
+Who can connect is decided by Tailscale and the allowlist. The invite card is
+the one place in Kiro Crew that changes it, and only the Crew's owner sees it;
+there are no role controls. Teammates who reach a
 cloud-hosted Crew through AWS Systems Manager are governed by IAM and Session
 Manager; their connections arrive as local connections, so their work reads
 Unattributed. A Crew managed through an organization Console shows its Team
