@@ -116,7 +116,8 @@ describe('ChatPage: Shared Crew typing signal', { timeout: 15_000 }, () => {
       // Wait for the edit's own follow-up render to land the value before asserting.
       await waitFor(() => expect(input.value).toBe('hi'))
       await waitFor(() => expect(heard).toHaveBeenCalledTimes(2))
-      for (const call of heard.mock.calls) expect(call).toEqual([])
+      // The only thing a listener hears is whether the draft is now empty.
+      for (const call of heard.mock.calls) expect(call).toEqual([false])
     } finally {
       off()
     }

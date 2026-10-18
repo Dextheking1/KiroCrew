@@ -51,16 +51,3 @@ export function queuedReason(reason: ReasonCode | null, capacity: CapacityRespon
   if (scope === 'crew') return i18nT('sharedCrew.queued_crew')
   return i18nT('sharedCrew.queued_generic')
 }
-
-/** Why an item ended without completing. */
-export function endedReason(reason: ReasonCode | null): string {
-  switch (reason) {
-    case 'queue_expired': return i18nT('sharedCrew.ended_queue_expired')
-    case 'run_deadline': return i18nT('sharedCrew.ended_run_deadline')
-    case 'runtime_error': return i18nT('sharedCrew.ended_runtime_error')
-    case 'cancelled_by_user': return i18nT('sharedCrew.ended_cancelled')
-    case 'grant_revoked':
-    case 'policy_changed': return i18nT('sharedCrew.ended_policy')
-    default: return ''
-  }
-}

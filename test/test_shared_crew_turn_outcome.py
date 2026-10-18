@@ -134,7 +134,6 @@ def test_typing_label_exists_in_every_locale_catalog():
         shared = catalog.get("sharedCrew") or {}
         assert "{{name}}" in shared.get("person_typing", ""), path.name
         assert shared.get("several_typing"), path.name
-        assert shared.get("ended_runtime_error"), path.name
         checked += 1
     assert checked >= 13
 

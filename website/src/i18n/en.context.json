@@ -774,6 +774,8 @@
     "sharedCrew.setup_status_not_in_build": "Status badge on a setup method this build of the app does not include.",
     "sharedCrew.setup_guide_link": "Link to the documentation guide for one setup method; {{name}} is the method name.",
     "sharedCrew.send_race_lost": "Notice above the composer after another collaborator's message in the same session was accepted first: names who sent first, says this user's message was not sent, and that the draft is still in the composer. {{name}} is that person's display name.",
+    "sharedCrew.composer_locked": "Banner that replaces the composer's button row, and the composer's placeholder, while another collaborator is typing in the same shared session: this user's message box is read-only until that person sends, clears the draft or pauses. {{name}} is that person's display name.",
+    "sharedCrew.composer_locked_hint": "Second line of the same banner: says this user can type again once the other collaborator sends their message or stops typing for a moment.",
     "sharedCrew.send_race_send_now": "Button in the lost-send notice that sends the kept draft now, as a new message after the one that was accepted first.",
     "sharedCrew.send_race_dismiss": "Button in the lost-send notice that hides the notice and keeps the draft in the composer for editing.",
     "sharedCrew.unattributed": "Label shown in place of a person's name for a session or message whose human author was never recorded (older sessions, unverified connections); also a session-list filter option.",

@@ -16,6 +16,7 @@ import type { ChatMessage } from '../../../types'
 import type { ErrorReport } from '../../../utils/errorReport'
 import { i18nT } from '../../../i18n/t'
 import { clearSendRaceNotice, isSendRaceConflict, sendIdempotencyKey, setSendRaceNotice } from '../../../api/sendRace'
+import { isComposerLocked, noteComposerLocked } from '../../../api/typingLease'
 import { baseRevisionForPress } from '../../../hooks/sharedCrew/sendRevisionSeed'
 
 // Per-action titles for the refused-press notice above the composer. A press
@@ -163,6 +164,14 @@ export function useSteerDelivery({
         // so its bubble goes, the text comes back, and the notice above the
         // composer names who sent first. Not an error row: nothing failed.
         setSendRaceNotice(slot, receipt.body)
+        if (sendId) dispatch(resolveOptimisticSteer({ slot, sendId, outcome: 'queued' }))
+        handBack()
+        return
+      }
+      if (receipt.status === 'refused' && isComposerLocked(receipt.body)) {
+        // Someone else holds the typing lease: the text comes back and the
+        // composer locks with their name. Not an error row: nothing failed.
+        noteComposerLocked(receipt.body)
         if (sendId) dispatch(resolveOptimisticSteer({ slot, sendId, outcome: 'queued' }))
         handBack()
         return

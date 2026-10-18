@@ -734,8 +734,8 @@ restart it counts work whose runtime is still alive, and answers `CapacityRespon
 resolved limit), `containment` (`ContainmentReport.to_dict`) and `fairness`.
 `GET /api/shared-crew/work?session_key=` lists public records (the viewer's own without
 `session_key`). The key may be a dashboard tab's slot key: it is read as the session
-that tab's turns run on (`routes_admission.work_session_keys`), so the chat's work list
-sees its own queued and running work. Every accepted-work write is pushed as a
+that tab's turns run on (`routes_admission.work_session_keys`), so the chat sees its own
+queued work. Every accepted-work write is pushed as a
 `shared_crew.work` frame carrying `slot_key`, the tab that shows the session. `POST /api/shared-crew/work/{id}/cancel {expected_revision}` cancels a
 queued or admitted record at once and moves running work to `cancelling`; a stale
 revision or a terminal record is 409 with `current`. A chat send answers 202 with
@@ -815,14 +815,76 @@ wrote carries the sender's name (`MessageByline`, `sharedCrewUi.bylineFor`). A
 session with no recorded creator (legacy) treats the viewer as the default owner, so
 a single-operator transcript is unchanged. An Unknown author reads as Unknown.
 
-Recorded non-goal: no input lock. Typing or presence never locks the composer or the
-session for anyone else; every collaborator can send at any time, and admission
-(section 4) orders the turns. Presence and typing stay telemetry only.
+### Typing lease
+
+Product owner's decision (2026-10-18), replacing the earlier "no input lock"
+non-goal: while one collaborator types in a shared session, every other
+collaborator's composer is read-only, the way a shared document shows who is
+editing a line. Owner: `shared_crew.typing_lease`.
+
+Rules:
+
+1. One lease per session (keyed by slot), held by one person: the verified
+   connection principal the socket handler stamps, never a value from a frame. A
+   person's tabs fold into one holder (`typing_lease.same_person`: the same
+   principal id, or the local operator's machine-local subjects from
+   `crew_mode.operator_ids`), so their other tabs stay unlocked.
+2. The first collaborator whose tab sends an accepted `typing` report with a
+   non-empty draft acquires a free lease. Each later accepted `typing` report from
+   the holder renews it. A typing report never takes a held lease away. Unknown and
+   system principals never hold one.
+3. The lease ends when the holder's send is accepted (`send_race.commit_request`
+   calls `note_sent`), when a holder tab reports its draft empty
+   (`"draft": "empty"`), when no holder tab has reported `typing` for the idle
+   window, or when every holder tab that was typing closes its socket (tab close
+   or disconnect). A plain step down to `viewing` (the tab's typing hold ran out)
+   keeps it: the draft is still there and the idle window decides.
+4. The idle window is `dashboard.shared_crew.typing_idle_seconds`, default 10,
+   clamped to 3..60 (`SHARED_CREW_BOUNDS`). A timer armed on the event loop at the
+   earliest lease's idle end (`arm_idle_timer`) ends it on time; the socket status
+   tick's presence sweep also sweeps leases.
+5. The host enforces it. `chat_send._composer_locked_answer` runs before the
+   send race: a dashboard user's send while someone else holds the lease answers
+   409 `{"error", "code": "composer_locked", session_key, holder (public), lease}`
+   and nothing is accepted. A steer into a running turn passes, and Stop is a
+   separate route, so a locked collaborator can still steer or stop the turn that
+   is running. An app or automation send has no composer and is not held.
+   First-submit-wins (below) stays the backstop for the moment a lease ends.
+6. A personal Crew never locks: the only person is the operator, who is always
+   the holder's own person. The session creator has no priority; there are no
+   roles.
+
+The lease rides the presence channel and its rate limit: a `typing` report renews
+only when `PresenceRegistry` accepted it, and an empty-draft report only releases,
+so it applies even inside the spacing. Every change (acquired, ended) pushes one
+whole-value `shared_crew.typing_lease` frame to every dashboard socket;
+`GET /api/shared-crew/typing-lease?session_key=` answers the same body for a
+reconnecting tab: `{schema_version, session_key, holder (public) | null,
+holder_ids, expires_at, idle_seconds, ended}`. `holder_ids` lists every id that
+counts as the holder, so a tab tells its own lease from someone else's without a
+second read; `ended` names why a lease just ended (`sent`, `cleared`, `idle`,
+`disconnected`). Nothing is persisted: no draft text and no keystroke, only who
+holds the lease, which of their connections are drafting, and when each last
+reported.
+
+In the browser (`usePresenceReporter`), a keystroke repeats `typing` once per
+spacing while keystrokes continue, so a trailing report lands after the last one;
+an edit that leaves the draft empty, and a send, report `draft: 'empty'` at once.
+`useComposerTypingLock` reads the lease and the viewer; when someone else holds
+it, ChatInput's `typingLock` turns the box read-only (not disabled: the draft
+stays as it was, and so does focus), replaces the button row with
+`TypingLockBanner` (initials and "<name> is typing…"), and keeps only Stop and
+Steer for a running turn. When the lease ends the box unlocks in place. A send
+refused `composer_locked` restores the draft and records the refusal's lease
+(`api/typingLease.noteComposerLocked`), so the lock shows even before the frame
+lands.
 
 ### First submit wins
 
 POC choice, not an approved product contract: revision-based compare-and-set
-(`shared_crew.send_race`). The boundary between a refused race and accepted work
+(`shared_crew.send_race`). With the typing lease in place it settles the sends the
+lease does not hold: a send at the moment a lease ends, an app or automation send,
+and a steer into a running turn. The boundary between a refused race and accepted work
 waiting for capacity stays open; this is the shape the POC ships to exercise it.
 
 Each session (keyed by slot) has a send revision, the count of accepted sends.
@@ -889,6 +951,8 @@ that never learned a revision sends none and is not compared.
 | `GET /api/shared-crew/decisions?session_key=` | the session's `SharedDecision` list (dashboard users only) |
 | `GET /api/shared-crew/send-state?session_key=` | the session's send revision and last accepted send (dashboard users only) |
 | a chat send with `base_revision` | 409 `send_race` with `winner` and `current_revision` when another principal's send was accepted after it |
+| `GET /api/shared-crew/typing-lease?session_key=` | who holds the session's typing lease (dashboard users only) |
+| a chat send while someone else types | 409 `composer_locked` with `holder` and `lease`; a steer into a running turn is not held |
 
 Browser-bound principals use `to_public_dict` (no issuer or subject); browser-bound
 work uses `AcceptedWork.to_public_dict` (no idempotency scope, lease or fencing ids).
@@ -906,26 +970,33 @@ all pages; `hidden_by_filter` counts the sessions it excluded.
 ### WebSocket
 
 The server pushes whole-value frames: `shared_crew.presence`, `shared_crew.work`,
-`shared_crew.decision`, `shared_crew.capacity` and `shared_crew.send_state`
-(`collab.SERVER_FRAMES`). The
-client sends `shared_crew.activity` with a session and an `Activity`. The activity frame
-carries no principal; the server stamps the connection's actor and ignores anything
-else. On reconnect the client refetches the HTTP state and treats the next frames as
+`shared_crew.decision`, `shared_crew.capacity`, `shared_crew.send_state` and
+`shared_crew.typing_lease` (`collab.SERVER_FRAMES`). The
+client sends `shared_crew.activity` with a session, an `Activity` and, when the
+tab's draft is empty, `draft: "empty"`. The activity frame carries no principal and
+no text; the server stamps the connection's actor and ignores anything else. On reconnect the client refetches the HTTP state and treats the next frames as
 authoritative. It never resubmits a send on its own.
 
 ## 7. UI states
 
-| `OperationState` | Shown as | Draft |
+No list of accepted work renders above the composer, in any state or Crew mode. A
+running turn shows as the chat's own running turn (its stop button), and a finished
+or ended one as its transcript. The one Shared Crew work state with its own line is a
+chat turn the host holds for capacity: while the session has no queue-stack rows,
+its newest user message carries a small "Queued" line with its own Cancel (`QueuedSendLabel`), whose
+tooltip names the personal or Crew-wide limit. Cancel sends `POST
+/api/shared-crew/work/{id}/cancel` at the shown revision once; a stale click adopts
+the current record. A busy session's queued sends stay the queue stack's rows.
+
+| State | Shown as | Draft |
 |---|---|---|
-| `submitted` | sending | kept |
-| `queued` | queued, with personal or Crew-wide limit named | sent |
-| `admitted`, `running` | running | sent |
-| `cancelling` | cancelling | sent |
-| `reconciling` | checking | sent |
-| `completed` | done | cleared |
-| `rejected` | refused, with the reason and next step | restored |
+| `submitted` | the sent bubble | sent |
+| `queued` (chat turn, no queue-stack rows) | "Queued" and Cancel on the newest user bubble | sent |
+| `admitted`, `running`, `cancelling`, `reconciling` | the chat's running turn | sent |
+| `completed`, `failed`, `expired`, `cancelled`, `unknown_outcome` | the transcript; no extra label | sent |
+| `rejected` | refusal notice by the composer, with whose limit and the next step | restored |
 | lost send race (`send_race`, never an `OperationState`) | notice above the composer: "X sent first", Send now, Dismiss; no bubble or error row | restored |
-| `failed`, `expired`, `cancelled`, `unknown_outcome` | ended, with the reason | sent |
+| someone else typing (typing lease, never an `OperationState`) | composer read-only, button row replaced by "X is typing…"; Stop and Steer stay for a running turn | kept, read-only |
 
 ## 8. Capabilities
 
@@ -1309,8 +1380,8 @@ or `crew`) and the viewer's active and queued counts. `GET /api/shared-crew/peop
 shows each observed person's usage when admission is on. Work records carry
 `budget_key`, the opaque principal id charged.
 
-Cancellation and recovery. Cancel a queued or admitted item from the work list in the
-chat, or by the cancel route with its `expected_revision`; a stale revision answers
+Cancellation and recovery. Cancel a queued chat turn from its "Queued" line in the
+chat, or any queued or admitted item by the cancel route with its `expected_revision`; a stale revision answers
 409 with the current record. A restart reconciles accepted work before admitting new
 work (section 4): nothing that may have run is replayed, and a chat turn queued across
 a restart ends `cancelled` with its user row in the transcript to resend.

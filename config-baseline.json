@@ -7493,7 +7493,9 @@
           "principal_cpu_quota_percent": 800,
           "principal_memory_max_mb": 24576,
           "principal_tasks_max": 8192,
-          "crew_cpu_quota_percent": 2400
+          "crew_cpu_quota_percent": 2400,
+          "tailnet_direct": true,
+          "typing_idle_seconds": 10
         },
         "restore_sessions": false,
         "dynamic_dashboard_cards": false,
@@ -7738,7 +7740,9 @@
         "principal_cpu_quota_percent": 800,
         "principal_memory_max_mb": 24576,
         "principal_tasks_max": 8192,
-        "crew_cpu_quota_percent": 2400
+        "crew_cpu_quota_percent": 2400,
+        "tailnet_direct": true,
+        "typing_idle_seconds": 10
       }
     },
     {
@@ -8006,6 +8010,35 @@
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": 2400
+    },
+    {
+      "path": "dashboard.shared_crew.tailnet_direct",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Direct Tailnet Link",
+      "help": "While Tailscale runs, also listen on this machine's own Tailscale addresses (100.x and fd7a:) on the dashboard port, and let in only people Tailscale names whose login is on dashboard.tailscale.allowed_logins (only you when that list is empty), without a dashboard token. Never binds any other address. Off restores the loopback-only listener. A value that is not true or false reads as off. Takes effect on the next gateway start.",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": true,
+      "requiresRestart": true
+    },
+    {
+      "path": "dashboard.shared_crew.typing_idle_seconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Typing Lock Idle Window",
+      "help": "Seconds a collaborator may pause typing before the other collaborators' composers unlock. While someone types in a shared session, everyone else's composer is read-only until that person sends, clears the draft, or stays idle this long. 3 to 60.",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": 10
     },
     {
       "path": "dashboard.restore_sessions",
