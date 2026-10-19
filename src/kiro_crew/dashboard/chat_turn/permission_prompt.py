@@ -37,10 +37,10 @@ if TYPE_CHECKING:
         post_linked_approval,
         redact_credentials,
         redact_exfiltration_urls,
-        relay_worker_approval,
         resolve_linked_approval,
         sel,
         slack_mirror_is_paused,
+        start_worker_approval_relay,
         tool_approval_timeout_secs,
         unsafe_bash_reason,
     )
@@ -382,17 +382,18 @@ async def _on_permission_prompt(
                 _host_deny_reason = "the approval prompt could not be delivered to Slack"
     # A worker that a Slack Code channel's session created asks in that
     # channel too (top-level, owner-only); the dashboard prompt stays.
-    _worker_card = None
-    if _slack_approval_ts is None and "resolved" not in perm_meta:
-        _worker_card = await relay_worker_approval(
-            state,
-            slot,
-            session_key,
-            event.request_id,
-            event.title,
-            event.tool_input or "",
-            fut,
-        )
+    # Started, not awaited: nothing here may await before the `try`.
+    _worker_relay = start_worker_approval_relay(
+        state,
+        slot,
+        session_key,
+        event.request_id,
+        event.title,
+        event.tool_input or "",
+        fut,
+        perm_meta=perm_meta,
+        linked_ts=_slack_approval_ts,
+    )
     # Pre-seeded so the `finally` backstop below is total over EVERY
     # exit from the await — including CancelledError, which slot
     # deletion / cleanup endpoints raise by cancelling slot.task.
@@ -665,9 +666,10 @@ async def _on_permission_prompt(
                 )
         # A relayed worker card says how it was answered (never raises).
         await finish_worker_approval(
-            _worker_card,
+            _worker_relay,
             outcome,
-            timed_out=_host_deny_cause == DENY_CAUSE_APPROVAL_TIMEOUT,
+            deny_cause=_host_deny_cause,
+            host_ended=bool(_host_cancelled or _host_stopped),
         )
     if outcome == "approved_trust_reads":
         slot._trust_reads = True
