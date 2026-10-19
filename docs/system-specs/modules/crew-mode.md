@@ -2503,7 +2503,10 @@ reads the change-card store, and the settle runs on the serving loop, so each
 settle first awaits `CardStore.warm()` (the file and vault-key read in a worker
 thread); when warming fails the list is read with `cards=False`, without the store,
 and the cold store is never read on the loop (`test/test_crewmate_feed_cold_store.py`).
-An
+A goal
+write while the thread has no live session (a milestones press between turns, a
+write after a restart) is held in `crewmate_feed._held_goals`, newest wins, and
+recorded on the thread's next growth, when its session is known. An
 entry is appended only when its snapshot differs from the last one this
 process recorded for that thread, so the check's own append records nothing.
 A goal written before the thread had a session (the create flow sets it before
