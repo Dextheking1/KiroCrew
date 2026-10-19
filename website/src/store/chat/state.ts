@@ -231,11 +231,11 @@ export interface ChatState {
    *  chunk_generation server-side); a chunk or snapshot from a different
    *  generation replaces the floor instead of being ordered against it. */
   lastChunkGen: string | undefined
-  /** Gateway generations this tab has applied a chunk or a running snapshot
-   *  from, oldest first (`noteChunkGen`). Generations belong to the gateway
-   *  process, not to a slot, so one list serves every slot: a chunk from any
-   *  generation but the newest is from a process that has since restarted and
-   *  is dropped (`isSupersededGen`). */
+  /** Gateway generations this tab has applied a chunk from, oldest first
+   *  (`noteChunkGen`). Generations belong to the gateway process, not to a
+   *  slot, so one list serves every slot: a chunk from any generation but the
+   *  newest is from a process that has since restarted and is dropped
+   *  (`isSupersededGen`). */
   chunkGenOrder: string[]
   _wsChunkedDuringFetch: boolean
   /** How many rows `messages` held when the active slot's switch fetch was

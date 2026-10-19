@@ -443,13 +443,16 @@ export const floorForGen = (floor: number | undefined, floorGen: string | undefi
  *  ordered by `floorForGen` alone. */
 export const CHUNK_GEN_MEMORY = 8
 
-/** Record a gateway generation this tab has applied a chunk or a running
- *  snapshot from, in the order it was first seen. A generation is a random
- *  value per process and carries no order of its own; the order a tab first
- *  sees them in is the restart order, because a restarted process sends
- *  nothing until the one before it has stopped. Mutates *order* (an immer
- *  draft in the reducers). `undefined`, an older gateway's frame, is not
- *  recorded. */
+/** Record a gateway generation this tab has applied a chunk from, in the order
+ *  it was first seen. A generation is a random value per process and carries
+ *  no order of its own; the order the chunk reducers first see them in is
+ *  the restart order, because chunks arrive only over the socket, a restarted
+ *  process sends nothing until the one before it has stopped, and the socket
+ *  delivers frames in the order they were sent. A slot snapshot is NOT a
+ *  source: it is an HTTP reply with no order against live frames, so a reply
+ *  the old process sent before it stopped can land after the new process's
+ *  first chunk. Mutates *order* (an immer draft in the reducers). `undefined`,
+ *  an older gateway's frame, is not recorded. */
 export const noteChunkGen = (order: string[], gen: string | undefined): void => {
   if (gen === undefined || order.includes(gen)) return
   order.push(gen)

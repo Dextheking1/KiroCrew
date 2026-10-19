@@ -207,15 +207,19 @@ describe('a chunk from a generation the tab already saw replaced is dropped', ()
     expect(text(store.getState())).toBe('oldfreshnext')
   })
 
-  it('the generation a running snapshot named counts as the current one', () => {
+  it('a delayed snapshot from the earlier process does not make the current generation superseded', () => {
+    // A running snapshot the old process sent before it stopped lands after the
+    // restarted process's first chunk: snapshots carry no order against live
+    // frames, so it records nothing and the current generation keeps streaming.
     const store = makeStore()
     store.dispatch(setActiveSlot(SLOT))
-    store.dispatch(chunk(SLOT, 57, 'old', 'g1'))
-    store.dispatch(refreshSlot.fulfilled(slotPayload(SLOT, [{ role: 'streaming', content: 'abc', cls: 'msg msg-a', seq: 3, gen: 'g2' }], true), 'r1', SLOT))
-    store.dispatch(chunk(SLOT, 58, 'stale', 'g1'))
-    expect(text(store.getState())).toBe('abc')
-    expect(store.getState().chat.lastChunkSeq).toBe(3)
+    store.dispatch(chunk(SLOT, 3, 'fresh', 'g2'))
+    store.dispatch(refreshSlot.fulfilled(slotPayload(SLOT, [{ role: 'streaming', content: 'abc', cls: 'msg msg-a', seq: 57, gen: 'g1' }], true), 'r1', SLOT))
+    store.dispatch(chunk(SLOT, 4, 'd', 'g2'))
+    store.dispatch(chunk(OTHER, 1, 'other', 'g2'))
+    expect(text(store.getState())).toBe('abcd')
     expect(store.getState().chat.lastChunkGen).toBe('g2')
+    expect((store.getState().chat.slotMessages[OTHER] ?? []).map(m => m.content).join('')).toBe('other')
   })
 
   it('a background pane drops it too', () => {
