@@ -9663,20 +9663,18 @@
     "crewMode": {
       "chip_off": "Crew Mode",
       "chip_off_explained": "Crew Mode: タスクに分ける",
-      "chip_on": "Crew Mode オン",
       "chip_hint_off": "Crew Mode をオンにします。各タスクは専用のチャットで実行され、結果をここに報告します。",
-      "chip_hint_on": "Crew Mode をオフにします。このチャットは通常のチャットに戻ります。すでに開いたチャットは動き続けます。",
       "chip_hint_busy": "返信のあとで使えます。",
-      "chip_off_keeps_chats": "Crew Mode をオフにすると、このチャットは通常のチャットになります。開いたチャットは動き続けます。",
       "title": "Crew Mode",
       "tagline_lead": "目標はあなたが決めます。",
       "tagline_strong": "作業はクルーが行います。",
-      "does_new_chat": "チャットを開く",
-      "does_pass_notes": "進捗を共有",
-      "does_take_asks": "依頼を受ける",
-      "does_check_in": "進み具合を表示",
-      "side_panel_board": "タスクボードはサイドパネルに表示されます",
-      "side_panel_open": "タスクボードを開く"
+      "flow_label": "Crew Mode のしくみ",
+      "flow_goal": "目標",
+      "flow_split": "分ける",
+      "flow_parallel": "別々のチャット",
+      "flow_board": "ボード",
+      "flow_needs_you": "要判断",
+      "side_panel_open": "タスクボード"
     },
     "guideLayer": {
       "region_label": "ガイド",

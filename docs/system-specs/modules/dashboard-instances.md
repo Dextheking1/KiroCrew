@@ -101,7 +101,7 @@ A ROOT session running the `kirocrew-conductor` template (Crew Mode) gets the sa
 `[DASHBOARD]` block on every dashboard turn, keyed by its own store key
 (`session_turn_block`), but only once a page is ADOPTED: the default page it is shown
 while `empty` asks nothing of it, so it gets no block. A root session on any other agent
-(Crew Mode off) or on a crewmate (`agent_kind == "member"`), a dispatched or adopted
+(not in Crew Mode) or on a crewmate (`agent_kind == "member"`), a dispatched or adopted
 session, and a crewmate DM get no session block; the page itself is left as it is.
 Switching a root session to the `kirocrew-conductor` template (Crew Mode on) adopts `goal-board` through the ordinary
 `adopt` (`adopt_crew_mode_board_on_switch`, called by `switch_slot_agent`), only while the

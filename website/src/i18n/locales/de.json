@@ -9805,20 +9805,18 @@
     "crewMode": {
       "chip_off": "Crew Mode",
       "chip_off_explained": "Crew Mode: in Aufgaben aufteilen",
-      "chip_on": "Crew Mode an",
       "chip_hint_off": "Crew Mode einschalten: Jede Aufgabe läuft in einem eigenen Chat und meldet sich hier zurück.",
-      "chip_hint_on": "Crew Mode ausschalten. Dieser Chat wird wieder ein normaler Chat; Chats, die er schon geöffnet hat, laufen weiter.",
       "chip_hint_busy": "Verfügbar nach der Antwort.",
-      "chip_off_keeps_chats": "Wenn du Crew Mode ausschaltest, wird dieser Chat ein normaler Chat. Von ihm geöffnete Chats laufen weiter.",
       "title": "Crew Mode",
       "tagline_lead": "Du setzt das Ziel.",
       "tagline_strong": "Deine Crew macht die Arbeit.",
-      "does_new_chat": "Öffnet Chats",
-      "does_pass_notes": "Teilt Fortschritte",
-      "does_take_asks": "Nimmt Aufträge an",
-      "does_check_in": "Zeigt den Stand",
-      "side_panel_board": "Dein Aufgabenboard steht im Seitenpanel",
-      "side_panel_open": "Aufgabenboard öffnen"
+      "flow_label": "So arbeitet Crew Mode",
+      "flow_goal": "Ziel",
+      "flow_split": "Aufteilen",
+      "flow_parallel": "Eigene Chats",
+      "flow_board": "Board",
+      "flow_needs_you": "Braucht dich",
+      "side_panel_open": "Aufgabenboard"
     },
     "guideLayer": {
       "region_label": "Anleitung",

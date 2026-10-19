@@ -9947,20 +9947,18 @@
     "crewMode": {
       "chip_off": "Crew Mode",
       "chip_off_explained": "Crew Mode : découper en tâches",
-      "chip_on": "Crew Mode activé",
       "chip_hint_off": "Active Crew Mode : chaque tâche tourne dans son propre chat et rend compte ici.",
-      "chip_hint_on": "Désactive Crew Mode. Ce chat redevient un chat normal ; les chats qu’il a déjà ouverts continuent.",
       "chip_hint_busy": "Disponible après la réponse.",
-      "chip_off_keeps_chats": "Désactiver Crew Mode fait de ce chat un chat normal. Les chats qu’il a ouverts continuent.",
       "title": "Crew Mode",
       "tagline_lead": "Tu fixes l’objectif.",
       "tagline_strong": "Ton équipe fait le travail.",
-      "does_new_chat": "Ouvre des chats",
-      "does_pass_notes": "Partage les nouvelles",
-      "does_take_asks": "Prend les demandes",
-      "does_check_in": "Montre l’avancement",
-      "side_panel_board": "Ton tableau des tâches s’affiche dans le panneau latéral",
-      "side_panel_open": "Ouvrir le tableau des tâches"
+      "flow_label": "Comment fonctionne Crew Mode",
+      "flow_goal": "Objectif",
+      "flow_split": "Découper",
+      "flow_parallel": "Chats séparés",
+      "flow_board": "Tableau",
+      "flow_needs_you": "À toi",
+      "side_panel_open": "Tableau des tâches"
     },
     "guideLayer": {
       "region_label": "Guide",

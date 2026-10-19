@@ -1,7 +1,6 @@
 import type { NavigateFunction } from 'react-router-dom'
 import { useId, type RefObject, type Dispatch, type SetStateAction, type MutableRefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { motion } from 'framer-motion'
 import { Undo2 } from 'lucide-react'
 import { Composer, type ComposerHandle, type ComposerVoiceOptions } from '../../../chat-core/composer/Composer'
 import type { ComposerPasteSlice } from '../../../chat-core/composer/composerPastes'
@@ -251,10 +250,9 @@ interface ComposerDockViewProps {
   switchMemoryMode: (newMode: MemoryMode) => Promise<void>
   composerAbove: JSX.Element
   composerSessionControls: ReturnType<typeof useSessionControlChips>
-  /** The Crew Mode switch (crewModeSwitch): offered, on, and its toggle. */
-  crewModeEligible: boolean
-  crewModeOn: boolean
-  toggleCrewMode: () => void
+  /** The Crew Mode chip (crewModeSwitch): offered on this chat, and its one-way switch on. */
+  crewModeOffered: boolean
+  turnOnCrewMode: () => void
 }
 
 /**
@@ -278,7 +276,7 @@ export default function ComposerDockView({
   effortSupported, modelMarker, pinModelToAgentMut, projectBranch, projectGit, projectGitError, shownModel, cardOwnsRecovery, continuable, continuing, handleContinue, interrupted, dockGutter, dockRef,
   endQuoteFlight, flyingQuote, inputAreaRef, isAtBottom, answerQuestionCard, handleCancelQueued, handleEditQueued, handleInterruptQueued, handleReorderQueued, keepQuestionAnswer, queuedMessages,
   queuePendingIds, steer, stopTurn, systemDeliveryCount, handleEditLastRequest, composerOptimizing, handleOptimizingChange, memorySwitching, showComposerMemoryChip, switchMemoryMode, composerAbove,
-  composerSessionControls, crewModeEligible, crewModeOn, toggleCrewMode,
+  composerSessionControls, crewModeOffered, turnOnCrewMode,
 }: ComposerDockViewProps) {
   const crewModeNoteId = useId()
   // Disabled while a reply runs (the agent switch refuses mid-turn): the
@@ -287,11 +285,8 @@ export default function ComposerDockView({
   const crewModeBusy = slotRunning || !!currentSlot?.running
   // The chip's hint as a visible line, named by its `aria-describedby`, so a
   // keyboard, a screen reader and a touch reader all reach it, not only a mouse
-  // hovering the title. While a reply runs it says when the chip works again;
-  // with the mode on it says what turning it off leaves alone.
-  const crewModeNote = !crewModeEligible ? null
-    : crewModeBusy ? i18nT('components.crewMode.chip_hint_busy')
-    : crewModeOn ? i18nT('components.crewMode.chip_off_keeps_chats') : null
+  // hovering the title. It says, while a reply runs, when the chip works again.
+  const crewModeNote = crewModeOffered && crewModeBusy ? i18nT('components.crewMode.chip_hint_busy') : null
   return (
     <>
             {/* Composer dock. Floats over the bottom of the transcript scroller
@@ -454,23 +449,21 @@ export default function ComposerDockView({
                   />
                 </div>
               )}
-              {(showComposerMemoryChip || crewModeEligible) && (
+              {showComposerMemoryChip && (
                 // No backdrop: the chip is glass and whatever scrolls under it is meant to show.
                 // `w-fit`, not a full-width flex row: the box is a `dock-inert` child, so
                 // it catches input, and it should be no wider than the chips it holds.
-                // The Crew Mode chip sits right of the memory chip. Once the chat has
-                // messages the memory chip leaves and the SAME Crew Mode chip glides to
-                // the centre (`layout`), so the mode can still be turned off.
+                // The Crew Mode chip sits right of the memory chip, on the welcome state
+                // only. Crew Mode is one way: once it is chosen the parent stops offering
+                // both chips, so this row leaves with them and nothing turns it off.
                 // The row wraps, so on a phone the chip's note drops under the chip
                 // instead of overlapping it.
                 <div className="relative z-10 mx-auto w-fit max-w-full px-4 pt-2 pb-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1" data-testid="composer-memory-chip">
-                  {showComposerMemoryChip && <MemoryModeChip memoryMode={currentSlot?.memory_mode ?? 'persistent'} onSwitchMode={switchMemoryMode} switching={memorySwitching} disabled={composerOptimizing} />}
-                  {crewModeEligible && (
+                  <MemoryModeChip memoryMode={currentSlot?.memory_mode ?? 'persistent'} onSwitchMode={switchMemoryMode} switching={memorySwitching} disabled={composerOptimizing} />
+                  {crewModeOffered && (
                     // Busy while a reply runs; disabled while a memory-mode switch is
                     // replacing this session.
-                    <motion.span layout="position" className="inline-flex">
-                      <CrewModeChip on={crewModeOn} onToggle={toggleCrewMode} busy={crewModeBusy} disabled={memorySwitching} describedBy={crewModeNote ? crewModeNoteId : undefined} />
-                    </motion.span>
+                    <CrewModeChip onTurnOn={turnOnCrewMode} busy={crewModeBusy} disabled={memorySwitching} describedBy={crewModeNote ? crewModeNoteId : undefined} />
                   )}
                   {crewModeNote && (
                     <span id={crewModeNoteId} data-testid="crew-mode-note" className="text-[12px] text-muted text-center">

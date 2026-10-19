@@ -400,22 +400,23 @@ releases only the captured identity, preserving any replacement session carrier.
 
 **Crew Mode** has no field of its own. It is a UI over the existing
 `kirocrew-conductor`: a chat is in Crew Mode exactly when its agent is that
-template. The composer switch is an ordinary `POST /api/chat/slots/{slot}/agent`
-naming the `template` namespace both ways. On names `kirocrew-conductor`; off
-sends an empty agent name, and the server stamps the configured default template,
-so off stays right while the dashboard's agent catalog is loading or unavailable.
-The off switch shows only on an empty chat's welcome state; a chat with
-messages shows it only while Crew Mode is on, so it can still be turned off. Its
-hint reads "Turn on Crew Mode: each task runs in its own chat and reports back
-here." when off and "Turn off Crew Mode. This chat becomes a normal chat again;
-chats it already opened keep running." when on. Turning it on in a root session
+template. The composer switch is one way: an ordinary
+`POST /api/chat/slots/{slot}/agent` naming `kirocrew-conductor` in the `template`
+namespace. The chip shows only on an empty chat's welcome state, and its hint
+reads "Turn on Crew Mode: each task runs in its own chat and reports back here."
+Pressing it hides both the memory-mode chip and the Crew Mode chip for that chat
+at once, and neither comes back: the composer has no off control and no off note.
+If the server refuses the switch, the chat never turned on and both chips return. The agent picker is unchanged and still lists
+every agent, so it can move a Crew Mode chat to another agent; whether to hide or
+lock it there is an open owner decision. The server route itself is unchanged: an
+empty agent name still stamps the configured default template. Turning it on in a root session
 also opens the side panel's Dashboard view, whose Overview is the session's own
 Dynamic Dashboard. The switch to the conductor adopts `goal-board` on that page while
 nothing else is adopted, and each turn's `[DASHBOARD]` block then names it, so the
 conductor's task board lives there instead of in its replies.
 A person who wants every new chat
 on the conductor sets it as the default agent (`agent.default_agent`); the switch
-is then not offered, since off would have nothing to switch back to.
+is then not offered, since every chat already starts on the conductor.
 
 ## Private member session ownership
 

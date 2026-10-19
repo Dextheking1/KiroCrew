@@ -9947,20 +9947,18 @@
     "crewMode": {
       "chip_off": "Crew Mode",
       "chip_off_explained": "Crew Mode: dividir em tarefas",
-      "chip_on": "Crew Mode ativado",
       "chip_hint_off": "Ative o Crew Mode: cada tarefa roda em um chat próprio e informa aqui.",
-      "chip_hint_on": "Desative o Crew Mode. Este chat volta a ser um chat normal; os chats que ele já abriu continuam rodando.",
       "chip_hint_busy": "Disponível depois da resposta.",
-      "chip_off_keeps_chats": "Desativar o Crew Mode torna este chat um chat normal. Os chats que ele abriu continuam rodando.",
       "title": "Crew Mode",
       "tagline_lead": "Você define a meta.",
       "tagline_strong": "Sua equipe faz o trabalho.",
-      "does_new_chat": "Abre chats",
-      "does_pass_notes": "Compartilha avanços",
-      "does_take_asks": "Recebe pedidos",
-      "does_check_in": "Mostra o progresso",
-      "side_panel_board": "Seu quadro de tarefas aparece no painel lateral",
-      "side_panel_open": "Abrir o quadro de tarefas"
+      "flow_label": "Como o Crew Mode funciona",
+      "flow_goal": "Objetivo",
+      "flow_split": "Dividir",
+      "flow_parallel": "Chats próprios",
+      "flow_board": "Quadro",
+      "flow_needs_you": "Precisa de você",
+      "side_panel_open": "Quadro de tarefas"
     },
     "guideLayer": {
       "region_label": "Guia",

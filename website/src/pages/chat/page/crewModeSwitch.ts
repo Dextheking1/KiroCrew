@@ -14,7 +14,7 @@
  * `openView`), and only for a ROOT session (`isRootSession`): any other session
  * has no Overview of its own, and the gateway would refuse the read.
  */
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import type { ChatSlot } from '../../../types'
 import type { ViewKind } from '../../../hooks/usePanelTabs'
 import { useAppDispatch } from '../../../store'
@@ -53,16 +53,25 @@ export function useCrewModeSwitch({ currentSlot, defaultAgent, switchAgent, open
     dispatch(openActivityPanel())
     openView('command-center')
   }, [dispatch, openView])
-  // Both directions name the template namespace: a bare name would be read as
-  // a crewmate whenever the slot's kind is unset. Off sends an empty name and
-  // the server stamps the configured default template, so it is right even
-  // while the agent catalog is loading or unavailable (`defaultAgent` is '').
-  // Turning it on also opens the task board; turning it off leaves the side
-  // panel as it is.
-  const toggleCrewMode = useCallback(() => {
-    if (crewModeOn) { void switchAgent('', 'template'); return }
-    void switchAgent(CREW_MODE_AGENT, 'template')
+  // The chat whose switch to the conductor is in flight. The composer's chips go
+  // the moment the chip is pressed, not when the switch lands: `switchAgent`
+  // writes the slot from the server's answer before it settles, so on success the
+  // slot is already on the conductor when this clears, and on a refused switch
+  // (which `switchAgent` reports as its own notice) the chat never turned on and
+  // its chips come back.
+  const [turningOn, setTurningOn] = useState<string | null>(null)
+  // One way only: the composer offers no way back to a plain chat. The template
+  // namespace is named, since a bare name would be read as a crewmate whenever the
+  // slot's kind is unset. Turning it on also opens the task board.
+  const turnOnCrewMode = useCallback(() => {
+    if (crewModeOn || !currentSlot) return
+    const key = currentSlot.key
+    setTurningOn(key)
+    void switchAgent(CREW_MODE_AGENT, 'template').finally(() => setTurningOn(k => (k === key ? null : k)))
     if (taskBoardOffered) openTaskBoard()
-  }, [crewModeOn, switchAgent, taskBoardOffered, openTaskBoard])
-  return { crewModeEligible, crewModeOn, toggleCrewMode, openTaskBoard: taskBoardOffered ? openTaskBoard : undefined }
+  }, [crewModeOn, currentSlot, switchAgent, taskBoardOffered, openTaskBoard])
+  /** Crew Mode is on, or being turned on, for this chat: the composer then shows
+   *  neither the memory-mode chip nor the Crew Mode chip, and never again. */
+  const crewModeChosen = crewModeOn || (!!currentSlot && turningOn === currentSlot.key)
+  return { crewModeEligible, crewModeOn, crewModeChosen, turnOnCrewMode, openTaskBoard: taskBoardOffered ? openTaskBoard : undefined }
 }

@@ -9663,20 +9663,18 @@
     "crewMode": {
       "chip_off": "Crew Mode",
       "chip_off_explained": "Crew Mode: 작업으로 나누기",
-      "chip_on": "Crew Mode 켜짐",
       "chip_hint_off": "Crew Mode를 켭니다. 각 작업이 별도의 채팅에서 실행되고 여기로 결과를 알려 줍니다.",
-      "chip_hint_on": "Crew Mode를 끕니다. 이 채팅은 다시 일반 채팅이 되고, 이미 연 채팅은 계속 실행됩니다.",
       "chip_hint_busy": "답변이 끝나면 사용할 수 있습니다.",
-      "chip_off_keeps_chats": "Crew Mode를 끄면 이 채팅은 일반 채팅이 됩니다. 이미 연 채팅은 계속 실행됩니다.",
       "title": "Crew Mode",
       "tagline_lead": "목표는 당신이 정하고,",
       "tagline_strong": "일은 크루가 합니다.",
-      "does_new_chat": "채팅을 엽니다",
-      "does_pass_notes": "소식을 전합니다",
-      "does_take_asks": "요청을 받습니다",
-      "does_check_in": "진행을 보여 줍니다",
-      "side_panel_board": "작업 보드는 사이드 패널에 표시됩니다",
-      "side_panel_open": "작업 보드 열기"
+      "flow_label": "Crew Mode 작동 방식",
+      "flow_goal": "목표",
+      "flow_split": "나누기",
+      "flow_parallel": "별도 채팅",
+      "flow_board": "보드",
+      "flow_needs_you": "내 결정 필요",
+      "side_panel_open": "작업 보드"
     },
     "guideLayer": {
       "region_label": "가이드",

@@ -1,9 +1,10 @@
 /**
- * Crew Mode on ChatPage: the switch sits right of the memory chip, flips the
- * chat to the existing conductor through the ordinary agent switch, swaps the
- * empty chat's welcome page for the Crew Mode one, and stays above the composer
- * once the chat has messages so it can be turned off. WelcomeView is mocked to
- * nothing, so a Crew Mode page found here comes from ChatPage's own branch.
+ * Crew Mode on ChatPage: the switch sits right of the memory chip on a new chat,
+ * turns the chat to the existing conductor through the ordinary agent switch, and
+ * swaps the empty chat's welcome page for the Crew Mode one. It is one way: once
+ * pressed, both the memory-mode chip and the Crew Mode chip leave the composer for
+ * good, and nothing there turns the mode off. WelcomeView is mocked to nothing, so
+ * a Crew Mode page found here comes from ChatPage's own branch.
  */
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, act, fireEvent, waitFor, within } from '@testing-library/react'
@@ -12,7 +13,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { configureStore } from '@reduxjs/toolkit'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import chatReducer from '../store/chatSlice'
+import chatReducer, { appendMessage } from '../store/chatSlice'
 import dashboardReducer from '../store/dashboardSlice'
 import notificationsReducer from '../store/notificationsSlice'
 import { ThemeProvider } from '../hooks/useTheme'
@@ -84,17 +85,19 @@ type Slot = {
   createdBy?: string
   instanceId?: string
   slotRunning?: boolean
+  /** The listed slot's `running`, which follows the server. */
+  listedRunning?: boolean
   slotLoading?: boolean
   activityOpen?: boolean
 }
 
-function makeStore({ messages, mode = '', agent = 'default', agentKind = '', origin = 'user', memoryMode = 'persistent', slotKeys = ['slot-a'], createdBy, instanceId, slotRunning = false, slotLoading = false, activityOpen = false }: Slot) {
+function makeStore({ messages, mode = '', agent = 'default', agentKind = '', origin = 'user', memoryMode = 'persistent', slotKeys = ['slot-a'], createdBy, instanceId, slotRunning = false, listedRunning = false, slotLoading = false, activityOpen = false }: Slot) {
   return configureStore({
     reducer: { dashboard: dashboardReducer, chat: chatReducer, notifications: notificationsReducer },
     preloadedState: {
       dashboard: {
         status: null,
-        slots: slotKeys.map(key => ({ key, messages: key === 'slot-a' ? messages.length : 0, running: false, mode: key === 'slot-a' ? mode : '', agent: key === 'slot-a' ? agent : 'default', agent_kind: key === 'slot-a' ? agentKind : '', origin: key === 'slot-a' ? origin : 'user', memory_mode: key === 'slot-a' ? memoryMode : 'persistent', ...(key === 'slot-a' && createdBy ? { created_by: createdBy } : {}), ...(key === 'slot-a' && instanceId ? { instance_id: instanceId } : {}), pending_approval: false, waiting_for_input: false, last_activity_ts: undefined })),
+        slots: slotKeys.map(key => ({ key, messages: key === 'slot-a' ? messages.length : 0, running: key === 'slot-a' && listedRunning, mode: key === 'slot-a' ? mode : '', agent: key === 'slot-a' ? agent : 'default', agent_kind: key === 'slot-a' ? agentKind : '', origin: key === 'slot-a' ? origin : 'user', memory_mode: key === 'slot-a' ? memoryMode : 'persistent', ...(key === 'slot-a' && createdBy ? { created_by: createdBy } : {}), ...(key === 'slot-a' && instanceId ? { instance_id: instanceId } : {}), pending_approval: false, waiting_for_input: false, last_activity_ts: undefined })),
         unreadSlots: [], refreshTrigger: 0, approvalMode: 'normal',
         subagentRunning: {}, subagentDetails: {}, subagentText: {},
       } as unknown as RootState['dashboard'],
@@ -151,36 +154,70 @@ describe('Crew Mode on ChatPage', () => {
     await waitFor(() => expect(chatSlotAgent).toHaveBeenCalledWith('slot-a', 'kirocrew-conductor', 'template'))
     await waitFor(() => expect(store.getState().dashboard.slots[0].agent).toBe('kirocrew-conductor'))
     expect(await screen.findByTestId('crew-mode-welcome')).toBeInTheDocument()
-    expect(screen.getByTestId('crew-mode-chip')).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  it('stays above the composer mid-chat and turns off back to the default template', async () => {
-    chatSlotAgent.mockClear()
-    const store = await renderWith({ messages: [{ role: 'user', content: 'hello' }], agent: 'kirocrew-conductor', agentKind: 'template' })
+    expect(screen.queryByTestId('crew-mode-chip')).toBeNull()
     expect(screen.queryByTestId('memory-mode-chip')).toBeNull()
-    const row = screen.getByTestId('composer-memory-chip')
-    const chip = within(row).getByTestId('crew-mode-chip')
-    expect(chip).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(chip)
-    // The template namespace, named: a bare name would be read as a crewmate.
-    // The empty name lets the server stamp the configured default.
-    await waitFor(() => expect(chatSlotAgent).toHaveBeenCalledWith('slot-a', '', 'template'))
-    await waitFor(() => expect(store.getState().dashboard.slots[0].agent).toBe('default'))
   })
 
-  it('turns off to the server default while the agent catalog is unavailable', async () => {
-    chatSlotAgent.mockClear()
-    agentsState.defaultAgent = ''
-    await renderWith({ messages: [{ role: 'user', content: 'hello' }], agent: 'kirocrew-conductor', agentKind: 'template' })
+  it('hides both chips the moment it is pressed, before the switch lands', async () => {
+    let land: (v: { agent: string; workspace: string }) => void = () => {}
+    chatSlotAgent.mockImplementationOnce(() => new Promise(r => { land = r }))
+    const store = await renderWith({ messages: [] })
     fireEvent.click(screen.getByTestId('crew-mode-chip'))
-    await waitFor(() => expect(chatSlotAgent).toHaveBeenCalledWith('slot-a', '', 'template'))
+    expect(screen.queryByTestId('crew-mode-chip')).toBeNull()
+    expect(screen.queryByTestId('memory-mode-chip')).toBeNull()
+    // The switch reaches the API a tick later (a lazily loaded helper); land it then.
+    await waitFor(() => expect(chatSlotAgent).toHaveBeenCalledWith('slot-a', 'kirocrew-conductor', 'template'))
+    await act(async () => { land({ agent: 'kirocrew-conductor', workspace: 'default' }) })
+    await waitFor(() => expect(store.getState().dashboard.slots[0].agent).toBe('kirocrew-conductor'))
+    expect(screen.queryByTestId('crew-mode-chip')).toBeNull()
+    expect(screen.queryByTestId('memory-mode-chip')).toBeNull()
   })
 
-  it('says mid-chat that turning it off keeps its chats', async () => {
-    await renderWith({ messages: [{ role: 'user', content: 'hello' }], agent: 'kirocrew-conductor', agentKind: 'template' })
-    const note = screen.getByTestId('crew-mode-note')
-    expect(note).toHaveTextContent("Turning off Crew Mode makes this a normal chat. Chats it opened keep running.")
-    expect(screen.getByTestId('crew-mode-chip')).toHaveAttribute('aria-describedby', note.id)
+  it('keeps one welcome mounted from the press on, before and after the switch lands', async () => {
+    let land: (v: { agent: string; workspace: string }) => void = () => {}
+    chatSlotAgent.mockImplementationOnce(() => new Promise(r => { land = r }))
+    const store = await renderWith({ messages: [] })
+    fireEvent.click(screen.getByTestId('crew-mode-chip'))
+    // At once, while the switch is still in flight and the slot record still names
+    // the default agent: the Crew Mode page, not the plain welcome.
+    const welcome = await screen.findByTestId('crew-mode-welcome')
+    expect(store.getState().dashboard.slots[0].agent).toBe('default')
+    await waitFor(() => expect(chatSlotAgent).toHaveBeenCalledWith('slot-a', 'kirocrew-conductor', 'template'))
+    await act(async () => { land({ agent: 'kirocrew-conductor', workspace: 'default' }) })
+    await waitFor(() => expect(store.getState().dashboard.slots[0].agent).toBe('kirocrew-conductor'))
+    // Same element all the way through: one mount, so one entrance.
+    expect(screen.getByTestId('crew-mode-welcome')).toBe(welcome)
+  })
+
+  it('gives the welcome up once the first message lands', async () => {
+    const store = await renderWith({ messages: [] })
+    fireEvent.click(screen.getByTestId('crew-mode-chip'))
+    await screen.findByTestId('crew-mode-welcome')
+    await act(async () => {
+      store.dispatch(appendMessage({ role: 'user', content: 'plan it', ts: 1 } as unknown as Parameters<typeof appendMessage>[0]))
+    })
+    await waitFor(() => expect(screen.queryByTestId('crew-mode-welcome')).toBeNull())
+  })
+
+  it('brings the chips back when the switch is refused, as the chat never turned on', async () => {
+    chatSlotAgent.mockImplementationOnce(async () => { throw new Error('refused') })
+    await renderWith({ messages: [] })
+    fireEvent.click(screen.getByTestId('crew-mode-chip'))
+    await waitFor(() => expect(screen.getByTestId('crew-mode-chip')).toBeInTheDocument())
+    expect(screen.getByTestId('memory-mode-chip')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['a new Crew Mode chat', [] as Msg[]],
+    ['a Crew Mode chat mid-conversation', [{ role: 'user', content: 'hello' }]],
+  ])('offers no chip and no way off on %s', async (_label, messages) => {
+    chatSlotAgent.mockClear()
+    await renderWith({ messages, agent: 'kirocrew-conductor', agentKind: 'template' })
+    expect(screen.queryByTestId('crew-mode-chip')).toBeNull()
+    expect(screen.queryByTestId('memory-mode-chip')).toBeNull()
+    expect(screen.queryByTestId('crew-mode-note')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Crew Mode' })).toBeNull()
+    expect(chatSlotAgent).not.toHaveBeenCalled()
   })
 
   it('has no note while the mode is off and no reply runs', async () => {
@@ -189,12 +226,11 @@ describe('Crew Mode on ChatPage', () => {
     expect(screen.getByTestId('crew-mode-chip')).not.toHaveAttribute('aria-describedby')
   })
 
-  it('is busy, still focusable, with a visible hint while this composer runs a reply the slot list has not seen', async () => {
-    // The composer's own turn state (`slotRunning`) is set at once by a send; the
-    // listed slot's `running` follows the server and is still false here.
-    detail.running = true
-    const store = await renderWith({ messages: [{ role: 'user', content: 'hello' }], agent: 'kirocrew-conductor', agentKind: 'template', slotRunning: true })
-    expect(store.getState().dashboard.slots[0].running).toBe(false)
+  it('is busy, still focusable, with a visible hint while the server reports a reply running', async () => {
+    // A new chat's composer is idle (the welcome state needs it), but the listed
+    // slot can still report a reply running on the server.
+    const store = await renderWith({ messages: [], listedRunning: true })
+    expect(store.getState().dashboard.slots[0].running).toBe(true)
     const chip = screen.getByTestId('crew-mode-chip')
     expect(chip).toHaveAttribute('aria-disabled', 'true')
     expect(chip).not.toBeDisabled()
@@ -204,6 +240,7 @@ describe('Crew Mode on ChatPage', () => {
     chatSlotAgent.mockClear()
     fireEvent.click(chip)
     expect(chatSlotAgent).not.toHaveBeenCalled()
+    expect(screen.getByTestId('crew-mode-chip')).toBeInTheDocument()
   })
 
   it('is not offered on a remote-instance chat', async () => {
@@ -215,10 +252,8 @@ describe('Crew Mode on ChatPage', () => {
   it('is held back while the chat is still loading', async () => {
     // The detail read stays pending, so the page keeps its loading state: the chip
     // is not drawn alone, to slide across the memory chip arriving beside it.
-    // A chat already in Crew Mode is the case the hold covers: off, the chip waits
-    // for the memory chip anyway.
     detail.hold = true
-    await renderWith({ messages: [], agent: 'kirocrew-conductor', agentKind: 'template', slotLoading: true })
+    await renderWith({ messages: [], slotLoading: true })
     expect(screen.queryByTestId('crew-mode-chip')).toBeNull()
   })
 
@@ -228,13 +263,6 @@ describe('Crew Mode on ChatPage', () => {
     fireEvent.click(screen.getByTestId('crew-mode-chip'))
     await waitFor(() => expect(store.getState().chat.activityOpen).toBe(true))
     expect(await screen.findByTestId('command-center-panel', {}, { timeout: 5000 })).toBeInTheDocument()
-  })
-
-  it('leaves the side panel open when turned off', async () => {
-    const store = await renderWith({ messages: [{ role: 'user', content: 'hello' }], agent: 'kirocrew-conductor', agentKind: 'template', activityOpen: true })
-    fireEvent.click(screen.getByTestId('crew-mode-chip'))
-    await waitFor(() => expect(chatSlotAgent).toHaveBeenCalledWith('slot-a', '', 'template'))
-    expect(store.getState().chat.activityOpen).toBe(true)
   })
 
   it('turns on in a dispatched chat without opening a board it does not have', async () => {
@@ -282,18 +310,9 @@ describe('Crew Mode on ChatPage', () => {
     expect(screen.queryByTestId('crew-mode-chip')).toBeNull()
   })
 
-  it('leaves the conductor when the chat switches to Incognito', async () => {
-    createChatSlot.mockClear()
-    createChatSlot.mockResolvedValueOnce({ key: 'slot-b', messages: 0, running: false, memory_mode: 'incognito' })
+  it('offers no memory-mode switch on a Crew Mode chat, so it stays on the conductor', async () => {
     await renderWith({ messages: [], agent: 'kirocrew-conductor', agentKind: 'template' })
-    fireEvent.click(screen.getByText('Choose memory mode').closest('button')!)
-    fireEvent.click(screen.getByText('Incognito').closest('button')!)
-    // The pick crosses ChatPage's lazy `import('./chat/memoryModeSwitch')`.
-    await waitFor(() => expect(createChatSlot).toHaveBeenCalled(), { timeout: 5000 })
-    // Agent-less (agent, then agent_kind): the server stamps the default template.
-    expect(createChatSlot.mock.calls[0][1]).toBeUndefined()
-    expect(createChatSlot.mock.calls[0][8]).toBeUndefined()
-    expect(createChatSlot.mock.calls[0][4]).toBe('incognito')
+    expect(screen.queryByText('Choose memory mode')).toBeNull()
   })
 
   it('keeps a plain chat on its agent when it switches to Incognito', async () => {

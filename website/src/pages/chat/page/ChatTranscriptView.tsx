@@ -140,7 +140,7 @@ export default function ChatTranscriptView({
           {/* Not a persistent element changing form: the user's own click
               on the Crew Mode chip (which stays put) asks for a different
               page, and CrewModeWelcome fades and pops in on its own. */}
-          {crewModeOn ? <CrewModeWelcome onOpenTaskBoard={openTaskBoard} /> : <WelcomeView setInput={setInput} />}
+          {crewModeOn ? <CrewModeWelcome chatKey={activeSlot ?? undefined} onOpenTaskBoard={openTaskBoard} /> : <WelcomeView setInput={setInput} />}
         </motion.div>
       ) : (
       <>
