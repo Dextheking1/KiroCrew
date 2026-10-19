@@ -42,7 +42,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from kiro_crew import member_goals
+from kiro_crew import crewmate_prompts, member_goals
 from kiro_crew import members as members_mod
 
 logger = logging.getLogger(__name__)
@@ -161,11 +161,7 @@ async def sync_schedule(crons: Any, slug: str, label: str, schedules: dict[str, 
         )
 
 
-_PREAMBLE = (
-    "Kiro Crew sends this; the user did not type it and sees only your reply, so "
-    "keep this note itself out of what you write. Write in the language of the "
-    "dashboard's [UI LANGUAGE] when it is shown, else English.\n\n"
-)
+_PREAMBLE = crewmate_prompts.text("wake.preamble")
 
 
 def _movement_lines(rec: dict[str, Any], cadence: str) -> str:
@@ -224,10 +220,7 @@ def _finished_lines(tasks: list[dict[str, str]]) -> str:
         if task["summary"]:
             line += f": {task['summary']}"
         lines.append(line)
-    return "\n".join(lines) or (
-        "(none on your task list in this period; summarise what you finished from "
-        "your own work log, and say in the report that you did)"
-    )
+    return "\n".join(lines) or crewmate_prompts.text("reminder.no_finished_tasks")
 
 
 def reminder_prompt(

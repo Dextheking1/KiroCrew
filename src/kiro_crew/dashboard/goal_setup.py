@@ -34,7 +34,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from kiro_crew import member_goals
+from kiro_crew import crewmate_prompts, member_goals
 from kiro_crew import members as members_mod
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ def milestones_prompt(rec: dict[str, Any], *, has_mate_tools: bool = True) -> st
         return None
     sched = rec.get("schedules") or {}
     any_on = any(sched.get(c) for c in member_goals.CADENCES)
-    lines = ["[Milestones confirmed] The user just confirmed your milestones:", ""]
+    lines = [crewmate_prompts.text("goal_setup.milestones_head"), ""]
     for kr in krs:
         text = member_goals.scrub_text(str(kr.get("text") or ""))
         target = member_goals.scrub_text(str(kr.get("target") or ""))
@@ -196,25 +196,11 @@ def milestones_prompt(rec: dict[str, Any], *, has_mate_tools: bool = True) -> st
         lines.extend(["", *member_goals.goal_lines({"goals": goals})])
     lines.append("")
     if any_on:
-        lines.append(
-            "Reply in one or two short sentences, in the user's language: acknowledge "
-            "them and say what you will work on first toward the goal. The check-ins "
-            "already running will record readings against these milestones."
-        )
+        lines.append(crewmate_prompts.text("goal_setup.milestones_running"))
     elif has_mate_tools:
-        lines.append(
-            "Reply in the user's language: acknowledge them in a sentence, then offer "
-            "check-ins with set_check_ins. Say in one plain sentence each what the Daily "
-            "Goal Reminder, the Weekly report and the Monthly review would do for them, "
-            "propose the ones that fit this goal, and let the card decide."
-        )
+        lines.append(crewmate_prompts.text("goal_setup.milestones_offer_tools"))
     else:
-        lines.append(
-            "Reply in the user's language: acknowledge them in a sentence, then offer "
-            "check-ins. Say in one plain sentence each what the Daily Goal Reminder, the "
-            "Weekly report and the Monthly review would do for them, suggest the ones "
-            "that fit this goal, and tell the user they turn them on on your Goals tab."
-        )
+        lines.append(crewmate_prompts.text("goal_setup.milestones_offer_no_tools"))
     return "\n".join(lines)
 
 
@@ -283,35 +269,29 @@ def removed_prompt(rec: dict[str, Any], goal_id: str, *, has_mate_tools: bool = 
         return None
     text = member_goals.scrub_text(str(removed["goal"].get("text") or ""))
     served = set(removed.get("key_result_ids") or [])
-    lines = ["[Goal removed] The user just removed this goal:", "", text, ""]
+    lines = [crewmate_prompts.text("goal_setup.removed_head"), "", text, ""]
     goals = [{**g, "text": member_goals.scrub_text(g["text"])} for g in rec.get("goals") or []]
     if goals:
         lines.extend(["Goals left:", *member_goals.goal_lines({"goals": goals})[1:], ""])
     else:
-        lines.extend(["No goal is left, so every check-in was switched off.", ""])
+        lines.extend([crewmate_prompts.text("goal_setup.removed_none_left"), ""])
     orphans = [
         member_goals.scrub_text(str(kr.get("text") or ""))
         for kr in rec.get("key_results") or []
         if kr.get("id") in served and not kr.get("goal_ids")
     ]
     if orphans:
-        lines.extend(["These milestones served only that goal:", *(f"- {o}" for o in orphans), ""])
-        if has_mate_tools:
-            follow_up = (
-                "Then propose, with set_key_results (a card, the whole set), dropping or "
-                "relinking the milestones above; the user decides."
-            )
-        else:
-            follow_up = (
-                "Then suggest, in this chat, dropping or relinking the milestones "
-                "above on your Goals tab; the user decides."
-            )
+        lines.extend(
+            [crewmate_prompts.text("goal_setup.removed_orphans"), *(f"- {o}" for o in orphans), ""]
+        )
+        follow_up = crewmate_prompts.text(
+            "goal_setup.removed_relink_tools"
+            if has_mate_tools
+            else "goal_setup.removed_relink_no_tools"
+        )
     else:
-        follow_up = "Ask nothing else."
-    lines.append(
-        "Reply in one or two short sentences, in the user's language: acknowledge the "
-        "removal and stop work that only served it. " + follow_up
-    )
+        follow_up = crewmate_prompts.text("goal_setup.removed_nothing_else")
+    lines.append(crewmate_prompts.text("goal_setup.removed_reply") + follow_up)
     return "\n".join(lines)
 
 

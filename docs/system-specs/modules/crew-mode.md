@@ -2629,6 +2629,54 @@ user actually has is the opposite problem — the crewmates the old sync already
 made — and that is what this migration settles.
 ## A crewmate's chat
 
+### Where a crewmate's prompt text lives
+
+Every piece of text a crewmate is told lives in one file,
+`src/kiro_crew/crewmate_prompts.json` (package data, listed in `setup.cfg`
+and `MANIFEST.in`): the conductor's member section (`conductor.*`, assembled by
+`context_assembly/member.py:build_member_section` and `operating_mode_block`),
+the worker's principles (`worker.principles`, `mate_worker.MATE_WORKER_PROMPT`),
+every gateway wake (`wake.preamble`, `heartbeat*`, `reminder.*`,
+`milestones.*` in `dashboard/goal_reminder.py`; `goal_setup.*` in
+`dashboard/goal_setup.py`; `worker_report.*` in
+`dashboard/mate_thread_wakes.py`; `welcome.*` in `dashboard/mate_welcome.py`;
+`upgrade_notice` in `mate_upgrade_notice.py`) and the hand-off capability
+note (`dispatch.*`, `mate_capability_catalog.dispatch_summary`). One key per
+piece; its `_about` entry names where it is assembled and which placeholders
+it takes. The modules keep only the assembly: `crewmate_prompts.text(key)`
+returns a piece, `crewmate_prompts.fill(key, **values)` fills its named
+`str.format` placeholders and refuses a missing or an unknown one.
+`test_crewmate_prompts.py` holds the rule: every piece is read by an
+assembler, every key an assembler names exists, and no sentence of any piece
+is left as a literal in those modules.
+
+Every crewmate-only concept and tool is named once in the conductor's own
+system section: `conductor.crew_log_section` (`[YOUR CREW LOG, DASHBOARD AND
+TOOLS]`), added after `[HOW YOU WORK]` at the desk, a phrase each: the crew
+log and its readers (`crew_log_read`, `crew_log_list`,
+`crew_log_projection`) and folds; the Dashboard tab as a page the crewmate
+owns and builds from folds, styled from its project and goal unless the user
+asked for a style, with a missing fact recorded as a new crew-log event type;
+the Kiro Crew docs search (`search_docs`, `find_ui` on `kirocrew-guide`, which
+both the conductor's fixed servers and the worker's base config mount);
+`work_ledger_record` / `work_ledger_read`, `save_goal_report`, `save_notes`;
+the worker's kit, the capability card that adds to it, the Profile's
+Permissions reaching its sessions, and its own worktree under the crew/
+prefix. `test_every_crewmate_only_tool_is_named_in_the_assembled_conductor_prompt`
+reads the tool names from the `kirocrew-mate`, `kirocrew-panel`,
+`kirocrew-crew-log` and `kirocrew-work` server sources plus the guide and
+session tools, and fails when the assembled prompt omits one, with an explicit
+exempt list (`panel_templates`, `work_brief`, `work_report`,
+`work_ledger_rebuild`). The worker's principles add one line: facts the
+crewmate's Dashboard depends on are recorded as crew-log events, through the
+tools that record them, and it commits in the crewmate's own worktree.
+
+`scripts/crewmate_prompt_preview.py --fixture <name> [--piece <p>] [--diff | --write]`
+runs the real assembly over a fixture in a throwaway data home and prints
+every assembled prompt, offline; the fixtures and their goldens are in
+`test/fixtures/crewmate_prompts/` (`all-met`, `card-waiting`, `worker-gap`,
+`no-tools`), and `--diff` compares against the golden.
+
 A member-mode slot's transcript is the crewmate's whole working record: the
 `[auto-nudge cycle N]` turns of its patrol loop, `[Cron notification …]` and
 `[Subagent completion event]` envelopes, every tool call, and the say-nothing
