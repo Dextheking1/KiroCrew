@@ -451,6 +451,7 @@ async def kill(self: AcpRuntime, *, expected: bool = False, reason: str = "") ->
     finally:
         self._discard_sandbox_cleanup()
         await self._discard_bound_workspace()
+        await self._close_remote_workspace()
 
 
 async def _kill_inner(self: AcpRuntime, *, expected: bool = False, reason: str = "") -> None:
