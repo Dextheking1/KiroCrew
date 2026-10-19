@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import bisect
+import contextlib
 import dataclasses
 import dis
 import functools
@@ -67,6 +68,30 @@ _BINDING_TYPES = frozenset(
 _WRITE_STATEMENTS = frozenset({ast.Assign, ast.AugAssign, ast.Delete})
 _WORD = re.compile(r"\w+")
 _FROM_IMPORT = re.compile(r"\bfrom\s+([\w.]+)\s+import\s+")
+#: How many texts a corpus scan keeps its per-text readings for inside
+#: :func:`holding_texts`: every file of the test trees (some 5,500), so each scan after
+#: the first reuses them instead of reading the file anew.
+_TEXTS = 8192
+#: The per-text readings :func:`holding_texts` widens, each with the share of
+#: :data:`_TEXTS` it keeps: the per-leaf ones hold a few entries per text.
+_PER_TEXT = {"_readings": 1, "_from_imports": 1, "_leaf_parts": 4, "_chain_words": 4}
+
+
+@contextlib.contextmanager
+def holding_texts(count: int = _TEXTS) -> Iterator[None]:
+    """Inside the block, every per-text reading keeps *count* texts (and the texts).
+
+    That is the whole tree's text (some 140 MB) for a scan that reads every file more
+    than once. On exit the narrow caches every other caller uses come back, so nothing
+    outside the block keeps the corpus.
+    """
+    narrow = {name: globals()[name] for name in _PER_TEXT}
+    for name, share in _PER_TEXT.items():
+        globals()[name] = functools.lru_cache(maxsize=share * count)(narrow[name].__wrapped__)
+    try:
+        yield
+    finally:
+        globals().update(narrow)
 
 
 def _dot_prefixes(dotted: str) -> Iterator[str]:
@@ -613,6 +638,38 @@ def _mentions(text: str, dotted_names: Iterable[str]) -> bool:
     return False
 
 
+def mentioned(text: str, dotted_names: Iterable[str]) -> tuple[str, ...]:
+    """The *dotted_names* that *text* spells (:func:`_mentions` of each), in order.
+
+    A plain name is asked about only when its leaf a ``from ... import`` list holds or
+    begins a word written after a dot, since :func:`_mentions_plain` admits no other;
+    every other name is always asked. The leaves are matched against those words as
+    sets, so a scan of thousands of files skips the call for most of a thousand names.
+    """
+    names = tuple(dotted_names)
+    by_leaf = _by_leaf(names)
+    _after_dots, after_dots, imported = _readings(text)
+    leaves = set(by_leaf.keys() & imported)
+    for leaf in by_leaf.keys() - leaves:
+        at = bisect.bisect_left(after_dots, leaf)
+        if at < len(after_dots) and after_dots[at].startswith(leaf):
+            leaves.add(leaf)
+    asked = {name for leaf in leaves for name in by_leaf[leaf]}
+    return tuple(
+        name for name in names if (name in asked or not _is_plain(name)) and _mentions(text, [name])
+    )
+
+
+@functools.lru_cache(maxsize=8)
+def _by_leaf(names: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    """Leaf -> the plain names (:func:`_is_plain`) among *names* ending in it."""
+    found: dict[str, list[str]] = {}
+    for name in names:
+        if _is_plain(name):
+            found.setdefault(name.rpartition(".")[2], []).append(name)
+    return {leaf: tuple(group) for leaf, group in found.items()}
+
+
 def _alias_chain(text: str, dotted: str) -> bool:
     """Whether *text* writes ``<alias>.<leaf>`` outside an import line, where ``<alias>``
     is a name *text* binds the parent module of *dotted* to (:func:`_text_aliases`).
@@ -622,11 +679,35 @@ def _alias_chain(text: str, dotted: str) -> bool:
     """
     head, _, leaf = dotted.rpartition(".")
     head_leaf = head.rpartition(".")[2]
-    needle = f".{leaf}"
-    if not head_leaf or needle not in text or head_leaf not in text:
+    if not head_leaf:
         return False
-    # The words written before ``.<leaf>``, read backwards from each occurrence with
-    # string scans only: this runs for every file and spelling the cheaper checks pass.
+    if _is_plain(dotted):
+        after_dots, _sorted, imported = _readings(text)
+        # An alias chain writes the leaf as a word after a dot, and each alias
+        # :func:`_text_aliases` reads of a dotted parent writes the parent's leaf after a
+        # dot (``import <head> as``, ``import_module("<head>")``) or in a ``from`` list.
+        if leaf not in after_dots:
+            return False
+        if "." in head:
+            if head_leaf not in after_dots and head_leaf not in imported:
+                return False
+        elif head_leaf not in text:
+            return False
+    elif f".{leaf}" not in text or head_leaf not in text:
+        return False  # a name the word sets cannot hold whole
+    # Drop the head leaf: ``<head leaf>.<leaf>`` is :func:`_spelling_patterns`' own.
+    candidates = _chain_words(text, leaf) - {head_leaf}
+    return bool(candidates) and not candidates.isdisjoint(_text_aliases(text, head))
+
+
+@functools.lru_cache(maxsize=1024)
+def _chain_words(text: str, leaf: str) -> frozenset[str]:
+    """The words *text* writes before ``.<leaf>`` outside an import line, each bound by
+    an ``as`` clause unless the text calls ``import_module``: :func:`_alias_chain`'s
+    candidate aliases, the same for every spelling ending in *leaf*."""
+    needle = f".{leaf}"
+    # Read backwards from each occurrence with string scans only: this runs for every
+    # file and leaf the cheaper checks pass.
     candidates = set()
     for at in _occurrences(text, needle):
         end = at + len(needle)
@@ -643,10 +724,9 @@ def _alias_chain(text: str, dotted: str) -> bool:
         line = text[text.rfind("\n", 0, start) + 1 : start].lstrip()
         if not line.startswith(("from ", "import ")):
             candidates.add(text[start:stop])
-    candidates.discard(head_leaf)  # ``<head leaf>.<leaf>`` is :func:`_spelling_patterns`'
     if "import_module" not in text:
         candidates = {word for word in candidates if re.search(rf"\bas\s+{word}\b", text)}
-    return bool(candidates) and not candidates.isdisjoint(_text_aliases(text, head))
+    return frozenset(candidates)
 
 
 #: The module names :func:`_mentions_plain` answers: dotted ASCII identifiers, no segment
@@ -664,15 +744,39 @@ def _is_plain(dotted: str) -> bool:
 
 
 def _mentions_plain(text: str, dotted: str) -> bool:
-    """:func:`_mentions` for one plain name, from :func:`_from_imports` and
-    :func:`_leaf_parts` instead of :func:`_spelling_patterns`."""
+    """:func:`_mentions` for one plain name, from :func:`_readings`, :func:`_from_imports`
+    and :func:`_leaf_parts` instead of :func:`_spelling_patterns`.
+
+    Past the dotted name itself, a ``from <head> import`` list holds the leaf, or
+    ``<parent>.<leaf>``, ``'.<leaf>'`` or an alias chain writes it as a word after a dot;
+    those last three are looked for only when some word after a dot is the leaf.
+    """
     head, _, leaf = dotted.rpartition(".")
-    present, parents, relative = _leaf_parts(text, leaf)
-    if not present:
-        return False
-    if dotted in text or leaf in _from_imports(text).get(head, ()):
+    head_leaf = head.rpartition(".")[2]
+    after_dots, _sorted, imported = _readings(text)
+    # Written out, the dotted name puts the leaf of a dotted *head* after a dot.
+    if ("." not in head or head_leaf in after_dots) and dotted in text:
         return True
-    return head.rpartition(".")[2] in parents or relative or _alias_chain(text, dotted)
+    if leaf in imported and leaf in _from_imports(text).get(head, ()):
+        return True
+    if leaf not in after_dots:
+        return False
+    _present, parents, relative = _leaf_parts(text, leaf)
+    return head_leaf in parents or relative or _alias_chain(text, dotted)
+
+
+#: A word written after a dot, spaces between allowed: the form ``<parent> . <leaf>`` takes.
+_AFTER_DOT = re.compile(r"\.\s*(\w+)")
+
+
+@functools.lru_cache(maxsize=64)
+def _readings(text: str) -> tuple[frozenset[str], tuple[str, ...], frozenset[str]]:
+    """``(after_dots, sorted_after_dots, imported)``: the words *text* writes after a dot
+    (:data:`_AFTER_DOT`), also sorted for a search by prefix, and every word its
+    ``from ... import`` lists hold (:func:`_from_imports`)."""
+    after_dots = frozenset(_AFTER_DOT.findall(text))
+    imported = frozenset().union(*_from_imports(text).values())
+    return after_dots, tuple(sorted(after_dots)), imported
 
 
 @functools.lru_cache(maxsize=64)
@@ -701,8 +805,11 @@ def _leaf_parts(text: str, leaf: str) -> tuple[bool, frozenset[str], bool]:
         return False, frozenset(), False
     parents = set()
     if f".{leaf}" in text:
-        for match in re.finditer(rf"\b{re.escape(leaf)}\b", text):
-            at = match.start() - 1
+        for start in _occurrences(text, leaf):
+            end = start + len(leaf)
+            if (start and _is_word(text[start - 1])) or (end < len(text) and _is_word(text[end])):
+                continue  # inside a longer word: ``\b<leaf>\b`` does not match here
+            at = start - 1
             while at >= 0 and text[at].isspace():
                 at -= 1
             if at < 0 or text[at] != ".":

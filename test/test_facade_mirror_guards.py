@@ -47,6 +47,7 @@ from facade_mirror_scan import (
     create_true_sites,
     global_reads,
     may_create,
+    mentioned,
     names_by_target,
     needs_syntax_tree,
     patch_events,
@@ -414,6 +415,42 @@ def test_the_spelling_prefilter_admits_every_reach_and_not_the_bare_word() -> No
         assert not _mentions(text, [target]), text
 
 
+def test_the_mentioned_filter_keeps_exactly_what_the_prefilter_admits() -> None:
+    """:func:`facade_mirror_scan.mentioned` skips names by their leaf before asking
+    ``_mentions``; on every way a file reaches a module it keeps what ``_mentions`` admits."""
+    names = (
+        "pkg.sub.state",
+        "pkg.sub.other",
+        "pkg.handler.state",
+        "pkg.state",
+        "top.mod",
+        "pkg.sub.statement_x",
+    )
+    texts = (
+        "import pkg.sub.state as st\n",
+        "x = 'pkg.sub.statement'\n",
+        "from pkg.sub import (\n    other,\n    state,\n)\n",
+        "from pkg import sub\nsub . state.LIMIT = 1\n",
+        "importlib.import_module('.state', 'pkg.sub')\n",
+        "from pkg import handler as h\nh.state.f = 1\n",
+        "import top.mod\n",
+        "the state of the slot\n",
+        "from pkg.other import state\n",
+        "",
+    )
+    for text in texts:
+        expected = tuple(name for name in names if _mentions(text, [name]))
+        assert mentioned(text, names) == expected, text
+    assert mentioned(texts[0], names) == ("pkg.sub.state",)
+    assert mentioned(texts[1], names) == ("pkg.sub.state",), "the dotted name runs on"
+    assert mentioned(texts[7], names) == ()
+    # Names the word sets cannot hold whole keep the full reading.
+    dashed = 'import importlib\nh = importlib.import_module("pkg.sub-thing")\nh.state.x = 1\n'
+    assert mentioned(dashed, ["pkg.sub-thing.state"]) == ("pkg.sub-thing.state",)
+    marked = "import pkg.sub as h\nmock.patch.object(getattr(h, 'a\u0301'), 'f')\n# h.a\u0301\n"
+    assert mentioned(marked, ["pkg.sub.a\u0301"]) == ("pkg.sub.a\u0301",)
+
+
 _FACADE_NAME = "pkg.facade"
 _SPELLINGS = {_FACADE_NAME: _FACADE_NAME, "pkg.handler.facade": _FACADE_NAME}
 _DETECTOR_CASES: tuple[tuple[str, list[tuple[str, str]], str], ...] = (
@@ -586,6 +623,7 @@ def test_the_test_tree_walk_reaches_every_collected_tree() -> None:
     assert source_corpus.repo_root() / "conftest.py" in walked
     assert any("/container_tests/" in path.as_posix() for path in walked)
     assert len(walked) > 1000
+    assert len(walked) < facade_mirror_scan._TEXTS, "the per-text readings must hold the tree"
 
 
 def test_leaf_test_scope_derives_this_file_as_a_corpus_gate(
@@ -628,18 +666,57 @@ _OWNERS_FOUND = {
 }
 
 
+@dataclasses.dataclass(frozen=True)
+class _FamilyText:
+    """One test-tree file that spells a family member, with the spellings it holds.
+
+    *spellings* is the part of :data:`_SPELLINGS_FOUND` and *owners* the part of
+    :data:`_OWNERS_FOUND` the file spells (:func:`facade_mirror_scan.mentioned`). Every
+    reader below skips a spelling the file does not hold, so each scan is handed these
+    instead of the whole tables, and the tables are matched against the file once.
+    """
+
+    text: str
+    spellings: Mapping[str, str]
+    owners: tuple[str, ...]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _hold_the_corpus() -> Iterator[None]:
+    """Keep every test-tree file's readings while this module's scans run
+    (:func:`facade_mirror_scan.holding_texts`), and drop them and the corpus when it
+    ends: the rest of the worker's tests never read them."""
+    with facade_mirror_scan.holding_texts():
+        yield
+    for cached in (_family_files, _events_of, _corpus_events, _corpus_patched_names):
+        cached.cache_clear()
+
+
+def test_holding_texts_widens_the_readings_only_inside_the_block() -> None:
+    narrow = {name: getattr(facade_mirror_scan, name) for name in facade_mirror_scan._PER_TEXT}
+    with facade_mirror_scan.holding_texts(10):
+        inside = {name: getattr(facade_mirror_scan, name) for name in narrow}
+        assert all(inside[name] is not narrow[name] for name in narrow)
+        assert inside["_readings"].cache_info().maxsize == 10
+        assert inside["_leaf_parts"].cache_info().maxsize == 40
+        assert mentioned("import pkg.sub.state\n", ["pkg.sub.state"]) == ("pkg.sub.state",)
+        assert inside["_readings"].cache_info().currsize == 1, "the scan reads the wide cache"
+    assert {name: getattr(facade_mirror_scan, name) for name in narrow} == narrow
+
+
 @functools.lru_cache(maxsize=1)
-def _family_test_texts() -> tuple[tuple[str, str], ...]:
-    """``(path, text)`` of each test-tree file that spells a mirrored facade or an owner,
-    read once for the three scans below."""
-    names = [*_SPELLINGS_FOUND, *_OWNERS_FOUND]
+def _family_files() -> dict[str, _FamilyText]:
+    """Path -> :class:`_FamilyText` of each test-tree file that spells a mirrored facade
+    or an owner, read once for the three scans below."""
     root = source_corpus.repo_root()
-    found = []
-    for path in _test_tree_files() if names else ():
+    found = {}
+    for path in _test_tree_files() if _SPELLINGS_FOUND or _OWNERS_FOUND else ():
         text = path.read_text(encoding="utf-8", errors="replace")
-        if _mentions(text, names):
-            found.append((path.relative_to(root).as_posix(), text))
-    return tuple(found)
+        spellings = {name: _SPELLINGS_FOUND[name] for name in mentioned(text, _SPELLINGS_FOUND)}
+        owners = mentioned(text, _OWNERS_FOUND)
+        if spellings or owners:
+            found[path.relative_to(root).as_posix()] = _FamilyText(text, spellings, owners)
+    return found
 
 
 #: One spelling table for every corpus scan -- each facade's spellings and each owner's
@@ -650,7 +727,7 @@ _SCAN_SPELLINGS = tuple(sorted({**_SPELLINGS_FOUND, **{o: o for o in _OWNERS_FOU
 @functools.lru_cache(maxsize=None)
 def _events_of(path: str, spellings: tuple[tuple[str, str], ...]) -> tuple[PatchSite, ...]:
     """:func:`patch_events` of one corpus file, parsed once per spelling table."""
-    text = dict(_family_test_texts())[path]
+    text = _family_files()[path].text
     try:
         return tuple(patch_events(text, dict(spellings)))
     except SyntaxError:
@@ -753,8 +830,9 @@ def test_no_test_patches_a_mirrored_facade_name_with_create_true() -> None:
     }
     offenders = []
     scanned = 0
-    for path, text in _family_test_texts():
-        if not _admitted(text, _SPELLINGS_FOUND):
+    for path, family in _family_files().items():
+        text = family.text
+        if not _admitted(text, family.spellings):
             continue
         scanned += 1
         if not may_create(text):
@@ -928,11 +1006,15 @@ def routed_patched_names(
     texts: Iterable[tuple[str, str]],
     spellings: Mapping[str, str],
     events_of: Callable[[str, str], Iterable[PatchSite]],
+    targets: Iterable[str] | None = None,
 ) -> dict[str, set[str]]:
     """Facade -> every name *texts* patch through it: the regular expressions' reading of
-    every file, and the syntax tree's (*events_of*) of each file routed to it."""
+    every file, and the syntax tree's (*events_of*) of each file routed to it.
+
+    The tree's events count for *targets*, by default every facade *spellings* names.
+    """
     found: dict[str, set[str]] = {}
-    targets = set(spellings.values())
+    targets = set(spellings.values() if targets is None else targets)
     for path, text in texts:
         for facade, names in text_patched_names(text, spellings).items():
             found.setdefault(facade, set()).update(names)
@@ -947,20 +1029,26 @@ def _corpus_events() -> tuple[tuple[str, PatchSite], ...]:
     """``(path, event)`` for every patch a routed test-tree file makes on a family member."""
     return tuple(
         (path, event)
-        for path, text in _family_test_texts()
-        if parsed_for_the_corpus(text, _SPELLINGS_FOUND, _OWNERS_FOUND)
+        for path, family in _family_files().items()
+        if parsed_for_the_corpus(family.text, family.spellings, family.owners)
         for event in _events_of(path, _SCAN_SPELLINGS)
     )
 
 
 @functools.lru_cache(maxsize=1)
 def _corpus_patched_names() -> dict[str, set[str]]:
-    """Facade -> every name the test trees patch through it (:func:`routed_patched_names`)."""
-    return routed_patched_names(
-        _family_test_texts(),
-        _SPELLINGS_FOUND,
-        lambda path, _text: _events_of(path, _SCAN_SPELLINGS),
-    )
+    """Facade -> every name the test trees patch through it (:func:`routed_patched_names`
+    of each file, with the spellings it holds; the tree's events count for every facade)."""
+    found: dict[str, set[str]] = {}
+    for path, family in _family_files().items():
+        for facade, names in routed_patched_names(
+            [(path, family.text)],
+            family.spellings,
+            lambda path, _text: _events_of(path, _SCAN_SPELLINGS),
+            targets=_FACADES,
+        ).items():
+            found.setdefault(facade, set()).update(names)
+    return found
 
 
 def one_facade_patched_names(
