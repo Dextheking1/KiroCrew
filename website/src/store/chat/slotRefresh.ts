@@ -7,7 +7,7 @@ import type { ChatMessage } from '../../types'
 import { mergePreservedPastes } from '../../utils/pasteTokens'
 import type { ChatState } from './state'
 import { fetchSlotDetail, isUnsafeKey, safeKey } from './wire'
-import { deduplicateByMid, finalizeAllStreaming, finalizeTrailingStreaming, floorForGen, hasUnidentifiedDurableRow, idAnchorsOneRow, isDurableRow, mergePreservedClientTs, midOccurrences, olderHeadAbovePage, preserveSettledMcpOauth, preserveSettledStopState, raiseChunkSeq, rowIdentities, serverRowCount, snapshotChunkGen, snapshotChunkSeq, tailNotInPage, transcriptTsMs, tsEpoch } from './transcript'
+import { deduplicateByMid, finalizeAllStreaming, finalizeTrailingStreaming, floorForGen, hasUnidentifiedDurableRow, idAnchorsOneRow, isDurableRow, mergePreservedClientTs, midOccurrences, noteChunkGen, olderHeadAbovePage, preserveSettledMcpOauth, preserveSettledStopState, raiseChunkSeq, rowIdentities, serverRowCount, snapshotChunkGen, snapshotChunkSeq, tailNotInPage, transcriptTsMs, tsEpoch } from './transcript'
 import { PANE_HYDRATE_LIMIT, REFRESH_LIMIT_CEILING, SLOT_DETAIL_MAX_LIMIT, countMatchedFetchLimit, pagingCursorAfterKeptHead, slotCoverageShortfall } from './paging'
 import { mergePreservedThinking, reinsertThinkingOrphans } from './thinking'
 import {
@@ -505,6 +505,7 @@ export function addSlotRefreshCases(builder: ActionReducerMapBuilder<ChatState>)
       // turn's seq in place to swallow the next turn's opening chunks.
       if (running) {
         const snapGen = snapshotChunkGen(messages)
+        noteChunkGen((state.chunkGenOrder ??= []), snapGen)
         state.lastChunkSeq = raiseChunkSeq(floorForGen(state.lastChunkSeq, state.lastChunkGen, snapGen), snapshotChunkSeq(messages))
         if (snapGen !== undefined) state.lastChunkGen = snapGen
       } else {
@@ -783,6 +784,7 @@ export function addSlotRefreshCases(builder: ActionReducerMapBuilder<ChatState>)
         if (seeded !== undefined) {
           const run = (state.slotRun[safeKey(key)] ??= { state: 'idle' })
           const snapGen = snapshotChunkGen(messages)
+          noteChunkGen((state.chunkGenOrder ??= []), snapGen)
           run.lastChunkSeq = raiseChunkSeq(floorForGen(run.lastChunkSeq, run.lastChunkGen, snapGen), seeded)
           if (snapGen !== undefined) run.lastChunkGen = snapGen
         }

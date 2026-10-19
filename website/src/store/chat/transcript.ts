@@ -438,6 +438,32 @@ export const snapshotChunkGen = (messages: ChatMessage[]): string | undefined =>
 export const floorForGen = (floor: number | undefined, floorGen: string | undefined, gen: string | undefined): number | undefined =>
   gen !== undefined && gen !== floorGen ? undefined : floor
 
+/** How many gateway generations `ChatState.chunkGenOrder` remembers. Once this
+ *  many newer ones were seen the oldest is forgotten, and a chunk from it is
+ *  ordered by `floorForGen` alone. */
+export const CHUNK_GEN_MEMORY = 8
+
+/** Record a gateway generation this tab has applied a chunk or a running
+ *  snapshot from, in the order it was first seen. A generation is a random
+ *  value per process and carries no order of its own; the order a tab first
+ *  sees them in is the restart order, because a restarted process sends
+ *  nothing until the one before it has stopped. Mutates *order* (an immer
+ *  draft in the reducers). `undefined`, an older gateway's frame, is not
+ *  recorded. */
+export const noteChunkGen = (order: string[], gen: string | undefined): void => {
+  if (gen === undefined || order.includes(gen)) return
+  order.push(gen)
+  if (order.length > CHUNK_GEN_MEMORY) order.splice(0, order.length - CHUNK_GEN_MEMORY)
+}
+
+/** Whether *gen* is a generation this tab already saw a newer one after: a
+ *  frame from a gateway process that has since restarted. Such a chunk is
+ *  dropped whole, so it neither changes the transcript nor takes over the
+ *  replay floor (which `floorForGen` would otherwise hand it). A frame with no
+ *  generation and a generation not seen before are never superseded. */
+export const isSupersededGen = (order: readonly string[] | undefined, gen: string | undefined): boolean =>
+  gen !== undefined && !!order && order.includes(gen) && order[order.length - 1] !== gen
+
 /** Raise a chunk-seq floor to what a snapshot vouches for; never lower it. A
  *  live frame may already have moved the floor past a snapshot taken earlier,
  *  and lowering it would let the frames between the two be applied again. */

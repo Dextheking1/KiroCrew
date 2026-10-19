@@ -108,7 +108,7 @@ const INITIAL_STATE = {
   activeSlot: null, messages: [], slotRunning: false, slotStopping: false, slotState: 'idle',
   slotStatusDetail: {}, slotHasMore: false, slotOldestIndex: 0, slotCursorKey: null,
   slotSwitchRequestId: null, slotSwitchTarget: null, slotSwitchLatestRequestId: null, slotSwitchOrigin: null, switchSlotGone: null,
-  loadingOlder: false, slotOlderError: false, lastChunkSeq: undefined, lastChunkGen: undefined,
+  loadingOlder: false, slotOlderError: false, lastChunkSeq: undefined, lastChunkGen: undefined, chunkGenOrder: [],
   _wsChunkedDuringFetch: false, liveFrameSeq: 0, refreshAppliedSeq: {}, _redeliveredFramesDropped: 0, history: [], historyHasMore: false,
   historyOffset: 0, unresumableResume: null, lastResumeRequestId: null, undeletableHistory: null,
   pendingInput: null, mainComposerAppend: null, agentSwitchNotice: null, creatingSlot: false, foregroundCreateId: null,

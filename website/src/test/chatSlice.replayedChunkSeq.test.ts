@@ -186,6 +186,71 @@ describe('a gateway restart (new generation) replaces the floor', () => {
   })
 })
 
+describe('a chunk from a generation the tab already saw replaced is dropped', () => {
+  const chunk = (slot: string, seq: number, content: string, gen?: string) =>
+    sseChatMessage({ slot, role: 'chunk', content, seq, ...(gen === undefined ? {} : { gen }), batched: true, parts: [{ seq, text: content }] })
+
+  it('a late chunk from the earlier generation changes neither the transcript nor the floor', () => {
+    const store = makeStore()
+    store.dispatch(setActiveSlot(SLOT))
+    store.dispatch(chunk(SLOT, 57, 'old', 'g1'))
+    store.dispatch(chunk(SLOT, 3, 'fresh', 'g2'))
+    // Redelivered late from the process before the restart, numbered above the floor.
+    store.dispatch(chunk(SLOT, 58, 'stale', 'g1'))
+    store.dispatch(sseChatMessage({ slot: SLOT, role: 'chunk', content: 'stale2', seq: 59, gen: 'g1' }))
+    expect(text(store.getState())).toBe('oldfresh')
+    expect(store.getState().chat.lastChunkSeq).toBe(3)
+    expect(store.getState().chat.lastChunkGen).toBe('g2')
+    // The current generation is still ordered against its own floor.
+    store.dispatch(chunk(SLOT, 3, 'dup', 'g2'))
+    store.dispatch(chunk(SLOT, 4, 'next', 'g2'))
+    expect(text(store.getState())).toBe('oldfreshnext')
+  })
+
+  it('the generation a running snapshot named counts as the current one', () => {
+    const store = makeStore()
+    store.dispatch(setActiveSlot(SLOT))
+    store.dispatch(chunk(SLOT, 57, 'old', 'g1'))
+    store.dispatch(refreshSlot.fulfilled(slotPayload(SLOT, [{ role: 'streaming', content: 'abc', cls: 'msg msg-a', seq: 3, gen: 'g2' }], true), 'r1', SLOT))
+    store.dispatch(chunk(SLOT, 58, 'stale', 'g1'))
+    expect(text(store.getState())).toBe('abc')
+    expect(store.getState().chat.lastChunkSeq).toBe(3)
+    expect(store.getState().chat.lastChunkGen).toBe('g2')
+  })
+
+  it('a background pane drops it too', () => {
+    const store = makeStore()
+    store.dispatch(setActiveSlot(SLOT))
+    store.dispatch(chunk(OTHER, 57, 'old', 'g1'))
+    store.dispatch(chunk(OTHER, 3, 'fresh', 'g2'))
+    store.dispatch(chunk(OTHER, 58, 'stale', 'g1'))
+    const shown = (store.getState().chat.slotMessages[OTHER] ?? []).map(m => m.content).join('')
+    expect(shown).toBe('oldfresh')
+    expect(store.getState().chat.slotRun[OTHER]?.lastChunkSeq).toBe(3)
+    expect(store.getState().chat.slotRun[OTHER]?.lastChunkGen).toBe('g2')
+  })
+
+  it('the generation is the gateway process, so a slot that saw only the earlier one drops it as well', () => {
+    const store = makeStore()
+    store.dispatch(setActiveSlot(SLOT))
+    store.dispatch(chunk(SLOT, 57, 'old', 'g1'))
+    // The restarted process streams in another slot first.
+    store.dispatch(chunk(OTHER, 3, 'fresh', 'g2'))
+    store.dispatch(chunk(SLOT, 58, 'stale', 'g1'))
+    expect(text(store.getState())).toBe('old')
+    expect(store.getState().chat.lastChunkSeq).toBe(57)
+  })
+
+  it('a frame with no generation (older gateway) is never dropped by it', () => {
+    const store = makeStore()
+    store.dispatch(setActiveSlot(SLOT))
+    store.dispatch(chunk(SLOT, 57, 'old', 'g1'))
+    store.dispatch(chunk(SLOT, 3, 'fresh', 'g2'))
+    store.dispatch(chunk(SLOT, 4, 'plain'))
+    expect(text(store.getState())).toBe('oldfreshplain')
+  })
+})
+
 describe('gap markers are derived after the snapshot floor is applied', () => {
   it('a gap the snapshot filled in is not flagged', () => {
     const store = makeStore()

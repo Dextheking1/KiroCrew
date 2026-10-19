@@ -26,7 +26,7 @@ import { SOFT_STOP_DEBOUNCE_MS } from '../pages/chat/types'
 import { mergePreservedPastes } from '../utils/pasteTokens'
 import { initialState, type ChatState } from './chat/state'
 import { filterMessages, isUnsafeKey, safeKey } from './chat/wire'
-import { ensureMsgId, finalizeTrailingStreaming, floorForGen, isRedeliveredMessage, mintMsgId, reconcileOptimisticEcho } from './chat/transcript'
+import { ensureMsgId, finalizeTrailingStreaming, floorForGen, isRedeliveredMessage, isSupersededGen, mintMsgId, noteChunkGen, reconcileOptimisticEcho } from './chat/transcript'
 import { OLDER_PAGE_LIMIT, OLDER_WALK_PAGE_LIMIT, claimOlderFetchAbort, isSupersededPagingRejection, releaseOlderFetchAbort } from './chat/paging'
 import { reinsertThinkingOrphans } from './chat/thinking'
 import {
@@ -205,7 +205,11 @@ function applyNonActiveFrame(
     // only the parts above the floor are appended, and a frame with nothing
     // above it leaves the slot untouched. A direct (non-batched) chunk at or
     // below the floor is a replayed seq and is dropped whole. A frame from
-    // another gateway generation replaces the floor first (floorForGen).
+    // another gateway generation replaces the floor first (floorForGen); one
+    // from a generation the tab already saw replaced is from a process that
+    // has since restarted and is dropped whole (isSupersededGen).
+    if (isSupersededGen(state.chunkGenOrder, gen)) return
+    noteChunkGen((state.chunkGenOrder ??= []), gen)
     run.lastChunkSeq = floorForGen(run.lastChunkSeq, run.lastChunkGen, gen)
     if (gen !== undefined) run.lastChunkGen = gen
     if (batched && parts) {
@@ -400,7 +404,11 @@ function applyActiveFrame(state: ChatState, p: ChatFrame): void {
     // nothing above it leaves the slot untouched. A direct (non-batched)
     // chunk at or below the floor is a replayed seq and is dropped whole.
     // A frame from another gateway generation replaces the floor first
-    // (floorForGen).
+    // (floorForGen); one from a generation the tab already saw replaced is
+    // from a process that has since restarted and is dropped whole
+    // (isSupersededGen).
+    if (isSupersededGen(state.chunkGenOrder, gen)) return
+    noteChunkGen((state.chunkGenOrder ??= []), gen)
     state.lastChunkSeq = floorForGen(state.lastChunkSeq, state.lastChunkGen, gen)
     if (gen !== undefined) state.lastChunkGen = gen
     if (batched && parts) {
