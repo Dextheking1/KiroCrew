@@ -845,6 +845,8 @@ from kiro_crew.slack.code_channels.binding import notify_turn_end as notify_code
 from kiro_crew.slack.code_channels.binding import (
     notify_turn_start as notify_code_channel_turn_start,
 )
+from kiro_crew.slack.code_channels.worker_approvals import finish as finish_worker_approval
+from kiro_crew.slack.code_channels.worker_approvals import relay as relay_worker_approval
 from kiro_crew.slack.handler import post_linked_approval, resolve_linked_approval
 from kiro_crew.slack.outbound import PostedOptions
 from kiro_crew.start_priority import StartPriority, person_priority

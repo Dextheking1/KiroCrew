@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         code_channel_post_thread,
         command_invokes_git,
         crew_log_emit,
+        finish_worker_approval,
         format_approval_no_budget_card,
         format_approval_timeout_card,
         is_read_only_bash,
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
         post_linked_approval,
         redact_credentials,
         redact_exfiltration_urls,
+        relay_worker_approval,
         resolve_linked_approval,
         sel,
         slack_mirror_is_paused,
@@ -378,6 +380,19 @@ async def _on_permission_prompt(
                 fut.set_result("rejected")
                 _host_deny_cause = DENY_CAUSE_APPROVAL_UNDELIVERABLE
                 _host_deny_reason = "the approval prompt could not be delivered to Slack"
+    # A worker that a Slack Code channel's session created asks in that
+    # channel too (top-level, owner-only); the dashboard prompt stays.
+    _worker_card = None
+    if _slack_approval_ts is None and "resolved" not in perm_meta:
+        _worker_card = await relay_worker_approval(
+            state,
+            slot,
+            session_key,
+            event.request_id,
+            event.title,
+            event.tool_input or "",
+            fut,
+        )
     # Pre-seeded so the `finally` backstop below is total over EVERY
     # exit from the await — including CancelledError, which slot
     # deletion / cleanup endpoints raise by cancelling slot.task.
@@ -648,6 +663,12 @@ async def _on_permission_prompt(
                     "Failed to clean up linked Slack approval message",
                     exc_info=True,
                 )
+        # A relayed worker card says how it was answered (never raises).
+        await finish_worker_approval(
+            _worker_card,
+            outcome,
+            timed_out=_host_deny_cause == DENY_CAUSE_APPROVAL_TIMEOUT,
+        )
     if outcome == "approved_trust_reads":
         slot._trust_reads = True
         outcome = "approved"
