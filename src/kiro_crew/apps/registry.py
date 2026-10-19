@@ -335,6 +335,14 @@ def _manifest_cache_dir() -> Path:
 
 _MANIFEST_CACHE_TTL = 86400  # 24 hours
 
+#: TTL for the NEGATIVE manifest cache: a short-lived record that a listing-time
+#: ``app.json`` fetch FAILED, so the next listing returns the bare entry instead
+#: of re-cloning. Deliberately much shorter than the success TTL — a failure is
+#: usually transient (a slow/unreachable host, a repo not yet pushed), so an hour
+#: both stops the per-open retry storm (#21964) and lets a now-fixed source be
+#: picked up on the next listing after it lapses.
+_MANIFEST_NEGATIVE_CACHE_TTL = 3600  # 1 hour
+
 #: Subdirectory of :func:`_manifest_cache_dir` holding the source-keyed
 #: manifest files. Registry INDEX caches live at the dir root; keeping the
 #: manifest files in a subdirectory separates the two by something an external
@@ -1494,6 +1502,76 @@ def _write_manifest_cache(entry: dict[str, Any], data: dict[str, Any]) -> None:
     _gc_manifest_cache_dir()
 
 
+def _manifest_negative_cache_path(entry: dict[str, Any]) -> Path:
+    """Negative-cache file for *entry*, keyed on the SAME source coordinates.
+
+    Derived from :func:`_manifest_cache_path` so the failure record shares the
+    success cache's identity exactly — normalized credential-free origin,
+    effective branch/pinned commit, repository subdirectory, and app name — and
+    changing any of them is a miss by construction, just as it is for the
+    success cache. A row configured for another branch/repo/subdirectory can
+    never read another entry's failure record.
+
+    The only difference from the success path is the ``.miss`` marker inserted
+    before the ``.json`` suffix, so a failure record and a successful manifest
+    for the same coordinates are distinct files that never overwrite each other.
+    It still ends in ``.json`` and lives in ``by-source/``, so
+    :func:`_gc_manifest_cache_dir` reclaims a stale failure record exactly like
+    a stale manifest — the GC boundary stays structural.
+    """
+    success_path = _manifest_cache_path(entry)
+    return success_path.with_name(success_path.name[: -len(".json")] + ".miss.json")
+
+
+def _read_manifest_negative_cache(entry: dict[str, Any]) -> bool:
+    """Whether a NON-expired failure is cached for *entry*'s source coordinates.
+
+    Returns ``True`` only when a failure record exists and is younger than
+    :data:`_MANIFEST_NEGATIVE_CACHE_TTL`; a missing, stale, or unreadable record
+    returns ``False`` so the caller falls through to a fresh fetch. The TTL is
+    read off the file mtime, so once it lapses the next listing retries — a
+    source that has since been fixed is picked up without any explicit
+    invalidation.
+    """
+    path = _manifest_negative_cache_path(entry)
+    if not path.is_file():
+        return False
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False
+    return age <= _MANIFEST_NEGATIVE_CACHE_TTL
+
+
+def _write_manifest_negative_cache(entry: dict[str, Any]) -> None:
+    """Record (atomically) that *entry*'s listing-time manifest fetch failed.
+
+    Keyed on the entry's full source identity so it only ever suppresses a
+    re-fetch of the exact same coordinates. Best-effort: a write failure just
+    means the next listing retries, which is the pre-cache behaviour.
+    """
+    path = _manifest_negative_cache_path(entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        atomic_write(
+            path,
+            json.dumps(
+                {
+                    "status": "fetch_failed",
+                    "cached_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            + "\n",
+        )
+    except OSError as exc:
+        logger.warning(
+            "Failed to write negative manifest cache for %s: %s",
+            entry.get("name", ""),
+            exc,
+        )
+    _gc_manifest_cache_dir()
+
+
 def _is_safe_registry_subdir(subdir: Any) -> bool:
     """True if *subdir* is a safe, contained relative path for a registry entry.
 
@@ -2355,6 +2433,17 @@ async def _resolve_manifest(entry: dict[str, Any]) -> dict[str, Any]:
     if cached:
         return _merge_manifest(entry, cached)
 
+    # Negative cache: a recent fetch for these exact source coordinates failed,
+    # so return the bare entry WITHOUT re-cloning. Keyed identically to the
+    # success cache, so it can only suppress a re-fetch of the same source and
+    # a different branch/repo/subdirectory still fetches. It lapses after
+    # ``_MANIFEST_NEGATIVE_CACHE_TTL`` (~1h), after which the next listing
+    # retries and a fixed source is picked up. This lives in ``_resolve_manifest``
+    # ONLY: the install path calls ``_fetch_app_manifest`` directly and must not
+    # be short-circuited by a listing-time failure (#21964).
+    if await asyncio.to_thread(_read_manifest_negative_cache, entry):
+        return entry
+
     # Fetch from repo
     # Same-repo credential carve-out: if the entry's clone URL matches the
     # owner-configured registry repo, use owner credentials for the manifest
@@ -2376,6 +2465,11 @@ async def _resolve_manifest(entry: dict[str, Any]) -> dict[str, Any]:
     # fetch attaches NOTHING: the source-scoped cache read above already
     # missed, and there is deliberately no name-only fallback that could
     # attach a manifest cached for another branch or repository.
+    #
+    # Record the failure in the negative cache so the next listing returns the
+    # bare entry without re-cloning until the TTL lapses — the install path is
+    # unaffected because it never reaches this function.
+    await asyncio.to_thread(_write_manifest_negative_cache, entry)
     logger.info("Could not fetch app.json for %s — showing minimal info", name)
     return entry
 

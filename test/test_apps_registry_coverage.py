@@ -651,6 +651,180 @@ class TestManifestCache:
         assert registry._read_external_registry_cache("mine") is None
 
 
+class TestManifestNegativeCache:
+    """A failed listing-time ``app.json`` fetch is negative-cached (#21964).
+
+    ``_resolve_manifest`` must stop re-cloning an app whose fetch already failed
+    this hour, keyed on the SAME source coordinates as the success cache, while
+    leaving the install path (``_fetch_app_manifest`` called directly) untouched.
+    """
+
+    _DEMO = {
+        "name": "demo-app",
+        "repo": "example/demo-app",
+        "branch": "main",
+        "gitUrl": "https://github.com/example/demo-app.git",
+    }
+
+    @pytest.fixture()
+    def _no_owner_target(self, monkeypatch):
+        # Mirror the issue repro: no owner carve-out, so every fetch is the
+        # credential-free listing path through ``_resolve_manifest``.
+        monkeypatch.setattr(registry, "_owner_designated_repo_target", lambda e: None)
+
+    def _count_failing_fetch(self, monkeypatch):
+        """Patch ``_fetch_app_manifest`` to always fail and count its calls."""
+        calls = {"n": 0}
+
+        async def _failing_fetch(*a, **k):
+            calls["n"] += 1
+            return None
+
+        monkeypatch.setattr(registry, "_fetch_app_manifest", _failing_fetch)
+        return calls
+
+    def test_repeated_listing_fetches_once_then_negative_caches(
+        self, cache_dir, _no_owner_target, monkeypatch
+    ):
+        # The issue's invariant: three listings of a failing app clone ONCE, not
+        # three times. (The repro script prints 1, not 3.)
+        calls = self._count_failing_fetch(monkeypatch)
+
+        async def _main():
+            for _ in range(3):
+                await registry._resolve_manifest(dict(self._DEMO))
+
+        asyncio.run(_main())
+        assert calls["n"] == 1
+
+    def test_negative_cache_path_shares_success_identity(self, cache_dir):
+        # Keyed on the SAME source coordinates as the success cache: same stem +
+        # digest, distinguished only by the ``.miss`` marker.
+        success = registry._manifest_cache_path(self._DEMO)
+        miss = registry._manifest_negative_cache_path(self._DEMO)
+        assert miss != success
+        assert miss.name.endswith(".miss.json")
+        assert miss.name[: -len(".miss.json")] == success.name[: -len(".json")]
+        assert miss.parent == success.parent
+
+    def test_failure_then_ttl_expiry_retries(self, cache_dir, _no_owner_target, monkeypatch):
+        # After the ~1h TTL lapses, the next listing fetches again rather than
+        # serving the stale failure forever — a fixed source is picked up.
+        calls = self._count_failing_fetch(monkeypatch)
+
+        asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert calls["n"] == 1
+
+        # Suppressed while fresh.
+        asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert calls["n"] == 1
+
+        # Age the failure record past its TTL.
+        miss = registry._manifest_negative_cache_path(self._DEMO)
+        past = time.time() - registry._MANIFEST_NEGATIVE_CACHE_TTL - 1
+        os.utime(miss, (past, past))
+
+        asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert calls["n"] == 2
+
+    def test_other_source_is_not_suppressed_by_another_entrys_failure(
+        self, cache_dir, _no_owner_target, monkeypatch
+    ):
+        # A failure for one row's coordinates must never suppress a DIFFERENT
+        # branch / repo / gitUrl — each has its own negative-cache identity.
+        calls = self._count_failing_fetch(monkeypatch)
+
+        asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert calls["n"] == 1
+
+        other_branch = dict(self._DEMO, branch="dev")
+        other_repo = dict(
+            self._DEMO,
+            repo="example/other",
+            gitUrl="https://github.com/example/other.git",
+        )
+        asyncio.run(registry._resolve_manifest(other_branch))
+        asyncio.run(registry._resolve_manifest(other_repo))
+        # Two more fetches — neither was suppressed by demo-app's failure.
+        assert calls["n"] == 3
+
+    def test_success_after_expired_failure_is_cached_as_success(
+        self, cache_dir, _no_owner_target, monkeypatch
+    ):
+        # A failure, then (after it lapses) a success, is cached as a SUCCESS:
+        # the next listing serves the manifest from the success cache and does
+        # not re-fetch.
+        state = {"fetch": 0}
+
+        async def _fetch(*a, **k):
+            state["fetch"] += 1
+            if state["fetch"] == 1:
+                return None  # first attempt fails
+            return {"name": "demo-app", "version": "2.0.0", "description": "ok now"}
+
+        monkeypatch.setattr(registry, "_fetch_app_manifest", _fetch)
+
+        # Failure recorded.
+        asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert state["fetch"] == 1
+        assert registry._read_manifest_cache(self._DEMO) is None
+
+        # Expire the failure, then resolve again → success, cached.
+        miss = registry._manifest_negative_cache_path(self._DEMO)
+        past = time.time() - registry._MANIFEST_NEGATIVE_CACHE_TTL - 1
+        os.utime(miss, (past, past))
+
+        merged = asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert state["fetch"] == 2
+        assert merged.get("description") == "ok now"
+        assert registry._read_manifest_cache(self._DEMO) == {
+            "name": "demo-app",
+            "version": "2.0.0",
+            "description": "ok now",
+        }
+
+        # A subsequent listing is served from the success cache (no re-fetch),
+        # and no failure record lingers to override it.
+        asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert state["fetch"] == 2
+
+    def test_install_path_is_unaffected_by_a_listing_failure(
+        self, cache_dir, _no_owner_target, monkeypatch
+    ):
+        # Calling ``_fetch_app_manifest`` directly (the install path) must fetch
+        # EVERY time — the negative cache lives only in ``_resolve_manifest``.
+        calls = self._count_failing_fetch(monkeypatch)
+
+        # Record a listing failure first.
+        asyncio.run(registry._resolve_manifest(dict(self._DEMO)))
+        assert calls["n"] == 1
+
+        async def _install_fetches():
+            for _ in range(3):
+                await registry._fetch_app_manifest(
+                    self._DEMO["repo"],
+                    self._DEMO["branch"],
+                    "",
+                    app_name=self._DEMO["name"],
+                    git_url=self._DEMO["gitUrl"],
+                )
+
+        asyncio.run(_install_fetches())
+        # 1 (listing) + 3 (direct install-path calls) = 4, none suppressed.
+        assert calls["n"] == 4
+
+    def test_missing_record_is_not_a_hit(self, cache_dir):
+        assert registry._read_manifest_negative_cache(self._DEMO) is False
+
+    def test_negative_write_failure_is_swallowed(self, cache_dir, monkeypatch):
+        def _boom(path, data):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(registry, "atomic_write", _boom)
+        registry._write_manifest_negative_cache(self._DEMO)  # must not raise
+        assert registry._read_manifest_negative_cache(self._DEMO) is False
+
+
 class TestSafeCacheStem:
     def test_pure_name_is_byte_identical(self):
         assert registry._safe_cache_stem("my-app_1.0") == "my-app_1.0"

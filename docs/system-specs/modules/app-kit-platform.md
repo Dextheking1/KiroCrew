@@ -277,6 +277,23 @@ an index cannot spell a directory into an app name, where a name-prefix
 convention (skip `_registry_*`) would be imitable by an app literally named
 `_registry_x` and hand a hostile index files the sweep never reclaims.
 
+A FAILED listing-time fetch is cached too, negatively: `_resolve_manifest`
+writes a short-lived failure record (`_write_manifest_negative_cache`) keyed
+on the row's SAME full source coordinates as the success cache, with a
+`.miss` marker inserted before the `.json` suffix so a failure record and a
+successful manifest for the same coordinates are distinct files. A non-stale
+failure record (`_read_manifest_negative_cache`, TTL
+`_MANIFEST_NEGATIVE_CACHE_TTL` ≈ 1h) makes the next listing return the bare
+entry WITHOUT re-cloning, which stops the per-open retry storm where every
+previously-failed app re-ran a throwaway shallow clone on each App Store open
+(#21964). Because the key is the full coordinates, a failure for one row
+never suppresses another branch/repo/subdirectory, and a success after the
+record lapses is cached as a success as usual. The record lives in
+`_resolve_manifest` only — the install path calls `_fetch_app_manifest`
+directly and still fetches every time, so a transient listing failure can
+never block an install. The `.miss.json` file sits in `by-source/` and is
+reclaimed by the same age-based GC as a stale manifest.
+
 The client
 (`isVerified`/`sourceLabel` in `website/src/components/appstore/types.ts`)
 reads the server fields, still rejects a `_registry`-tagged row first (so
