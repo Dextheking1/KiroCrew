@@ -27,7 +27,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from kiro_crew.acp import kas_agents as kas_agents_mod
+from kiro_crew.agent_sdk import agent_specs
 from kiro_crew.atomic_write import atomic_write
 from kiro_crew.config import paths as paths_mod
 from kiro_crew.user_json import copy_json_document
@@ -39,31 +39,63 @@ class MateConfigError(Exception):
     """A crewmate config file could not be written from its source agent."""
 
 
+def _refuse_service_name(mate_id: str) -> None:
+    """Refuse *mate_id* when it names the mate conductor or worker spec.
+
+    Both are generated into the same folder as the crewmates' own files
+    (``agent_files.MATE_SERVICE_AGENT_FILENAMES``), so a crewmate by either name
+    would overwrite one of them.
+    """
+    from kiro_crew.agent_files import is_mate_service_agent
+
+    if is_mate_service_agent(mate_id):
+        raise MateConfigError(
+            f"{mate_id!r} is the name of a spec Kiro Crew generates, so no crewmate may "
+            "own a file by that name; rename the crewmate"
+        )
+
+
 def mate_config_path(mate_id: str) -> Path:
     """The crewmate's own custom-agent file, existing or not."""
     return paths_mod.mate_agents_dir() / f"{mate_id}.json"
 
 
 def has_mate_config(mate_id: str) -> bool:
-    """Whether *mate_id* has a crewmate config file in ``mates/agents/``."""
-    return mate_config_path(mate_id).is_file()
+    """Whether *mate_id* has a crewmate config file in ``mates/agents/``.
+
+    Never for the mate conductor or worker, whose generated specs share that folder.
+    """
+    from kiro_crew.agent_files import is_mate_service_agent
+
+    return not is_mate_service_agent(mate_id) and mate_config_path(mate_id).is_file()
+
+
+def source_agents_dir(source_agent: str) -> Path:
+    """The folder *source_agent*'s spec is read from: the user level, except for
+    the mate conductor and worker, which Crew generates into ``mates/agents/``."""
+    from kiro_crew.agent_files import is_mate_service_agent
+
+    if is_mate_service_agent(source_agent):
+        return paths_mod.mate_agents_dir()
+    return paths_mod.kiro_agents_dir()
 
 
 def _resolved_source_spec(source_agent: str) -> dict[str, Any]:
     """Read *source_agent*'s user-level spec with ``prompt`` inlined as literal text.
 
     The source is a user-level custom agent (``~/.kiro/agents/``), read once
-    through the hardened reader :func:`kas_agents.load_agent_spec`. Its ``prompt``
+    through the hardened reader :func:`kiro_crew.agent_sdk.agent_specs.load_agent_spec`. Its ``prompt``
     is resolved against that same directory, so a ``file://`` reference becomes
     the literal prompt text and the crewmate file carries no path back into the
     source. A prompt-less source resolves to the KAS fallback -- the same text a
     session on the source would run -- so the copy and the source project
-    identically (RFC Phase-2 payload equivalence).
+    identically (RFC Phase-2 payload equivalence). The mate conductor and worker
+    are read from the crewmate folder instead (:func:`source_agents_dir`).
     """
-    agents_dir = paths_mod.kiro_agents_dir()
+    agents_dir = source_agents_dir(source_agent)
     try:
-        spec = kas_agents_mod.load_agent_spec(agents_dir, source_agent)
-    except kas_agents_mod.KasAgentTranslationError as exc:
+        spec = agent_specs.load_agent_spec(agents_dir, source_agent)
+    except agent_specs.AgentSpecUnreadable as exc:
         raise MateConfigError(
             f"source agent {source_agent!r} has no readable spec to copy: {exc}"
         ) from exc
@@ -71,8 +103,8 @@ def _resolved_source_spec(source_agent: str) -> dict[str, Any]:
     # resolve + reassign below mutates, so never risk touching a memoised parse.
     spec = copy_json_document(spec)
     try:
-        prompt = kas_agents_mod.resolve_prompt(spec, agent_id=source_agent, agents_dir=agents_dir)
-    except kas_agents_mod.KasAgentTranslationError as exc:
+        prompt = agent_specs.resolve_prompt(spec, agent_id=source_agent, agents_dir=agents_dir)
+    except agent_specs.AgentSpecUnreadable as exc:
         raise MateConfigError(
             f"source agent {source_agent!r} prompt could not be inlined: {exc}"
         ) from exc
@@ -118,6 +150,7 @@ def write_mate_spec(mate_id: str, spec: dict[str, Any]) -> Path:
     from kiro_crew.config.loader import publish_mate_agents
     from kiro_crew.mate_worker import drop_partial_platform_servers
 
+    _refuse_service_name(mate_id)
     # A platform server comes from the gateway; an entry that only switches one
     # on or off would be a server with no transport in this file.
     drop_partial_platform_servers(spec)
