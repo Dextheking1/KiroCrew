@@ -707,8 +707,9 @@ forms. `harness_unsupported` on `agent.member_acp_backend` shows the
 `config set agent.member_acp_backend kas` command on its own line with a copy
 button, since no dashboard page edits that setting and kas (the member default)
 loads saved capabilities, plus a second step to clear `servers` when present,
-since kas would refuse those next. It never suggests the Kiro backend, which
-takes member dispatch away. `harness_unsupported` on `agent.acp_backend` names
+since kas would refuse those next. It never suggests `kiro`, which a member
+setting reads as KAS. A member DM's `kiro` reads as KAS at config load, so the
+warning names `kas` as its backend and its refusals follow KAS. `harness_unsupported` on `agent.acp_backend` names
 the affected entry points (Slack threads, scheduled jobs, spawned tasks), says
 member chats are unaffected, and offers no one-line switch, because that setting
 moves every session. `tool_limits_unsupported` names the same entry points when

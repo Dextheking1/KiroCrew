@@ -115,7 +115,10 @@ exact spec consumed by their MCP projection after session creation or load
 (Claude's projection must also be governed). `ACP_BACKENDS_MEMBER_TOOL_LIMITS`
 (Kiro only) says which honour a saved spec's per-tool `disabledTools`; on any
 other backend such a spec is refused before spawn with
-`capability_tool_limits_unsupported`. This is separate from session sharing and per-session member dispatch. Both `AcpProvider` and
+`capability_tool_limits_unsupported`. A member DM whose
+`agent.member_acp_backend` is `kiro` runs on KAS (the loader reads it so), so
+no member-DM backend setting honours per-tool limits and that refusal's remedy
+is to change the saved spec. This is separate from session sharing and per-session member dispatch. Both `AcpProvider` and
 `AcpSessionProvider` answer `member_capabilities_supported` from this set.
 Support alone does not prove a template is loaded: dedicated runtime ownership,
 liveness, native activation or projection consumption, saved-version checks and

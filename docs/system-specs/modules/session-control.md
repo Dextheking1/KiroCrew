@@ -1210,9 +1210,12 @@ itself opened. Member sessions also bypass the provider warm pool
 default backend, so a warm hit would skip both the member backend route and
 the mount. The member backend is `agent.member_acp_backend` (default `kas`),
 and requires a wire-capable backend (`ACP_BACKENDS_MEMBER_DISPATCH`: the
-claude seam, KAS, codex, opencode, goose, deepseek and pi); kiro-cli v2 reads its template from disk and
-exposes no per-session channel, so a member session on it runs as plain chat —
-the tools are simply not mounted, never mounted-and-refused. Codex qualifies
+claude seam, KAS, codex, opencode, goose, deepseek and pi). A stored `kiro`
+there reads as KAS at config load (`_read_backend_choice`), because crewmates
+run on KAS as their Kiro backend. kiro-cli v2 reads its template from disk and
+exposes no per-session channel, so a member session that still lands on it (the
+selection gate's floor) runs as plain chat — the tools are simply not mounted,
+never mounted-and-refused. Codex qualifies
 because `providers/mirrors/codex.py` already gives it a per-session array and
 its routing is `SESSION_CONFIG`, a member of `ENFORCED_ROUTINGS`, so
 `_apply_session_permission_routing` refuses the session outright when
