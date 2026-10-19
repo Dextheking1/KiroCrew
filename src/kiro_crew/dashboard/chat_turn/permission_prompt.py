@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         _validate_tool_name,
         approval_command,
         approval_display_command,
+        code_channel_post_thread,
         command_invokes_git,
         crew_log_emit,
         format_approval_no_budget_card,
@@ -313,14 +314,20 @@ async def _on_permission_prompt(
         and not slack_mirror_is_paused(state, session_key)
     ):
         try:
+            # A Slack Code channel's own session posts top-level,
+            # where its replies go (the mirror's own rule, read
+            # from the same helper); every other linked thread
+            # keeps threading under ``_slack_thread_ts``.
+            _approval_thread = code_channel_post_thread(slot._slack_channel, slot._slack_thread_ts)
             _slack_approval_ts = await post_linked_approval(
                 state.slack_client,
                 slot._slack_channel,
-                slot._slack_thread_ts,
+                _approval_thread,
                 event.request_id,
                 session_key,
                 (f"{_child_lf_warning}{event.title}" if _child_lf_warning else event.title),
                 event.tool_input or "",
+                channel_trust=_approval_thread is None,
             )
             if _slack_approval_ts is None and not fut.done():
                 # Delivery failed — do not park for the whole
