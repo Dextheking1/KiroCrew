@@ -17,6 +17,7 @@ import pytest
 from kiro_crew import agent
 from kiro_crew.agent_files import MATE_CONDUCTOR_AGENT_FILENAME, OWNED_KIRO_AGENT_FILES
 from kiro_crew.agent_materialization import service_agents
+from kiro_crew.config import paths as paths_mod
 
 
 @pytest.fixture
@@ -24,7 +25,9 @@ def installed(tmp_path, monkeypatch) -> dict:
     """The spec this installer actually writes, read back off disk."""
     monkeypatch.setattr(agent, "kiro_agents_dir_path", lambda: tmp_path)
     service_agents._install_mate_conductor_agent()
-    return json.loads((tmp_path / MATE_CONDUCTOR_AGENT_FILENAME).read_text(encoding="utf-8"))
+    return json.loads(
+        (paths_mod.mate_agents_dir() / MATE_CONDUCTOR_AGENT_FILENAME).read_text(encoding="utf-8")
+    )
 
 
 class TestTheInstallerWritesTheDefaultTemplateUnderItsOwnName:
@@ -88,7 +91,9 @@ def test_the_user_servers_never_reach_the_conductor(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "build_agent_config", with_user_servers)
     monkeypatch.setattr(agent, "kiro_agents_dir_path", lambda: tmp_path)
     service_agents._install_mate_conductor_agent()
-    spec = json.loads((tmp_path / MATE_CONDUCTOR_AGENT_FILENAME).read_text(encoding="utf-8"))
+    spec = json.loads(
+        (paths_mod.mate_agents_dir() / MATE_CONDUCTOR_AGENT_FILENAME).read_text(encoding="utf-8")
+    )
 
     from kiro_crew.mate_worker import conductor_mcp_servers
 
@@ -118,7 +123,7 @@ def test_rebuild_agent_config_installs_it_alongside_the_default(tmp_path, monkey
     turn actually depends on."""
     monkeypatch.setattr(agent, "kiro_agents_dir_path", lambda: tmp_path)
     agent.rebuild_agent_config(clean=True)
-    assert (tmp_path / MATE_CONDUCTOR_AGENT_FILENAME).exists()
+    assert (paths_mod.mate_agents_dir() / MATE_CONDUCTOR_AGENT_FILENAME).exists()
 
 
 class TestIsKirocrewDefaultAgent:

@@ -61,6 +61,68 @@ def _exclude(config: dict, refs: tuple[str, ...]) -> None:
     config["excludedTools"] = list(dict.fromkeys([*kept, *refs]))
 
 
+def _write_mate_service_spec(filename: str, config: dict, source: str) -> None:
+    """Write a mate conductor/worker spec into ``~/.kiro/mates/agents/``.
+
+    Not ``~/.kiro/agents/``: kiro-cli lists every spec there, and neither of
+    these is an agent anyone picks (``agent_files.MATE_SERVICE_AGENT_FILENAMES``).
+    An earlier build wrote them to ``~/.kiro/agents/``; the copy it left is
+    removed here (:func:`_remove_user_level_copy`).
+    """
+    from kiro_crew.config import paths as paths_mod
+
+    mates = paths_mod.mate_agents_dir()
+    mates.mkdir(parents=True, exist_ok=True)
+    path = mates / filename
+    auto_approve.write_governed_spec(path, config, source=source)
+    agent_mod.logger.info("Installed %s: %s", filename, path)
+    _remove_user_level_copy(filename, config)
+
+
+def _remove_user_level_copy(filename: str, config: dict) -> None:
+    """Remove the ``~/.kiro/agents/<filename>`` an earlier build of this branch wrote.
+
+    That build rewrote the file on every start with the ``name`` and
+    ``description`` the installer sets, so a file carrying both is its own and
+    is deleted. Anything else at that name (a symlink, an unreadable file, or a
+    spec whose name or description someone changed) is the user's and is kept,
+    with one warning: a spec there is what kiro-cli lists, and Crew no longer
+    reads it. Never raises.
+    """
+    import json
+    import os
+
+    path = agent_mod.kiro_agents_dir_path() / filename
+    try:
+        if not os.path.lexists(path):
+            return
+        ours = False
+        if path.is_file() and not path.is_symlink():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None
+            ours = (
+                isinstance(data, dict)
+                and data.get("name") == config.get("name")
+                and data.get("description") == config.get("description")
+            )
+        if ours:
+            path.unlink()
+            agent_mod.logger.info(
+                "Removed %s left in %s by an earlier build", filename, path.parent
+            )
+        else:
+            agent_mod.logger.warning(
+                "%s is not the spec Kiro Crew generated, so it is kept; Kiro Crew now "
+                "keeps that spec in %s and does not read this file",
+                path,
+                path.parent.parent / "mates" / "agents",
+            )
+    except OSError:
+        agent_mod.logger.warning("could not remove %s", path, exc_info=True)
+
+
 def _install_mate_conductor_agent() -> None:
     """Generate and install the ``kirocrew-mate-conductor`` agent config.
 
@@ -116,10 +178,9 @@ def _install_mate_conductor_agent() -> None:
         if isinstance(listed, list):
             config[key] = [t for t in listed if _kept(t)]
     _exclude(config, MATE_CONDUCTOR_EXCLUDED_TOOLS + MATE_CONDUCTOR_WITHHELD_BUILTINS)
-    agent_mod.kiro_agents_dir_path().mkdir(parents=True, exist_ok=True)
-    path = agent_mod.kiro_agents_dir_path() / _MATE_CONDUCTOR_AGENT_FILENAME
-    auto_approve.write_governed_spec(path, config, source="_install_mate_conductor_agent")
-    agent_mod.logger.info("Installed mate conductor agent config: %s", path)
+    _write_mate_service_spec(
+        _MATE_CONDUCTOR_AGENT_FILENAME, config, "_install_mate_conductor_agent"
+    )
 
 
 def _install_mate_worker_agent() -> None:
@@ -151,10 +212,7 @@ def _install_mate_worker_agent() -> None:
     # Asking the user for a capability is the conductor's: a worker reports a
     # missing tool back to the chat that opened it.
     _exclude(config, MATE_WORKER_EXCLUDED_TOOLS)
-    agent_mod.kiro_agents_dir_path().mkdir(parents=True, exist_ok=True)
-    path = agent_mod.kiro_agents_dir_path() / _MATE_WORKER_AGENT_FILENAME
-    auto_approve.write_governed_spec(path, config, source="_install_mate_worker_agent")
-    agent_mod.logger.info("Installed mate worker agent config: %s", path)
+    _write_mate_service_spec(_MATE_WORKER_AGENT_FILENAME, config, "_install_mate_worker_agent")
 
 
 def _install_lite_agent_fallback() -> None:

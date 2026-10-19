@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 import pytest
 
+import kiro_crew.config.paths as paths_mod
 from kiro_crew import agent, agent_state
 from kiro_crew.kiro_cli import SPEC_PERMISSIONS_MIN_VERSION
 
@@ -94,6 +95,9 @@ class _Rig:
         self.tmp = tmp_path
         self.agents = tmp_path / "agents"
         self.agents.mkdir()
+        # The mate conductor and worker specs are written to the crewmate folder
+        # (``mate_agents_dir``), not here; their bytes are pinned all the same.
+        self.mates = tmp_path / "mates" / "agents"
         bindir = tmp_path / "bin"
         bindir.mkdir()
         self.bin = bindir / "kirocrew"
@@ -105,6 +109,7 @@ class _Rig:
         self.hooks_dir.mkdir()
         self.events: list[dict[str, Any]] = []
         monkeypatch.setattr(agent, "KIRO_AGENTS_DIR", self.agents)
+        monkeypatch.setattr(paths_mod, "mate_agents_dir", lambda: self.mates)
         monkeypatch.setattr(agent, "_KIROCREW_BIN", str(self.bin))
         monkeypatch.setattr(agent, "_KIRO_MCP_JSON", self.kiro_mcp)
         monkeypatch.setattr(agent, "_DEFAULT_KIRO_HOOKS_DIR", self.hooks_dir)
@@ -178,7 +183,9 @@ class _Rig:
     def snapshot(self) -> _Materialized:
         files = {
             p.name: self.normalize(p.read_text(encoding="utf-8"))
-            for p in sorted(self.agents.iterdir())
+            for folder in (self.agents, self.mates)
+            if folder.is_dir()
+            for p in sorted(folder.iterdir())
             if p.is_file() and not p.name.startswith(".")
         }
         state_path = agent_state._state_path()

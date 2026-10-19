@@ -327,7 +327,12 @@ def refresh_materialized_agents(*, heal_default: bool = False) -> None:
         complete_after_user = bool(getattr(_SCAN_STATE, "complete", True))
         mate_names, mate_stems = _scan_materialized_index(mate_agents_dir())
         _SCAN_STATE.complete = complete_after_user
-        mate_only = frozenset(mate_names - snapshot)
+        # The mate conductor and worker live in that folder too
+        # (``agent_files.MATE_SERVICE_AGENT_FILENAMES``): declared agents, never a
+        # crewmate's own file.
+        from kiro_crew.agent_files import MATE_SERVICE_AGENT_NAMES
+
+        mate_only = frozenset(mate_names - snapshot - MATE_SERVICE_AGENT_NAMES)
         user_names = snapshot
         snapshot = frozenset(snapshot | mate_names)
         stems = {**mate_stems, **stems}

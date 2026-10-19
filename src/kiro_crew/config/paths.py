@@ -1393,6 +1393,13 @@ def project_agents_dir(project_dir: str | Path) -> Path:
     return Path(project_dir) / ".kiro" / "agents"
 
 
+#: A replacement resolver for :func:`mate_agents_dir`, ``None`` = live. The same
+#: shape as :data:`_agents_dir_override`, read inside the body for the same reason;
+#: the test floor installs one so no test reaches the operator's real crewmate
+#: folder, which holds the generated mate conductor and worker specs too.
+_mate_agents_dir_override: Callable[[], Path] | None = None
+
+
 def mate_agents_dir() -> Path:
     """The Crew-owned crewmate custom-agent folder (``<kiro home>/mates/agents``).
 
@@ -1404,7 +1411,7 @@ def mate_agents_dir() -> Path:
     which reads :func:`kiro_agents_dir` only. A SECOND read scope for
     RESOLUTION, never a write target that competes with the single-valued
     ``kiro_agents_dir`` -- the managed-spec rebuild and app materialization keep
-    writing there, not here.
+    writing there, except for the two mate specs below.
 
     A SIBLING of :func:`kiro_agents_dir` under ``kiro_home()`` (``~/.kiro``), NOT
     a folder under Crew's data home ``~/.kiro/crew``. This is the location the
@@ -1422,7 +1429,14 @@ def mate_agents_dir() -> Path:
     no special rule of its own. The governance ceiling is re-applied at
     projection regardless, so a hand-edited crewmate file cannot escalate the
     crewmate's real grants even if some future in-sandbox reader is added.
+
+    It also holds the two specs Crew generates for crewmates, the mate conductor
+    and worker (``agent_files.MATE_SERVICE_AGENT_FILENAMES``), kept here rather
+    than in :func:`kiro_agents_dir` so kiro-cli's own agent list does not show them.
+    Honours :data:`_mate_agents_dir_override` when one is installed.
     """
+    if _mate_agents_dir_override is not None:
+        return _mate_agents_dir_override()
     return kiro_home() / "mates" / "agents"
 
 

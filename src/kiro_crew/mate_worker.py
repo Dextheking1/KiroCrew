@@ -36,7 +36,11 @@ from pathlib import Path
 from typing import Any
 
 from kiro_crew import crewmate_prompts
-from kiro_crew.agent_files import MATE_CONDUCTOR_AGENT_FILENAME, MATE_WORKER_AGENT_FILENAME
+from kiro_crew.agent_files import (
+    MATE_CONDUCTOR_AGENT_FILENAME,
+    MATE_WORKER_AGENT_FILENAME,
+    is_mate_service_agent,
+)
 from kiro_crew.user_json import copy_json_document
 
 logger = logging.getLogger(__name__)
@@ -220,9 +224,13 @@ def drop_partial_platform_servers(spec: Any) -> list[str]:
     a template carries. An entry such as ``"kirocrew-mate": {"disabled": false}``
     names one with no ``command`` or ``url``; a session that ran the file would wait
     for a server it cannot launch. An entry that carries anything else (a
-    transport, ``disabledTools``) is left as it is. Edits *spec* in place and
-    returns the names it removed.
+    transport, ``disabledTools``) is left as it is, and so is a switch-OFF
+    (``{"disabled": true}``): it launches nothing, and it is the crewmate's
+    restriction on the base's server (:func:`disabled_base_servers`). Edits *spec*
+    in place and returns the names it removed.
     """
+    from kiro_crew.mcp_cleanup import mcp_entry_is_muted
+
     servers = spec.get("mcpServers") if isinstance(spec, dict) else None
     if not isinstance(servers, dict):
         return []
@@ -230,7 +238,10 @@ def drop_partial_platform_servers(spec: Any) -> list[str]:
     dropped = [
         name
         for name, entry in servers.items()
-        if name in platform and isinstance(entry, dict) and set(entry) <= _BARE_OVERRIDE_KEYS
+        if name in platform
+        and isinstance(entry, dict)
+        and set(entry) <= _BARE_OVERRIDE_KEYS
+        and not mcp_entry_is_muted(entry)
     ]
     for name in dropped:
         del servers[name]
@@ -289,7 +300,11 @@ def worker_additions(base: dict[str, Any], mate_spec: dict[str, Any]) -> dict[st
     raw_prompt = mate_spec.get("prompt")
     prompt = raw_prompt.strip() if isinstance(raw_prompt, str) else ""
     own = (base_prompt or "").strip()
-    if own and prompt.startswith(own):
+    if own and prompt and own.startswith(prompt):
+        # The base opens with this whole prompt (the worker base is the default
+        # template's prompt plus the worker's own principles), so it adds nothing.
+        prompt = ""
+    elif own and prompt.startswith(own):
         # A template built on the default one opens with the base's own text;
         # only what follows it is an addition, or the worker would read it twice.
         prompt = prompt[len(own) :].strip()
@@ -309,7 +324,27 @@ def worker_additions(base: dict[str, Any], mate_spec: dict[str, Any]) -> dict[st
     # The file's own ``excludedTools`` is a restriction too, kept whole: a tool it
     # takes out stays out of the worker, whoever declared it.
     additions["excludedTools"] = list(dict.fromkeys(_strings(mate_spec.get("excludedTools"))))
+    # A whole-server switch-off on a server the base declares is a restriction as
+    # well. Only the NAME is carried: the base's entry keeps its transport, and the
+    # merge mutes it. (A server the file adds keeps its own ``disabled`` above.)
+    additions["disabledServers"] = disabled_base_servers(base, mate_spec)
     return additions
+
+
+def disabled_base_servers(base: dict[str, Any], mate_spec: dict[str, Any]) -> list[str]:
+    """The base servers *mate_spec* switches off whole (``disabled``, read fail-closed).
+
+    Read with :func:`kiro_crew.mcp_cleanup.mcp_entry_is_muted`, the launch
+    decision's own reading, so the merge mutes exactly what a launch would skip.
+    """
+    from kiro_crew.mcp_cleanup import mcp_entry_is_muted
+
+    base_servers = _servers(base.get("mcpServers"))
+    return [
+        name
+        for name, entry in _servers(mate_spec.get("mcpServers")).items()
+        if name in base_servers and mcp_entry_is_muted(entry)
+    ]
 
 
 def has_additions(additions: dict[str, Any]) -> bool:
@@ -334,6 +369,12 @@ def merge_worker_spec(base: dict[str, Any], additions: dict[str, Any]) -> dict[s
     added = _servers(additions.get("mcpServers"))
     for name, entry in added.items():
         servers.setdefault(name, copy_json_document(entry))
+    # The file's switch-off of a base server mutes the base's own entry; the
+    # transport is never taken from the file. The KAS projection does not declare
+    # a muted entry (``kas_agents``), so the worker does not launch it.
+    muted = [name for name in _strings(additions.get("disabledServers")) if name in servers]
+    for name in muted:
+        servers[name] = {**servers[name], "disabled": True}
     spec["mcpServers"] = servers
     for key in ("resources", "skills"):
         extra_items = _strings(additions.get(key))
@@ -348,6 +389,8 @@ def merge_worker_spec(base: dict[str, Any], additions: dict[str, Any]) -> dict[s
     for ref in _strings(additions.get("allowedTools")):
         if _server_of(ref) in added and ref not in allowed:
             allowed.append(ref)
+    # A muted server's approvals grant nothing; drop them so none outlives the mute.
+    allowed = [ref for ref in allowed if _server_of(ref) not in muted]
     # Per-tool limits, from the base's own entries and the file's, are hidden from
     # the session rather than refused at its start: each disabled tool joins
     # ``excludedTools`` and loses any auto-approval naming it.
@@ -401,7 +444,9 @@ def mate_file_for_member(member_id: str, config: Any = None) -> str:
     except Exception:  # noqa: BLE001 - an unknown or ambiguous id owns no file
         return ""
     name = getattr(binding, "kiro_agent", "") or ""
-    if not name:
+    if not name or is_mate_service_agent(name):
+        # The conductor and worker specs share the crewmate folder; neither is
+        # any crewmate's file.
         return ""
     if not kas_agents_mod.agent_spec_absent(paths_mod.kiro_agents_dir(), name):
         return ""

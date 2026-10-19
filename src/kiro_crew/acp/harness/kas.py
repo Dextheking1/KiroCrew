@@ -184,6 +184,16 @@ def resolve_projected_spec(
     :class:`~kiro_crew.acp.kas_agents.KasAgentSpecAbsent`, so a caller can say
     what is missing rather than quote a failed file open.
     """
+    from kiro_crew.agent_files import is_mate_service_agent
+
+    if is_mate_service_agent(agent):
+        # The mate conductor and worker are generated into the crewmate folder,
+        # not the user level (``agent_files.MATE_SERVICE_AGENT_FILENAMES``), and
+        # read there FIRST: a spec an older build left at the user level is not
+        # the one the gateway governs.
+        service_dir = paths_mod.mate_agents_dir()
+        if not kas_agents_mod.agent_spec_absent(service_dir, agent):
+            return kas_agents_mod.load_agent_spec(service_dir, agent), service_dir
     if not kas_agents_mod.agent_spec_absent(agents_dir, agent):
         return kas_agents_mod.load_agent_spec(agents_dir, agent), agents_dir
     # Crewmate scope. A name the user level does NOT declare may be a crewmate's

@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+import kiro_crew.config.paths as paths_mod
 from kiro_crew import agent
 from kiro_crew.agent_files import (
     AGENT_FILENAME,
@@ -41,6 +42,7 @@ def agents_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory.mkdir()
     monkeypatch.setattr(agent, "kiro_agents_dir_path", lambda: directory)
     monkeypatch.setattr(agent, "KIRO_AGENTS_DIR", directory)
+    monkeypatch.setattr(paths_mod, "mate_agents_dir", lambda: tmp_path / "mates" / "agents")
     monkeypatch.setattr(
         "kiro_crew.kiro_cli.installed_kiro_cli_version", lambda: SPEC_PERMISSIONS_MIN_VERSION
     )
@@ -142,16 +144,19 @@ def test_every_crewmate_spec_mounts_the_same_guide_set(rebuildable: Path) -> Non
     agent.rebuild_agent_config()
     default = _spec(rebuildable, AGENT_FILENAME)
     worker = _spec(rebuildable, WORKER_AGENT_FILENAME)
-    conductor = _spec(rebuildable, MATE_CONDUCTOR_AGENT_FILENAME)
+    mates = rebuildable.parent / "mates" / "agents"
+    conductor = _spec(mates, MATE_CONDUCTOR_AGENT_FILENAME)
     for spec in (default, worker, conductor):
         assert GUIDE_REF in spec["tools"]
         assert "autoApprove" not in spec["mcpServers"][GUIDE_SERVER]
         assert _guide_grants(spec) == GRANTS
     # The first crewmate's chat runs on the crewmate conductor, which carries the
-    # same guide set; no per-crewmate copy lands in the user-level agents dir.
+    # same guide set; no crewmate spec, not even the mate conductor's or worker's,
+    # lands in the user-level agents dir that kiro-cli lists.
     row = _saved()["agents"][ASSISTANT_MEMBER_NAME]
     assert row["kiro_agent"] == MATE_CONDUCTOR_AGENT
-    assert sorted(p.name for p in rebuildable.glob("*mate*")) == sorted(
+    assert not list(rebuildable.glob("*mate*"))
+    assert sorted(p.name for p in mates.glob("*mate*")) == sorted(
         [MATE_CONDUCTOR_AGENT_FILENAME, MATE_WORKER_AGENT_FILENAME]
     )
 

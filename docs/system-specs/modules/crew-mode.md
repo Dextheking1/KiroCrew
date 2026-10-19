@@ -873,7 +873,12 @@ preserves the exact original bytes. Complete sensitive
 terminator stops option inference, not assignment scanning. Retention preserves
 the entire original argument, including additional equals signs in its value. The
 `agent_capabilities.py` response boundary is registered in the security posture
-redaction inventory, so the omission gate checks it with the other outputs. MCP `set`
+redaction inventory, so the omission gate checks it with the other outputs. A
+crewmate that owns its file takes the in-place path (`mate_capabilities`), and its
+GET, preview and PUT responses pass the same `safe_view`; its MCP `set` applies the
+same `retain_paths` rules against the transport stored in the file, under the file's
+optimistic lock, and refuses an unretained mask as `redacted_value_not_writable`.
+MCP `set`
 accepts `retain_paths`, RFC6901 pointers into the complete replacement value.
 Each pointer must address exactly `[REDACTED]` and the same redacted scalar leaf
 in the current member transport. Empty/root, malformed, overlapping, duplicate
@@ -1195,7 +1200,9 @@ and native provider context cannot acquire member memory by changing a label.
 The session execution record binds its member ID and store ID across later opens
 and restarts. Old schedules and child runs retain their captured member/store.
 A provider-side template switch changes persona behavior without selecting a
-new memory owner. Ordinary owner/app, capability, native-history and governance
+new memory owner, and so does the startup crewmate migration's thread repoint
+(below), which moves a moved crewmate's pre-upgrade DM threads onto its conductor
+by rewriting `template_id` alone. Ordinary owner/app, capability, native-history and governance
 checks still apply to selection changes; see [session](session.md#agent-selection-provenance).
 
 The crew editor links to
@@ -1387,7 +1394,9 @@ from such a template) is dropped wherever the file is written
 (`mate_config.write_mate_spec`) or projected (`acp.harness.kas.resolve_projected_spec`),
 and the startup migration rewrites any file that still holds one
 (`mate_config_migration.repair_partial_platform_servers`); an entry carrying a
-transport or `disabledTools` stays (`mate_worker.drop_partial_platform_servers`,
+transport or `disabledTools` stays, and so does a switch-off (`{"disabled": true}`),
+which launches nothing and is the crewmate's restriction on the worker base's
+server (`mate_worker.drop_partial_platform_servers`,
 pinned by `test/test_mate_platform_server_override.py`). The capability editor accepts that
 server on a member whose Parent lacks it (`agent_capabilities.MEMBER_PLATFORM_SERVERS`):
 its transport is never the request's but the default template's entry
@@ -3259,7 +3268,24 @@ chat, the hand-off (`_dispatching_crewmate`) and `is_conductor_execution` alike
   worker lacks" below). Both specs are written from
   `build_agent_config()` on every gateway start
   (`service_agents._install_mate_conductor_agent` /
-  `_install_mate_worker_agent`), are background-only in the agent catalog, and
+  `_install_mate_worker_agent`) into `~/.kiro/mates/agents/`, beside the
+  crewmates' own files and NOT into `~/.kiro/agents/`, so kiro-cli's own agent
+  list does not show them (`agent_files.MATE_SERVICE_AGENT_FILENAMES`). Every
+  reader follows them there: the KAS projection reads these two names in that
+  folder before the user level (`acp/harness/kas.resolve_projected_spec`), an
+  array-backed host's session MCP read does too (`session_mcp._user_agent_spec`),
+  and so do the capability catalog's and the migration's worker base and the
+  copy of a crewmate created on the conductor (`mate_config.source_agents_dir`).
+  Their names are reserved in that folder: no crewmate file may take either
+  (`mate_config.write_mate_spec` refuses, `has_mate_config` answers False, the
+  migration skips such a crewmate with a warning), and neither is ever read as a
+  crewmate's own file (`mate_worker.mate_file_for_member`, the snapshot's
+  crewmate-only set). A copy an earlier build left in `~/.kiro/agents/` is
+  deleted at the next install when its `name` and `description` are the
+  generated ones (that build rewrote it on every start); any other file at
+  that name is kept, unread, with a warning
+  (`service_agents._remove_user_level_copy`, `test/test_mate_service_specs.py`).
+  Both are background-only in the agent catalog, and
   are in `agent_files.KIROCREW_DEFAULT_AGENT_NAMES`, so their sessions keep the
   default agent's context blocks.
 - **The crewmate's file** extends the worker only, and only by addition
@@ -3267,7 +3293,15 @@ chat, the hand-off (`_dispatching_crewmate`) and `is_conductor_execution` alike
   prompt; `mcpServers` the worker base lacks are added and mounted in `tools`
   (a base server of the same name always wins); `resources` and `skills`
   entries the base lacks are added; `allowedTools` entries are taken only for
-  the servers the file adds. A file that copies the base adds nothing. Every
+  the servers the file adds. A file that copies the base adds nothing.
+  **A whole-server switch-off is a restriction, not an addition:** a file entry
+  for a server the base declares that reads as muted (`mcp_cleanup.mcp_entry_is_muted`:
+  any `disabled` but absent or `false`) is carried by name
+  (`mate_worker.disabled_base_servers`, `worker_additions["disabledServers"]`), and
+  the merge sets `disabled: true` on the BASE's own entry -- its transport is never
+  the file's -- and drops every `allowedTools` grant on that server. The KAS
+  projection does not declare a muted entry (`kas_agents._project_mcp_servers`), so
+  the worker does not launch it (`test/test_mate_worker_disabled_servers.py`). Every
   other field (`tools` for built-ins, `model`, `permissions`, `hooks`) is
   ignored. **Per-tool limits are hidden, never a refusal:** every
   `mcpServers.<name>.disabledTools` entry -- the base's own and the file's,
@@ -3499,15 +3533,30 @@ edits are kept. The source is read with its prompt inlined and governed
 to the worker base (`migration_file`, through `mate_worker.worker_additions`):
 its prompt, the servers the base lacks with their `autoApprove`, their
 `allowedTools` grants and `tools` mounts, its `resources` and `skills`, and its
-restrictions (`excludedTools`, and every `disabledTools` entry for a server the
-base declares as an `excludedTools` entry). Nothing equal to the worker base is
+restrictions (`excludedTools`, every `disabledTools` entry for a server the
+base declares as an `excludedTools` entry, and a base server the source switched
+off whole as `{"disabled": true}`). Nothing equal to the worker base is
 copied, so a crewmate on the default template gets a file that adds nothing; a
 prompt-less source adds no prompt. Before any write, `dry_run` merges the
 planned file exactly as a worker session would and compares grants: the merged
 worker must keep every server, transport (for a server the base does not
 declare), approval, tool mount, resource and skill the source has beyond the
-base, add none that neither has, carry the source's prompt, and the source must
-have no `hooks`. A crewmate that fails is skipped, its binding unchanged and no
+base, add none that neither has, start no server the source switched off
+("its worker would start MCP server ... it had switched off"), carry the source's
+prompt, and the source must have no `hooks`. What the worker base deliberately does not give is not a loss
+(`mate_config_migration._by_design`, 2026-10-19 owner decision): the base's own
+`excludedTools`; every approval it does not give (`allowedTools` or a server's
+`autoApprove`) for a built-in tool or for a server it owns, the servers it
+declares plus the platform servers the gateway runs
+(`mate_worker.conductor_mcp_servers`) -- so an old `@kirocrew-cron`,
+`@kirocrew-guide/rename_self`, `@kirocrew-core/ask_question` or `global_*`
+auto-approval moves without a word; and a mount of a server it owns. A grant the
+old agent had on any other server is the crewmate's own, and losing it still
+keeps the crewmate where it is (`test/test_mate_config_migration.py`). A
+crewmate whose id is also the name of a user-level agent (a `rust-master`
+crewmate on a `rust-master` template) is skipped before anything is written:
+resolution reads the user level first, so a file under that id would never be
+read, and its threads are not repointed either. A crewmate that fails is skipped, its binding unchanged and no
 file written, with one WARNING naming it by display name and the difference
 (`MigrationReport.dry_run_failed`); it is evaluated again, unchanged, on the
 next boot. A written file is read back through the same merge and checked
@@ -3522,7 +3571,29 @@ Nothing is deleted: the shared template and any `crew-<hex>` copy stay on disk,
 and setting `agents.<name>.kiro_agent` back to the old name in `config.json`
 rolls the crewmate back (its file is then ignored). Each moved crewmate is
 recorded in `~/.kiro/mates/migrated.json` after its repoint, so a rolled-back
-crewmate is not moved again; removing its name there opts it back in. Sub-agents running at the upgrade end
+crewmate is not moved again; removing its name there opts it back in.
+
+**Its pre-upgrade threads move with it**
+(`mate_config_migration.repoint_moved_threads`, run right after the repoints and
+on every boot that still owes it, before the slots restore). Every turn reuses
+the thread's own execution record, so a thread opened before the upgrade would
+otherwise keep the agent the crewmate was moved from. The ledger entry
+`threads.<name>` = `{from, repointed, done}` names that agent; a crewmate bound
+to the conductor already (Mate) has no entry. The pass reads only the DM thread
+transcripts whose slot names the crewmate (`dashboard_member-<slug>[.memory-<store>]`),
+and rewrites a record only when it is a persistent `member` selection carrying
+the crewmate's `member_id` and running `from`: `template_id` becomes
+`kirocrew-mate-conductor`, and member, store, selection, mode and app stay, so
+memory routing does not move. The write is `bind_session_execution`'s
+compare-and-set against the value just read, with `replace_existing` and no
+vouch. A worker or other template selection on its store, a thread of another
+member, an ordinary `chat-` slot, a skipped crewmate (no ledger entry) and a
+rolled-back or removed one (its `kiro_agent` no longer its own id) are left as
+they are. The keys moved are recorded in `repointed`, so a rollback sets them
+back to `from` together with the binding; `done` is set once every thread was
+read and written, so a second boot reads no transcript, and a thread that could
+not be read leaves the pass owed. A thread whose turn is running then takes the
+conductor on its next turn (`test/test_mate_config_migration.py`). Sub-agents running at the upgrade end
 with its gateway restart (subagent.md, Gateway Restart Reconciliation).
 
 **A moved crewmate tells its user once** (`kiro_crew.mate_upgrade_notice`).
@@ -3543,6 +3614,93 @@ sentences, work it takes on now goes to its worker, and the user sees and
 changes what the worker can do from the crewmate's name at the top of its chat,
 then Edit crewmate > Built From, in its Tools, MCP Servers and Skills tabs; no
 tools in that reply.
+
+**What the worker lacks, the conductor asks for.** A worker that lacks a tool or
+a skill says so in its report; it has no request tool (its spec lists
+`@kirocrew-mate/request_capabilities` and `@kirocrew-mate/find_capabilities` in
+`excludedTools`, `mate_worker.MATE_WORKER_EXCLUDED_TOOLS`). Its source-defined
+prompt is the default prompt followed by `mate_worker.MATE_WORKER_PROMPT`
+(`service_agents._install_mate_worker_agent`): a task that needs a tool, server
+or skill it does not have is reported, not worked around, on a first line
+`MISSING CAPABILITY: <what> -- <why>` (`mate_worker.MISSING_CAPABILITY_PREFIX`).
+The `[Worker report]` the crewmate's thread receives finds that line in the
+excerpt (`mate_thread_wakes.missing_capability`, Markdown emphasis and quote
+marks tolerated, bounded) and adds one line naming the gap and pointing at
+`find_capabilities` and `request_capabilities`. The conductor also learns what
+its worker can use when it hands work off: the result of its own
+`session_create` and `session_send` to a worker of the same crewmate (both
+attested execution records: the caller a conductor, the target a
+`kirocrew-mate-worker` record with the same `member_id`) carries
+`worker_capabilities`, the worker's MCP servers and the servers this gateway has
+loaded that it lacks (`dashboard/crewmate_dispatch_capabilities.own_worker_note`,
+`mate_capability_catalog.dispatch_summary`: steps 1 and 2 of `find_capabilities`,
+names only, cut to a plain character set and twelve per line; the registry stays
+on demand), which the MCP tool appends to its reply. Every other caller and
+target gets nothing, and nothing is added to the conductor's per-turn context
+(`test/test_crewmate_dispatch_capabilities.py`). Before telling the user a
+source is missing, the conductor checks what the worker and the gateway can
+reach, also when the ask names no system (what users said, reported or
+complained about lives in some source): `find_capabilities`, or a worker handed
+the question of where it lives (`conductor.mate_tools_identity`). The gateway
+adds nothing to a reply that says something is unavailable; the hand-off note
+above already shows the catalog. Once the catalog
+names the addition the work needs, the conductor raises the card straight away
+(its prompt and the `find_capabilities` description say so): the card is the
+question to the user, so the chat does not ask first. The conductor reads
+the catalog with `find_capabilities` (`POST /api/member/self/capabilities`,
+`dashboard/handlers/member_capability_catalog.py`, any turn in the crewmate's
+own thread, refused `not_a_crewmate` elsewhere and `no_crewmate_file` for a
+binding that owns no file), which answers in order: `worker` -- what
+`resolve_worker_spec` projects for this crewmate (servers, the tools each runs
+without asking, the tools switched off, skills; `mate_capability_catalog.worker_has`);
+`gateway` -- servers (`mcp_discovery.list_servers`) and skills (the capability
+editor's own catalog) loaded here that the worker lacks (`gateway_lacks`); and,
+for a `query`, `registry` -- `mcp_discover.search_registry`, the search behind
+`/api/mcp/discover`, with every provider field redacted. It never returns a
+transport. The conductor then calls `request_capabilities` with a draft naming
+`additions`: `{server, source: "gateway"}` copies this gateway's own entry
+(`_find_server_spec_anywhere`, minus `autoApprove`, `disabled` and
+`disabledTools`); `{server, source: "registry", registry_id}` takes the official
+registry's install plan (`mcp_discover.official_install_plan`, the spec
+`/api/mcp/discover/install` would write, under the name that install would give
+it); `{skill}` adds a loaded skill; each server may name `auto_approve` tools.
+`additions_to_draft` resolves them into `mcpServers` / `tools` / `allowedTools`
+/ `skills` operations and an `origins` map, refusing `already_has`,
+`not_on_gateway`, `name_in_use` (a registry name this gateway already runs),
+`unknown_skill`, `registry_unavailable` and any other provider than the official
+registry (an edition provider installs into the user's config, not the
+crewmate's). The `crewmate.capabilities` card shows the full launch line, a
+"comes from" row per server (this gateway's only while the draft's entry still
+matches the gateway's on what launches it, `member_capability_catalog.gateway_matches`,
+re-read when the card is built; the registry id otherwise) and a "runs without
+asking" row listing exactly the approvals the preview kept after the governance
+ceiling (`mate_capability_catalog.origin_rows`). The card's main view is one
+plain line per addition (`addition_summary`: a row carrying `addition`, which
+the dashboard words in the reader's language as what the worker gets, where it
+comes from and what runs without asking, named by the crewmate's display name);
+every raw row above is kept on the card marked `detail` and drawn under a
+collapsed Details. When every server the card adds is one this gateway already
+runs as drafted (`only_gateway_servers`), no new outside code comes in, so the
+card carries no `code_exec` and shows no third-party warning; an approval it
+would widen keeps its acknowledgement: `widen` is measured from the preview's
+impact as on any capabilities card, so an auto-approved tool or a whole-server
+grant (`@server`, worded "every tool" with `auto_approve_all` on the addition)
+needs the "runs without asking" checkbox, and each widening `allowedTools` /
+`autoApprove` row stays in the main view rather than under Details. A gateway
+addition with no new approval carries neither flag; a registry install keeps
+both. Pressing it applies through
+`/api/agents/{name}/capabilities`, which for a crewmate that owns its file is
+`mate_capabilities.put`: the gateway writes `~/.kiro/mates/agents/<id>.json` in
+place under its optimistic lock, never the user's MCP config; neither the
+conductor nor the worker writes the file. The worker picks the change up at its
+next spawn, when the projection merges the file again. A card press starts no
+turn, so once a `crewmate.capabilities` card reaches applied or partly applied
+(`handlers/change_cards._complete`), the crewmate's own thread gets one hidden
+`[Capabilities added]` turn once it is idle
+(`goal_setup.schedule_capabilities_nudge`, the goal nudges' wait, piece
+`goal_setup.capabilities_added`): it names the card's title and says a worker
+already running started without the addition, so the work that waited on it
+goes to a new worker session.
 
 **The ceiling holds on the merged spec.** `merge_worker_spec` runs
 `sanitize_agent_config_governance` over the result, and the projection's own

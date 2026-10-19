@@ -48,6 +48,22 @@ MATE_CONDUCTOR_AGENT_FILENAME = "kirocrew-mate-conductor.json"
 # conductor; a crewmate's own file under ``~/.kiro/mates/agents/`` adds to it at
 # projection time (``kiro_crew.mate_worker``), never on disk here.
 MATE_WORKER_AGENT_FILENAME = "kirocrew-mate-worker.json"
+#: The two crewmate specs Crew generates. They live in ``~/.kiro/mates/agents/``
+#: beside the crewmates' own files, NOT in ``~/.kiro/agents/``: kiro-cli lists
+#: every spec in its agents folder, and these two are never picked by hand. The
+#: KAS projection resolves that folder after the user level, and reads these two
+#: names there first (``acp/harness/kas.resolve_projected_spec``). Being in that
+#: folder, their stems are reserved: no crewmate may own a file by either name
+#: (``mate_config.write_mate_spec``).
+MATE_SERVICE_AGENT_FILENAMES = (MATE_CONDUCTOR_AGENT_FILENAME, MATE_WORKER_AGENT_FILENAME)
+MATE_SERVICE_AGENT_NAMES = frozenset(f[: -len(".json")] for f in MATE_SERVICE_AGENT_FILENAMES)
+
+
+def is_mate_service_agent(name: object) -> bool:
+    """Whether *name* is the mate conductor or the mate worker (case-folded)."""
+    return isinstance(name, str) and name.casefold() in MATE_SERVICE_AGENT_NAMES
+
+
 # The dashboard-author crewmate: authors ONE dashboard template and lands it as a
 # pull request, writing no runtime code. Its own file because it is a dispatched,
 # worker-shaped agent with its own charter and tool surface -- it writes files and
