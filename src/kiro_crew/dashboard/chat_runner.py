@@ -1254,6 +1254,26 @@ def _hands_off_queue_on_exit(
     return guarded
 
 
+#: The dashboard -> Slack mirror's working placeholder, posted under the prompt
+#: echo and deleted once the task stream, the answer or the turn's end takes over.
+_MIRROR_THINKING = "💭 _Thinking…_"
+
+
+async def _retire_mirror_thinking(slack_client: Any, channel: str | None, ts: str) -> str:
+    """Delete the mirror's "Thinking…" placeholder *ts*; return the new (empty) ts.
+
+    Best-effort and never raises: the placeholder is decoration, and a failed
+    delete must not fail a turn that already delivered. Returns ``""`` either
+    way, so the caller stops owing the delete and never repeats it.
+    """
+    if ts and channel:
+        try:
+            await slack_client.delete_message(channel, ts)
+        except Exception:
+            logger.debug("Failed to delete the mirror's Thinking placeholder", exc_info=True)
+    return ""
+
+
 def _emit_ttft_metric(t0: float, session_key: str, *, is_new: bool, resumed: bool) -> None:
     """Emit the user-message → first-visible-token latency histogram.
 
@@ -5224,6 +5244,11 @@ async def _run_chat(
                     if not _these_options:
                         break
 
+                # The answer starts here, so the "Thinking…" placeholder (still
+                # up on a turn that ran no tool) goes before the answer lands.
+                turn._mirror_thinking_ts = await _retire_mirror_thinking(
+                    state.slack_client, _mirror_chan, turn._mirror_thinking_ts
+                )
                 for _part in render_for_slack(_mirror_body):
                     await state.slack_client.post_message(_mirror_chan, _part, _mirror_thread)
                 if _mirror_options:
@@ -7391,6 +7416,13 @@ async def _run_chat(
                     await state.slack_client.stop_stream(_mirror_chan, _mirror_stream_ts)
                 except Exception:
                     logger.debug("Stream cleanup failed", exc_info=True)
+            if turn._mirror_thinking_ts and state.slack_client and _mirror_chan:
+                # A turn that ended with neither a tool nor a mirrored answer
+                # (an error, a cancel, a withheld reply) still owes the thread
+                # its placeholder's removal. Best-effort and never raises.
+                turn._mirror_thinking_ts = await _retire_mirror_thinking(
+                    state.slack_client, _mirror_chan, turn._mirror_thinking_ts
+                )
             if _acquired and (needs_session_reset or needs_conversation_discard):
                 # Neither branch below goes through `_reset_slot_session`, so the
                 # withhold verdict is dropped here: both replace the session that

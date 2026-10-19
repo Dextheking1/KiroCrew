@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         UnknownMemoryStore,
         _git_repo_touches,
         _redact_tool_field,
+        _retire_mirror_thinking,
         _tool_identity_fields,
         capabilities_of,
         crew_log_emit,
@@ -452,38 +453,57 @@ async def _on_tool_call(turn: _ChatTurn, event) -> None:
     # stream's destination is the thread cached at turn start, judged
     # as the room it is beside the live comparison.
     if (
-        _mirror_stream_ts
+        _mirror_chan
+        and _mirror_thread
+        and state.slack_client
         and not cross_surface_withheld(state, slot)
         and not slack_publication_withheld(state, slot, _mirror_chan, _mirror_thread)
     ):
         try:
-            if _mirror_active_task:
+            if not turn._mirror_stream_tried:
+                # First mirrored tool: the task stream takes over from
+                # the "Thinking…" placeholder, whose line would
+                # otherwise sit above the plan's own header for good.
+                turn._mirror_stream_tried = True
+                _mirror_stream_ts = (
+                    await state.slack_client.start_stream(_mirror_chan, _mirror_thread) or ""
+                )
+                turn._mirror_stream_ts = _mirror_stream_ts
+                if _mirror_stream_ts:
+                    turn._mirror_thinking_ts = await _retire_mirror_thinking(
+                        state.slack_client, _mirror_chan, turn._mirror_thinking_ts
+                    )
+        except Exception:
+            logger.debug("Mirror task stream start failed", exc_info=True)
+        if _mirror_stream_ts:
+            try:
+                if _mirror_active_task:
+                    await state.slack_client.append_task(
+                        _mirror_chan,
+                        _mirror_stream_ts,
+                        _mirror_active_task,
+                        _mirror_active_task_title,
+                        "complete",
+                    )
+                _mirror_task_counter += 1
+                turn._mirror_task_counter = _mirror_task_counter
+                _mirror_active_task = f"tool_{_mirror_task_counter}"
+                turn._mirror_active_task = _mirror_active_task
+                _task_title = event.tool_purpose or event.title
+                _task_title, _ = redact_exfiltration_urls(_task_title)
+                _task_title, _ = redact_credentials(_task_title)
+                _task_title = _task_title[:75]
+                _mirror_active_task_title = _task_title
+                turn._mirror_active_task_title = _mirror_active_task_title
                 await state.slack_client.append_task(
                     _mirror_chan,
                     _mirror_stream_ts,
                     _mirror_active_task,
-                    _mirror_active_task_title,
-                    "complete",
+                    _task_title,
+                    "in_progress",
                 )
-            _mirror_task_counter += 1
-            turn._mirror_task_counter = _mirror_task_counter
-            _mirror_active_task = f"tool_{_mirror_task_counter}"
-            turn._mirror_active_task = _mirror_active_task
-            _task_title = event.tool_purpose or event.title
-            _task_title, _ = redact_exfiltration_urls(_task_title)
-            _task_title, _ = redact_credentials(_task_title)
-            _task_title = _task_title[:75]
-            _mirror_active_task_title = _task_title
-            turn._mirror_active_task_title = _mirror_active_task_title
-            await state.slack_client.append_task(
-                _mirror_chan,
-                _mirror_stream_ts,
-                _mirror_active_task,
-                _task_title,
-                "in_progress",
-            )
-        except Exception:
-            logger.debug("Mirror tool task failed", exc_info=True)
+            except Exception:
+                logger.debug("Mirror tool task failed", exc_info=True)
 
 
 async def _on_tool_call_update(turn: _ChatTurn, event) -> None:
