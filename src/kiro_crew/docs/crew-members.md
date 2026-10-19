@@ -188,6 +188,21 @@ tools, MCP servers and skills (`request_capabilities`); each ask is a change
 card with a button, and nothing changes until you press it. Its workspace,
 memory store and template are not the crewmate's to ask for.
 
+### Its worker
+
+A crewmate hands longer work to a **worker**: a session it opens with
+`session_create`, which runs on the crewmate's own memory and workspace with
+the worker's built-in tools plus whatever that crewmate's settings add. To give
+the worker a ready-made set of instructions, connections and skills, open the
+crew editor, choose **Advanced**, pick an agent template under **Worker's extra
+kit**, press **Copy into the worker**, review the list of changes and press
+**Apply**. The kit is copied once; later edits to the template do not reach the
+crewmate. **Re-copy from template** brings a newer version in the same way,
+showing what would change first, and asks whether to keep anything added since
+the last copy. Nothing the kit carries can lift the worker past your security
+policy and profile. **Advanced** appears for a crewmate that owns its own
+config.
+
 ### Goals
 
 A crewmate's **Goals** tab (Profile card) holds what it works toward:

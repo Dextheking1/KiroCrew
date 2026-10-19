@@ -52,6 +52,8 @@ if TYPE_CHECKING:
     )
 
 
+
+
 async def api_kirocrew_agent_resolved_model(request: web.Request) -> web.Response:
     """GET /api/agents/resolved-model?agent=NAME[&app=APP] — the model a new session uses.
 

@@ -20,6 +20,7 @@ Blocking IO throughout; callers run it off the event loop.
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
 import re
 from pathlib import Path
@@ -42,7 +43,18 @@ ALREADY_ENROLLED = "already_enrolled"
 POLICY_WITHHOLDS = "policy_withholds"
 SERVER_UNAVAILABLE = "server_unavailable"
 BACKEND_UNSUPPORTED = "backend_unsupported"
+MATE_FILE_MISSING = "mate_file_missing"
+PLATFORM_PROVIDED = "platform_provided"
 FAILED = "failed"
+
+
+def _digest(value: Any) -> str:
+    """Stable digest of a spec, to tell a no-op edit from a real one."""
+    import hashlib
+
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
 
 
 def _referenced(tools: Any) -> bool:

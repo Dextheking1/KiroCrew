@@ -137,6 +137,7 @@ from kiro_crew.config.paths import (  # noqa: F401, kiro_agents_dir
     demote_scratch_root_override,
     ensure_data_home,
     kiro_agents_dir,
+    mate_agents_dir,
     project_agents_dir,
     scratch_root_owner_refusal,
     scratch_root_writer_refusal,
