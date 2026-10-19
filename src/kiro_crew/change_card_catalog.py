@@ -473,20 +473,34 @@ KINDS: dict[str, KindDef] = {
             "Turn one crewmate's check-ins on or off and set when they run: daily "
             "(the Daily Goal Reminder), weekly (the Weekly report, on `weekday`, "
             "0 = Sunday) and monthly (the Monthly review, on `month_day`, 1-28), "
-            "all at `time` (HH:MM, 24-hour). Give only the fields that change.",
+            "all at `time` (HH:MM, 24-hour), and heartbeat (a wake every `interval` "
+            "minutes, one of 15, 30, 60, 120, 240, in which the crewmate moves its "
+            "work forward on its own; each wake uses credits). Give only the fields "
+            "that change.",
             _obj(
                 {
                     "member": _STR,
                     "daily": _BOOL,
                     "weekly": _BOOL,
                     "monthly": _BOOL,
+                    "heartbeat": _BOOL,
                     "weekday": {"type": "integer", "minimum": 0, "maximum": 6},
                     "month_day": {"type": "integer", "minimum": 1, "maximum": _goals.MAX_MONTH_DAY},
                     "time": {"type": "string", "maxLength": 5},
+                    "interval": {"type": "integer", "enum": list(_goals.HEARTBEAT_INTERVALS)},
                 },
                 ["member"],
             ),
-            ("daily", "weekly", "monthly", "weekday", "month_day", "time"),
+            (
+                "daily",
+                "weekly",
+                "monthly",
+                "heartbeat",
+                "weekday",
+                "month_day",
+                "time",
+                "interval",
+            ),
         ),
         KindDef(
             KIND_TEMPLATE_UPDATE,
@@ -2130,14 +2144,25 @@ def _check_ins_path(slug: str) -> str:
 
 
 #: The fields a ``crewmate.check_ins`` card may set.
-CHECK_IN_FIELDS = ("daily", "weekly", "monthly", "weekday", "month_day", "time")
+CHECK_IN_FIELDS = (
+    "daily",
+    "weekly",
+    "monthly",
+    "heartbeat",
+    "weekday",
+    "month_day",
+    "time",
+    "interval",
+)
 CHECK_IN_LABELS = {
     "daily": "Daily Goal Reminder",
     "weekly": "Weekly report",
     "monthly": "Monthly review",
+    "heartbeat": "Heartbeat (each wake uses credits)",
     "weekday": "Day of the week",
     "month_day": "Day of the month",
     "time": "Check-in time",
+    "interval": "Heartbeat interval",
 }
 _WEEKDAY_NAMES = ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
 
@@ -2152,6 +2177,8 @@ def _check_in_value(key: str, value: Any) -> str | None:
         return _WEEKDAY_NAMES[value]
     if key == "month_day":
         return f"Day {value}"
+    if key == "interval" and isinstance(value, int):
+        return f"Every {value} min" if value < 60 else f"Every {value // 60} h"
     return str(value)
 
 

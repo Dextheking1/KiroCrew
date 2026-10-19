@@ -1,6 +1,6 @@
-"""A crewmate's check-ins: Daily Goal Reminder, Weekly report, Monthly review.
+"""A crewmate's check-ins: Daily Goal Reminder, Weekly report, Monthly review, Heartbeat.
 
-The Goals tab's three switches (``PUT /api/members/{slug}/goals/schedules``) are
+The Goals tab's four switches (``PUT /api/members/{slug}/goals/schedules``) are
 stored in the goal record (:mod:`kiro_crew.member_goals`), and each switch keeps
 exactly ONE gateway-owned schedule in step with it, through the cron store's
 installer key (``managed_by``, ``goal-<cadence>:<slug>``), so no switch can ever
@@ -8,7 +8,9 @@ have two schedules and none touches another's:
 
 * on -> that cadence's old schedule (if any) is removed and a fresh one created
   at the shared time of day: daily ``M H * * *``, weekly ``M H * * <weekday>``,
-  monthly ``M H <day> * *``, in the user's timezone;
+  monthly ``M H <day> * *``, in the user's timezone; the heartbeat runs on its
+  interval instead (``*/15 * * * *``, ``*/30 * * * *``, ``0 * * * *``,
+  ``0 */2 * * *``, ``0 */4 * * *``, :func:`cron_expr_for`);
 * off -> that cadence's schedule is removed.
 
 When a schedule fires, the gateway's cron callback hands the job here
@@ -79,7 +81,7 @@ def cadence_of(job: Any) -> str | None:
 
 
 def is_reminder_job(job: Any) -> bool:
-    """Whether *job* is one of a crewmate's goal check-ins (daily, weekly, monthly).
+    """Whether *job* is one of a crewmate's goal check-ins (daily, weekly, monthly, heartbeat).
 
     The one predicate every list that leaves them out reads: the Goals tab's
     switches are their only control, so ``GET /api/crons`` (the Schedule page and
@@ -89,8 +91,29 @@ def is_reminder_job(job: Any) -> bool:
     return cadence_of(job) is not None
 
 
+#: The heartbeat's cron expression per interval (minutes), on the clock's own
+#: marks: a 30-minute heartbeat runs at :00 and :30.
+_HEARTBEAT_EXPRS = {
+    15: "*/15 * * * *",
+    30: "*/30 * * * *",
+    60: "0 * * * *",
+    120: "0 */2 * * *",
+    240: "0 */4 * * *",
+}
+
+
+def heartbeat_interval(schedules: dict[str, Any]) -> int:
+    """The record's heartbeat interval in minutes, the default when it holds none."""
+    value = schedules.get("interval")
+    if isinstance(value, int) and member_goals.is_heartbeat_interval(value):
+        return value
+    return member_goals.DEFAULT_HEARTBEAT_INTERVAL
+
+
 def cron_expr_for(cadence: str, schedules: dict[str, Any]) -> str:
-    """The cron expression for *cadence* at the record's shared time."""
+    """The cron expression for *cadence* at the record's shared time (or interval)."""
+    if cadence == member_goals.CADENCE_HEARTBEAT:
+        return _HEARTBEAT_EXPRS[heartbeat_interval(schedules)]
     hour, minute = (int(x) for x in str(schedules["time"]).split(":"))
     if cadence == member_goals.CADENCE_WEEKLY:
         return f"{minute} {hour} * * {int(schedules['weekday'])}"
@@ -112,6 +135,7 @@ _NAMES = {
     member_goals.CADENCE_DAILY: "Daily goal reminder",
     member_goals.CADENCE_WEEKLY: "Weekly report",
     member_goals.CADENCE_MONTHLY: "Monthly review",
+    member_goals.CADENCE_HEARTBEAT: "Heartbeat",
 }
 
 
@@ -277,6 +301,49 @@ def reminder_prompt(
         "leave them as they "
         "are and propose nothing."
     )
+def _interval_words(minutes: int) -> str:
+    """``"30 minutes"`` / ``"hour"`` / ``"2 hours"``, for "every ..." in the prompt."""
+    if minutes < 60:
+        return f"{minutes} minutes"
+    hours = minutes // 60
+    return "hour" if hours == 1 else f"{hours} hours"
+
+
+#: How a heartbeat hands off long work, with the ``session_*`` tools and without.
+_HEARTBEAT_WORKERS = crewmate_prompts.text("heartbeat.handoff_workers")
+_HEARTBEAT_SMALL_STEPS = crewmate_prompts.text("heartbeat.handoff_small_steps")
+#: Both hand-offs: the cadence itself is the patrol, and a hidden turn is not
+#: one a person opened, so ``monitor_start`` refuses inside it.
+_HEARTBEAT_PATROL = crewmate_prompts.text("heartbeat.patrol")
+
+
+def member_has_session_tools(member: str) -> bool:
+    """Whether *member*'s thread is expected to hold the ``session_*`` tools.
+
+    The same answer the context builder gives a member turn with no live session
+    evidence, when it decides whether to inject the operating-mode block
+    (``context._member_dispatch_held(None, cfg)``: the configured member backend
+    is one that mounts the dispatch server per session), narrowed by the
+    user-level switch-off of that server, which the mount itself also honours
+    (``session_mcp_server_is_disabled``). It only chooses the heartbeat's
+    wording, so any failure answers False: small steps in the thread work with
+    or without the tools. Blocking IO.
+    """
+    try:
+        from kiro_crew.acp.session_mcp import session_mcp_server_is_disabled
+        from kiro_crew.config.loader import KiroCrewConfig
+        from kiro_crew.context import _member_dispatch_held
+        from kiro_crew.members import MEMBER_DISPATCH_SERVER
+
+        cfg = KiroCrewConfig.load()
+        if not _member_dispatch_held(None, cfg):
+            return False
+        binding = cfg.agents.get(member)
+        agent = getattr(binding, "kiro_agent", "") or None
+        return not session_mcp_server_is_disabled(MEMBER_DISPATCH_SERVER, agent)
+    except Exception:
+        logger.debug("session tools check failed for %r", member, exc_info=True)
+        return False
 
 
 def _idle_thread(state: Any, slot_key: str, member: str) -> tuple[Any, str]:
