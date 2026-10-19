@@ -763,6 +763,18 @@ async def dispatch(payload: dict) -> None:
         if await handle_handoff_click(_orch, payload):
             return
 
+    # ── Slack Code channel: the restart notice's Resume button ──
+    # Prefix-dispatched like the session-resume buttons below; owner-only and
+    # SEL-audited, it continues the channel's own interrupted work.
+    from kiro_crew.slack.code_channels.resume import RESUME_ACTION_PREFIX, handle_resume_click
+
+    if action_id.startswith(RESUME_ACTION_PREFIX):
+        if not await channel_inbound_permitted("slack"):
+            logger.info("slack code channel resume dropped: denied by channels governance policy")
+            return
+        if await handle_resume_click(_orch, payload):
+            return
+
     # ── OPTIONS Send / legacy choice buttons ──
     # Both RESOLVE an [OPTIONS:] choice: they edit/post the selection to the
     # channel AND re-dispatch it as a fresh turn. So a ``channels`` policy that
