@@ -27,8 +27,12 @@ use util::{ERROR, INFO, WARNING};
 
 /// The crate-source digest ``build.rs`` computed, in a form
 /// ``stub_impl._binary_source_digest`` finds by scanning the file: a stale
-/// build is then never launched as the current stub. ``#[used]`` keeps it
-/// through LTO and stripping, which drop symbols but not data.
+/// build is then never launched as the current stub. ``#[used]`` alone does
+/// not keep it: rustc puts a ``#[used]`` static in an ``SHF_GNU_RETAIN``
+/// section, which GNU ld older than 2.36 garbage-collects like any other
+/// unreferenced section, and every fresh build would then read as stale.
+/// ``--source-digest`` reads it from ``main``, so it is live data on every
+/// linker.
 #[used]
 static SOURCE_DIGEST_MARKER: [u8; 89] = *concat!(
     "kirocrew-stub-rs-source:",
@@ -40,8 +44,15 @@ static SOURCE_DIGEST_MARKER: [u8; 89] = *concat!(
 .expect("24 + 64 + 1 bytes");
 
 fn main() {
-    util::init_from_env();
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.len() == 1 && raw[0] == "--source-digest" {
+        // ``black_box`` hands the optimizer the static's address, so the 89
+        // bytes stay one contiguous array instead of a folded copy.
+        let marker = std::hint::black_box(&SOURCE_DIGEST_MARKER);
+        println!("{}", String::from_utf8_lossy(&marker[24..88]));
+        return;
+    }
+    util::init_from_env();
     let a = args::parse(&raw);
 
     if std::env::var_os("KIROCREW_STUB_RS_DUMP_REGISTER").is_some() {

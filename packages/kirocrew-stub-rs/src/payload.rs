@@ -63,8 +63,9 @@ pub struct InstallContext {
     pub fingerprint_root: String,
     /// ``importlib.metadata.version("kiro-crew")`` or ``"unknown"``.
     pub dist_version: String,
-    /// ``platform_compat.isolated_python_argv()``: the interpreter (plus its
-    /// user-site flag) a Python stub from this overlay would run under. Empty
+    /// ``platform_compat.isolated_python_argv("-P")``: the interpreter (plus
+    /// its user-site and safe-path flags) a Python stub from this overlay
+    /// would run under. Empty
     /// when the overlay predates it; then nothing is handed over.
     pub python_argv: Vec<String>,
 }

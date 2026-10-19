@@ -984,7 +984,12 @@ def test_rewriter_picks_the_rust_stub_when_built_and_python_otherwise(
     assert stub_impl.rust_stub_binary() == str(fake_bin)
     ctx = json.loads(base64.urlsafe_b64decode(stub_impl.install_context_b64()))
     assert ctx["interpreter"] == sys.executable
-    # The prefix the Rust stub execs the Python one through on a hand-over.
+    # The prefix the Rust stub execs the Python one through on a hand-over:
+    # the rewriter's own Python launch prefix, ``-P`` (session cwd off
+    # ``sys.path``) included.
+    from kiro_crew import platform_compat
+
+    assert ctx["python_argv"] == platform_compat.isolated_python_argv("-P")
     assert ctx["python_argv"][0] == sys.executable
 
 
@@ -1079,16 +1084,32 @@ def test_the_digest_covers_the_mirrored_python_modules(tmp_path) -> None:
         # Only the direct-exec fallback's control-plane vetting, which the port
         # hands to the Python stub (without an interpreter it drops the token).
         "kiro_crew.mcp_gateway.gatewayd",
+        # The facade that serves stub.py's owners under one module path.
+        "kiro_crew._facade_mirror",
     }
-    tree = ast.parse(Path(pystub.__file__).read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("kiro_crew"):
-            mod = node.module or ""
-            if mod == "kiro_crew" or mod == "kiro_crew.mcp_gateway":
-                imported.update(f"{mod}.{a.name}" for a in node.names)
-            else:
-                imported.add(mod)
+
+    def _product_imports(path: Path) -> set[str]:
+        found: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("kiro_crew"):
+                mod = node.module or ""
+                if mod == "kiro_crew" or mod == "kiro_crew.mcp_gateway":
+                    found.update(f"{mod}.{a.name}" for a in node.names)
+                else:
+                    found.add(mod)
+        return found
+
+    # stub.py is a facade over owner modules (``stub_bridge``, ``stub_link``,
+    # ...): the stub's behaviour is theirs, so their imports count as the stub's.
+    imported = _product_imports(Path(pystub.__file__))
+    owners = {
+        m
+        for m in imported
+        if m.startswith("kiro_crew.mcp_gateway.stub_") and m != "kiro_crew.mcp_gateway.stub_impl"
+    }
+    assert owners, "stub.py no longer names its owner modules"
+    for owner in sorted(owners):
+        imported |= _product_imports(_REPO / "src" / (owner.replace(".", "/") + ".py"))
     digested = {
         rel.removeprefix("../../src/").removesuffix(".py").replace("/", ".")
         for rel in stub_impl._MIRRORED_PYTHON
@@ -1124,3 +1145,22 @@ def test_the_built_binary_embeds_the_source_digest() -> None:
     if os.environ.get("KIROCREW_TEST_STUB_BIN"):
         pytest.skip("an externally supplied binary need not match this checkout")
     assert stub_impl._binary_source_digest(_RUST_BIN) == stub_impl._source_digest()
+
+
+@pytest.mark.skipif(not _RUST_BIN.is_file(), reason="Rust stub not built")
+def test_the_source_digest_flag_reports_the_embedded_marker() -> None:
+    """``--source-digest`` reads the marker from code, which is what keeps it
+    in the binary on a linker that drops an unreferenced retained section
+    (GNU ld before 2.36); its answer is the digest the file scan finds."""
+    from kiro_crew.mcp_gateway import stub_impl
+
+    out = subprocess.run(
+        [str(_RUST_BIN), "--source-digest"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=True,
+    ).stdout.strip()
+    assert re.fullmatch(r"[0-9a-f]{64}", out), out
+    assert out == stub_impl._binary_source_digest(_RUST_BIN)

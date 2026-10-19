@@ -16,12 +16,12 @@ from kiro_crew.constants import DEFAULT_SPAWN_MIN_MEMORY_GB
 if TYPE_CHECKING:
     from kiro_crew.subagent import (
         DEFAULT_SUBAGENT_COST_GB,
+        RUST_STUB_BIN_NAME,
         STUB_MODULE,
         KiroCrewConfig,
         Optional,
         Path,
         PurePosixPath,
-        RUST_STUB_BIN_NAME,
         _agents_slice_cgroup_dir,
         logger,
         math,

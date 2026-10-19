@@ -1354,16 +1354,23 @@ and `rust` take `target/release/kirocrew-mcp-stub-rs` in this checkout only on
 Linux, only when it is executable, and only when the source digest it
 embeds (`build.rs`) equals `stub_impl._source_digest()` over the checkout's
 crate source plus the Python modules it mirrors (`stub_impl._MIRRORED_PYTHON`:
-`stub.py` and every product module it imports except process plumbing, the
-reconnect metric, fallback-log file modes and gatewayd's fallback vetting,
-which the port does not mirror); anything else keeps the Python stub (`rust` and a stale build log
-why). CI's `Rust MCP Stub Gate (kirocrew-stub-rs)` job builds the crate and
+`stub.py`, the `stub_*` owner modules it is a facade over, and every product
+module those import except process plumbing, the facade mirror, the reconnect
+metric, fallback-log file modes and gatewayd's fallback vetting, which the port
+does not mirror); anything else keeps the Python stub (`rust` and a stale build log
+why). The digest is found by scanning the binary for its marker; `main` also
+reads that marker for `kirocrew-mcp-stub-rs --source-digest`, which is what keeps
+it in the binary on every linker (a `#[used]` static alone sits in an
+`SHF_GNU_RETAIN` section that GNU ld before 2.36 discards, so every fresh build
+would read as stale). CI's `Rust MCP Stub Gate (kirocrew-stub-rs)` job builds the crate and
 runs its unit tests and `test_stub_rs_conformance.py` against the fresh build. The overlay fingerprint carries the choice, so flipping it regenerates
 overlays. `_build_stub_entry` changes only the launch line: the Rust binary in
 place of the interpreter, and `--install-context-b64` inside the envelope, which
 carries what a Python stub would read off its own interpreter (`sys.executable`,
 the package directory, the code-fingerprint root, the distribution version) and
-the `platform_compat.isolated_python_argv()` prefix.
+the `platform_compat.isolated_python_argv("-P")` prefix, the same one the
+rewriter launches a Python stub under, so a hand-over keeps the session cwd off
+`sys.path` too.
 
 The port leaves two things to Python and execs into the Python stub for them,
 with the same flags (minus `--install-context-b64`), env and stdio:

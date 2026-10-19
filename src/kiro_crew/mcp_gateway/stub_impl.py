@@ -91,6 +91,10 @@ _MIRRORED_PYTHON = (
     "../../src/kiro_crew/mcp_gateway/secret_uri.py",
     "../../src/kiro_crew/mcp_gateway/shutdown_budget.py",
     "../../src/kiro_crew/mcp_gateway/stub.py",
+    "../../src/kiro_crew/mcp_gateway/stub_bridge.py",
+    "../../src/kiro_crew/mcp_gateway/stub_fallback.py",
+    "../../src/kiro_crew/mcp_gateway/stub_link.py",
+    "../../src/kiro_crew/mcp_gateway/stub_register.py",
     "../../src/kiro_crew/mcp_gateway/transport.py",
     "../../src/kiro_crew/session_pid_sig.py",
     "../../src/kiro_crew/session_token_sig.py",
@@ -205,7 +209,7 @@ def install_context_b64() -> str:
     the same ones a Python stub launched from this overlay would compute.
 
     ``python_argv`` is the interpreter prefix the rewriter would launch a Python
-    stub with. The Rust stub execs into the Python one through it for what the
+    stub with, ``-P`` included. The Rust stub execs into the Python one through it for what the
     port leaves to Python: a stub without a verified session token, and the
     direct-exec fallback while the gateway cannot serve.
     """
@@ -229,7 +233,10 @@ def install_context_b64() -> str:
         "package_dir": _package_dir(),
         "fingerprint_root": str(_PACKAGE_ROOT),
         "dist_version": dist,
-        "python_argv": platform_compat.isolated_python_argv(),
+        # ``-P`` as on the rewriter's own Python launch: kiro-cli starts the
+        # stub in the session cwd, which must stay off the handed-over
+        # interpreter's ``sys.path`` for the ``-m`` and the ``-c`` hand-over.
+        "python_argv": platform_compat.isolated_python_argv("-P"),
     }
     raw = json.dumps(ctx, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii")

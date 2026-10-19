@@ -143,7 +143,9 @@ from kiro_crew.llm_helpers import (
     transient_retry_delay,
 )
 from kiro_crew.mcp_gateway import STUB_MODULE
-from kiro_crew.mcp_gateway.stub_impl import RUST_STUB_BIN_NAME
+from kiro_crew.mcp_gateway.stub_impl import (  # noqa: F401 - resolved by host_memory.py via _facade_compose
+    RUST_STUB_BIN_NAME,
+)
 from kiro_crew.platform.context import redact_via_context
 from kiro_crew.process_identity import (  # noqa: F401 - resolved by run_lifecycle.py/run_yields.py/terminal.py via bind_component_globals
     MAX_ERROR_DETAIL_LEN,

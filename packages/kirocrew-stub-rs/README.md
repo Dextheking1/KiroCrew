@@ -18,7 +18,7 @@ The gateway looks for `packages/kirocrew-stub-rs/target/release/kirocrew-mcp-stu
 | `rust` | Rust; a missing binary keeps Python and logs why |
 | `python` | Python always |
 
-Linux only; macOS and Windows always run the Python stub. The binary embeds a digest of this crate's source and of the Python modules it mirrors (`stub.py` and the product modules it imports for wire, identity and pooling behaviour; the list is `MIRRORED_PYTHON` in `build.rs`), and the gateway launches it only when that matches the checkout, so a build from before a `git pull` keeps the Python stub and logs that it needs a rebuild.
+Linux only; macOS and Windows always run the Python stub. The binary embeds a digest of this crate's source and of the Python modules it mirrors (`stub.py`, its `stub_*` owner modules and the product modules they import for wire, identity and pooling behaviour; the list is `MIRRORED_PYTHON` in `build.rs`), and the gateway launches it only when that matches the checkout, so a build from before a `git pull` keeps the Python stub and logs that it needs a rebuild. `kirocrew-mcp-stub-rs --source-digest` prints the embedded digest; reading it from `main` is what keeps the marker on linkers that drop a bare `#[used]` static (GNU ld before 2.36).
 
 A stub without a verified session token hands itself to the Python stub. If it cannot (no recorded interpreter, or the exec fails), it registers with no session key rather than trusting `KIROCREW_SESSION_KEY`.
 

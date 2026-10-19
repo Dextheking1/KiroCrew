@@ -1291,6 +1291,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         routed_for_secret_reference,
         secret_reference_keys,
     )
+    from kiro_crew.mcp_gateway.stub_impl import install_context_b64  # noqa: F401
     from kiro_crew.mcp_provenance import (  # noqa: F401
         WITHHELD_KEY,
         is_withheld_mute,
