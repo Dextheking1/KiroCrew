@@ -3315,6 +3315,67 @@ chat, the hand-off (`_dispatching_crewmate`) and `is_conductor_execution` alike
   tools back. The worker's model pin is judged against the same backend
   (`mate_worker.crewmate_worker_backend`).
 
+**Each crewmate works in a git worktree of its own** (`kiro_crew.crewmate_worktree`,
+`dashboard/crewmate_worktree_scope.py`), so two crewmates handed one repository
+never share a working tree or a checked-out branch. At the start of a worker's
+turn, after its Permissions are seeded, `chat_runner` calls `scope_worker_turn`:
+for a worker (a `template` record on `kirocrew-mate-worker` with the crewmate's
+`member_id`; the conductor is left alone) it reads the repository from the
+paths the turn's message names, then the slot's current project, then the
+crewmate's goals, and the first path inside a git repository gets the
+crewmate's own worktree of that repository's checkout (git's common directory,
+so a path inside another crewmate's worktree maps to the same repository):
+`<parent>/<repo>.worktrees/<crewmate slug>/` BESIDE the repository
+`<parent>/<repo>` (`crewmate_worktree.path_for`, both parts sanitised) on branch
+`crew/<crewmate slug>/<repo>`, cut from the repository's default branch
+(`origin/HEAD`, else `HEAD`) the first time and reused, as it is, by every worker
+the crewmate opens. When the repository's parent (or an existing
+`<repo>.worktrees`) is not writable, or the repository is a filesystem root, the
+old place under the crewmate's workspace is used instead,
+`<crewmate workspace>/worktrees/<repo>-<hash>` (`legacy_path_for`), and the reason
+is logged once per repository (`crewmate_worktree.destination`). Every worktree is
+listed in the crewmate's index in its workspace,
+`<crewmate workspace>/worktrees/index.json` (`{worktree path: {repo, branch}}`):
+the "already in one of its worktrees" check is membership in that index
+(`crewmate_worktree.owns`, called by `scope_worker_turn`), and removal reads it
+rather than scanning the disk. A worktree an earlier build made at the old place
+is moved beside the repository with `git worktree move` the first time it is
+used again (`crewmate_worktree._move_from_old_place`); one with uncommitted
+changes, or whose move fails, is kept where it is and used there, and either is
+logged. `slot.project` -- the worker's cwd and project scope -- is
+set to it (the same subdirectory when the path named one) and the binding is
+re-captured under the dispatch lock, so the shared checkout is never a worker's
+cwd; a session already running takes the deferred reset `set_project` uses. A
+repository that contains the crewmate's own workspace is not one it was handed
+and is skipped. The `[PROJECT]` line of a turn in such a worktree names the
+repository and the branch and says to edit and commit there (read from the
+worktree's own `.git` file and the `HEAD` it points at, a linked worktree on a
+`crew/` branch, `crewmate_worktree.describe`, no git call); work
+that truly needs a further branch names it under the crewmate's prefix
+(`crew/<slug>/<topic>`) and cuts it in the same worktree. That naming is the
+prompt's alone: nothing in the gateway refuses another branch name. Every
+worker turn in a worktree, a later one included, first brings its branch up to
+the repository's default branch (`crewmate_worktree.sync_with_base`, called by
+`scope_worker_turn`; the base is the repository's default branch,
+`crewmate_worktree._default_branch`: `origin/HEAD`, else a local `main` or
+`master`, never the shared checkout's `HEAD`, which whoever has that checkout
+open decides): when the base has commits the branch lacks,
+a worktree with no tracked changes is rebased onto it, a rebase that stops is
+aborted so the branch is never left mid-rebase, and a worktree with
+uncommitted changes is not touched. The outcome is one line
+(`worktree.base_rebased`, `worktree.base_rebase_stopped` or
+`worktree.base_moved_dirty`, naming the branch, the base and how many commits)
+that the next `[PROJECT]` line carries once (`crewmate_worktree.take_base_note`).
+Git runs through the follow-up card's sandboxed
+runner (`handlers/worktree._run_git`): no hooks, no fsmonitor, and a repository
+declaring a checkout filter is refused. Deleting the crewmate
+(`crew_removal.api_kirocrew_agent_delete`) removes its worktrees with
+`git worktree remove` (never `--force`): one with uncommitted changes is kept and
+logged, the branches stay, the repositories' own checkouts and every worktree
+the index does not list (another crewmate's beside the same repository) are
+never touched, and `<repo>.worktrees` is removed only once it is empty
+(`test/test_crewmate_worktree.py`, `test/test_crewmate_worktree_layout.py`).
+
 **A worker reports back on its own** (`dashboard/mate_thread_wakes.py`), so the
 conductor dispatches and ends its turn and is free for the user at any moment.
 Every top-level turn end (`chat_runner._end_turn_tail`, depth 0) calls
