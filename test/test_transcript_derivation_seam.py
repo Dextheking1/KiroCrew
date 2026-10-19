@@ -69,7 +69,7 @@ PLUMBING: frozenset[tuple[str, str]] = frozenset(
         # Channel file migration: moves rows between stems, derives nothing.
         ("kiro_crew/channel_transcript_migration.py", "read_messages"),
         # SEL audit log `recent`, not a transcript.
-        ("kiro_crew/cli_commands.py", "recent"),
+        ("kiro_crew/cli_commands_security.py", "recent"),
         # The live session's OWN rows into its OWN prompt / compaction.
         ("kiro_crew/context.py", "read_messages"),
         ("kiro_crew/context.py", "read_messages_chained"),
@@ -87,7 +87,7 @@ PLUMBING: frozenset[tuple[str, str]] = frozenset(
         ("kiro_crew/dashboard/chat_fork.py", "read_messages_chained_full"),
         # ``selection.recent`` -- a mirror selection field, not a transcript read.
         ("kiro_crew/dashboard/chat_mirror.py", "recent"),
-        ("kiro_crew/dashboard/chat_persistence.py", "read_messages_chained"),
+        ("kiro_crew/dashboard/chat_persistence_parts/slot_builders.py", "read_messages_chained"),
         ("kiro_crew/dashboard/chat_rewind.py", "read_messages_chained"),
         ("kiro_crew/dashboard/chat_slack.py", "recent"),
         # The decisions hooks composed into chat_runner: the same read it made.
@@ -95,10 +95,10 @@ PLUMBING: frozenset[tuple[str, str]] = frozenset(
         ("kiro_crew/dashboard/chat_threads.py", "read_messages_chained"),
         ("kiro_crew/dashboard/cron_inject.py", "read_messages"),
         # Rendering the transcript's own artifacts / rows to its user.
-        ("kiro_crew/dashboard/handlers/artifacts.py", "read_messages"),
+        ("kiro_crew/dashboard/handlers/artifacts_parts/session_documents.py", "read_messages"),
         # SEL audit log `recent`, not a transcript.
         ("kiro_crew/dashboard/handlers/core.py", "recent"),
-        ("kiro_crew/dashboard/handlers/cron.py", "read_messages"),
+        ("kiro_crew/dashboard/handlers/cron_runs.py", "read_messages"),
         ("kiro_crew/dashboard/handlers/session_control.py", "read_messages"),
         # The History browser showing the user their own transcript. Its
         # list_sessions(summarize=true) leg goes through the seam (derive_recent).
@@ -186,6 +186,10 @@ class TestTheFence:
         derivers = {
             "kiro_crew/dashboard/chat_summary.py",
             "kiro_crew/dashboard/session_transfer.py",
+            "kiro_crew/dashboard/session_transfer_install.py",
+            "kiro_crew/dashboard/session_transfer_intake.py",
+            "kiro_crew/dashboard/session_transfer_layers.py",
+            "kiro_crew/dashboard/session_transfer_staging.py",
             "kiro_crew/dashboard/session_export.py",
             "kiro_crew/suggestions.py",
             "kiro_crew/mcp_tools/sessions.py",
@@ -232,6 +236,8 @@ _PUBLISH_MODULES = frozenset(
         "kiro_crew/dashboard/handlers/sessions_parts/usage_scrape.py",
         "kiro_crew/dashboard/session_export.py",
         "kiro_crew/dashboard/handlers_instances.py",
+        "kiro_crew/dashboard/handlers_instances_gate.py",
+        "kiro_crew/dashboard/handlers_instances_peer.py",
         "kiro_crew/history_consolidation.py",
         "kiro_crew/history_consolidation_memory.py",
         "kiro_crew/history_consolidation_pass.py",

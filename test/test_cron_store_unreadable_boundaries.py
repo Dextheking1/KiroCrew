@@ -1019,7 +1019,7 @@ _CRON_WRITES = frozenset(
 #: structural reason. An exemption is a visible, reviewable line on purpose --
 #: adding one should feel like a claim someone can check, because it is.
 _EXEMPT_READ_DECIDE_WRITE: dict[tuple[str, str], str] = {
-    ("src/kiro_crew/apps/bridges.py", "register_app_crons_with_service"): (
+    ("src/kiro_crew/apps/bridges_crons.py", "register_app_crons_with_service"): (
         "An empty read makes every definition look ABSENT, so the add is still "
         "attempted and refuses at the write. The degraded read biases TOWARD the "
         "write rather than around it, so the refusal cannot be skipped."
@@ -1035,7 +1035,7 @@ _EXEMPT_READ_DECIDE_WRITE: dict[tuple[str, str], str] = {
         "renders as ungrouped and self-heals), so the outcome this reports does not "
         "depend on the cron read at all."
     ),
-    ("src/kiro_crew/cli_commands.py", "_cron_dispatch"): (
+    ("src/kiro_crew/cli_commands_cron.py", "_cron_dispatch"): (
         "A verb dispatcher: the read and the writes are ALTERNATIVE branches of one "
         "request, never a read that decides a write. Its own dispatch-boundary "
         "wrapper already translates the refusal for every verb, including ones "
@@ -1130,7 +1130,9 @@ def _read_decide_write_callers() -> tuple[tuple[str, str, int, bool], ...]:
         # -- reporting every exempt caller as unprobed and every exemption as stale at
         # once. POSIX is the portable spelling and the one the table is keyed in.
         posix = path.as_posix()
-        if path.name == "cron.py" or "__pycache__" in posix:
+        # cron_secret_grants.py: its two grant handlers read, decide and write without the
+        # probe, and this skip is what keeps them out of the offenders below.
+        if path.name in ("cron.py", "cron_secret_grants.py") or "__pycache__" in posix:
             continue
         if "/tests/" in posix or path.name.startswith("test_"):
             continue

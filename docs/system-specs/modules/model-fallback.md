@@ -38,7 +38,7 @@ The fallback path is eligible only after the normal transient retry budget is
 spent on a transient error with no qualifying prior activity. Each surface
 tracks that condition in its own stream loop: `llm_helpers.stream_and_collect`
 requires no result text or tool activity, `dashboard/chat_runner.py` requires
-no emitted or thought activity, and `subagent_manager/run.py::RunEventCoordinator._run_impl`'s nested `_stream_with_transient_retry`
+no emitted or thought activity, and `subagent_manager/run_turn.py::_run_inner_impl`'s nested `_stream_with_transient_retry`
 requires no activity. Post-activity recovery does not enter the model-fallback
 walk.
 
@@ -94,7 +94,7 @@ and each error surface must receive the same safe text.
   pre-activity transient branch, persists a notice, and requeues the same
   message as a synthetic recovery item. Its fallback condition excludes nested
   prompts. On exhaustion it renders the slot-local walk in the terminal error.
-- `subagent_manager/run.py::RunEventCoordinator._run_impl`'s nested `_stream_with_transient_retry` follows the zero-activity branch,
+- `subagent_manager/run_turn.py::_run_inner_impl`'s nested `_stream_with_transient_retry` follows the zero-activity branch,
   uses the shared candidate helper, and applies `annotate_model_fallback` to
   the completed result.
 
@@ -143,7 +143,7 @@ families — a different model routinely accepts what another's filter declined
   refusal envelope names, resolving to disabled when it names none; a concrete
   id is used directly. The dashboard PATCH schema applies the same grammar and
   validator as `agent.fallback_model`.
-- `chat_runner._refusal_fallback_retry` (nested in `_run_chat`) gates the
+- `chat_turn.model_fallback._refusal_fallback_retry` (called with the turn) gates the
   retry: interactive prompts only (no nested depth, and only a turn whose
   ledger actor is `user` — a cron, autonudge, or sub-agent wake keeps the
   terminal refusal, since nobody attends its announced swap), not while a
@@ -342,7 +342,7 @@ sub-agents) keep the terminal refusal behavior.
 `test/test_llm_helpers_fallback_chain.py` and
 `test/test_llm_helpers_fallback_restore.py` cover chain derivation, candidate
 selection, retry state, story handling, and unattended restore. `test/test_dashboard_chat.py`
-covers dashboard fallback and slot restore. `test/test_subagent_turn_resilience.py`
+covers dashboard fallback and slot restore. `test/test_subagent_turn_resilience_retry.py`
 and `test/test_cron_gateway_integration_llm.py` cover sub-agent and gateway wiring.
 `test/test_config_loader_agent_section.py`, `test/test_role_models.py`, and
 `test/test_dashboard_handlers_core_coverage_agent_settings.py` cover configuration

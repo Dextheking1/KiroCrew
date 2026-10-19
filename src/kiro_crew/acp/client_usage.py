@@ -38,6 +38,7 @@ from kiro_crew.acp.transport_errors import (
 from kiro_crew.acp.types import (
     ACP_BACKENDS_INLINE_COMPACTION,
     ACP_BACKENDS_STRUCTURED_REFUSAL,
+    ACP_BACKENDS_UNMARKED_COMPACTION_PAIR,
     EVENT_COMPACTION_STATUS,
     KNOWN_SESSION_UPDATES,
     METHOD_COMPACTION_STATUS,
@@ -159,7 +160,7 @@ def _handle_compaction_status(self: AcpClient, msg: JsonRpcMessage) -> None:
     reset cannot be missed by one path. Without it the pre-compaction
     counts survive — and their ``context_tokens_from_usage=True`` flag
     blocks ``_track_metadata`` from applying any fresh percentage — so the
-    dashboard's context meter kept showing the old usage after a compact.
+    dashboard's context meter would keep showing the old usage after a compact.
     """
     params = msg.params or {}
     status = params.get("status", "")
@@ -169,7 +170,7 @@ def _handle_compaction_status(self: AcpClient, msg: JsonRpcMessage) -> None:
     # populated on success but typically empty on failure). Log the full
     # raw params at WARNING so a future occurrence is actually debuggable
     # instead of surfacing only "unknown error" to the user with nothing
-    # to grep for server-side. See Mesh compaction-spam investigation.
+    # to grep for server-side.
     s_type = status.get("type", "") if isinstance(status, dict) else str(status)
     if s_type == "failed":
         if self.memory_mode == "persistent":
@@ -253,9 +254,10 @@ def _codex_compaction_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | 
 
     Gated on ``ACP_BACKENDS_INLINE_COMPACTION``, the set of harnesses whose
     compaction lands INSIDE the prompt turn -- so a harness that earns that
-    membership inherits the translation by joining the set. The MARKER is what
-    actually decides: ``_meta.contextCompaction`` is codex-acp's own, and
-    claude (a member) stamps nothing, so the parser declines its frames.
+    membership inherits the translation by joining the set. The FRAME decides:
+    ``_meta.contextCompaction`` is codex-acp's own marker, and the unmarked 2.2.2
+    shape is read only for ``ACP_BACKENDS_UNMARKED_COMPACTION_PAIR``. claude (a
+    member) sends neither, so the parser declines its frames.
 
     Reached on this class through the dormant codex seam -- a live codex
     session is served by ``AcpRuntime``, whose ``AcpSessionHandle`` carries the
@@ -279,13 +281,24 @@ def _codex_compaction_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | 
     update = params.get("update")
     if not isinstance(update, dict):
         return None
-    status_type = parse_codex_compaction_update(update)
+    status_type = parse_codex_compaction_update(
+        update,
+        self._codex_compaction_pending,
+        allow_unmarked=self.backend in ACP_BACKENDS_UNMARKED_COMPACTION_PAIR,
+    )
     if status_type is None:
         return None
     if status_type != "started" and not self._codex_compaction_pending:
         return None
     logger.info("Compaction status (codex): %s", status_type)
-    self._codex_compaction_pending = status_type == "started"
+    # The start's call id, so an unmarked (2.2.2) terminal can be matched to it.
+    call_id = update.get("toolCallId")
+    if status_type != "started":
+        self._codex_compaction_pending = False
+    elif isinstance(call_id, str) and call_id:
+        self._codex_compaction_pending = call_id
+    else:
+        self._codex_compaction_pending = True
     if status_type == "completed":
         self._compaction_failed_at = None
         self.last_prompt_stats.reset_after_compaction()

@@ -136,6 +136,16 @@ provider.
 | `goose` | goose | Uses goose's native ACP server. |
 | `deepseek` | DeepSeek Harness | Runs `dsh --profile acp` with Kiro Crew's gate plugin; provider keys come from `agent.deepseek_env`. |
 
+Codex runs with `~/.aws/credentials` and `~/.aws/sso/cache` hidden on purpose,
+and only `~/.aws/config` readable. Codex on Amazon Bedrock therefore needs a
+self-contained `credential_process` in that file, not SSO or static keys. If a
+Codex session fails to start with an authentication error, the error says this
+too.
+
+- Keep static keys in `~/.aws/credentials`. Do not write them into `~/.aws/config`.
+- Do not make `~/.aws/config` a symlink. On Linux the sandbox copies whatever
+  the link points at, so a link to a credential file would expose it.
+
 The non-default harnesses are offered only when this build registers them. A
 host governance policy can narrow that list further, and the dashboard reports
 missing harness components with their install command. `kirocrew doctor` reports
@@ -371,6 +381,7 @@ transcribed the same way.
 | `stt.partial_interval_ms` | How often the live transcript is refreshed while you speak. A value outside 100-5000 ms is clamped into that range. Set here only: Settings → Voice offers no picker for it, because a decode costs a large fixed amount plus a small amount per second of audio (about 0.78 s + 0.08 s per audio-second for `base` on a 32-core CPU build), so on any CPU build the recogniser, not this number, decides the real cadence | `400` |
 | `stt.idle_evict_secs` | How long the local model stays in memory after your last recording. It holds roughly 150 MB at the default model and reloads in a fraction of a second, so lower this on a machine short of memory. `0` releases it as soon as you stop speaking | `600` |
 | `stt.endpointing` | While dictating, judge each finished phrase with a fast background model and send the message once it reads as a complete request, without you pressing anything. Needs `streaming` | `false` |
+| `stt.submit_on_release` | Send the message once the transcript is ready when you deliberately stop dictating: letting go of hold-to-talk, releasing the push-to-talk key, or pressing the mic or the key again. Press Shift as you finish, or slide sideways on the phone's hold bar, to keep a draft. Cancelling, losing focus and the recording time limit never send, and nothing is sent if you typed, sent or switched chats while it was transcribing. Works with streaming and batch; applies to the next recording without a restart | `false` |
 | `stt.polish` | After a dictation finishes, hand the TEXT (never the audio) to a fast model that fixes punctuation and spacing, and replace what is in the message box a moment later. Off by default because this is the one part of `local` recognition that sends anything off your machine. It never blocks you — the recogniser's own text is already there and already sendable — and never CHANGES a word: a reply that altered one is discarded, so the worst case is that nothing happens. It also never touches anything you typed after you stopped talking | `false` |
 | `stt.dictation_panel` | Show the animated dictation panel while recording instead of the thin status bar. Ignored when the browser lacks WebGL2 or the OS asks for reduced motion, both of which fall back to the bar | `true` |
 | `stt.timeout_secs` | Ceiling on transcribing one whole file: the audio decode, and each model load or recognition inside it | `300` |

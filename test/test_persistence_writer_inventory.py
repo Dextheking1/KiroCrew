@@ -62,7 +62,7 @@ GATED_AUTOMATIC = {
     "taskrunner_parts/run_reporting.py::_extract_lesson",
     # The enforcement point behind the learn_add MCP tool: every transport that
     # posts a lesson (tool, dashboard, direct HTTP) is refused by this one check.
-    "dashboard/handlers/cron.py::api_lessons_create",
+    "dashboard/handlers/cron_lessons.py::api_lessons_create",
     # The "Dashboard: ..." history line every owner mutation leaves in Global
     # memory: automatic, so it is skipped while the switch is off.
     "dashboard/handlers/change_cards.py::_record_memory",
@@ -114,7 +114,7 @@ EXEMPT = {
     ),
     # The CLI's own explicit `kirocrew learn add`, which carries its own check
     # (a refusal message rather than a silent skip) — see cli_commands.
-    "cli_commands.py::_learn": "carries its own refusal",
+    "cli_commands_learn.py::_learn": "carries its own refusal",
     # The app's nightly sweep gates its only caller, routes._index_ledger_safely,
     # before constructing the vector store. This function stays policy-free so
     # its isolated projection tests can inject a fake store directly.

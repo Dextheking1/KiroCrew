@@ -396,7 +396,7 @@ resolves it without creating it (the doctor's census uses that).
 
 The CLI (`cli.py:main()`) auto-detects and sets the env var at startup.
 
-## Folder steering directories (`dashboard/chat_folders.py`)
+## Folder steering directories (`dashboard/chat_folders_paths.py`)
 
 A chat folder record in `folders.json` may carry an optional `steering_dirs`
 list of absolute (or `~`-prefixed) directories, alongside its existing
@@ -406,7 +406,7 @@ steering (`manual`, `auto` and `fileMatch` files are skipped), in addition to gl
 steering. The key is omitted when empty (like `color`/`tags`), so "absent means
 none" is the single on-disk representation and a PATCH with `[]` clears it.
 
-- **Validation** (`dashboard/chat_folders.py` `_validate_steering_dirs`) checks
+- **Validation** (`dashboard/chat_folders_paths.py` `_validate_steering_dirs`) checks
   each entry: at most `MAX_FOLDER_STEERING_DIR_LEN` (4096) characters before and
   after canonicalization; a UNC path refused before resolution; refused outright
   on a platform without a pinned tree walk (`pinned_fs.supports_pinned_tree_walk`);
@@ -1992,7 +1992,7 @@ common hot path — no `_app`, or already resolved):
    re-resolve *still* misses, the spec was never materialized even though the
    source is intact, so **re-register this app's resources from source** —
    `await loop.run_in_executor(subprocess_executor(), register_app, slot._app)`
-   (`register_app`, `apps/bridges.py`, registers the app's MCP servers BEFORE its
+   (`register_app`, `apps/bridges_register.py`, registers the app's MCP servers BEFORE its
    agents and publishes the snapshot synchronously; imported via a **local** import
    inside the function to avoid the top-level `apps`↔`dashboard` cycle, mirroring
    `dashboard/server_runtime/app_platform.py`'s local import of `reconcile_enabled_app_resources`. `register_app`
@@ -2045,7 +2045,7 @@ speculative-resume refusal, or a capability refusal raised before any process ra
 selection write, or admission step spawned no agent and is logged without
 counting. Pinned by `test/test_eager_spawn_start_backoff.py`.
 
-`register_app` (`apps/bridges.py`) backs the from-source recovery with a **visible
+`register_app` (`apps/bridges_register.py`) backs the from-source recovery with a **visible
 error**: when a manifest declares agents but `_register_agents` materializes none
 (source missing or unreadable) it appends a `"registered 0 of N declared
 agent(s)"` entry to `result.errors` — which `reconcile_enabled_app_resources`
@@ -2659,7 +2659,7 @@ ones whose holder is `DashboardState`, that must rebuild agent artifacts, or tha
 process-wide registry state
 live in `dashboard/server_runtime/config_watch.py::_register_config_watch` — `agent.provider`,
 `agent.model`, `agent.role_models.background`, `agent.log_level`
-(→ `handlers/updates.py::apply_log_level_from_config`),
+(→ `handlers/updates_streams.py::apply_log_level_from_config`),
 `dashboard.dynamic_dashboard_cards` (→ `DashboardState.set_dynamic_cards_enabled`), and
 `agent.model_context_tokens` (→ `model_registry.apply_operator_windows`, process state of
 the model registry rather than of any holder, so it is also installed once from the boot
@@ -2865,9 +2865,15 @@ Telegram and the shared rollback step by `test_channel_env_write_off_loop.py`, a
 for the watcher itself by `test_config_live.py`.
 
 Tests: `test/test_config_live.py` (diff, registry, lifecycle, fingerprint,
-dispatch order and scope, every write path, the schema/handler agreement, the
-`dashboard/server_runtime/config_watch.py` appliers, and the owned-applier shapes `watch_section` /
-`watch_object` / `bind`) and `test/test_channels_a_hot_reload.py` (every
+dispatch order and scope, every write path, the schema/handler agreement), its
+parts `test/test_config_live_server_appliers.py` (the
+`dashboard/server_runtime/config_watch.py` appliers),
+`test/test_config_live_subscriptions.py` (cancellation, the owned-applier shapes
+`watch_section` / `watch_object` / `bind`, and replay on registration),
+`test/test_config_live_restart_hint.py` (the `restart_required` hint, also over
+HTTP) and `test/test_config_live_untrusted_documents.py` (the point-of-use
+read's fallbacks and the bounded applier dispatch), and
+`test/test_channels_a_hot_reload.py` (every
 channel's applier, its fail-closed degrade refusal and its point-of-use reads,
 parametrized over the case table in `test/_hot_reload_helpers.py`;
 `test_channels_b_hot_reload.py` and `test_channels_c_hot_reload.py` carry the
@@ -2989,6 +2995,7 @@ class SttConfig:
     partial_interval_ms: int = 400 # live-transcript refresh cadence; same clamp
     idle_evict_secs: int = 600     # release the resident local model after this idle; 0 = at end of recording
     endpointing: bool = False      # semantic auto-submit on a complete utterance; needs streaming
+    submit_on_release: bool = False  # a deliberate stop sends once the transcript settles; any provider
     polish: bool = False           # hand the FINISHED transcript (never the audio) to a fast model; off = nothing leaves the machine
     dictation_panel: bool = True   # animated recording panel; falls back to the status bar
     timeout_secs: int = 300
@@ -3639,9 +3646,10 @@ keeps it for the next load. Settle-time invalidation draws the stored value.
 the pinned order's store (`dashboard/pinned_session_order.py`), as a second file,
 `chat_manual_order.json`, in the same fenced `pinned-order` directory, and reaches
 the browser on every slot row as `manual_rank` / `manual_rev`. Under `manual`,
-pinned rows stay on top in their own order, unpinned rows show a drag handle and
-no date headers, and a session with no place (a new one) shows above the placed
-ones. A drop between two unpinned rows of one container, in any sort, switches
+pinned rows stay on top in their own order, unpinned rows show a drag handle in
+the row's left pad, outside the text column, so the agent name, title and folder
+name keep one left edge, there are no date headers, and a session with no place
+(a new one) shows above the placed ones. A drop between two unpinned rows of one container, in any sort, switches
 this key to `manual`, writes the order, and offers "Sorted by hand" with Undo;
 under `manual`, Alt+Arrow on a focused unpinned row moves it the same way. A drop
 on a folder files the session and changes neither. Every write is one operation of `POST /api/chat/manual-order`:

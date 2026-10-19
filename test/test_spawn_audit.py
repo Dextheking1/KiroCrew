@@ -579,7 +579,7 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # ``SessionAgentRunner._approve`` coroutine from a synchronous test. No child
         # process is created — the test's provider is a local stub with no argv at all.
         # Same classification as the ``asyncio.run`` sites above
-        # (cli_commands.py::_cleanup_app_crons_from_scheduler, cli_doctor.py::_doctor).
+        # (cli_commands_app.py::_cleanup_app_crons_from_scheduler, cli_doctor.py::_doctor).
         "apps/builtins/auto_improvement/tests/test_dogfood_learnings_tool_gate.py"
         "::test_approval_is_logged_then_granted",
         "apps/builtins/auto_improvement/tests/test_dogfood_learnings_tool_gate.py"
@@ -847,7 +847,7 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # can be exercised without a running loop. No child process is created and
         # nothing is agent-influenced — the payloads are literals in the test file.
         # Same classification as the other ``asyncio.run`` sites in this list
-        # (cli_doctor.py::_doctor, cli_commands.py::_cleanup_app_crons_from_scheduler).
+        # (cli_doctor.py::_doctor, cli_commands_app.py::_cleanup_app_crons_from_scheduler).
         "apps/builtins/issue_radar/tests/test_pr_actions.py::_await",
         # Same construct, same classification, for the assignee-route tests: an
         # ``asyncio.run`` that drives one in-process aiohttp handler coroutine to
@@ -1197,14 +1197,14 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # the operator-typed app name. Same classification as the other
         # ``asyncio.run`` sites below (cli_doctor.py::_doctor, workflows
         # server.py::handle_run).
-        "cli_commands.py::_cleanup_app_crons_from_scheduler",
+        "cli_commands_app.py::_cleanup_app_crons_from_scheduler",
         # NOT a subprocess spawn: the AST heuristic matches ``asyncio.run`` (attr
         # ``run`` on base ``asyncio``) driving the async
         # ``register_app_crons_with_service`` coroutine from the loop-less CLI
         # enable path — the exact enable-direction mirror of
         # ``_cleanup_app_crons_from_scheduler`` above. No child process is
         # created; the sole input is the operator-typed app name.
-        "cli_commands.py::_register_app_crons_to_scheduler",
+        "cli_commands_app.py::_register_app_crons_to_scheduler",
         "cli_doctor.py::_doctor",
         # NOT a subprocess spawn: the AST heuristic matches ``asyncio.run`` (attr
         # ``run`` on base ``asyncio``) driving the async Discord
@@ -1420,7 +1420,7 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         "dashboard/file_api/editor.py::_diff_redacted_bodies",
         "dashboard/file_api/desktop.py::api_screenshot",
         "dashboard/file_api/desktop.py::api_upload",
-        "dashboard/handlers/knowledge.py::_run_folder_dialog",
+        "dashboard/handlers/knowledge_sources.py::_run_folder_dialog",
         # Terminal live-cwd probe on hosts without /proc (macOS/BSD): fixed
         # `lsof -a -p <pid> -d cwd -Fn` list-argv (no shell=True) where <pid>
         # is the gateway's own PTY child pid (an int from asyncio.subprocess),
@@ -1428,15 +1428,15 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # sandboxing would break lsof's access to host process state.
         "dashboard/handlers/terminal.py::_proc_cwd",
         "dashboard/handlers/terminal.py::api_terminal_ws",
-        "dashboard/handlers/updates.py::_apply",
+        "dashboard/handlers/updates_apply.py::_apply",
         # The update check's git side: fixed `git fetch` / `rev-parse` / `show` /
         # `diff` list-argv (no shell=True) run in KIROCREW_PROJECT_DIR, an operator
         # environment value, never agent input. Read-only version comparison —
         # nothing here writes to the tree.
-        "dashboard/handlers/updates.py::_check_git_checkout",
+        "dashboard/handlers/updates_check.py::_check_git_checkout",
         # (_venv_pip_install removed — it now delegates the install to
         # dep_sync.sync_or_reinstall and spawns nothing itself.)
-        "dashboard/handlers/updates.py::api_update_apply",
+        "dashboard/handlers/updates_apply.py::api_update_apply",
         "dashboard/handlers_system.py::_collect_system_metrics",
         # Split out of _collect_system_metrics above so the whole-machine process
         # walk can be cached on its own (much longer) TTL instead of the live
@@ -1593,7 +1593,7 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # Read-only kernel socket attribution: trusted absolute lsof binary,
         # fixed flags and a validated numeric port, no shell/user command.
         "platform_compat_ports.py::_macos_tcp_peer_pid",
-        "platform_compat.py::find_python_interpreter",
+        "platform_compat_runtime.py::find_python_interpreter",
         "platform_compat_kill.py::kill_pid",
         "platform_compat_kill.py::kill_process_tree",
         "platform_compat_trust.py::reveal_in_file_manager",
@@ -1629,7 +1629,7 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # not agent-influenced. Same disposition as the systemctl wrapper.
         "pod/launchd.py::launchctl",
         # Windows interpreter discovery for the worktree venv, the same class as
-        # platform_compat.py::find_python_interpreter above. Fixed argv: the `py`
+        # platform_compat_runtime.py::find_python_interpreter above. Fixed argv: the `py`
         # launcher plus `-<version>` and a literal `-I -X utf8 -c` probe that
         # prints sys.executable. The only variable is the version string, built
         # by _python_candidates from this module's own MIN_PYTHON/_NAMED_MINORS
@@ -1722,9 +1722,9 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         "service/linux.py::_systemctl",
         "service/linux.py::_write_unit_via_sudo",
         "service/macos.py::_launchctl",
-        "session_pid.py::_our_orphan_pids",
-        "session_pid.py::find_orphan_mcp_candidates",
         "session_pid.py::kill_orphan_mcps",
+        "session_pid_orphan_scan.py::_our_orphan_pids",
+        "session_pid_orphan_scan.py::find_orphan_mcp_candidates",
         # The abandoned-agent-scope reaper's two systemctl calls are gateway
         # maintenance against this install's own units, not agent work. The binary
         # comes only from platform_compat.trusted_system_bin("systemctl")'s fixed
@@ -1932,7 +1932,7 @@ FIRST_PARTY_SPAWNS: frozenset[str] = frozenset(
         # runs for the same argv. Third-party servers and any customized
         # managed command/args/env compare unequal, pass False, and keep the
         # full fail-close + opt-in behavior.
-        "mcp_discovery.py::probe_server",
+        "mcp_discovery_probe.py::probe_server",
         # The built-in SAPI synthesizer. The flag value is COMPUTED
         # (``engine == SYSTEM_ENGINE_SAPI``), so only the Windows branch claims
         # it: that argv is a System32 ``powershell.exe`` resolved by
@@ -2398,7 +2398,7 @@ def test_agent_influenced_sites_are_routed():
     """Agent-influenced spawns must stay routed through the sandbox."""
     unrouted = _collect_unrouted_spawns()
     for key in (
-        "mcp_discovery.py::probe_server",
+        "mcp_discovery_probe.py::probe_server",
         "task_executor.py::run_tests",
         "git_coord.py::_git",
         "git_coord.py::_is_git_repo",

@@ -966,7 +966,7 @@ requiring a label or a sample hit. The lane remains advisory; a Linux simulation
 is not evidence of native APFS behavior.
 
 The native contracts in `test/test_darwin_native_provider_reap.py` and their
-`session_pid`, `session_lifecycle` (with its `session_lifecycle_parts` owners),
+`session_pid` (with its `session_pid_*.py` owners), `session_lifecycle` (with its `session_lifecycle_parts` owners),
 `session_cleanup`, and `session_pool` callers
 are explicit on-demand paths. They exercise real Darwin process identities,
 zombie-root reaping, reaped-root group recovery, escaped descendants, and three
@@ -1494,6 +1494,32 @@ Details worth knowing:
     red and its log names the `gh run cancel <run-id>` to type. A re-run attempt
     that is still its branch's newest is healed like any orphan. A held
     concurrency group a human is told about is the cheaper failure.
+  - **Code layout.** The workflow and the tests see one module,
+    `scripts/ci/runner_watchdog.py`. It keeps the knobs, the verdict vocabulary,
+    `ApiError`, `LookupInconclusive`, the `Api` protocol and `_safe_text`, plus the
+    tick driver (`run_watchdog`), the kicked-tick debounce (`kick_is_redundant`,
+    `stand_down`), the step summary and the entry point. Everything else lives in
+    one module per stage of the `scripts/ci/runner_watchdog_parts/` package, and new
+    logic for a stage goes to its module:
+    - `client`: the GitHub REST transport (`GitHubApi`). A read is retried once on a
+      transient failure, a mutation is never retried, and a refused request carries
+      its rate-limit hints.
+    - `classify`: the run model (`RunVerdict`, `Policy`), the routing-label reading,
+      the verdict of a live or a cancelled run, and the dispatch evidence.
+    - `heal_safety`: whether a workflow's runs may be cancelled and re-run, from the
+      declared sets and from the workflow's own text at the run's revision.
+    - `listing`: the repo-wide run listings, the per-tick job-read bound and the job
+      reads.
+    - `supersession`: whether a newer run carries the branch's or pull request's
+      verdict.
+    - `heal`: the hold decision, the cancel, the verified re-run and the yield to a
+      successor.
+    - `recovery`: a later tick's pass over the cancelled orphans nobody re-ran.
+
+    A knob or function a test patches on the script is read by the owners as
+    `runner_watchdog.<name>` at call time, so the patch reaches them.
+    `test/test_runner_watchdog_parts.py` pins that, and that the script runs from a
+    copy of `scripts/ci` alone.
   - **Trust model.** A self-hosted runner exposes its host identity to the job it
     runs; that is inherent, not something this PR adds. What bounds it: only runs
     triggered by accounts that can push here reach the runner (forks never do);
@@ -2131,9 +2157,11 @@ and it does not outweigh the relearning cost every existing user pays.
   from a constraint you can point at, or *inherited* from convention, symmetry, "for
   flexibility"? Reasoning by analogy is named and rejected explicitly, because
   analogy is how an unnecessary feature enters a codebase looking reasonable.
-- **Does it already exist?** A grep for the mechanism that already does this job. A
-  second spelling of one capability is a finding even when no code is duplicated,
-  because both spellings must then be maintained and will diverge.
+- **Does it already exist?** A ladder, first rung that holds: this repository (a
+  grep for the mechanism that already does this job), then the standard library or
+  an API the runtime already ships, then a dependency already declared. A second
+  spelling of one capability is a finding even when no code is duplicated, because
+  both spellings must then be maintained and will diverge.
 - **Does it fix the cause?** Each item is placed on a named chain — **symptom**
   (patched where it was observed), **mechanism** (the code that produced it), or
   **cause** (the decision or invariant gap that let it misbehave). Symptom-level

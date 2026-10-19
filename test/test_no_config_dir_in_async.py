@@ -59,9 +59,23 @@ _ASYNC_CHECKED_FILES = [
     "dashboard/chat_turn/slash_commands.py",
     "dashboard/chat_turn/tool_approval.py",
     "dashboard/chat_turn/tool_rows.py",
+    "dashboard/chat_turn/turn_admission.py",
+    "dashboard/chat_turn/turn_context.py",
+    "dashboard/chat_turn/turn_entry.py",
+    "dashboard/chat_turn/turn_ledgers.py",
     "dashboard/chat_turn/turn_marker.py",
+    "dashboard/chat_turn/turn_reply_seams.py",
     "dashboard/chat_turn/turn_spec_hooks.py",
     "dashboard/handlers/knowledge.py",
+    "dashboard/handlers/knowledge_access.py",
+    "dashboard/handlers/knowledge_agent_context.py",
+    "dashboard/handlers/knowledge_bundles.py",
+    "dashboard/handlers/knowledge_embeddings.py",
+    "dashboard/handlers/knowledge_ingest.py",
+    "dashboard/handlers/knowledge_library.py",
+    "dashboard/handlers/knowledge_lifecycle.py",
+    "dashboard/handlers/knowledge_sources.py",
+    "dashboard/handlers/knowledge_sync.py",
     "dashboard/handlers/messaging.py",
     "dashboard/messaging_api/agent_push.py",
     "dashboard/messaging_api/browser_routes.py",
@@ -138,6 +152,17 @@ _ASYNC_CHECKED_FILES = [
 ]
 
 
+def _takes_the_turn(node: ast.AST) -> bool:
+    """A function cut from the dashboard turn's coroutine takes the turn first: its body ran
+    inside ``_run_chat``, on the event loop, so the async rule reads it as it read that
+    coroutine."""
+    return (
+        isinstance(node, ast.FunctionDef)
+        and bool(node.args.args)
+        and node.args.args[0].arg == "turn"
+    )
+
+
 class TestNoConfigDirInAsync:
     """config_dir() must not be called inside async functions."""
 
@@ -182,7 +207,7 @@ class TestNoConfigDirInAsync:
                 continue
             tree = ast.parse(fp.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
-                if not isinstance(node, ast.AsyncFunctionDef):
+                if not (isinstance(node, ast.AsyncFunctionDef) or _takes_the_turn(node)):
                     continue
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Call):

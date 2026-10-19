@@ -481,7 +481,20 @@ an enabled app's tools vanish).
 
 ## Discovery and probing
 
-Source: `mcp_discovery.py`.
+Source: `mcp_discovery.py`, a mirror facade (`kiro_crew._facade_mirror`) over sibling
+owner modules, so every name they define still reads and patches as
+`mcp_discovery.<name>`. The facade keeps the discovery passes: `probe_all`, with the
+quarantine exclusion, and the discover-and-sync step (`sync_discovered_servers`,
+`register_servers_for_cc`). New work goes to the owner of its responsibility:
+
+| Owner | Owns |
+|---|---|
+| `mcp_discovery_server_info.py` | `McpServerInfo`, the scope names and config-source tables, and `redact_mcp_headers` / `redact_mcp_error` |
+| `mcp_discovery_probe_state.py` | the protocol revision the remote probe offers and steps down to, the probe timeouts and error cap, the once-only warning ledgers, and the probe-result cache |
+| `mcp_discovery_managed.py` | the managed servers' subcommand and tool-module tables, `managed_server_is_session_bound`, the in-process tool read, and stale-command repair |
+| `mcp_discovery_config.py` | loading the agent config and the `mcp.json` sources per scope, and `list_servers` |
+| `mcp_discovery_remote.py` | `_probe_remote`: the HTTP handshake, header expansion, and the authorization checks |
+| `mcp_discovery_probe.py` | `probe_server`: refusing a disabled server, and the stdio handshake of a local server spawned in the sandbox on a private loop, with its temp refusals |
 
 `list_servers()` reads `~/.kiro/agents/kirocrew.json`, then each scope file with
 provenance, re-resolves stale managed commands, and overlays cached probe
@@ -904,7 +917,7 @@ pass, so gatewayd refuses the changed expansion and the next boot retries. A
 changed command, argument or declared env text is still refused.
 Both halves of the fingerprint fold exactly three gateway-computed spellings
 (`hashing.install_aliases`), each in the ONE slot the gateway's own writer
-(`apps/bridges.py`) emits it in: `sys.executable` (what the rewriter substitutes
+(`apps/bridges_mcp.py`) emits it in: `sys.executable` (what the rewriter substitutes
 for a manifest's bare `python3` and for the `kirocrew` host CLI) folds only as
 the command, the absolute path of the `deps_boot` shim folds only as an argument
 (`hashing.launch_token_bytes`, which takes the slot's role from the caller), and
@@ -1690,7 +1703,7 @@ Managed servers, registered by `agent._MANAGED_MCP_SERVERS` and installed into
 
 | Server | Process | Tools |
 |--------|---------|-------|
-| `kirocrew-cron` | `kirocrew mcp-cron` (`mcp_cron.py`) | `cron_add`, `cron_list`, `cron_update`, `cron_remove`, `cron_remove_all`, `cron_pause`, `cron_resume`, `cron_trigger`, `cron_secret_request` |
+| `kirocrew-cron` | `kirocrew mcp-cron` (`mcp_cron.py` + `mcp_cron_*.py`) | `cron_add`, `cron_list`, `cron_update`, `cron_remove`, `cron_remove_all`, `cron_pause`, `cron_resume`, `cron_trigger`, `cron_secret_request` |
 | `kirocrew-core` | `kirocrew mcp-core` (`mcp_core.py` + `mcp_core_parts/` + `mcp_tools/`) | spawn/subagent, learn, task, messaging, artifact, workflow, knowledge and session-directive tools (see below) |
 | `kirocrew-computer` | `kirocrew mcp-computer` (`mcp_computer.py`) | `computer_list_apps`, `computer_launch_app`, `computer_get_state`, `computer_click`, `computer_drag`, `computer_type_text`, `computer_press_key`, `computer_set_value`, `computer_scroll`, `computer_perform_action`, `computer_end_turn` |
 | `kirocrew-dashboard` | `kirocrew mcp-dashboard` (`mcp_dashboard.py` + `mcp_dashboard_*.py`) | `chat_folder_tree`, `chat_folder_create`, `chat_folder_move`, `chat_folder_update`, `chat_folder_move_session`, `chat_folder_delete`, `chat_folder_file_self`, `chat_tag_list`, `chat_tag_create`, `chat_tag_update`, `chat_tag_assign`, `chat_tag_column_list`, `chat_tag_column_create`, `chat_tag_column_move`, `session_move_to_column`, `chat_session_pin`, `chat_session_pin_move`, `session_create`, `session_fork`, `session_stop`, `session_end_wait`, `session_retry`, `session_continue`, `session_set_model`, `session_reload`, `session_rename`, `session_generate_title`, `session_close`, `session_revive`, `session_history_list`, `session_send`, `session_broadcast`, `session_status`, `session_adopt`, `session_release`, `session_read_message`, `session_summary` |
@@ -2515,6 +2528,19 @@ to the owner of its responsibility:
 | `history` | the chat-history search tools' scoping, redaction and snippet helpers |
 | `radar_crew` | the Issue Radar crew tools' identity, ledger view and write scrubbing |
 
+`mcp_cron.py` keeps the cron server itself — argument validation, the call path, the
+caller's identity and ownership checks, the tool bodies (`_call_tool_inner`) and the
+stdio entry point — and is a mirror facade over four sibling owners, so every name
+still reads and patches as `mcp_cron.<name>`. New cron-server code goes to the owner of
+its responsibility:
+
+| Owner | Owns |
+|---|---|
+| `mcp_cron_shell_scan` | the lexical scanners the cron shell gate runs: the protected-path and secret-environment matchers, quote states, `$` expansions, extglob and brace expansion, and whether a glob can reach a credential directory |
+| `mcp_cron_vet` | the cron gate: the governance, command and script vets, the fire-time re-vet `vet_job_at_fire_time`, the storage-time denial audit, and the folder `cron_add` names |
+| `mcp_cron_tool_list` | the tool catalogue `tools/list` returns |
+| `mcp_cron_list_render` | `cron_list`'s full, compact and JSON renderings and the run-history fold |
+
 The remaining upward dependency is known: the plumbing could move to a module the
 handlers own, which would make `mcp_tools` a leaf. That is a separate change —
 it has to retarget every patch site, which is mechanical but touches far more
@@ -2625,8 +2651,15 @@ route or parent path: find_ui returns `on_every_page: true` for it and keeps it
 under any `surface` filter.
 
 The index is generated by `website/scripts/gen-ui-index.mjs`
-(`npm run gen:ui`; logic in `scripts/lib/ui-index.mjs`) from registries the
-dashboard already renders, never a parallel route table:
+(`npm run gen:ui`) from registries the dashboard already renders, never a
+parallel route table. Its logic is `scripts/lib/ui-index.mjs`, the one import
+path, which assembles the index and re-exports its three owners' public
+names: `ui-index-source.mjs` reads dashboard source (render-site markers and
+their labels, literal lists, the route table, interactive candidates),
+`ui-index-auto.mjs` maps files to pages and decides each auto site's id and
+guide policy, and `ui-index-guide.mjs` compiles the `ui.show` guide plans. New logic
+goes to the owner of its responsibility, and no owner imports `ui-index.mjs`.
+The inputs:
 
 - pages: `src/surfaces/surfaceData.ts` (the data half of every built-in surface,
   spread by `builtins.tsx`) and `commandPalette/providers/pagesData.ts` (Search
@@ -2783,7 +2816,7 @@ that very action, and says what it removes and that it cannot be undone.
 #### Guide plans
 
 `gen:ui` gives a registered location a `guide_plan` (`guidePlanFor` in
-`scripts/lib/ui-index.mjs`), deny by default: only a curated location (its
+`scripts/lib/ui-index-guide.mjs`), deny by default: only a curated location (its
 render-site marker proven), whose every placement requires only `viewport`,
 `shown_by`, `preview_flag` and the conditions described below, whose
 placements each take at most 7 steps (six pointing steps plus a preview gate;

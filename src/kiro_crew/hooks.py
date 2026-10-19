@@ -160,6 +160,7 @@ from kiro_crew.hook_runtime.safe_reads import (  # noqa: F401
     safe_read_file_bytes_with_identity,
     safe_read_prefix,
     screen_file_path,
+    screen_windows_linked_ancestors,
     stat_identity,
     validate_file_path,
 )
@@ -191,6 +192,7 @@ from kiro_crew.hook_runtime.tool_identity import (  # noqa: F401
     _builtin_app_for_agent,
     _context_matches,
     _has_global_inline_flags,
+    _host_builtin_alias,
     _is_declared_builtin_mcp_server,
     _is_deepseek_read_only_builtin,
     _is_first_party_app,
@@ -236,6 +238,7 @@ from kiro_crew.platform.governance import (
 # names; hooks keeps its HARD-DENY reading of ``TargetPaths.truncated``.
 from kiro_crew.platform.tool_names import (  # noqa: F401  (read by hook_runtime owners)
     DEEPSEEK_READ_ONLY_TOOLS,
+    KIRO_TOOL_ALIASES,
     deepseek_policy_alias,
     policy_alias_split,
     policy_aliases,
@@ -844,20 +847,6 @@ _HOST_READ_ONLY_BUILTIN_TOOLS: frozenset[str] = frozenset(
     {"fs_read", "glob", "grep", "web_fetch", "web_search"}
 )
 
-# kiro-cli's own spellings of the names above. It stamps its file-read built-in
-# ``read``; ``fs_read`` is the alias a spec may still use, and the spelling the
-# allowlist and ``BUILTIN_TOOL_SCOPES`` carry. ``_is_host_read_only_builtin``
-# resolves the stamped name through this table before the membership test, so
-# a value here must be an allowlist name (never a new proof of its own). Only
-# the read-only aliases are spelled here, because the table that owns the
-# mapping (``acp.kas_permissions.KIRO_TOOL_ALIASES``) lives under ``acp`` and
-# the agent-SDK boundary keeps application code off that layer;
-# ``test_host_read_only_aliases_agree_with_kiro_tool_aliases``
-# (``test/test_hooks.py``) joins the two, so a ``write`` or ``shell`` alias
-# cannot join by mistake and a renamed one breaks there rather than silently
-# refusing every file read on a surface with no approver.
-_HOST_READ_ONLY_BUILTIN_ALIASES: Mapping[str, str] = {"read": "fs_read"}
-
 
 # Semantic kinds known to mutate/execute. DOCUMENTATION ONLY — the gate does not
 # branch on this set, and must not start: `tool_kind` arrives verbatim from the ACP
@@ -1187,7 +1176,12 @@ _DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 
-def _screen_windows_links(target: str, read_errors: list[OSError] | None = None) -> str | None:
+def _screen_windows_links(
+    target: str,
+    read_errors: list[OSError] | None = None,
+    *,
+    follow_leaf: bool = True,
+) -> str | None:
     """Replace Windows links with screened targets before ``realpath``.
 
     ``first_linked_ancestor`` walks root-first without traversing a link.
@@ -1199,6 +1193,10 @@ def _screen_windows_links(target: str, read_errors: list[OSError] | None = None)
     target could not be read. The path is refused either way; the list tells a
     caller that this refusal comes from a read that did not complete, not from
     a target the screen does not accept.
+
+    ``follow_leaf=False`` rewrites linked ancestors only and returns as soon as
+    none is left, so a caller with its own leaf-link rule applies that rule to
+    the returned path's leaf. See :func:`screen_windows_linked_ancestors`.
     """
     for _ in range(_WINDOWS_LINK_CHAIN_MAX):
         if target.count("\\") + target.count("/") > _MAX_SCREENED_PATH_DEPTH:
@@ -1226,7 +1224,7 @@ def _screen_windows_links(target: str, read_errors: list[OSError] | None = None)
             target = os.path.normpath(os.path.join(normalized, suffix))
             continue
 
-        if not platform_compat.is_link_or_junction(target):
+        if not follow_leaf or not platform_compat.is_link_or_junction(target):
             return target
         try:
             raw_target = os.readlink(target)  # lgtm[py/path-injection]

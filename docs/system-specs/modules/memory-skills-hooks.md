@@ -1180,7 +1180,7 @@ For repeated query-aware context builds, `_SemanticScoringSet` holds exactly the
 ### Episodic Memory
 
 SQLite table `episodic_memories` — conversation fragments with optional embeddings:
-- **Write**: text validation (10-2000 chars), **prompt-injection screening** (`_contains_injection`, same pattern set as the semantic-KV path), tag sanitization, importance clamping (0-1), FAISS dedup (cosine > `_DEFAULT_DEDUP_THRESHOLD` = 0.88, configurable via `memory.episodic_dedup_threshold` — every store built from the install's config passes the loaded config to the constructor as `config=`, which applies it through `reconfigure(cfg)` before the store subscribes to the live watcher (so a reload landing during construction is not overwritten by the older snapshot), and the new subscription is then replayed (`ConfigWatch.replay`, only for a store built with `config=`; so a reload dispatched between the caller's load and the registration reaches the store; see the config spec), setting it together with `memory.episodic_max_count` and the other retrieval settings: `slack/gateway.py`, `cli_server.py`, `cli_commands.py` (lesson, carve and import/migrate stores), the dashboard's standalone fallback in `dashboard/handlers/memory_services.py`, the ops-mission-control ledger indexer (`routes.py`) and lesson recall (`dispatch.py`), and named stores via `context._build_store_vectors`. A deferred write skips this similarity check, so the threshold is inert on a deferred-only store, but the cap is not. `onboarding_import.py` (a foreign `data_home`), `eval/` harnesses and the read-only injection audit keep constructor defaults at construction (no config applied, no replay; like every store they still follow later live `memory.*` reloads through the subscription); `test_every_construction_site_is_plumbed_or_exempted` fails on a new construction site that is in neither list). The dedup scan **skips tombstoned ("ghost") matches**: tombstone paths (merge, dashboard delete, cap eviction, stale retirement) set `is_deleted=1` but leave the vector in `_faiss_index`/`_faiss_id_map`, so a high-similarity hit may map to a deleted row. `_get_episodic()` filters `is_deleted=0` and returns `None` for those; the write loop `continue`s past a `None` match (mirroring `search_episodic`'s `if not mem or mem["is_deleted"]: continue`) instead of treating it as a conflict — otherwise a new memory matching a deleted one was silently rejected (data loss).
+- **Write**: text validation (10-2000 chars), **prompt-injection screening** (`_contains_injection`, same pattern set as the semantic-KV path), tag sanitization, importance clamping (0-1), FAISS dedup (cosine > `_DEFAULT_DEDUP_THRESHOLD` = 0.88, configurable via `memory.episodic_dedup_threshold` — every store built from the install's config passes the loaded config to the constructor as `config=`, which applies it through `reconfigure(cfg)` before the store subscribes to the live watcher (so a reload landing during construction is not overwritten by the older snapshot), and the new subscription is then replayed (`ConfigWatch.replay`, only for a store built with `config=`; so a reload dispatched between the caller's load and the registration reaches the store; see the config spec), setting it together with `memory.episodic_max_count` and the other retrieval settings: `slack/gateway.py`, `cli_server.py`, `cli_commands_learn.py` (lesson store), `cli_commands_memory.py` (carve and import/migrate stores), the dashboard's standalone fallback in `dashboard/handlers/memory_services.py`, the ops-mission-control ledger indexer (`routes.py`) and lesson recall (`dispatch.py`), and named stores via `context._build_store_vectors`. A deferred write skips this similarity check, so the threshold is inert on a deferred-only store, but the cap is not. `onboarding_import.py` (a foreign `data_home`), `eval/` harnesses and the read-only injection audit keep constructor defaults at construction (no config applied, no replay; like every store they still follow later live `memory.*` reloads through the subscription); `test_every_construction_site_is_plumbed_or_exempted` fails on a new construction site that is in neither list). The dedup scan **skips tombstoned ("ghost") matches**: tombstone paths (merge, dashboard delete, cap eviction, stale retirement) set `is_deleted=1` but leave the vector in `_faiss_index`/`_faiss_id_map`, so a high-similarity hit may map to a deleted row. `_get_episodic()` filters `is_deleted=0` and returns `None` for those; the write loop `continue`s past a `None` match (mirroring `search_episodic`'s `if not mem or mem["is_deleted"]: continue`) instead of treating it as a conflict — otherwise a new memory matching a deleted one was silently rejected (data loss).
 - **Injection screening (XPIA defense-in-depth)**: episodic text is derived from conversation transcripts, so a poisoned turn could persist steering instructions that get re-injected into future contexts. `write_episodic()` runs `_contains_injection()` (before the embed call) and, on match, drops the entry and emits an auditable `injection_blocked` event with `memory_type='episodic'`. The stored audit snippet is scrubbed with `redact_exfiltration_urls()` + `redact_credentials()` first as defense in depth; `/api/memory/events` also redacts all returned events. This mirrors the semantic-KV screen at `validate_semantic()`. **Residual (accepted risk)**: this is a best-effort regex screen: a determined owner can still steer their own long-term memory with phrasing that evades the patterns; long-term memory poisoning is an accepted residual. The screen raises the bar against accidental/opportunistic XPIA persistence, not against a motivated self-owner.
 - **Search**: FAISS vector similarity with decay scoring: `cosine_sim × (0.7 + 0.3×importance) × exp(-rate×days_old)`, then MMR diversity reranking (Jaccard-based, `_MMR_LAMBDA` = 0.6). The decay rate is `_DEFAULT_DECAY_RATE` = 0.03/day, configurable per tag via `memory.decay_rates` (`_decay_rate_for`): keys are tags (case-insensitive, matching `_matches_tags`), the reserved `default` key replaces the built-in fallback, a multi-tag row uses the SLOWEST matching rate (smallest = maximum retention, so a broad tag can never age out a long-retention one), values are clamped to [0, 10] and non-numeric entries are dropped with a warning by `_sanitize_decay_rates`, which runs on every config apply as well as at construction, so a hand-edited rate is clamped and a garbage entry dropped identically either way. Both vector rungs (FAISS and the stdlib fallback) resolve the rate through the same helper; the keyword rung does no decay scoring at all.
 - **MMR reranking**: Maximal Marginal Relevance balances relevance with diversity. Greedy iterative selection penalizes candidates similar to already-selected results. Prevents redundant episodic fragments from consuming the context budget. Configurable via `mmr=False` parameter to disable. The candidate pool is deliberately NOT truncated toward `limit` (that tail pick is the point of MMR); the only bound is the recall-safe `_MMR_MAX_POOL` = 1000 ceiling for pathological inputs.
@@ -2535,6 +2535,21 @@ not coordinate, so reason about them separately:
 
 ### In-Process Embedder (`embeddings.py`)
 
+`embeddings.py` is a mirror facade (`kiro_crew._facade_mirror`) over sibling owner
+modules: every name below still reads and patches as `embeddings.<name>`, and every owner
+logs to the `kiro_crew.embeddings` logger. New work goes to the owner of its
+responsibility:
+
+| Owner | Owns |
+|---|---|
+| `embeddings_settings.py` | the model, runtime and download constants, the `PRIORITY_*` classes and `EmbeddingWork`, and the `memory` knobs for idle eviction, thread counts and the bulk duty cycle |
+| `embeddings_native.py` | loading the vendored runtime: the platform library directory, the CPU-feature and MSVC-runtime checks, the library-path seam, `verify_vendored_libs` and `_load_llama_class` |
+| `embeddings_gguf.py` | the GGUF metadata read and the context policy a model is loaded with |
+| `embeddings_model.py` | the bundled model path, the custom model's validation, identity and background verification, and `model_file_present` |
+| `embeddings_llama.py` | `EmbeddingBackend` and `LlamaCppEmbedder`, with their native-memory and timing helpers |
+| `embeddings_shared.py` | the shared embedder (`get_shared_embedder`, `install_shared_embedder`, `register_embedding_backend`), the embedding-space signature, reconcile and align, and the sync embed cache |
+| `embeddings_download.py` | `ModelDownloadManager`, its process singleton and the background download task |
+
 Embeddings run in-process via the vendored llama-cpp-python 0.3.34 runtime (`kiro_crew/_vendor/llama_cpp`) — no external server, no HTTP hop, no runtime pip install. There is no remote embedding URL, so no URL validation or SSRF hardening is needed on this path; see `../post-launch-removals.md` for why a network embedding client must not come back.
 
 - `LlamaCppEmbedder.embed(text)` / `embed_batch(texts)` → returns 1024-dim vectors or `None` on any failure (graceful degradation)
@@ -2825,7 +2840,7 @@ alignment requires readiness.
 
 ### Model Download Manager (`embeddings.py`)
 
-`ModelDownloadManager` (singleton via `model_download_manager()`) downloads the embedding GGUF in the BACKGROUND at gateway startup — boot is never blocked by the 610MB transfer:
+`ModelDownloadManager` (`embeddings_download.py`; singleton via `model_download_manager()`) downloads the embedding GGUF in the BACKGROUND at gateway startup — boot is never blocked by the 610MB transfer:
 
 **Where the transfer lives.** The streamed-and-verified HTTPS transfer itself is `asset_downloader.download_to` (shared with hosted feature-video media, `feature-videos.md`): it owns connecting, hashing while streaming, the atomic install and the wording of each failure. `ModelDownloadManager` keeps everything that is about the MODEL — which url to resolve, the sha/size pins, the Ollama salvage, the retry ladder, and turning byte counts into the `status` dict. A second private downloader would be a second place for "did we verify this before installing it?" to be answered differently.
 
@@ -4535,9 +4550,15 @@ Three rules survive beside it, for the cases the shape permits: `..` anywhere, a
 trailing dot, and a reserved device stem. The cost is real and accepted -- a
 repository carrying `my file.md` is refused rather than imported -- and it buys the
 property that an import lands complete or names the file it cannot take.
-`TestWriterCompatibility` pins both directions. `fetch_skill_bundle` can only answer `None`, so the
-reason currently reaches the log rather than the user — an error channel on the
-`SkillProvider` Protocol is follow-up work. Branch tracking / re-sync is deliberately out of scope (#746 covers the
+`TestWriterCompatibility` pins both directions. A refusal reaches the user: a provider that
+cannot answer raises `SkillProviderError(code, message)` (`skill_providers/base.py`), while
+`search() -> []` keeps meaning "looked, nothing matched" and `fetch_skill_bundle() -> None`
+"nothing to fetch". The codes (`rate_limited`, `not_found`, `refused`, `unavailable`) are for
+the audit log and the error-code contract; the user reads `message`, which the discover handler
+scrubs with `_redact_external` and caps at 300 characters. Search puts it on the provider's
+`provider_outcomes` entry as `message` (beside an optional `display_name`), install answers 502
+with `{error, code}`, and preview adds `error` to its empty shape. GitHub's rate limit names a
+relative wait from `Retry-After` or `X-RateLimit-Reset`. Branch tracking / re-sync is deliberately out of scope (#746 covers the
 adjacent design). Requests are unauthenticated (60/hour/IP), so private
 repositories are not reachable. An installed skill's key comes from the provider, not from its id:
 `_slugify` lowercases and folds `/`, `@` and `:` all onto `-`, so it is not
@@ -5399,7 +5420,7 @@ Success is 200 `{"approved": "<auto/name>"}`; a malformed slug is still an uncod
 
 ## MCP Discovery (`mcp_discovery.py`)
 
-Auto-sync runs at startup and on demand from the dashboard. The authoritative managed-server inventory and its always-on, gated and opt-in rules are in [MCP architecture](../../architecture/mcp.md#managed-servers).
+Auto-sync runs at startup and on demand from the dashboard. `mcp_discovery.py` is a mirror facade over its `mcp_discovery_*` owners; [MCP architecture](../../architecture/mcp.md#discovery-and-probing) says which owner holds what. The authoritative managed-server inventory and its always-on, gated and opt-in rules are in [MCP architecture](../../architecture/mcp.md#managed-servers).
 
 **Server sources** (merged by `list_servers()`):
 1. `agents/defaults.json` → `mcpServers` (default: none beyond the managed servers)
@@ -5687,7 +5708,7 @@ wedged owner frame still reads as a gate stall.
 |---|---|
 | `denied_commands` | The keystone opt-out read (`load_denied_commands_state`), the boot parse and both live-reload splices, the governance force-pin lookup, and the effective regex set and operator notes the gate hands `PolicyAuthority.is_denied` |
 | `governance_gate` | The ceiling ∩ profile tool decision (`_governance_denial`), the `capabilities.spawn` decision, the `capabilities.script_hooks` gate, and their SEL audit rows |
-| `tool_identity` | What a call IS: the gate's typed input (`ToolCall`, whose `from_event` is the one event-field extraction; `hook_gate_kwargs` is its keyword form), the `spawn_run` identity test, the first-party-app and builtin-agent registry readers and writers, the host-known read-only built-in test, the canonical `@server/tool` reference, title normalization and the pattern matchers |
+| `tool_identity` | What a call IS: the gate's typed input (`ToolCall`, whose `from_event` is the one event-field extraction; `hook_gate_kwargs` is its keyword form), the `spawn_run` identity test, the first-party-app and builtin-agent registry readers and writers, the host-known read-only built-in test and the short-stamp alias it and the deny tiers resolve through, the canonical `@server/tool` reference, title normalization and the pattern matchers |
 | `gate_tiers` | What each row of the tool gate checks: one tier body per `GATE_TIERS` row (the three per-target rules included), `GateFacts` (the call, the asking surface, and what the tiers derive from them — the one platform-context snapshot and every value built from it derived on first use and kept; the effective deny set is resolved twice from that one snapshot, for the enabled rule ids and for the deny-rules tier), and the table's projection and soundness checks (`shell_rules`, `gate_tier_problems`) |
 | `search_targets` | The file-search deny target: the scope-only grammar, its percent encoding, the home-variable substitution and the lexical root normalization |
 | `windows_paths` | UNC shape, the extended-length fold, the trusted-root probe gate, OS-layer representability and one link target's normalization |

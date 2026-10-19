@@ -171,8 +171,21 @@ materializing the complete parsed transcript. `TranscriptReadProjection` keeps a
 bounded in-memory sparse index per transcript revision, mapping every row
 stride to a byte offset. The stride starts at 128 rows and doubles whenever the
 entry would exceed 1024 checkpoints, so an entry's size is capped regardless of
-transcript length. Any file-stamp or invalidation-generation change rebuilds
-the index from byte zero; only an exact revision reuses checkpoints. A key with
+transcript length. A file-stamp or invalidation-generation change makes the
+cached entry unusable; an exact revision reuses it. The next scan then either
+starts at byte zero or resumes from the last complete scan: the projection keeps
+that scan (`_page_index_base`: device, inode, the record boundary it stopped at,
+a blake2b digest of the 4 KiB before the boundary, the row count and the
+checkpoints) across invalidation, because `ConversationLog.append` invalidates on
+every write and the file only grows by appends. The scan resumes only when the
+open handle it is about to read has the same device and inode, is longer than the
+boundary, and has the same digest before the boundary; it then scans only the
+appended rows. Compaction, rotation and metadata updates replace the file through
+`atomic_write` (a new inode), so they always rebuild from byte zero, and a final
+row without a line terminator is never used as a boundary. The premise is that
+product writes are `O_APPEND` appends or atomic replaces; an in-place edit that
+keeps the inode and the 4 KiB before the old end and also lengthens the file would
+not be noticed. A key with
 no transcript file is a stable empty revision (`total=0`); any other stat error
 propagates rather than reading as empty.
 The index is built lazily by the first paginated read of a revision (one O(rows)
@@ -192,8 +205,10 @@ requires the full file stamp (`mtime_ns`, `ctime_ns`, size, inode, device) and t
 history invalidation generation. An unpinned page read whose revision changes
 mid-read is retried once; a read pinned to an `expected_revision` is not, since
 the stamp that broke the pin cannot recur, and the caller's retry policy decides.
-Repeated churn falls back to the complete-reader oracle so the endpoint
-never returns a mixed revision. Indexed reads use the strict framing posture
+The `limit=0` total/revision probe never falls back to a full read: after its
+retry it raises `TranscriptRevisionChanged` to the caller, which spends one
+snapshot attempt on it. Repeated churn falls back to the complete-reader oracle,
+so the endpoint never returns a mixed revision. Indexed reads use the strict framing posture
 (`strict_raw_records_with_offsets`): a record over `RECORD_CAP` raises instead of
 being skipped, because a skipped row would shift every cursor above it; the
 endpoint then serves the request from the full reader, which has no per-record cap.
@@ -914,16 +929,23 @@ authorization are still checked. Async restore prefetches this record off-loop a
 the transcript and applies the resulting name on the event loop.
 
 **Where the code lives.** `chat_persistence.py` is the facade every caller imports
-from. It keeps the orchestration: the save transaction `_save_slot_to_history`
-(snapshot, refusals, the transcript lock, the atomic replace and the witness
-stamping) with its on-loop entry point `save_slot_off_loop`; the restore drivers
-and slot builders (`restore_open_slots`, `restore_recent_sessions`, their async
-twins, `_rehydrate_slot_from_history`, `_apply_recent_session` and the prefetch
-reads they share); the reasoning-effort allowlist; the persisted-entry memo
-`_build_message_entry` with its bounds; the private member-store assignment; and
-the request-side retired-mode coercion (`_coerce_requested_mode`). The rules those
-consult live in `dashboard/slot_persistence/`, and each file names the work that
-belongs in it. Only the newest `EAGER_WINDOW_RESTORES` open tabs are built with
+from, and the one namespace the orchestration runs on. It keeps the reasoning-effort
+allowlist, the persisted-entry memo `_build_message_entry` with its bounds, the
+request-side retired-mode coercion (`_coerce_requested_mode`) and the history
+prefix. The orchestration's text lives in `dashboard/chat_persistence_parts/`,
+composed onto the facade by `kiro_crew._facade_compose.compose`, so each function
+runs on the facade's globals and reports the facade as its module:
+`save_transaction.py` (the save transaction `_save_slot_to_history` -- snapshot,
+refusals, the transcript lock, the atomic replace and the witness stamping -- with
+its on-loop entry point `save_slot_off_loop`, the shutdown save and the wait for
+unwinding turns), `restore_drivers.py` (`restore_open_slots`,
+`restore_recent_sessions` and their async twins, with the open-tab plan, budget,
+tail and reports), `slot_builders.py` (`_rehydrate_slot_from_history`,
+`_apply_recent_session`, the open-tab slot build, the deferred window load and the
+prefetch reads they share) and `member_store.py` (the private member-store
+assignment). New orchestration goes to the part of its responsibility. The rules
+those consult live in `dashboard/slot_persistence/`, and each file names the work
+that belongs in it. Only the newest `EAGER_WINDOW_RESTORES` open tabs are built with
 their transcript window loaded; every later tab that only a person drives (its own
 dashboard origin, no linked, app, remote or creator binding, not a member or crew-bound
 worker tab, not driven by a loop, and no unsettled local turn or held notes) is built
@@ -1004,16 +1026,22 @@ learn-cron-dashboard):
 - `turn_marker.py` -- the turn-in-flight marker's validation and reconcile. New
   rules about a turn a restart did not see finish.
 
-The orchestration stays in the facade because gates key the restore builders, the
-prefetch reads, the async drivers, `save_slot_off_loop` and the recreate-won guard
-to `chat_persistence.py`, and test fixtures reset its process state there. Every
-project name the facade bound is still importable from it, and the owners read
-every name a test rebinds on it through it at call time;
+The orchestration runs on the facade's globals because tests patch its names there
+and test fixtures reset its process state there; the gates that read its text (the
+off-loop restore reads, the fence-to-registration order and the recreate-won guard of
+the save, the transcript plumbing list, the member-store vouch) read the part that
+holds it. Every project name the facade bound is still importable from it, and the
+owners read every name a test rebinds on it through it at call time;
 `test/test_chat_persistence_composition_contract.py` pins both, plus the bytes a
 save writes. It also pins the placement rules: the package holds exactly the composed
 owner modules and its `__init__` imports nothing; each name lives in exactly one owner;
 no owner imports another owner or the facade's rebound names, and owners reach the
 facade as a module at call time; the facade imports every owner last.
+`test/test_chat_persistence_parts_composition_contract.py` pins the parts: each
+composed function and method runs on the facade's globals and reports it as its
+module, every global one reads is bound on the facade, nothing but the facade imports a
+part, no part binds the facade's process state, async functions sit only in parts
+the off-loop gate reads, and only the save transaction dispatches a save.
 
 `_save_slot_to_history` persists dashboard chat slots. It models the session
 file as a **frozen prefix + live window** so on-disk history is never
@@ -1088,6 +1116,10 @@ no longer destroy older turns.
   `dashboard.tail_fork_enabled`; if the gate is off, a `direction="tail"`
   request falls back to a normal head-fork instead of erroring. The source
   slot's history file is untouched, so the head stays archived in the parent.
+  While the gate is on, the dashboard's message menu lists "Fork with earlier messages"
+  beside the plain entry: the plain entry sends `direction="tail"` and this one
+  sends `direction="head"`. With the gate off the plain entry already forks with
+  history, so the menu lists no second entry.
 - **Fork inherits `memory_mode`, and never loosens it**: an incognito or
   temporary session forks like a persistent one, and the child is born with the
   parent's mode -- passed to `get_or_create_slot` at creation so the child's
@@ -1312,7 +1344,7 @@ no longer destroy older turns.
   cleanup probes), the abort latches — every later save of new activity is
   skipped, which is why the skip logs at WARNING with the slot key.
 - **Turn persistence is offloaded through ONE choke point**
-  (`save_conversation_turn_off_loop`, `llm_helpers.py`): `save_conversation_turn`
+  (`save_conversation_turn_off_loop`, `llm_helpers_parts/turn_results.py`): `save_conversation_turn`
   makes TWO `append` calls, so an on-loop caller pays ~24 ms of loop time per turn
   AND takes `_locked`'s single non-blocking acquire — dropping the durable copy
   exactly when another writer is active. Every async caller (the Slack handler,
@@ -2783,7 +2815,7 @@ the same reason attachments do not travel with a session transfer or export
 references by design), exactly as the scratch path they replace never did.
 
 `sessions/` is write-protected but deliberately not read-sensitive
-(`security/paths.py`), so `/api/file-raw` serves an attachment under the existing
+(`security/paths_lists.py`), so `/api/file-raw` serves an attachment under the existing
 sensitive-path policy.
 
 ## Source Provenance

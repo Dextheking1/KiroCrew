@@ -445,7 +445,8 @@ numbers. Two readers deliberately do not change: the anonymous usage beacon
 build sends the same value as its base), and the About page's changelog, where
 `changelog.running_release` folds the stamp back onto its three-segment release
 so the build marks the `0.6.0` row rather than opening an empty `0.6.0.12` row. Import time is the only point that works:
-`dashboard/handlers/updates.py`, `dashboard/ws.py`, `config/loader_document.py` and
+`dashboard/handlers/updates_verdict.py`, `dashboard/handlers/updates_check.py`,
+`dashboard/ws.py`, `config/loader_document.py` and
 `cli_server.py` bind `from kiro_crew import __version__` copies that nothing
 later can reach, so this is deliberately not a `PlatformContext` field — a
 context is composed after those imports.
@@ -631,13 +632,13 @@ Wired sites:
   back to the original executable (outer sandbox still applies); a
   `PlatformCompositionError` propagates fail-closed.
 - `hooks.py` — the deny check routes through `current_context().security.is_denied`;
-  the kiro-hooks egress (`dashboard/handlers/hooks.py`) scrubs command/matcher
+  the kiro-hooks egress (`dashboard/handlers/hooks_scripts.py`) scrubs command/matcher
   through the shared `redact_via_context` shim.
 - Credential redaction — all egress scrubs route through the single
   `kiro_crew.platform.redact_via_context` shim (the one canonical
   fail-closed-aware shim; modules import it as `redact`). Covers: `agent.py`
-  SEL-audit callers, `mcp_core_parts/` chat-history/crew output, `mcp_cron.py`
-  deny-reason + script-vet + timezone messages, and the file-content egress the
+  SEL-audit callers, `mcp_core_parts/` chat-history/crew output, `mcp_cron_vet.py`
+  deny-reason + script-vet and `mcp_cron.py` timezone messages, and the file-content egress the
   `dashboard/handlers/files.py` facade serves (the outbox's slot append in
   `dashboard/file_api/outbox.py`, file_read in `dashboard/file_api/editor.py`,
   file-watch and the download gate in `dashboard/file_api/transfer.py`) as well as
@@ -954,7 +955,7 @@ Wired sites:
   payload only when non-None.
 - `config/loader.py` `build_provider_factory(cfg)` — the
   LLM-provider factory build sites (`cli_chat`, `cli_server`,
-  `session.reload_provider_factory`, `slack/gateway`, `cli`, `cli_commands`) route
+  `session.reload_provider_factory`, `slack/gateway`, `cli`, `cli_commands_eval`) route
   through `current_context().providers.create_factory(cfg)` instead of
   `cfg.create_provider_factory()` directly. The Default returns exactly
   `cfg.create_provider_factory()` (identity), so the public edition is unchanged;
@@ -962,7 +963,7 @@ Wired sites:
   fallback is passed as a lazy `fallback_factory` so the happy path builds the
   factory exactly once (no eager double-build) and a failure inside the fallback
   is still caught by the shim.
-- `dashboard/handlers/knowledge.py` — the `SyncScheduler` connector map merges
+- `dashboard/handlers/knowledge_lifecycle.py` — the `SyncScheduler` connector map merges
   `current_context().knowledge.extra_connectors(cfg)` after the built-ins
   (`local_folder`/`obsidian_vault`); Default returns `{}` so standalone is
   unchanged.
@@ -1200,7 +1201,7 @@ is byte-identical) with no `CONTRACT_VERSION` bump.
   async apply mutex (`_get_apply_lock`, spanning BOTH phases) so two concurrent
   applies cannot interleave (one re-adding a server from a preserved spec after
   another removed its package); the narrower file lock is retained inside for
-  cross-process coordination with `bridges.py`;
+  cross-process coordination with `bridges_mcp_config.py`;
 
   > **Uninstall ordering & the crash window.** Package-first ordering (chosen
   > for the concurrent-re-add TOCTOU fix above) flips the partial-failure

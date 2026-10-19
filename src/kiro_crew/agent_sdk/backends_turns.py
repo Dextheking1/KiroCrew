@@ -54,10 +54,12 @@ from kiro_crew.agent_sdk.backends import (
 # goose is not a member: its steer is its own request, and it is not shown to
 # carry a deny notice (see ``ACP_BACKENDS_STEERING_REQUEST``).
 #
-# KAS is a member on a SYNTHESIZED fixture, not a capture:
-# ``test/fixtures/acp_frames/kas/steering.jsonl`` (``recorded: synthesized``)
-# carries the ``steering_queued`` / ``steering_consumed`` frames, and no lane drives
-# a real KAS steer.
+# KAS is a member on a LIVE capture against KAS 0.66.43 (kiro-cli 2.32.0):
+# ``test/fixtures/acp_frames/kas/steering-live.jsonl``. A ``_session/steer`` sent
+# while a shell call ran was answered ``{queued: true}``, echoed as
+# ``steering_queued`` then ``steering_injected`` (a ``session_info_update`` with the
+# kind under ``_meta.kiro``), and the model obeyed it before that turn's
+# ``stopReason``. No lane re-runs it, so a later kiro-cli is not re-measured.
 #
 # This set answers the DENY-NOTICE question as well as the user one: a member's
 # steer can carry a refusal reason into the turn that was refused. A backend that
@@ -88,7 +90,9 @@ ACP_BACKENDS_STEER = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_KAS})
 # advertises no capability for the method; an older goose without it answers
 # ``-32601`` and the steer is queued.
 #
-# codex, measured against a live codex-acp 1.11.0: a steer sent while a prompt is in
+# codex, measured against a live codex-acp 1.11.0 and re-measured on 2.2.2 in the
+# Real Adapter Contract lane (``test_real_codex_acp_steer_is_injected_into_the_running_turn``,
+# against a loopback model): a steer sent while a prompt is in
 # flight is answered ``{outcome: "injected"}`` within milliseconds and the running
 # turn reads it; the same request with no turn running is answered
 # ``{outcome: "startedNewTurn"}`` and the adapter runs a turn of its own that no
@@ -201,12 +205,15 @@ ACP_BACKENDS_STEER_CONCURRENT_PROMPT = frozenset({ACP_BACKEND_OPENCODE})
 # driven over stdio advertises ``compact`` in its ``available_commands_update``
 # ("Summarize conversation to avoid hitting the context limit"), intercepts the
 # ``/compact`` prompt as that command, and answers the same ``session/prompt``
-# request once the compaction is done. The frames are a MARKED tool-call pair --
-# ``_meta.contextCompaction`` -- which ``_dispatch.parse_codex_compaction_update``
-# translates into the compaction status every consumer already reads, so the waiter
+# request once the compaction is done. On 1.11.0 the frames are a MARKED tool-call
+# pair -- ``_meta.contextCompaction``. 2.2.2 sends the same pair UNMARKED, re-measured
+# in the Real Adapter Contract lane and committed as
+# ``test/fixtures/acp_frames/codex/compact-live-2.2.2.jsonl``.
+# ``_dispatch.parse_codex_compaction_update`` reads both shapes and
+# translates them into the compaction status every consumer already reads, so the waiter
 # is satisfied from inside the turn rather than stranded after it. Its native
 # auto-compaction is real but CONDITIONAL: with ``model_auto_compact_token_limit``
-# set it fires on its own and emits the same marked pair, and with the limit absent a
+# set it fires on its own and emits the same pair (measured on 1.11.0), and with the limit absent a
 # session held at 50k tokens across three turns compacted not once. So the old
 # "manages compaction automatically" promise was true only for an operator who had
 # configured it.
@@ -231,7 +238,7 @@ ACP_BACKENDS_STEER_CONCURRENT_PROMPT = frozenset({ACP_BACKEND_OPENCODE})
 # The source agrees: pi-acp intercepts ``/compact`` in ``prompt()``, awaits
 # ``session.proc.compact(...)`` and returns ``{ stopReason: "end_turn" }``.
 #
-# kas is a member on a LIVE drive against kiro-cli 2.29.0's relay (``--agent-engine
+# kas is a member on a LIVE drive, first on kiro-cli 2.29.0's relay (``--agent-engine
 # v3``), and it is the one member that is not handed the ``/compact`` prompt. Sent
 # as prompt text, ``/compact`` makes the model WRITE a summary as its answer and
 # the meter does not move (5.57% -> 5.61%). What compacts is the engine's own
@@ -245,13 +252,18 @@ ACP_BACKENDS_STEER_CONCURRENT_PROMPT = frozenset({ACP_BACKEND_OPENCODE})
 # outcome arrives as a compaction status inside that turn. KAS stays in
 # :data:`ACP_BACKENDS_HARNESS_MANAGED_COMPACTION` too: membership here opens the
 # MANUAL command, and the threshold still leaves KAS to its own summarization.
-# Only the advertisement is committed (``test/fixtures/acp_frames/kas/session.jsonl``
-# names the verb); the drive above is quoted here, not committed, and no lane
-# re-runs it, so a kiro-cli release after 2.29.0 is not re-measured.
+# Re-driven on KAS 0.66.43 (kiro-cli 2.32.0) and committed:
+# ``test/fixtures/acp_frames/kas/compact-live.jsonl``. After three turns read
+# 6.31% -> 8.64% -> 10.76%, the verb answered ``{"success": true}`` after ~12s with
+# ``summarization_completed`` before it, and the next turn read 4.51%. No lane
+# re-runs it, so a later kiro-cli is not re-measured.
 #
-# kiro is a member on a SYNTHESIZED fixture, not a capture:
-# ``test/fixtures/acp_frames/kiro/notifications.jsonl`` (``recorded: synthesized``)
-# carries the ``_kiro.dev/compaction/status`` frames this membership relies on.
+# kiro is a member on a LIVE capture against kiro-cli 2.32.0:
+# ``test/fixtures/acp_frames/kiro/compaction-live.jsonl``. A ``/compact`` prompt is
+# answered ``end_turn`` first; ``_kiro.dev/compaction/status`` then sends
+# ``{type: started}`` and ``{type: completed}`` with the summary. Over three turns
+# ``contextUsagePercentage`` read 21.99 -> 30.40 -> 38.82, and the next ordinary
+# turn read 30.47. The one metadata frame right after ``completed`` read 81.03.
 #
 # claude is a member with no committed compaction capture: the one claude capture
 # (``test/fixtures/acp_frames/claude/session.jsonl``) is a single turn with no
@@ -284,7 +296,7 @@ ACP_BACKENDS_COMPACT = frozenset(
 # auto-summarization and emits ``summarization_started`` /
 # ``summarization_completed``, which ``acp.kas_wire`` maps to a compaction status and
 # which calls ``reset_after_compaction()`` on the meter
-# (``acp/session_handle.py``) -- so the reading that crossed
+# (``acp/session_handle_kas.py``) -- so the reading that crossed
 # ``session.autocompact_pct`` drops on its own and the user-facing "manages
 # compaction automatically" is a description rather than a hope. A backend outside
 # BOTH this set and ``ACP_BACKENDS_COMPACT`` has no compaction path Crew can see on
@@ -401,6 +413,14 @@ ACP_BACKENDS_INLINE_COMPACTION = frozenset(
         ACP_BACKEND_PI,
     }
 )
+
+# Inline-compaction members whose compaction pair may arrive UNMARKED, and so are
+# read by ``_dispatch.CODEX_COMPACTION_TITLE`` on a ``think`` call plus the start's
+# ``toolCallId``. codex is the member: codex-acp 2.2.2 sends the pair with no
+# ``_meta``, captured in ``test/fixtures/acp_frames/codex/compact-live-2.2.2.jsonl``.
+# Every other member is read by the marker alone, so its own ``think`` call with
+# that title is never taken for a compaction.
+ACP_BACKENDS_UNMARKED_COMPACTION_PAIR = frozenset({ACP_BACKEND_CODEX})
 
 
 # Backends implementing ``_kiro.dev/commands/execute`` — the kiro extension that

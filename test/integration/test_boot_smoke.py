@@ -422,7 +422,7 @@ _KNOWN_SECOND_BOOT_CHANGES: dict[tuple[str, str], str] = {
     ("kiro_crew.config.loader_snapshots", "_MATERIALIZED_REFRESH_APPLIED"): "counter",
     ("kiro_crew.config.loader_snapshots", "_MATERIALIZED_REFRESH_ISSUED"): "counter",
     ("kiro_crew.context", "_store_cache_generation"): "counter",
-    ("kiro_crew.dashboard.handlers.updates", "_last_update_check"): "clock",
+    ("kiro_crew.dashboard.handlers.updates_check", "_last_update_check"): "clock",
     # When telemetry consent was last re-read, and whether a re-read is in
     # flight: a boot that outlasts the recheck window starts one. The consent
     # itself (``_built_consent``) does not change here.
@@ -439,11 +439,11 @@ _KNOWN_SECOND_BOOT_CHANGES: dict[tuple[str, str], str] = {
     # in the next; neither is derived from the home.
     ("kiro_crew.sandbox_cgroup", "_CGROUP_SCOPE_PROBE_AT"): "host probe clock",
     ("kiro_crew.sandbox_cgroup", "_CPU_DELEGATED"): "host probe, re-read after a re-probe",
-    ("kiro_crew.security.argv_floor", "_OWN_HOST_NAMES_CACHE"): "host names",
-    ("kiro_crew.security.argv_floor", "_OWN_HOST_RESOLVE_DONE"): "host names",
-    ("kiro_crew.security.argv_floor", "_OWN_HOST_RESOLVE_IN_FLIGHT"): "host names",
-    ("kiro_crew.security.argv_floor", "_OWN_HOST_RESOLVE_NEXT_TRY"): "host probe clock",
-    ("kiro_crew.security.argv_floor", "_OWN_HOST_RESOLVE_STAMP"): "host probe clock",
+    ("kiro_crew.security.argv_floor_hosts", "_OWN_HOST_NAMES_CACHE"): "host names",
+    ("kiro_crew.security.argv_floor_hosts", "_OWN_HOST_RESOLVE_DONE"): "host names",
+    ("kiro_crew.security.argv_floor_hosts", "_OWN_HOST_RESOLVE_IN_FLIGHT"): "host names",
+    ("kiro_crew.security.argv_floor_hosts", "_OWN_HOST_RESOLVE_NEXT_TRY"): "host probe clock",
+    ("kiro_crew.security.argv_floor_hosts", "_OWN_HOST_RESOLVE_STAMP"): "host probe clock",
     # Per-boot objects the next boot replaces wholesale before any read; they
     # hold references, not home-derived decisions a later request would act on.
     ("kiro_crew.apps.builtins.auto_improvement.backend.crew", "_runtime"): "replaced per boot",
@@ -471,7 +471,8 @@ _KNOWN_SECOND_BOOT_CHANGES: dict[tuple[str, str], str] = {
     ("kiro_crew.autonudge", "_MAINTENANCE_LOCKS"): "keyed cache",
     ("kiro_crew.dashboard.handlers.mcp", "_mcp_probe_cache"): "keyed cache",
     ("kiro_crew.dashboard.handlers.mcp", "_mcp_probe_ts"): "keyed cache",
-    ("kiro_crew.mcp_discovery", "_probe_cache"): "keyed cache",
+    ("kiro_crew.mcp_discovery_probe_state", "_probe_cache"): "keyed cache",
+    ("kiro_crew.mcp_discovery_probe", "_probe_cache"): "keyed cache",
     ("kiro_crew.agent_discovery", "_PARSED_SPECS_CACHE"): "keyed cache",
     # Process-wide values resolved on first use, home-independent: the thread
     # pools, and the umask-derived default file mode (``0o666 & ~umask``) that

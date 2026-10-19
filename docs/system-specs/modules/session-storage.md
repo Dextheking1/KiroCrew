@@ -340,7 +340,7 @@ reclaimable.
 
 `title` and `first_message` are conversation content, so they pass
 `redact_exfiltration_urls()` then `redact_credentials()` — the same order
-`dashboard/handlers/artifacts.py::_serialize` uses. `origin` gets the same
+`dashboard/handlers/artifacts_parts/record_serialization.py::_serialize` uses. `origin` gets the same
 treatment: a session id is
 rendered, `_UNIT_ID_RE` admits the alphanumeric shape of an access-key id, and a
 credential pasted into an id would otherwise reach the dashboard verbatim.
@@ -1242,7 +1242,7 @@ Emptying is the one worth spelling out. An interrupted batch can list *zero*
 sessions while holding real files, so the trash shows it as empty — meaning a
 user's "empty this batch" is consent for nothing while destroying something. Such a
 batch is skipped and logged rather than deleted, so `freed_bytes` under-reports
-instead of the trash over-deleting. `TestEmptyTrash` and
+instead of the trash over-deleting. `TestEmptyTrashApproval` and
 `test_restore_never_deletes_a_file_the_manifest_omits` cover both directions.
 
 All three now also re-establish the answer through the descriptor they remove by, not only

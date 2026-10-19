@@ -521,6 +521,47 @@ describe('useSessionActions', () => {
     dispatchSpy.mockRestore()
   })
 
+  it('close names why it asks: live work, or the setting when nothing is running', () => {
+    const BUSY = 'chat-actions-reason-busy'
+    const IDLE = 'chat-actions-reason-idle'
+    store.dispatch(sseSlots([
+      { key: BUSY, title: BUSY, messages: 1, running: true, folder_id: '' },
+      { key: IDLE, title: IDLE, messages: 1, running: false, folder_id: '' },
+    ]))
+    cfgMock.loadChatConfig.mockReturnValue({ confirmCloseSession: true })
+    const decline = vi.fn((_msg?: string) => false)
+    vi.stubGlobal('confirm', decline)
+    const a = renderActions()
+
+    act(() => a.current.close(BUSY))
+    expect(decline.mock.calls[0][0]).toContain('It is still working on a reply. Closing stops that reply.')
+    expect(decline.mock.calls[0][0]).not.toContain('Confirm Before Closing Session')
+
+    act(() => a.current.close(IDLE))
+    expect(decline.mock.calls[1][0]).toContain('Nothing is running in it.')
+    expect(decline.mock.calls[1][0]).toContain('Confirm Before Closing Session')
+    expect(decline.mock.calls[1][0]).toContain('Chat › Confirm Before Closing Session')
+  })
+
+  it('close stays instant for a session waiting on the user (options card, question, interrupted turn)', () => {
+    // These read as the Waiting lane, but nothing is running in them: a close
+    // retires no work. Asking here is a prompt the setting cannot turn off.
+    const WAITING = 'chat-actions-waiting'
+    store.dispatch(sseSlots([
+      { key: WAITING, title: WAITING, messages: 1, running: false, has_options: true, needs_input: true, interrupted: true, folder_id: '' },
+    ]))
+    cfgMock.loadChatConfig.mockReturnValue({ confirmCloseSession: false })
+    const ask = vi.fn(() => false)
+    vi.stubGlobal('confirm', ask)
+    const dispatchSpy = vi.spyOn(store, 'dispatch')
+    const a = renderActions()
+    dispatchSpy.mockClear()
+    act(() => a.current.close(WAITING))
+    expect(ask).not.toHaveBeenCalled()
+    expect(dispatchSpy).toHaveBeenCalled()
+    dispatchSpy.mockRestore()
+  })
+
   it('close stays instant for an idle session with confirmCloseSession off', () => {
     seed()
     cfgMock.loadChatConfig.mockReturnValue({ confirmCloseSession: false })

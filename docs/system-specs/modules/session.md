@@ -147,11 +147,14 @@ sub-agent and MCP App state in [side](side.md), [subagent](subagent.md) and
 ## Return-triggered warm task brief
 
 The owner-only `slot_focused` WebSocket frame also drives the warm task brief.
-Only `{slot: null, hidden: true}` from the last owner connection viewing a
-thread starts an in-memory away episode. The first later owner focus frame
-consumes it. It qualifies only when it names the same thread after at least 30
-minutes. Socket cleanup, reconnect, ordinary null frames, focus loss, route or
-thread changes, and elapsed time alone never start work.
+When the last owner connection viewing a thread sends `{slot: null, hidden:
+true}` or a frame naming another thread, that thread starts an in-memory away
+episode. The episode ends the next time any owner frame names the thread
+again; frames for other threads leave it alone. That return qualifies after at
+least 30 minutes. Socket cleanup, reconnect, ordinary null frames, focus loss,
+and elapsed time alone never start work. A return while the thread runs a turn
+waits for the turn to end, up to 30 minutes, while the owner keeps the thread
+on screen. Each skip logs one debug line with the thread key and a fixed reason.
 
 A qualifying return writes a hidden durable fingerprint claim, then posts a
 short fixed crewmate opener ("Welcome back, let me catch you up on where we
@@ -161,8 +164,13 @@ genuine user request, conversation task rows, session ledger, and work ledger.
 The model result is a second ordinary crewmate message in first-person prose:
 what the user asked for, where it stands, and one to three suggestions, with no
 headings or lists. These generated rows
-are excluded from the task fingerprint. User turns, slot replacement, reset,
-close, task changes, and newer assistant rows drop a stale result unposted.
+are excluded from the task fingerprint. A new user turn, a new away episode,
+slot replacement, reset, close, and a finished task drop a stale result
+unposted. Patrol turns, `[work-ledger wake]` rows, and worker reports change
+the dedup fingerprint but do not make a prepared result stale; a turn running
+at publication defers the result until it ends. Only a live user row the person
+typed cancels a brief in preparation; assistant rows, automation rows and turn
+admission never do.
 Away state is never persisted, so restart and network loss fail silent.
 
 ## Implementation Boundaries
@@ -718,9 +726,9 @@ when done. See [acp-client.md](acp-client.md) for `AcpRuntime` /
 `AcpSessionHandle`.
 
 **Cheapest-model bg tasks**: the categorical/classification background tasks
-(folder-icon `chat_folders.py`, link-summary `chat_nav.py`, session title
+(folder-icon `chat_folders_icons.py`, link-summary `chat_nav.py`, session title
 `chat_title.py`, session-summary `handlers/sessions_parts/summaries.py`, STT endpointing
-`stt_stream.py`, and the lesson-contradiction check `dashboard/handlers/cron.py`,
+`stt_stream.py`, and the lesson-contradiction check `dashboard/handlers/cron_lesson_supersede.py`,
 plus tips generation) express a `"auto"` model preference and pass it to a
 best-effort per-session `set_model`. The wire chokepoint
 (`AcpSessionHandle.set_model` → `resolve_usable_model`) mirrors the interactive
@@ -1313,9 +1321,10 @@ against sweep completeness, and are torn down at `close_all`.
   never the string form of `_kiro.dev/commands/execute`, which kiro-cli 2.14.0
   exits rc=0 on) and its result arrives afterwards, while claude, codex, opencode,
   goose and pi finish the whole compaction inside the prompt turn. claude and opencode emit no
-  status at all, goose emits only a `Compaction complete` chunk and pi only a `Compaction completed` chunk; codex reports the compaction as a `tool_call` pair marked
-  `_meta.contextCompaction` (translated by
-  `_dispatch.parse_codex_compaction_update`) that arrives before the prompt
+  status at all, goose emits only a `Compaction complete` chunk and pi only a `Compaction completed` chunk; codex reports the compaction as a `tool_call` pair, marked
+  `_meta.contextCompaction` on 1.11.0 and unmarked on 2.2.2 (both translated by
+  `_dispatch.parse_codex_compaction_update`; the unmarked shape only for
+  `ACP_BACKENDS_UNMARKED_COMPACTION_PAIR`), that arrives before the prompt
   response, so its terminal is read from the stream like kiro-cli's.
   For the two that emit nothing `wait_for_compaction()` answers `completed` from the
   capability
@@ -2480,6 +2489,26 @@ envelope on a cold session.
   resume expected.
 - `close_all()`: saves all active mappings before killing processes.
 - `start_pool()`: prunes stale entries (files deleted by kiro-cli GC).
+
+**Module layout:** `kiro_crew.session_map` is the import path and defines `SessionMap`
+itself: the constructor, the resume rule and both stale paths (`get`, `prune`, the per-read
+repair), the session pointer and the per-conversation state, the privacy rows, and the
+bind/unbind announcements beside the listeners they call. Every member that reads a name
+tests patch through that module, or the one ACP-layer constant, is defined there. The class
+binds its other members by name from two owner modules:
+
+| Owner | Owns |
+|---|---|
+| `session_map_store.py` | `_MAP_LOCK` and `_guarded`, the load, the deferred flush's scheduling and snapshot claims, and the atomic write (`batched_save`, `_save`, `flush`, `aflush`, `aclose`, `_write_payload`); the debounced task itself, `_flush_async`, stays in the facade, where tests patch its debounce |
+| `session_map_links.py` | the Slack thread link and its reverse index, the channel-neutral mirror binding, the session's own link, the compare-and-clear unlinks, the mutes, the binding nonces and `ConversationOwnershipConflict` |
+
+New work goes to the module that owns its responsibility. A bound member reads as a method of
+the class: its `__qualname__`, `__module__` and signature are the ones it had when the class
+was one module, and only its code object names the owner file. A module-level name that moved
+(`_MAP_LOCK`, `_guarded`, `ConversationOwnershipConflict`) is imported back, so
+`kiro_crew.session_map.<name>` is the owner's own object. `test/test_session_map_bindings.py`
+pins the bindings, the owners' import direction and the reach of every patch the tests make
+through the module.
 
 ### Asking for a fresh conversation on a slot that stays open
 
@@ -4590,7 +4619,7 @@ a trust root on its own; publication therefore also writes a
   owner's session key until the next restart's orphan sweep. Publication therefore
   appends the process start token
   (`platform_compat.get_process_start_id` — the same incarnation identity
-  `session_pid.py` records in its `<gw>:<pid>:<start_token>` sweep entries)
+  `session_pid_tracking.py` records in its `<gw>:<pid>:<start_token>` sweep entries)
   as a second line of the `.txt` (a line, not a colon field, because the
   session key itself contains colons). Both readers dual-parse legacy
   vs guarded forms and refuse on a PROVEN mismatch — the lenient reader
@@ -4641,7 +4670,7 @@ a trust root on its own; publication therefore also writes a
   sidecar; strict resolvers fail closed until the next turn's publish
   re-signs the mapping. Benign and self-healing — no migration step.
 - **Stale cleanup**: the orphan sweep removes `session_pid_<pid>.sig`
-  alongside its `.txt` for dead pids (`session_pid.py`). "Dead" is not
+  alongside its `.txt` for dead pids (`session_pid_mappings.py`). "Dead" is not
   `pid_exists` alone: Linux numbers threads from the pid space, so a dead
   session's pid recycled as a THREAD of an unrelated live process still
   satisfies that probe and the mapping would survive forever (observed on a
@@ -5121,8 +5150,8 @@ The Windows synchronous provider fallback uses the same exact-tree cleanup admis
 ACP teardown; its bounds and recovery procedure are in
 [platform-compat](../common/platform-compat.md#windows-session-tree-teardown).
 
-All process liveness/kill/PID-file-lock operations in `session.py`, its `session_parts/` owners and
-`session_pid.py` go through `kiro_crew.platform_compat` so KiroCrew runs natively on
+All process liveness/kill/PID-file-lock operations in `session.py`, its `session_parts/` owners,
+`session_pid.py` and its `session_pid_*.py` owners go through `kiro_crew.platform_compat` so Kiro Crew runs natively on
 Windows as well as macOS/Linux. The critical correctness reason is that
 **`os.kill(pid, 0)` is NOT a liveness probe on Windows — it terminates the process** —
 so every liveness check uses `platform_compat.pid_exists(pid)` (or the tri-state
@@ -5183,7 +5212,7 @@ bounded; escalation happens only when the rung below exhausted its attempts:
 | `L4_gatewayd` | daemon | liveness ping failed 3x (neither the fast nor the escalated probe answered) AND no backend progress | daemon drain | one respawn per 600s window (the second escalates) | `GatewayManager._run_watchdog` respawn; stubs reconnect within their 600s budget |
 | `L5_gateway` | gateway | none automatic | -- | 0 | ONE notification per escalation; the user restarts. Never a `kirocrew restart`. |
 
-**Where the rungs are recorded.** L1 for the main chat is `chat_runner`'s infra branch (below); for a sub-agent it is `subagent_manager/run.py::_yield_for_infra_retry`, which takes the ladder's delay and parks the run on the dependency coordinator's `mcp_gateway:<class>` scope ([subagent.md](subagent.md)). L2 is `daemon/replacement.py::_respawn_backend_for_stub`: a completed respawn is `record_restart(L2_backend)` + `observe_success(L2, server)`, a give-up is `observe_failure(L2, server)` (the breaker's OPEN cooldown is the wait between rungs; the ladder counts, it does not sleep there). L3 is counted by the sub-agent run when the parent's shared runtime is unavailable (`observe_failure(L3, runtime:<parent>)`; the dedicated process stays the per-run recovery, the runtime's rebuild belongs to its owning session). L4 is the gatewayd supervisor. Distinct from these per-rung attempt counts is `SESSION_RECOVERY_MAX_ATTEMPTS` (3), the IN-PLACE budget for continuing one ACP session on the same runtime — the main chat's tool-stall / stale_recover nudges and pipe-death re-queues and the sub-agent's stop recovery all read it (`acp.types.STOP_RECOVERY_MAX_RETRIES` is its re-export).
+**Where the rungs are recorded.** L1 for the main chat is `chat_runner`'s infra branch (below); for a sub-agent it is `subagent_manager/run_yields.py::_yield_for_infra_retry_impl`, which takes the ladder's delay and parks the run on the dependency coordinator's `mcp_gateway:<class>` scope ([subagent.md](subagent.md)). L2 is `daemon/replacement.py::_respawn_backend_for_stub`: a completed respawn is `record_restart(L2_backend)` + `observe_success(L2, server)`, a give-up is `observe_failure(L2, server)` (the breaker's OPEN cooldown is the wait between rungs; the ladder counts, it does not sleep there). L3 is counted by the sub-agent run when the parent's shared runtime is unavailable (`observe_failure(L3, runtime:<parent>)`; the dedicated process stays the per-run recovery, the runtime's rebuild belongs to its owning session). L4 is the gatewayd supervisor. Distinct from these per-rung attempt counts is `SESSION_RECOVERY_MAX_ATTEMPTS` (3), the IN-PLACE budget for continuing one ACP session on the same runtime — the main chat's tool-stall / stale_recover nudges and pipe-death re-queues and the sub-agent's stop recovery all read it (`acp.types.STOP_RECOVERY_MAX_RETRIES` is its re-export).
 
 Overload never enters the ladder: pressure lowers caps and pauses admission
 ([adaptive-concurrency](adaptive-concurrency.md)); only a unit that stopped

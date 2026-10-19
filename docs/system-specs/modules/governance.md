@@ -2773,7 +2773,7 @@ second surface cannot grow a drifting copy):
 
 | Surface | Destination id | On deny |
 |---|---|---|
-| `api_artifact_publish` + its sharing/review siblings (`handlers/artifacts.py`, via the module-local `_publish_governance_denied` alias) | the requested/effective `publication.provider` | 403 |
+| `api_artifact_publish` + its sharing/review siblings (`handlers/artifacts_parts/`: `publish_sharing.py`, with the comment, remote and update routes in `artifact_comments.py`, `remote_artifacts.py` and `create_update.py`, via the `_publish_governance_denied` alias in `handlers/artifacts_parts/route_plumbing.py`) | the requested/effective `publication.provider` | 403 |
 | `GET /api/publish-providers` (`apps/routes.py`) | `deploy-web-aws` | the row is omitted, so the button never renders |
 | `POST /api/deploy/deploy` (`deploy/handlers.py`) | `deploy-web-aws` | 403, audited `deploy/denied` |
 | `POST /api/deploy/pending/{id}/confirm` | `deploy-web-aws` | 403 BEFORE `claim_pending`, so a denied confirm does not consume the entry |
@@ -3682,7 +3682,8 @@ carve-out stay as code. It expects `CONTRACT_VERSION == 1` (pinned pre-launch).
   `read_policy_trust_root` (the side-effect-free trust-root reader).
 - `platform/update_governance.py` — the shared update seam (`resolve_remote_url`,
   `update_blocked_reason`, `update_required`, `min_version`) called by
-  `dashboard/handlers/updates.py`, `cli_server_update.py` and the gateway's update owners
+  the update handler owners (`dashboard/handlers/updates_verdict.py`, `updates_check.py`,
+  `updates_apply.py`), `cli_server_update.py` and the gateway's update owners
   (`slack/gateway_runtime/update_schedule.py`, `slack/gateway_runtime/update_apply.py`).
 - `platform/policy_distribution.py` — central distribution: source resolution
   (env ∘ the policy's `distribution` block), the append-only
@@ -3693,7 +3694,7 @@ carve-out stay as code. It expects `CONTRACT_VERSION == 1` (pinned pre-launch).
   `resolve_active_scope`, `governance_permits`, `governance_floor_ordinal`,
   `GOVERNANCE_ERROR_REASON` (the eval-error marker consumers match on),
   `vet_and_audit`.
-- `security/paths.py` — `_SENSITIVE_HOME_DIRS` keystone entries.
+- `security/paths_lists.py` — `_SENSITIVE_HOME_DIRS` keystone entries.
 - `security/denied_rules.py` — `pinned_builtin_command_ids` and `pinned_builtin_command_ids_for_snapshot`.
 - `agent_backend_governance.py` — the `agent_backend` scope: `SCOPE`,
   `narrow_selectable_backends` (the registry recompute, plus its host-bound,
@@ -3717,11 +3718,11 @@ carve-out stay as code. It expects `CONTRACT_VERSION == 1` (pinned pre-launch).
 - `dashboard/handlers_system.py` — `GET /api/governance/channels`.
 - `dashboard/handlers/security_governance_policy.py` — `GET /api/governance/policy`
   (posture-only serialization), served through `dashboard/handlers/security.py`.
-- chokepoints: `sandbox.py`, `mcp_cron.py`, `subagent_parts/agent_policy.py`, `mcp_core.py`,
+- chokepoints: `sandbox.py`, `mcp_cron_vet.py`, `subagent_parts/agent_policy.py`, `mcp_core.py`,
   plus the audit-only seam `computer_use/gate.py` (not a governance chokepoint:
   `require_computer_use` always proceeds and audits, and `apply_observation_ceiling`
   passes the payload through).
-- `cli_parser_admin.py` (its arguments), `cli.py` (dispatch) / `cli_commands.py` — the `policy` command.
+- `cli_parser_admin.py` (its arguments), `cli.py` (dispatch) / `cli_commands_security.py` — the `policy` command.
 
 ## Tests
 
@@ -3748,12 +3749,14 @@ degraded and fail-closed chokepoints), `test_governance_channels_endpoint.py`
 `test_governance_policy_viewer.py` (`/api/governance/policy` posture-only, incl.
 `test_detail_never_leaks_rule_contents` and `TestScopeAttribution` — that a
 host-profile pin is reported as surface-scoped, not install-wide),
-`test_governance_distribution.py` (the `distribution` block, the fetcher seam and
+`test_governance_distribution.py` and its `test_governance_distribution_*.py`
+siblings `_fetch_checks`, `_redaction`, `_publish`, `_cache_trust` and `_ladder`
+(the `distribution` block, the fetcher seam and
 its transport refusals, the cache and its repoint/staleness rules, the
 unavailable dispositions, the live-refresh reject-and-keep path — and the three
-controls on the cache itself — `TestAnExposedCacheIsStillReadOnly`,
-`TestTheCachePairIsWrittenUnderOneLock` and
-`TestAnUnverifiableSourceIsTreatedAsWritable`),
+controls on the cache itself — `TestAnExposedCacheIsStillReadOnly` and
+`TestTheCachePairIsWrittenUnderOneLock` in `_cache_trust`, and
+`TestAnUnverifiableSourceIsTreatedAsWritable` in `_fetch_checks`),
 `test_sandbox_mount_checked.py` (that all six launcher mounts, including the
 read-only bind and its sealing remount, refuse the spawn when they fail),
 `test_governance_updates.py` (the

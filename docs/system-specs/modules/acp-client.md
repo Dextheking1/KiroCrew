@@ -72,7 +72,7 @@ The class statement sets `__module__ = "kiro_crew.acp.client"`, so reprs, pickle
 the class's own code. The class keeps the three seed static methods that read the
 `AcpClient` global (`_settings_path_holds`, `_claim_pathname_if_ours`,
 `_restore_aside_without_clobber`) and `is_process_alive` (the pid-reader ratchet counts
-its name). `AcpRuntime` and `AcpSessionHandle` stay in their modules. `acp/client.py`
+its name). `AcpRuntime` stays in its module; `AcpSessionHandle`'s class home is below. `acp/client.py`
 keeps `_mise_which`, `_resolve_ssh_auth_sock` and `_resolve_spawn_env` (the spawn audit,
 the subprocess-encoding baseline and the cross-platform gate key them on this path) and
 the compatibility facade. The session start reads `_resolve_spawn_env` as a global of
@@ -80,7 +80,7 @@ its own module, which `acp/client.py` fills in right after defining it, because 
 owner never imports the facade; a patch through `kiro_crew.acp.client` reaches it
 through the mirror.
 
-`AcpSessionHandle`'s behaviour moves into `acp/session_handle_*.py` owner modules the
+`AcpSessionHandle`'s behaviour lives in `acp/session_handle_*.py` owner modules the
 same way, one responsibility each. A member's body is a module-level function there whose
 first parameter is `self` (annotated `AcpSessionHandle` for type checkers only), and the
 class binds it by name in one block above `__init__`, one comment header per owner. The
@@ -106,15 +106,29 @@ inventory, the binding, the reach and the import inventory.
 | Session-handle owner | Owns |
 |---|---|
 | `acp/session_handle_runtime_contract.py` | the contract between a handle and its runtime: the `AcpRuntimeError` family (`AcpRuntimeDead`, `AcpRequestTimeout`, ...) and `AcpRuntimeProtocol`, the interface the handle needs from `AcpRuntime` |
-| `acp/session_handle_watchdog.py` | the per-session stale/stall watchdog: `WatchdogSettings` and `_load_watchdog_settings`, the turn park clocks, the liveness-oracle consult, the WORKING deferral log and metric, and the stalled-tool end |
+| `acp/session_handle_watchdog.py` | the per-session stale/stall watchdog: `WatchdogSettings` and `_load_watchdog_settings`, the turn park clocks, the liveness-oracle consult, the WORKING deferral log and metric, the stalled-tool end and the input-wait status |
+| `acp/session_handle_mcp.py` | the session's MCP servers: the launch roster the liveness oracle attributes a tool by (`mcp_launch_roster`, `record_mcp_launches`), the init drain, the readiness wait, OAuth and sign-in offers, and the failed-server reattempt |
+| `acp/session_handle_kas.py` | what KAS speaks beyond ACP on a session: its hooks requests (list, session start, execute), the checkpoint rewind of an unanswered prompt (`discard_unanswered_prompt`), and its own session-update discriminants (mode, session info) |
+| `acp/session_handle_native_children.py` | harness-native child sessions (H16): the KAS sub-agent roster and child chunks, child-session bookkeeping, the resume refusal and the uncharged report |
+| `acp/session_handle_model_selection.py` | the session's model: the advertised list and its parsers (`parse_advertised_models`, `models_from_config_options`, ...), its storage with the session config and read-path revalidation, mode, model and effort selection through the backend's own verbs, and the served-default backfill |
+| `acp/session_handle_steering.py` | steering a live turn: `steer`, the codex steering-request protocol, settling abandoned answers, and the injected, proven and denied steer bookkeeping the dispatch loop reads |
 | `acp/session_handle_lifecycle.py` | the session outside its turn loop: awaited control requests and slash commands, cancel, death attribution, `destroy` and transcript cleanup |
 | `acp/session_handle_compaction.py` | compaction on every backend (`compact`, the KAS compaction verb, codex and claude inline compaction, `wait_for_compaction`) and the usage and metadata frames it is measured by |
+| `acp/session_handle_permissions.py` | permission requests and in-band refusals: the permission event, approve and reject, the spec-disabled deny and tripwire, the unidentifiable, unreadable and unretained MCP identity refusals, the reject audit (`_audit_handle_reject`) and session permission routing |
+| `acp/session_handle_updates.py` | `session/update` frames as `AcpEvent` values: tool calls and the per-tool-call caches they keep, child-tool frames and structured status frames |
 | `acp/session_handle_turn.py` | one turn end to end: `prompt`, `stream_command`, the per-turn reset and pre-turn drain in `_run_turn`, the abandoned-turn close and `wait_turn_done` |
+| `acp/session_handle_class.py` | the class statement: the constructor, the properties, the class default, the member table that binds every owner's members, and `_own_methods` |
 | `acp/session_handle_dispatch.py` | the per-turn event loop `_dispatch_events`: it reads the session queue, routes each frame and runs the in-band watchdog arm |
 
-The members no row above names, and the module-level code they read, are still defined in
-`acp/session_handle.py`. New `AcpSessionHandle` behaviour goes to the owner whose row names
-its responsibility, bound in the class under that owner's header.
+The class statement sets `__module__ = "kiro_crew.acp.session_handle"`, so reprs, pickles
+and `typing.get_type_hints` on the class name the facade, and `acp/session_handle.py`
+re-exports it: `kiro_crew.acp.session_handle.AcpSessionHandle` and
+`kiro_crew.acp.runtime.AcpSessionHandle` are the same class object, and a patch of a member on
+it reaches every caller. `inspect.getsource(AcpSessionHandle)` does not find the class through
+that module name; read a member's source, or `acp/session_handle_class.py`. `_own_methods`
+decorates the class there. `acp/session_handle.py` keeps only the compatibility facade. New
+`AcpSessionHandle` behaviour goes to the owner whose row names its responsibility, bound in the
+class (`acp/session_handle_class.py`) under that owner's header.
 
 New module-level code goes to the owner whose row above names its
 responsibility, not to `acp/client.py` or `acp/runtime.py`: stdio framing and
@@ -776,9 +790,14 @@ bounded prune, under the same lock and gates (lease scan, `_per_spawn_prune_due`
 spacing, time budget), so this home's now-unleased views leave the agents
 directory at once instead of waiting for the next spawn. The eager prune never
 queues behind this process's own in-process lock (a start holding it runs its
-own prune), and when the finalizer runs on an event-loop thread the lease release
-stays inline while the prune goes to a daemon thread, so no session start is
-stalled behind a file-lock wait. Pruning runs ONE bounded lease scan for the whole
+own prune), and when the end runs on an event-loop thread the lease release and
+the prune both go to a daemon thread, so no session start is stalled behind a
+file-lock wait. A finalizer the cyclic collector runs does none of that work on
+the collecting thread: the collector fires on whatever thread allocated, possibly
+inside a non-reentrant lock such as a `ThreadPoolExecutor.submit` lock the prune's
+own path checks need, so the end is only queued (`SimpleQueue`, safe inside a
+collection) for one daemon reaper thread started when the finalizer is armed. A
+`gc.callbacks` hook records which thread is collecting. Pruning runs ONE bounded lease scan for the whole
 run -- not one scan per candidate, which multiplied the candidate cap by the
 scan cap into a quadratic sweep under the held publication lock -- streaming lease
 records without materializing the directory and stopping at a fixed scan ceiling.
@@ -2186,7 +2205,7 @@ opposed to `spawn_run` / `spawn_sub_agents` tasks Kiro Crew manages
 
 | Backend | Identity | Tool events | Cancel | Resume | Counting / scheduler treatment |
 |---|---|---|---|---|---|
-| kiro-cli (`ACP_BACKEND_KIRO`) `use_subagent` | yes — `_kiro.dev/subagent/list_update` roster (`sessionId`, `status`), and child-routed `session/update` / `_kiro.dev/session/update` frames carry the child `sessionId` (`AcpEvent.sub_session_id`) | attributable: child frames are parsed with the shared parser into origin-scoped caches and re-tagged `EVENT_SUBAGENT_ACTIVITY`; child approvals surface on the PARENT with `sub_session_id` set (`run.py` counts them separately) | parent only — `session/cancel` on the parent session takes every child | none independent of the parent | not a task row. `AcpSessionHandle.native_child_sessions` counts child ids seen this turn through `_note_native_child` at three execution-layer seams — the child-routed branch of `_handle_update`, the `_kiro.dev/session/update` child stream in `_dispatch_events`, and the `subagent_list` roster when this handle is its sole owner (`fanout_no_owner` False; a fanned-out roster is counted on nobody) — never from model text. No `HostBudget` charge, because a child lives inside the parent's already-charged runtime process; `report_native_children(budget)` reports the count as `uncharged["native_children"]`. Recovery boundary = the parent session. A child-routed `kirocrew/status` is rejected (`child_origin`), never re-attributed |
+| kiro-cli (`ACP_BACKEND_KIRO`) `use_subagent` | yes — `_kiro.dev/subagent/list_update` roster (`sessionId`, `status`), and child-routed `session/update` / `_kiro.dev/session/update` frames carry the child `sessionId` (`AcpEvent.sub_session_id`) | attributable: child frames are parsed with the shared parser into origin-scoped caches and re-tagged `EVENT_SUBAGENT_ACTIVITY`; child approvals surface on the PARENT with `sub_session_id` set (`subagent_manager/run_turn.py` `_run_inner_impl` counts them separately) | parent only — `session/cancel` on the parent session takes every child | none independent of the parent | not a task row. `AcpSessionHandle.native_child_sessions` counts child ids seen this turn through `_note_native_child` at three execution-layer seams — the child-routed branch of `_handle_update`, the `_kiro.dev/session/update` child stream in `_dispatch_events`, and the `subagent_list` roster when this handle is its sole owner (`fanout_no_owner` False; a fanned-out roster is counted on nobody) — never from model text. No `HostBudget` charge, because a child lives inside the parent's already-charged runtime process; `report_native_children(budget)` reports the count as `uncharged["native_children"]`. Recovery boundary = the parent session. A child-routed `kirocrew/status` is rejected (`child_origin`), never re-attributed |
 | KAS (`ACP_BACKEND_KAS`) | yes — `_meta.kiro.agentSubtaskId` / `pipeline` on parent `tool_call` frames (`_handle_kas_subagent`), roster keyed by `agentSubtaskId` | child nested tool frames emit an activity prefix and populate the caches | parent only | none | same boundary as kiro-cli; every roster entry (individual `agent-subtask` frame or pipeline stage) is counted through the same `_note_native_child` seam |
 | Claude backend (`ACP_BACKEND_CLAUDE`) | no per-child ACP identity today — the Task tool is an ordinary `tool_call` on the parent | no | parent only | none | same boundary; the counter stays 0 because the harness exposes nothing to count, not because nothing runs. A declared capability gap (H16), not a defect: the liveness oracle bounds the parent turn identically (`test_claude_backend_counts_no_children_but_oracle_still_bounds_the_parent`) |
 | `spawn_run` / `spawn_sub_agents` (all backends) | task rows (`taskq`) | yes | per task | per task (continuable) | full scheduling. A `spawn_run` child that itself uses `use_subagent` is the boundary for ITS native grandchildren: they are counted on the child's handle only, never on the grandparent |
@@ -2803,6 +2822,24 @@ session-start timeout's progress and hide the servers that never reported for it
 Both holders are bounded (`_INIT_NOTIFICATION_BUFFER_LIMIT`) and claim by the
 session id inside the frame, so no frame can reach two sessions.
 
+**Session-open mount check.** A harness in `ACP_BACKENDS_SESSION_MCP_ARRAY` can drop
+an array element it cannot start and still create the session (goose 1.50.1,
+`goose/mcp-stdio-dropped-live.jsonl`). After `session/new` or `session/load` on
+such a harness, both composers (`AcpClient._start_mount_check` and
+`AcpRuntime._start_mount_check`) start `acp/mcp_mount_check.py` as a background
+task. It asks gatewayd's `session-mounts` frame, for up to `MOUNT_WINDOW_SECS`
+(30 s), which of the session's broker stubs registered under its stub token. A stub
+still absent when the window closes gets a WARNING line, an SEL event
+(`mcp_session_mount_missing`: backend, session id, server names; never the token,
+an env value or a command line) and a FAILED row on the report with
+`NOT_MOUNTED_REASON`. Nothing is recorded before the window closes, so a stub not
+seen yet reads as not reported, never as missing. A broker that cannot prove
+absence records nothing and logs at INFO: no socket, an older daemon, a ledger
+that began after this session opened or evicted this session's entry since, or more stubs than
+`MOUNT_SERVERS_CAP`. A session closed inside the window gets nothing. Only broker
+stubs are checked: an element the harness execs directly never reaches the
+broker. `test_acp_mcp_mount_check.py` pins it.
+
 **What the progress suffix counts, and says it counts.** The roster
 `_mcp_init_progress` (and the dedicated client's `_mcp_timeout_progress`) reports
 against is the `mcpServers` array the session put ON THE WIRE — on kiro-cli the
@@ -2891,8 +2928,8 @@ adopted session receives the init frames staged both before and during the
 collector window and none of them is counted as a dropped frame; a settled
 collector (torn down, abandoned or runtime-dead) keeps none and the next start's
 timeout names its own silent servers; two live collectors never claim each
-other's frames; `run.py` never calls `get_or_create` on congestion and continues
-on an adopted late session.
+other's frames; `subagent_manager/run_turn.py` never calls `get_or_create` on
+congestion and continues on a session `subagent_manager/run_start.py` adopted late.
 
 **Adaptive-controller sample.** Every `session/new` outcome is one `AdaptiveController.record_start(duration_ms, ok, attributable_timeout, key="acp:session/new")` when a controller is registered (`adaptive.controller.current()`; a no-op otherwise): duration is measured from gate EXIT (the queue wait is admission's cost), `ok=True` on an answer, `ok=False, attributable_timeout=True` on `AcpRequestTimeout` (the congestion signal the controller's decrease keys on), `ok=False` on any other failure. `test_runloop_integration.py` pins the three shapes.
 

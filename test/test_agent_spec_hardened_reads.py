@@ -1109,7 +1109,7 @@ _EXPECTED_CALL_SITE_LABELS: dict[str, list[tuple[str, str]]] = {
         ("api_agent_template_delete", "dashboard"),
         ("api_agent_template_delete", "dashboard"),
     ],
-    "kiro_crew/dashboard/handlers/hooks.py": [("api_kiro_hooks", "dashboard")],
+    "kiro_crew/dashboard/handlers/hooks_scripts.py": [("api_kiro_hooks", "dashboard")],
     # One read: the configured-server mint resolves the server's URL from the
     # owner's main spec, so the caller never supplies it.
     "kiro_crew/dashboard/handlers/connections.py": [("connections_mint", "dashboard")],
@@ -1133,7 +1133,7 @@ _EXPECTED_CALL_SITE_LABELS: dict[str, list[tuple[str, str]]] = {
         ("side_readonly_spec", "dashboard"),
         ("side_readonly_spec", "dashboard"),
     ],
-    "kiro_crew/mcp_discovery.py": [("mcp_discovery_agent_config", "unknown")],
+    "kiro_crew/mcp_discovery_config.py": [("mcp_discovery_agent_config", "unknown")],
     # The installed spec as an OAuth discovery trust anchor; any chat interface
     # can raise the banner that triggers it.
     "kiro_crew/mcp_oauth_discovery.py": [("mcp_oauth_discovery", "unknown")],

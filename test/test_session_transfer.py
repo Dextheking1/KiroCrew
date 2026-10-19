@@ -1264,7 +1264,10 @@ def test_importer_never_answers_404_or_405():
 
     import kiro_crew.dashboard.session_transfer as st
 
-    source = Path(st.__file__).read_text(encoding="utf-8")
+    source = "".join(
+        Path(st.__file__).with_name(f"session_transfer{part}.py").read_text(encoding="utf-8")
+        for part in ("", "_staging", "_layers", "_intake", "_install")
+    )
     assert "status=404" not in source
     assert "status=405" not in source
 
@@ -3777,13 +3780,21 @@ def test_import_never_reads_the_whole_body_into_memory():
 
     import kiro_crew.dashboard.session_transfer as st
 
-    tree = ast.parse(_Path(st.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(
+        "\n".join(
+            _Path(st.__file__).with_name(f"session_transfer{part}.py").read_text(encoding="utf-8")
+            for part in ("", "_intake", "_install")
+        )
+    )
+    guarded = {"_read_bundle_body", "_stream_request_to_file", "_install_arrived_bundle"}
     targets = {
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
-        and node.name in {"_read_bundle_body", "_stream_request_to_file", "_install_arrived_bundle"}
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in guarded
     }
+    # Every guarded handler must be found, or the loop below inspects nothing and
+    # the guard passes whatever the arrival path does.
+    assert {fn.name for fn in targets} == guarded, sorted(guarded - {fn.name for fn in targets})
     banned = {"read", "post", "json"}
     offenders = []
     for fn in targets:
@@ -6287,7 +6298,7 @@ def test_a_symlinked_staging_dir_is_never_swept(monkeypatch, tmp_path):
 def test_staging_helpers_sweep_orphans_on_first_use(monkeypatch, tmp_path, helper, leaf):
     import importlib.util
 
-    from kiro_crew.dashboard import session_transfer as patched
+    from kiro_crew.dashboard import session_transfer_staging as patched
 
     # The autouse isolation fixture replaces both helpers on the imported module,
     # so load a private copy whose helpers are the real ones.

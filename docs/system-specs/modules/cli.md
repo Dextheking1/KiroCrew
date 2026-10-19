@@ -42,6 +42,43 @@ owner imports `kiro_crew.cli` or another owner, the owners log as `kiro_crew.cli
 and the facade declares no exclusion. `test/test_cli_split_facade.py` pins the
 contract.
 
+### `cli_commands.py` and its owners
+
+`main()` takes the handlers of `cron`, `spawn`, `learn`, `artifact`, `memory`, `app`,
+`eval`, `security`, `policy`, `tailnet`, `telemetry`, `secrets`, `pod`, `agent` and
+`workspace`, and the `mcp-<app>` server of a built-in app, from
+`kiro_crew/cli_commands.py`, through a function-local import (see
+[Import Weight Contract](#import-weight-contract)). That module keeps the `tailnet`,
+`telemetry`, `secrets` and `pod` handlers and the config-shape guards `tailnet` runs
+first. Each of the others lives in a `cli_commands_<command>.py` module beside it, and
+new work for one of those commands goes to its module:
+
+| Module | Owns |
+|---|---|
+| `cli_commands_workspace.py` | `workspace`, and `_locked_config_write`, the locked `config.json` write that `workspace` and `agent delete` share |
+| `cli_commands_memory.py` | `memory`, and `_finding_store_suffix`, the named-store label `security audit` prints too |
+| `cli_commands_gateway_api.py` | `spawn` and `artifact`, which call the running gateway's internal API with the local secret |
+| `cli_commands_app.py` | `app` |
+| `cli_commands_agent.py` | `agent` |
+| `cli_commands_cron.py` | `cron` |
+| `cli_commands_security.py` | `security` and `policy` |
+| `cli_commands_eval.py` | `eval` |
+| `cli_commands_learn.py` | `learn` |
+
+`kiro_crew.cli_commands` is a mirror facade (`kiro_crew._facade_mirror`) over those
+nine owners, lowest layer first in the order of the table. It keeps its whole import
+block, so every name it held before the split still resolves as
+`kiro_crew.cli_commands.<name>` and is the same object, and a patch through it reaches
+every owner that binds the name. An owner never imports the facade, and imports
+another owner only from a row above its own: `agent` takes the locked write from
+`workspace`, and `security` takes `_finding_store_suffix` from `memory`. The moved
+handlers log as `kiro_crew.cli_commands`, `_CliConflict` keeps that module name, and
+the facade declares no exclusion. `test/test_cli_commands_split_facade.py` pins the
+contract and freezes the facade's import block, so a new import goes in the owner that
+reads it. A new command's handler goes in a new `cli_commands_<command>.py` owner, added
+to the facade's `_OWNERS`, to `OWNERS` in that test and to `_BANNED_AFTER_CLI_IMPORT` in
+`test/test_cli_lazy_imports.py`.
+
 `kiro_crew/cli_server.py` holds the server-lifecycle commands `main()` dispatches to. It
 keeps `file-delivery approve`, `status`, `gateway`, `run`, `service`, `sandbox` and `logs`;
 the gateway peer proof, the owner requests (`token`, `logout`, `update approve`), `stop`,
@@ -114,7 +151,7 @@ present in `sys.modules`, and every deferred dispatch import must resolve.
 Bare `kirocrew --version` (exactly one argv entry) is answered by pre-dispatch
 fast-path guards — `_bootstrap.main` (which then skips importing `cli` on the
 console-script path) and `__main__` (same for the `python -m` path, which also
-covers the desktop launchers) — printing `kirocrew <version>` and exiting 0.
+covers the desktop launchers) — printing `kiro_crew.version_line()` and exiting 0.
 It is the one invocation that never reaches `cli.main()`: no platform boot, no
 sandbox hygiene, no project-dir resolution, no logging or data-home setup, and
 no editable-install self-heal (a broken checkout answers `--version` instead
@@ -561,7 +598,7 @@ module outside the snapshot family imports an owner.
 | `kirocrew mcp-cron` | MCP server for cron tools (spawned by kiro-cli) |
 | `kirocrew mcp-core` | MCP server for spawn, learn, task tools (spawned by kiro-cli) |
 | `kirocrew mcp-computer` | MCP server for computer-use tools (spawned by kiro-cli; hidden — registered with no `help`, so it is in neither listing). A **thin shim** — it forwards to the gateway over loopback and does no accessibility work itself. |
-| `kirocrew --version` | Print version |
+| `kirocrew --version` | Print version. Every entry (both fast paths and argparse) prints `kiro_crew.version_line()`: `kirocrew <version>`, followed by `(source checkout, not a release build)` when the package resolves inside `<repo>/src/kiro_crew` (a `setup.cfg` two levels up) and carries no `BUILD_VERSION` stamp. There the number is the tree's own literal, which no release lane rewrote, so the note travels with it into a pasted bug report. |
 
 ## Token Command Output Streams
 
@@ -1327,7 +1364,7 @@ order is the one `test_cli_doctor_refactor_report.py` freezes.
 5. Config values (provider, model, approval mode, dashboard port)
 6. **MCP tools**: `@kirocrew-cron` and `@kirocrew-core` in `tools`, `allowedTools`, and `mcpServers` — auto-fixes missing entries, except from an instance that must not own the shared agent home (`_decline_shared_agent_home`), which writes nothing and reports the skipped repairs and any ceiling-forbidden grant as issues
 7. **Python environment**: verifies the running interpreter (the venv interpreter for a `pip install -e .` install) and that the gateway's core dependencies (`websockets`, `slack_sdk`, `aiohttp`) import; the supported interpreter floor is `pyproject.toml`'s `requires-python`. Every install command this step prints names the RUNNING interpreter and is gated the same way as step 8's (`extras.pip_install_command_for` behind `extras.pip_install_channel_available`), because each one is for a module this process imports, so a bare `pip` can resolve to an interpreter the gateway never imports from. The `sqlite fts5` remedy is the one place the gate hides only part of the message: the pip command is withheld where it cannot run, while "use a Python whose SQLite was built with FTS5" always prints, since that is the only remaining fix in exactly those environments. The `import path` row reports whether the standard library resolves from the interpreter's own tree: `stdlib_shadow.find_shadowed_stdlib()` locates each probed stdlib name with `find_spec` (never an import) and reports one that a launch-directory, `PYTHONPATH` or site-packages entry supplied — a `~/concurrent/` directory in the home the service unit runs from, an unpacked backport on `PYTHONPATH`, a stdlib-named pip package. A shadow IS an issue and names the module, the resolved file and the `sys.path` entry with its class, because the failure it otherwise produces is a `TypeError` from deep inside asyncio with nothing pointing at the directory. The same probe runs at both process entries (`python -m kiro_crew` and the `kirocrew` console script) BEFORE the CLI is imported and refuses to start with exit 2 on a shadow, so doctor normally reaches this row only clean; the row then says whether the launch entry is on `sys.path` at all (`-P` / `PYTHONSAFEPATH` keeps it off, and every bundled launcher passes `-P`), which is the note that tells an operator why the same stray directory is harmless from one cwd and fatal from another. Detection is fail-closed towards "not shadowed": an entry the classifier does not recognise as one of those three roots is never reported, so an unusual layout can only escape the check, never be refused by it. The `tz data` row reads the timezone rules behaviourally, because a system zoneinfo tree exposes no version the stdlib can read: it resolves America/Vancouver with `ZoneInfo.no_cache` at a December 2026 instant, where IANA tzdb 2026b and later give UTC-7 and older data gives UTC-8. Older data is an issue (cron expressions and clock-time `at_time` values in that zone resolve an hour late, and nothing else notices, since every zone name still resolves); missing data is an issue too. The remedy names the data source in use: a zone file on `zoneinfo.TZPATH` means the operating system's timezone package, otherwise the `tzdata` Python package (`setup.cfg` declares `tzdata>=2026.2` on Windows, the first release built from 2026b), and it ends with a gateway restart because a running gateway keeps every zone it already loaded
-8. **Vector memory (in-process embeddings)**: vendored llama-cpp-python runtime importable, embedding model file present (downloads in background on gateway start; when absent, a light HTTPS-reachability probe of the resolved model URL runs); embeddings are always-on (`embeddings:  ✅ always-on`). On platforms with no vendored native libs (`_platform_libs_dirname()` returns None, e.g. linux/armv7l or win32/arm64 — Intel Macs are supported via `macos_x86_64`), the runtime line reports `⏹ unsupported platform … — memory uses keyword search` and is NOT counted as an issue (designed degradation per `embeddings.py`); only a load failure on a supported platform flags `embedding runtime`. When that failure is an INCOMPLETE shipped payload, doctor additionally names the absent files (`Missing native libs for <platform>: …`, from `embeddings.verify_vendored_libs()`) and says it is a packaging defect rather than an unsupported platform — the two are indistinguishable in ctypes' own `Shared library with base name 'llama' not found`, which reads as an architecture problem and misdirects diagnosis. When `LLAMA_CPP_LIB_PATH` holds an operator override (`embeddings.operator_lib_path_override()` — set, non-empty, and not shaped like a Kiro Crew install's bundled directory), doctor reports THAT directory as the thing to check instead (mirroring the loader's exemption): the libs load from there, so blaming the bundled tree would send the operator to reinstall a package they are deliberately not loading from. A bundled-shaped value is one inherited from another Kiro Crew process, so the entry prelude removes and records it before any thread or child exists. Doctor reports the bundled tree and adds a `lib path:` note naming the value (likewise for an empty value) with the remedy "point it at a directory of your own" — a note, never an issue. It reads the live environment first and falls back to `dropped_inherited_lib_path()` when the prelude has already removed the variable; a process that skips the prelude leaves the value in the environment, where the loader ignores it without writing the environment. A `faiss:` line reports whether the optional FAISS accelerator is importable — never an issue on any platform (episodic recall falls back to the stdlib cosine scan); when absent it suggests installing `faiss-cpu` and prints an `Install:` line naming the RUNNING interpreter (`extras.pip_install_command_for`), because a bare `pip` on a packaged or minimal install resolves to an interpreter the gateway never imports from, so the wheel lands out of reach and the next run repeats the same advice. That line is printed only where the command can actually run (`extras.pip_install_channel_available`, shared with the dashboard's install card): on the bundled desktop interpreter, on an interpreter with no `pip` module, and on a PEP 668 externally-managed interpreter outside a venv, doctor names no command at all, because a pip install into the code-signed bundle breaks later launches and is discarded on the next app update
+8. **Vector memory (in-process embeddings)**: vendored llama-cpp-python runtime importable, embedding model file present (downloads in background on gateway start; when absent, a light HTTPS-reachability probe of the resolved model URL runs); embeddings are always-on (`embeddings:  ✅ always-on`). On platforms with no vendored native libs (`_platform_libs_dirname()` returns None, e.g. linux/armv7l or win32/arm64 — Intel Macs are supported via `macos_x86_64`), the runtime line reports `⏹ unsupported platform … — memory uses keyword search` and is NOT counted as an issue (designed degradation per `embeddings_native.py`); only a load failure on a supported platform flags `embedding runtime`. When that failure is an INCOMPLETE shipped payload, doctor additionally names the absent files (`Missing native libs for <platform>: …`, from `embeddings.verify_vendored_libs()`) and says it is a packaging defect rather than an unsupported platform — the two are indistinguishable in ctypes' own `Shared library with base name 'llama' not found`, which reads as an architecture problem and misdirects diagnosis. When `LLAMA_CPP_LIB_PATH` holds an operator override (`embeddings.operator_lib_path_override()` — set, non-empty, and not shaped like a Kiro Crew install's bundled directory), doctor reports THAT directory as the thing to check instead (mirroring the loader's exemption): the libs load from there, so blaming the bundled tree would send the operator to reinstall a package they are deliberately not loading from. A bundled-shaped value is one inherited from another Kiro Crew process, so the entry prelude removes and records it before any thread or child exists. Doctor reports the bundled tree and adds a `lib path:` note naming the value (likewise for an empty value) with the remedy "point it at a directory of your own" — a note, never an issue. It reads the live environment first and falls back to `dropped_inherited_lib_path()` when the prelude has already removed the variable; a process that skips the prelude leaves the value in the environment, where the loader ignores it without writing the environment. A `faiss:` line reports whether the optional FAISS accelerator is importable — never an issue on any platform (episodic recall falls back to the stdlib cosine scan); when absent it suggests installing `faiss-cpu` and prints an `Install:` line naming the RUNNING interpreter (`extras.pip_install_command_for`), because a bare `pip` on a packaged or minimal install resolves to an interpreter the gateway never imports from, so the wheel lands out of reach and the next run repeats the same advice. That line is printed only where the command can actually run (`extras.pip_install_channel_available`, shared with the dashboard's install card): on the bundled desktop interpreter, on an interpreter with no `pip` module, and on a PEP 668 externally-managed interpreter outside a venv, doctor names no command at all, because a pip install into the code-signed bundle breaks later launches and is discarded on the next app update
 9. **Speech-to-Text (optional)**: recognizer, selected model and audio-decoder presence when STT is enabled. Supported desktop releases bundle and build-gate the recognizer plus the pinned `imageio-ffmpeg` executable; a missing decoder there is a corrupt payload whose remedy is reinstalling Kiro Crew, never Homebrew/Winget/Apt. The macOS Intel release bundles no decoder, so `stt.decoder.bundle_carries_decoder()` is false there and doctor prints the `brew install ffmpeg` hint a source install gets. Source installs use `kirocrew[voice]` for the recognizer and a fixed system FFmpeg path for compressed audio. Windows preserves its non-fatal `⚠️` marker for an optional-extra gap so enabled-by-default STT cannot block gateway startup; on macOS/Linux a missing active runtime still flags an issue.
 10. Slack credentials (optional)
 11. **Discord (optional)**: the channel's enabled flag, whether a bot token is present (never any part of its value), the three allow-lists, the privileged Message Content intent, the live connection, and the install URL. Blocking issues are enabled-without-a-token, an empty `discord.allowed_user_ids` (the transport fails closed, so every message is denied while it is empty), a thread or channel allow-list with Message Content OFF, and a reachable gateway whose Discord connection recorded a `connect_error`. The intent state comes from `discord/intent_probe.py`: one read-only `GET /oauth2/applications/@me` that decodes Discord's application-flags bitfield as a tri-state per intent PAIR (`enabled` / `limited` / `disabled`, since a limited grant still delivers the data) and degrades to `unknown` on any failure rather than aborting the report. Granted-but-unused Server Members / Presence intents are hardening notes, never issues. The install URL comes from `discord/install_url.py`, the OAuth-authorize analogue of Slack's app manifest: named permission bits OR'd to `309237711936` for a thread-capable install (the number [`discord-integration.md`](../../../src/kiro_crew/docs/discord-integration.md) publishes), and none at all for the recommended DM-only install
@@ -1610,7 +1647,7 @@ API fallback reports its no-target diagnostic, and the badge poke prints its
 fallback line. This fails closed and ends at the next gateway restart.
 
 **Out of scope.** The same value is also the gateway's `X-Internal-Secret`.
-Other senders of it do not yet use this proof: `cli_commands.py` spawn,
+Other senders of it do not yet use this proof: `cli_commands_gateway_api.py` spawn,
 spawn-run and spawn poll, `_artifact`, the no-socket arm of
 `_file_delivery_approve`, `pod/runtime_client.py`'s Windows mint and
 `app_lifecycle_client.py`. Those are tracked as follow-ups.
@@ -1623,8 +1660,9 @@ spawn-run and spawn poll, `_artifact`, the no-socket arm of
 and `restart` use, so the answer does not depend on the listener socket: it
 names a draining gateway that has released its socket but still holds the lock.
 The desktop app runs it during liveness and adopt-time drain recovery when its
-socket lookup names no incumbent (see `website/electron/gateway-supervisor.js`,
-`probeLockHolderPid`). It sends no signal, starts nothing and takes no lock.
+socket lookup names no incumbent (see
+`website/electron/runtime/gateway/home-lock.js`, `probeLockHolderPid`). It
+sends no signal, starts nothing and takes no lock.
 
 | stdout | exit | meaning | desktop verdict |
 |---|---|---|---|

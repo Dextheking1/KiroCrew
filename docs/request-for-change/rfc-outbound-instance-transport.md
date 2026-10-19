@@ -102,7 +102,7 @@ This RFC is small because it changes one layer and leaves four contracts alone.
 
 - **`proxy_request` stays the only way to talk to a peer.** Its callers
   (`api_instances_proxy` and `read_peer_slots`, both in
-  `src/kiro_crew/dashboard/handlers_instances.py`) are not touched.
+  `src/kiro_crew/dashboard/handlers_instances_peer.py`) are not touched.
 - **The peer's own token auth stays the authorisation boundary.** An outbound
   transport does not introduce a second way to be authorised to a dashboard; it
   changes only how the token is obtained.
@@ -454,7 +454,7 @@ writable through the same surface it constrains is not a control. The two files
 are already in different protection classes, and the asymmetry is what makes the
 placement work rather than a preference:
 `~/.kiro/crew/config.json` is listed in the write-protected home paths
-(`src/kiro_crew/security/paths.py`), so the agent's file-edit tool cannot modify
+(`src/kiro_crew/security/paths_lists.py`), so the agent's file-edit tool cannot modify
 it; `~/.kiro/crew/instances.json`, which holds the records and therefore
 `hub_url`, appears in no security path at all and is agent-writable by design —
 registering a crew is ordinary agent work. Putting `allowed_methods` and the hub

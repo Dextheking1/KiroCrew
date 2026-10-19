@@ -8,6 +8,7 @@ descriptor-bound workspace binding.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import stat
 import sys
@@ -908,3 +909,60 @@ class TestBuildSeatbeltProfile:
         profile = _build_seatbelt_profile("strict")
         assert "(deny file-link " in profile
         assert "file-link*" not in profile
+
+
+class TestDirectoryAncestorIdentities:
+    """The descriptor-walking ancestry probe must not leak file descriptors.
+
+    Each ``..`` descriptor it opens is unowned until the ``current = parent``
+    handoff. A fault in the window before that handoff (an ``os.fstat`` on the
+    freshly opened parent) must still close the parent, or its descriptor leaks
+    for the process lifetime.
+    """
+
+    def test_parent_descriptor_closed_when_fstat_raises(self, monkeypatch, tmp_path):
+        """An ``os.fstat`` fault on a freshly opened parent closes that parent."""
+        start_fd = sandbox_mod._open_directory_descriptor(tmp_path)
+        try:
+            opened: list[int] = []
+            closed: list[int] = []
+
+            real_open = sandbox_mod._open_directory_descriptor
+
+            def tracking_open(path, **kwargs):
+                fd = real_open(path, **kwargs)
+                opened.append(fd)
+                return fd
+
+            real_fstat = os.fstat
+
+            def exploding_fstat(fd):
+                # Let the walk read its starting descriptor normally, then fail
+                # on the first parent it opens -- the leak window under test.
+                if opened and fd == opened[-1]:
+                    raise OSError(errno.EIO, "injected fstat failure")
+                return real_fstat(fd)
+
+            real_close = os.close
+
+            def tracking_close(fd):
+                closed.append(fd)
+                return real_close(fd)
+
+            # Patched through the facade: it fans the name out to every owner
+            # module that binds it (sandbox_workspace and sandbox_rlimit).
+            monkeypatch.setattr(sandbox_mod, "_open_directory_descriptor", tracking_open)
+            monkeypatch.setattr(sandbox_mod.os, "fstat", exploding_fstat)
+            monkeypatch.setattr(sandbox_mod.os, "close", tracking_close)
+
+            with pytest.raises(OSError):
+                sandbox_mod._directory_ancestor_identities(start_fd)
+
+            # The one parent descriptor that was opened must have been closed,
+            # even though fstat raised before the ownership handoff.
+            assert opened, "the walk never opened a parent descriptor"
+            assert set(opened).issubset(
+                set(closed)
+            ), f"leaked descriptor(s): opened={opened} closed={closed}"
+        finally:
+            os.close(start_fd)

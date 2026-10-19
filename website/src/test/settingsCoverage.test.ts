@@ -66,6 +66,7 @@ function readPanel(file: string): string {
  * an unlisted file fails, so the choice is always conscious.
  */
 const UNMAPPED_PANELS: Record<string, string> = {
+  'KiroHarnessFallbackNote.tsx': 'informational note ChatPanel mounts above the fallback pickers on a Kiro harness, zero controls',
   'BrowserInstallStatus.tsx': 'read-only install progress region BrowserPanel mounts above its sections, zero controls',
   'ChannelDisabledPanel.tsx': 'informational placeholder (locked/loading/error states), zero controls',
   'ChannelFolderBackfill.tsx': 'one action button shared by the channel panels; files existing conversations into the folder the OWNING panel configures, and holds no setting of its own',
@@ -88,6 +89,7 @@ const UNMAPPED_PANELS: Record<string, string> = {
   'ReleasesPanel.tsx': 'read-only changelog viewer, zero persistent settings',
   'ReportProblemCard.tsx': 'feedback action card, no settings',
   'SettingsSearch.tsx': 'the settings search box itself — indexing it would be self-referential',
+  'SttRetentionNote.tsx': "read-only \"Is my audio kept?\" line under SttSettings' provider picker; an info tip and a docs link, zero controls",
   'ThemeDroppedRulesNotice.tsx': 'informational notice, zero controls',
   'TranslucentPanelsPreview.tsx': 'aria-hidden illustration under the Translucent panels switch (registry id display.translucent-panels, on DisplayPanel); it holds no control of its own',
   'WebhooksPanel.tsx': 'status summary card; the real controls live on the /webhooks page',

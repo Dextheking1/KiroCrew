@@ -9,8 +9,8 @@ for the helper, not the stdlib call, even in code you believe only runs on POSIX
 import alone is enough to break a Windows install, and the failure lands at import time
 in a module a Windows user cannot avoid.
 
-`platform_compat` is the import and patch surface for every helper below; most of them
-are defined in owner modules beside it. Import and patch every one as
+`platform_compat` is the import and patch surface for every helper below; each of them
+is defined in an owner module beside it. Import and patch every one as
 `platform_compat.<name>`, and put new code for a family in the module that owns it.
 
 - The cross-process file locks (`file_lock`, `flock_exclusive`, `acquire_lock` /
@@ -31,10 +31,18 @@ are defined in owner modules beside it. Import and patch every one as
     CPU time and footprint, its children and group members, and who holds a file or
     its `flock`;
   - `platform_compat_runtime`: the UTF-8 environment and console, the re-exec and exit
-    seams, the process alarm and the boot and awake clocks, the desktop bundle's
+    seams, the process alarm and the boot and awake clocks, the open-file limit,
+    `strftime`, interpreter discovery and the launcher hops, the desktop bundle's
     interpreter, the isolated argv a Python child is spawned with, and Windows on Arm;
-  - `platform_compat_files`: the no-replace rename and directory publication, and the
-    macOS TCC folders a home-rooted walk prunes;
+  - `platform_compat_links`: links and junctions, the first linked ancestor of a path,
+    the extended-length prefix folded off a path before a containment comparison, the
+    pinned directory that acts on its entries through its descriptor, and the opens that
+    never follow a link at the final name;
+  - `platform_compat_files`: permission changes that never raise, a tree removal that
+    defeats Windows read-only files, the no-replace rename and directory publication, a
+    path's mount identity, the log-tail and lock-sweep opens, owner access restored to
+    every directory of a copied tree, the macOS TCC folders a home-rooted walk prunes,
+    and the remote-volume, executable-file and read-only checks;
   - `platform_compat_trust`: system binaries resolved only from fixed directories, the
     environment allowlist, the Windows Known Folders and short names, whether another
     account can write a path, and launching the file manager or a default app;
@@ -49,28 +57,25 @@ are defined in owner modules beside it. Import and patch every one as
   - `platform_compat_descendants`: a process's descendants, walked from one snapshot of
     the parent map, with the bounds that keep a Windows Toolhelp snapshot finite;
   - `platform_compat_winproc`: exact Windows process handles, asyncio's handle
-    duplicated for a tree anchor, the handles of a tree's descendants and closing a
-    handle;
+    duplicated for a tree anchor, the handles of a tree's descendants, closing a
+    handle, and the Job object and main-thread resume a suspended child is bounded and
+    started with;
   - `platform_compat_wintree`: the Windows process trees the gateway owns: the cleanup
-    reservation, the owned spawn, terminating an exact handle and the drains that
-    retire a tree;
+    reservation, the owned spawn and its capture, the pending check, terminating an
+    exact handle and the drains that retire a tree;
   - `platform_compat_kill`: ending processes: a pid, a group or a tree, the pinned
     variants, kill-and-reap and terminate-and-reap. It holds every public kill or reap
     helper and every call to `os.killpg`, `kill_pid` or `kill_process_tree` (pinned
     or not) in the family, the signal-0 group probe `pgroup_exists` included, because
-    `test/test_kill_chokepoint_ratchet.py` exempts that one file.
+    `test/test_kill_chokepoint_ratchet.py` exempts that one file;
+  - `platform_compat_metrics`: resident and peak memory, heap trimming and the malloc
+    arena cap, open descriptors, CPU time, process-subtree samples, and the host's
+    memory, CPU load and memory pressure.
 
   No carved module imports the facade. The facade installs `kiro_crew._facade_mirror`,
   so a write through it (`monkeypatch.setattr`, `mock.patch`) lands on every carved
   module that binds the same object, as it landed on the one module before the carve.
   Each of them that logs does so as `kiro_crew.platform_compat`.
-- Still defined in `platform_compat` itself: the file-permission, link, pinned-directory
-  and no-reparse helpers, the log-tail and lock-sweep opens, the remote-volume,
-  executable-file, read-only and owner-directory checks, interpreter discovery and the
-  launcher hops, the process and host metrics, `strftime`, the open-file limit, the
-  Windows Job object and main-thread resume, and the Windows tree pending check and
-  owned-spawn capture (`windows_tree_cleanup_pending`,
-  `_create_windows_subprocess_owned`).
 
 The Cross-Platform Portability gate excludes `platform_compat.py` and the
 `platform_compat_*.py` owners by name: they hold the POSIX primitives this layer exists
@@ -125,6 +130,7 @@ produces exactly those silent failures, which is why the helper is named per cal
 | Spawn isolation | `start_new_session=IS_POSIX` + `creationflags=CREATE_NEW_PROCESS_GROUP` | bare `start_new_session=True` |
 | Spawn a console helper from the windowless gateway | `creationflags=_SUBPROCESS_NO_WINDOW` (`CREATE_NO_WINDOW` on Windows, `0` on POSIX) | no flag (each helper flashes a console window) |
 | Walk a tree without leaving it | skip entries where `lstat_is_name_surrogate(info)` is true (Windows junctions and other name-surrogate reparse points); remove a tree in a sweep with `rmtree_force(path)` | `S_ISDIR` alone on an `lstat` result (it reports a junction as a plain directory and walks into the target) |
+| Tell two mounts of one directory apart (a bind mount shares its source's device and inode) | `mount_identity(path, dir_fd=)` -> `(mount id, device major, device minor, inode)` through `statx(STATX_MNT_ID)`, following symlinks and `/proc` magic links; with `dir_fd` and an empty path it names the descriptor. `None` off Linux, before Linux 5.8, or on any failure. Reached through `syscall()` where glibc has no `statx` wrapper, as `rename_noreplace` is | `os.stat` alone, which reports a bind and its source as one directory |
 | Remove a tree git produced (a clone, a `--local` clone, a directory with a `.git`) | `rmtree_force(path)` from a thread, or `_rmtree_force_settled(path)` where a cancelled caller must not leave the delete running (`registry_pipeline`). It clears the read-only bit on a file Windows refuses to unlink and retries once, never raises, and returns whether the path is gone, so a caller that restores something into the same path checks the answer. A tree that survives (a file another process holds open) is set aside, not collided with: `_restore_moved_aside` renames it to a `.partial-*` sibling before the restore | `shutil.rmtree(path, ignore_errors=True)` (git writes `.git/objects/pack/*` read-only; Windows refuses the unlink, `ignore_errors` swallows it, and the tree stays on disk while the caller reports success). Keep `ignore_errors=True` only where the tree holds nothing git wrote: a copy that drops `.git` (`manager._COPY_IGNORE`), a scratch or staging directory, or a linked worktree whose `.git` is a file. `test/test_git_tree_removal_windows.py` pins every site that removes a git tree |
 | Resolve a path for a containment check | `resolve(strict=True)`, handling `FileNotFoundError` on its own and failing closed on any other error | non-strict `Path.resolve()` (on Windows it collapses a self-pointing reparse point lexically without raising, so the loop passes as contained) |
 | Wait on a subprocess PIPE with a deadline | a daemon reader thread feeding a `queue.Queue`, consumed with a bounded `get` (`testing/harness.py`'s `_StdoutPump`) | `selectors.DefaultSelector()` on the pipe (select()-based on Windows, which accepts SOCKETS only, so registering a pipe RAISES there) |

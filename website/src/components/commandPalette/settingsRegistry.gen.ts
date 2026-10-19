@@ -2705,7 +2705,7 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "id": "voice.provider",
     "label": "Provider",
     "labelKey": "pages.settings.sttSettings.provider",
-    "hint": "Local speech recognition runs on this machine and sends nothing anywhere. Transcribe uploads your audio to AWS.",
+    "hint": "Local speech recognition runs on this machine and sends nothing anywhere. Transcribe streams your audio to AWS.",
     "tab": "voice",
     "type": "select",
     "occurrence": 1,
@@ -2720,6 +2720,16 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "type": "select",
     "occurrence": 2,
     "settingId": "voice.provider-2"
+  },
+  {
+    "id": "voice.send-when-i-stop-recording",
+    "label": "Send when I stop recording",
+    "labelKey": "pages.settings.sttSettings.submit_on_release",
+    "hint": "Stopping sends the message. Hold Shift, or slide sideways on the phone, to keep a draft.",
+    "tab": "voice",
+    "type": "toggle",
+    "occurrence": 1,
+    "configKey": "stt.submit_on_release"
   },
   {
     "id": "voice.shortcut-key",

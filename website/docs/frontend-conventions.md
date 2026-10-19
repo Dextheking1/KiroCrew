@@ -667,6 +667,26 @@ connection and peer owners) as arguments and never imports the facade; outside
 `src/hooks/websocket/` only the facade imports an owner, and owners import each
 other only along the edges `src/test/useWebSocket.ownership.test.ts` lists.
 
+`src/types/index.ts` is the one import path for the shared types it serves, most
+of them the shapes of REST and `/api/ws` payloads. That file declares nothing. It
+re-exports each owner below with an explicit `export type { … } from` list
+(`isolatedModules` is on, so a plain `export { … }` of a type does not compile).
+A new type for one of these areas goes to its owner and gets a line in that
+owner's list; `src/types/index.owners.test.tsx` fails until it has one. No owner
+imports the facade. An owner that needs another owner's type imports it with
+`import type` from that owner and imports nothing else, and nothing outside the
+family imports an owner. A module beside them in `src/types/` that is not named
+`index.<area>.ts` is not an owner and keeps its own import path.
+
+| Owner (`src/types/`) | Holds |
+|---|---|
+| `index.gateway.ts` | the status push (`StatusData`), the update check, host metrics, session storage and its inventory, and each connected crew's version, capabilities, approval state and remote update |
+| `index.jobs.ts` | scheduled jobs (`CronJob`), task-runner projects and their steps, dynamic-workflow runs |
+| `index.capabilities.ts` | lessons and memory stores, skills and their budget, steering files, skill and MCP discovery, configured MCP servers and their scopes |
+| `index.chat.ts` | the chat slot row (`ChatSlot`) with its turn identity and the `chat_done` payload, its todo list, MCP report and channel links; sidebar folders, tags and board lanes; transcript messages and the slot detail read; subagent and tool activity; content blocks; notifications and their channels; approvals; history session rows |
+| `index.sources.ts` | pull requests, issues, the source provider id, an app repository's contributors |
+| `index.artifacts.ts` | artifacts and their publication, publishing providers, forks, remote listings, session docs, folders, events, comments, web-app metadata |
+
 Redux Toolkit (`src/store/index.ts`) holds the cross-page shell state in **four**
 slices:
 
@@ -747,9 +767,9 @@ Two habits belong to the same concern:
   win whatever order Tailwind emits the rules in) plus `motion-reduce:animate-none`,
   or keep it static. `src/test/idleAnimations.test.ts` pins the top-bar and rail
   indicators.
-- Do NOT add a new CSS `@keyframes`. The existing ones in `index.css` back
-  specific low-level effects (skeleton pulse, caret blink, indeterminate
-  progress); a new component animation goes through Framer Motion.
+- Do NOT add a new CSS `@keyframes`. The existing ones in the `src/styles/`
+  partials back specific low-level effects (skeleton pulse, caret blink,
+  indeterminate progress); a new component animation goes through Framer Motion.
 - **Hover PAINTS; it never moves or resizes.** A hover state may change colour,
   border, brightness or shadow, but not `scale` or `translate` — growing a row
   under the cursor nudges its neighbours and reads as a layout change rather
@@ -808,13 +828,61 @@ files own it:
   `@utility` blocks. Adding a utility for a new token means adding one
   `--color-<token>: var(--<token>)` line here; `scripts/check-phantom-classes.mjs`
   compiles against this file to catch a utility whose token was never declared.
-- `src/index.css` — the entry. It imports Tailwind's theme and Preflight into
-  their cascade layers and emits `@tailwind utilities` UNLAYERED (see the header
-  comment there: the component CSS below it was written against v3's unlayered
-  utilities and must keep competing with them on plain specificity), lists the
-  template sources with `@source`, and restores three v3 Preflight defaults as
-  token-backed base rules (default border colour `var(--border)`, placeholder
-  colour `var(--muted)`, `cursor: pointer` on enabled buttons).
+- `src/index.css` — the entry, read top to bottom in cascade order. First the
+  Tailwind header: it imports Tailwind's theme and Preflight into their cascade
+  layers, emits `@tailwind utilities` UNLAYERED (see the header comment there:
+  the component CSS after it was written against v3's unlayered utilities and
+  must keep competing with them on plain specificity), and lists the template
+  sources with `@source`. Then the Preflight compensation, three v3 Preflight
+  defaults restored as token-backed base rules (default border colour
+  `var(--border)`, placeholder colour `var(--muted)`, `cursor: pointer` on
+  enabled buttons). Then the imports of `font-faces.css`, `design-tokens.css` and
+  `theme-palettes.css`; then the `@layer base` element defaults (box model, the
+  global `:focus-visible` ring, the reduced-motion cut, the global scrollbar)
+  and, unlayered, the ambient backdrop and the app-icon tints; then the imports
+  of the other eight partials. Tailwind inlines each `@import` where it stands,
+  so the import order IS the cascade order: never reorder the imports, and put a
+  new rule in the partial that owns its surface.
+- `src/styles/*.css` — the partials `index.css` imports, listed here in import
+  order. Each is one contiguous slice of the cascade, so some also hold a
+  neighbouring rule that has no file of its own; those strays are named:
+  - `font-faces.css` owns every `@font-face`: the script-fallback and
+    straight-quote aliases, the brand faces and OpenDyslexic.
+  - `design-tokens.css` owns the custom properties every theme shares and the
+    default dark and light palette.
+  - `theme-palettes.css` owns one `[data-theme]` block pair per named theme.
+  - `chat-transcript.css` owns what a chat message paints and how it streams in.
+    Strays: the composer's prompt-optimize overlay and approval glow, the update
+    card's indeterminate progress bar, `.animate-shimmer`, the custom-font
+    ligature toggle, the Kiro-theme overrides of nav, session-row and shell
+    chrome, and the workspace-tree token mapping.
+  - `scrollbars-and-touch-hit.css` owns the auto-hiding scrollbar classes and the
+    44px touch hit areas. Strays: the send-button sweep (`.btn-sweep`), the card
+    hover glow (`.card-glow`) and the stat top-line accent (`.stat-accent`).
+  - `shell-chrome.css` owns the top bar and its collapse ladder, the frameless
+    Electron window chrome and focus mode. Stray: `.scrollbar-none`.
+  - `focus-and-state-cues.css` owns the scroll-edge fades, the skeleton shimmer,
+    the focus rings and the swatch hover cue. Strays: table striping, the
+    follow-up chip width cap, the skill-load heading sizes and the highlight.js
+    colours.
+  - `sidebar-and-side-panel.css` owns session and folder rows, the list dock and
+    the side-panel tab strip. Strays: the inline lucide icon size and the
+    panel-icon pane morph.
+  - `highlights-and-page-zoom.css` owns search, find and comment highlights and
+    the coarse-pointer rules that stop page zoom. Strays: the artifact toolbar
+    button heights and the mobile sessions-drawer width.
+  - `liquid-glass.css` owns the glass material and every solid fallback
+    (no `backdrop-filter`, reduced transparency, more contrast). Strays: the
+    settings icon-tile and goal-mark tokens, the dock pass-through and the
+    global reduced-motion transition reset.
+  - `content-fit.css` owns the rules that make content fit its box: font-metric
+    compensation on the nav rail, the crew-chip cut edge, image and spacer
+    reservations, the pane-dim token and the markdown-table breakout.
+
+  `cli-mode.css`, `message-font-size.css` and `crew-notes.css` in the same
+  directory are imported by `main.tsx` instead. A test that measures the
+  stylesheet's source text reads it through `src/test/indexCssSource.ts`
+  (`readIndexCss()`), which splices every partial in at its import.
 
 The build runs through `@tailwindcss/vite`; there is no PostCSS config. A
 downstream edition's sources are added to the content scan by
@@ -824,7 +892,8 @@ Utility names follow Tailwind v4: `outline-hidden` (not `outline-none`) is the
 accessible outline suppressor, `backdrop-blur-xs` is the 4px blur, and the
 `shadcn/ui` primitives animate through `tw-animate-css`.
 
-Colors come from CSS custom properties defined in `src/index.css`, including the
+Colors come from CSS custom properties defined in `src/styles/design-tokens.css`
+and `src/styles/theme-palettes.css`, including the
 semantic roles `--aim`, `--clarify`, and the `--diff-*` family. Never a hardcoded
 `#hex` / `rgb()` / `rgba()` literal, and never a raw palette class
 (`text-green-500`, `bg-amber-400`): state colors are `text-ok` / `text-warn` /
@@ -888,9 +957,10 @@ Built-in themes are picked in Settings, Display tab, and the choice syncs across
 instances. Each theme has a dark and a light block, and the default theme's
 `data-theme` is the bare `dark` / `light` rather than a prefixed slug.
 
-Shared CSS utilities in `index.css`: `.top-bar-pill`, `.topbar-glass`,
-`.scroll-shadow`, `.table-striped`, `.skeleton`, `.focus-ring`. A theme change
-crossfades through a `transition` on `body`.
+Shared CSS utilities: `.top-bar-pill` and `.topbar-glass`
+(`src/styles/shell-chrome.css`), `.scroll-shadow`, `.table-striped`, `.skeleton`
+and `.focus-ring` (`src/styles/focus-and-state-cues.css`). A theme change
+crossfades through a `transition` on `body` (`src/index.css`).
 
 ## Large file-pair diffs
 

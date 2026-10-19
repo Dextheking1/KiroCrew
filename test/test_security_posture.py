@@ -280,10 +280,10 @@ _BASELINE_LOG_SITE_CENSUS: dict[str, int] = {
     # dashboard/handlers/messaging.py: the gateway process, as the facade's two.
     "dashboard/messaging_api/slack_workspace.py": 10,
     "dashboard/session_control_parts/target_authorization.py": 1,
-    "dashboard/session_transfer.py": 1,
+    "dashboard/session_transfer_install.py": 1,
     "dashboard/state_parts/slot_turns.py": 1,
     "knowledge/agent_fetch.py": 1,
-    "mcp_cron.py": 1,
+    "mcp_cron_vet.py": 1,
     # The pooled-backend daemon never composes a companion context. Its
     # declared-temp warnings therefore use the baseline pass deliberately.
     "mcp_gateway/backend.py": 3,
@@ -1133,7 +1133,7 @@ class TestRedactionSinkRegistry:
             # scanner followed by the credential scanner for every text value.
             "_redact_memory_field(",
             # redact_mcp_error runs redact_exfiltration_urls THEN redact_credentials
-            # (mcp_discovery.py) and then scrubs the exact configured header values
+            # (mcp_discovery_server_info.py) and then scrubs the exact configured header values
             # the generic scanners cannot know about — strictly more than either
             # scanner alone, so a sink using it is fully covered.
             "redact_mcp_error",

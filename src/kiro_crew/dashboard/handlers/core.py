@@ -1224,6 +1224,8 @@ async def api_stt_config(request: web.Request) -> web.Response:
                 stt_section["streaming"] = body["streaming"]
             if "endpointing" in body and isinstance(body["endpointing"], bool):
                 stt_section["endpointing"] = body["endpointing"]
+            if "submit_on_release" in body and isinstance(body["submit_on_release"], bool):
+                stt_section["submit_on_release"] = body["submit_on_release"]
             # `polish` is the one CONSENT setting on this surface -- it sends the
             # finished transcript to a model -- so its round trip is load-bearing in a
             # way an ordinary toggle's is not. Omitting it here is what made the
@@ -1350,6 +1352,7 @@ async def api_stt_config(request: web.Request) -> web.Response:
             "code": availability_code,
             "streaming": cfg.stt.streaming,
             "endpointing": cfg.stt.endpointing,
+            "submit_on_release": cfg.stt.submit_on_release,
             "dictation_panel": cfg.stt.dictation_panel,
             "polish": cfg.stt.polish,
             "transcribe_region": cfg.stt.transcribe_region,
@@ -4079,7 +4082,7 @@ def _invalid_session_path_id(session_id: str, agent_id: str | None = None) -> we
     The predicate is imported rather than restated: this must refuse exactly the
     set the path join refuses, no wider (a narrower guard would break the ``:``
     in a real key like ``dashboard:slot-3``) and no narrower (a wider one puts
-    the 500 back). Shape follows ``cron.py``'s ``_invalid_path_id_response`` --
+    the 500 back). Shape follows ``cron_shared.py``'s ``_invalid_path_id_response`` --
     400 with an ``invalid_<name>`` ``code`` -- the contract
     docs/system-specs/common/code-style.md requires of a backend-owned error body.
 

@@ -1448,17 +1448,22 @@ measures, never above.
   tmpfs cleared on reboot. That reliance is deliberate and is worth knowing if you own a
   long-lived CI host: it is bounded at one directory per killed run.
 
-  Reported, not yet fatal, and that split is a staged rollout rather than a soft opinion.
-  Two classes under that root are deliberately **not** residue and are excluded by name:
-  the computer-use screenshot spool, which production keeps as a persistent ring buffer,
-  and the scratch that Chromium and the Playwright driver create because a child inherits
-  the redirected `TMPDIR`. What remains is a handful of single `mkstemp` **files**, some
-  of them written by production code a test merely reached — one inode each, not the
-  `mkdtemp` directories the rule is about. Failing the suite on that set today would
-  block every unrelated change while it is attributed, and a guard that blocks unrelated
-  work is a guard somebody deletes. Set `KIROCREW_TMP_RESIDUE_STRICT=1` to make it fatal,
-  which is how the remaining set gets burned down and how the line gets held afterwards —
-  the same shape as `windows-expected-failures.txt`.
+  Fatal in CI's `Backend Tests*` jobs, a warning elsewhere. Those six jobs in `ci.yml`
+  set `KIROCREW_TMP_RESIDUE_STRICT=1`, so a test that leaves residue fails the shard it
+  runs in. A local run only warns, because a developer host has its own tools writing under
+  the redirected `TMPDIR` that CI does not have; set the variable yourself to hold a
+  local run to the CI rule. Two classes under that root are deliberately **not** residue
+  and are excluded by name: the computer-use screenshot spool, which production keeps as
+  a persistent ring buffer, and the scratch that Chromium and the Playwright driver
+  create because a child inherits the redirected `TMPDIR`.
+
+  A residue line names the test that created the entry when `tempfile` made it in that
+  worker. The usual cause is not a missing cleanup but a late writer: a background
+  thread that still holds a path under the removed directory and calls
+  `mkdir(parents=True)`, which re-creates it. The crew-log eager fold worker is one: a
+  fold still running when a test removes its private `KIROCREW_HOME` re-creates that
+  home. Use the conftest's per-test `KIROCREW_HOME` pin instead of a private home,
+  because the conftest stops that worker before the pin lifts.
 
   Why it is worth a guard rather than a convention: `/tmp` is commonly a tmpfs with a
   fixed **inode** budget (1,048,576 on the hosts this was measured on), and it returns
@@ -2459,7 +2464,7 @@ The ten failures were the venv, not the code:
   `sys.executable`, so `resolve_app_python` and `venv_provided_command` both "prefer" the
   running interpreter. `python -m venv` — where real venvs come from — uses symlinks on
   POSIX. Build fixture venvs with `symlinks=not IS_WINDOWS`
-  (`test_apps_backend_coverage._create_real_venv`).
+  (`test_apps_backend_coverage_dispatch._create_real_venv`).
 - **A probe of the RUNNING interpreter's packaging.** `_run_app_build` decides whether
   to plan a `pip install` with `importlib.util.find_spec("pip")`, which is `None` in a uv
   venv, so every build-planning test captured an empty command list. Already a documented
@@ -2945,7 +2950,7 @@ negative control before it was believed, and that is what caught them.
   re-resolving the name is. Both halves are worth having: the test stops accusing observers,
   and a well-behaved observer stops being visible to tests that patch a stdlib symbol.
 - **A datagram `connect()` sends no packet, so it is a routing-table query and not a network
-  connection.** `src/kiro_crew/security/argv_floor.py`'s own-address enumeration connects a
+  connection.** `src/kiro_crew/security/argv_floor_hosts.py`'s own-address enumeration connects a
   `SOCK_DGRAM` socket to `198.51.100.1:53` and `2001:db8::1:53` — TEST-NET-2 and
   documentation addresses, contacted by nobody — to learn the primary outbound address per
   family, and says so in a comment three lines above. The `socket.connect` audit hook never
@@ -3113,7 +3118,7 @@ mechanism, and one of them a production defect wearing a test's clothes.
   are skipped before the parse, which keeps it under a second), and the sites left in the
   package equal to a vetted list. A checklist item asks a reviewer to notice; the pin
   fails the first run that adds one.
-- **"Let it finish" as two 200 ms sleeps.** `test_overload_integration_glue.py`'s
+- **"Let it finish" as two 200 ms sleeps.** `test_overload_integration_glue_store_off_loop.py`'s
   `test_drain_refill_reads_the_store_off_loop` waited `20 x sleep(0.01)` twice for started
   runs to settle through the writer thread, then asserted a row reached a terminal state; in
   round 3, on a loaded worker, both rows still read `starting`. The pin the test exists for
@@ -3311,7 +3316,7 @@ went red, or the fix lands in the wrong file and the leak stays.
   `/proc/sys/kernel/pid_max` so the kernel's range check, not convention, is what makes
   the number unreachable.
 - **`network`: rank the address before you file the finding.** The UDP `connect` to
-  `198.51.100.1:53` / `2001:db8::1:53` in `argv_floor._own_interface_addresses` is the
+  `198.51.100.1:53` / `2001:db8::1:53` in `argv_floor_hosts._own_interface_addresses` is the
   packet-less local-IP trick over TEST-NET, a hardening item: `test_security.py` now routes
   it through an inert `_InertDatagramSocket` at the module's `socket` binding (datagram
   construction only; every other socket kind passes through) that records the peer and

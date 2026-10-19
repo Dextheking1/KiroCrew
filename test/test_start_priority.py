@@ -1139,7 +1139,7 @@ def test_the_oneliner_does_not_cancel_the_shared_runtimes_own_start():
     """``run_bg_oneliner``'s ``timeout`` bounds the DRIVE only. Cancelling the
     acquisition would kill the shared ``_bg`` (re)spawn every later caller reuses,
     and leak a backend session whose ``session/new`` had already gone out."""
-    tree = ast.parse((_SRC / "llm_helpers.py").read_text(encoding="utf-8"))
+    tree = ast.parse((_SRC / "llm_helpers_parts/background_turns.py").read_text(encoding="utf-8"))
     fn = next(
         n
         for n in ast.walk(tree)
@@ -1190,10 +1190,12 @@ def test_a_recovery_respawn_starts_with_an_empty_queue_total():
     """``_run_inner`` re-runs the same ``SubagentInfo`` on a recovery respawn. The
     previous attempt's queue total (or a mark it was cancelled inside) must not be
     subtracted from a clock that never paid it."""
-    source = (_SRC / "subagent_manager" / "run.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    # run.py binds most of its members from sibling ``run_*`` owners: scan the family.
+    package = _SRC / "subagent_manager"
+    family = [package / "run.py", *sorted(package.glob("run_*.py"))]
+    trees = [ast.parse(path.read_text(encoding="utf-8")) for path in family]
     reset_fields = []
-    for fn in ast.walk(tree):
+    for fn in (node for tree in trees for node in ast.walk(tree)):
         if not isinstance(fn, ast.AsyncFunctionDef):
             continue
         body = ast.unparse(fn)

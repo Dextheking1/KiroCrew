@@ -102,19 +102,12 @@ name-only consumers (cron `agent_id`, channel and project bindings, the cycle
 shortcuts). The pop-up draws the group headers and the custom-agents hint only when it
 lists more than one kind: a header that separates nothing is chrome, and the hint
 contrasts a template against a crewmate the list must then be showing. The folded
-rows keep their `selection_kind`, and `AgentSelector` (the shared roster picker)
-groups by it under the same two headers when a caller passes `groupByKind`, in its
-own order and with its own hint: the schedule job form does, so a cron's agent field
-offers **Crewmates** then **Custom agents** in one dropdown, the custom-agents
-group there keeping the longer hint (`group_templates_hint_default_workspace`: the
-job runs the template on the default workspace with shared memory and enrols no
-crewmate, which is the fact an unattended job needs), and a template pick stores
-the bare template name -- the backend's name-first resolution runs an unaliased
-template on `default_workspace` and Global memory, so no cron contract changes.
-The chrome follows the same one-kind rule, decided on the unfiltered roster so a
-filter that narrows to one group keeps its header; the `role="group"` label stays
-for assistive technology either way. Callers that do not opt in, and any name-only
-roster, render flat as before. Unless the config key
+rows keep their `selection_kind`. `AgentSelector` (the shared roster picker) always
+renders its rows flat; the schedule job form splits the kinds itself with a **Runs
+as** switch (Custom agent / Crewmate) and hands the selector one kind at a time
+(#18772). A template pick stores the bare template name -- the backend's name-first
+resolution runs an unaliased template on `default_workspace` and Global memory, so
+no cron contract changes. Unless the config key
 `dashboard.crewmates_in_agent_picker` is on (off by default, read from the shared
 `/api/config/kirocrew` query), `useAgents.ts` withholds from `choices` every member
 row a listed template already COVERS (`withoutCoveredCrewmates`): the member has no
@@ -918,6 +911,18 @@ one the review can vouch for (`_unvouched`); a changed key the review cannot
 show refuses with `409 unreviewable_drift`, naming the file
 (`_stamp_reviewed`).
 
+Four sibling start refusals get the same row treatment, each with its own fix.
+`parent_identity_changed` offers the same Capabilities pane fix.
+`foreign_private_copy` opens the member editor at
+`/capabilities?tab=crews&crew=<member>`. `project_identity_changed` and
+`private_template_shadowed` offer no button, and the copy names the fix. A
+`project_identity_changed` row carries `meta.project`, the saved project to go
+to; when the member was saved with no project, the copy says "another project".
+A `private_template_shadowed` row carries `meta.file`, the basename of the
+project file that hides the member's own agent file, and `meta.project`, the
+project whose `.kiro/agents` holds that file. Each of these rows also
+withholds the composer's Resume through `newestErrorOwnsRecovery`.
+
 ## Crew records and binding
 
 A crew lives only in `config.json` under `agents.<name>`. It is not a kiro-cli
@@ -1131,6 +1136,7 @@ proposed goal exactly as one created on the Crewmates page does (see the goal
 welcome below); the `/members?create=1&name=<encoded-name>&goal=<encoded-goal>`
 link to an editable UI draft remains for a user who wants to fill it in; opening a draft
 never creates a member or starts a schedule.
+An app's proposal of a crewmate from a `.crewmate` bundle is a `crewmate.import` card, raised only through `ctx.crewmate` ([app-kit-platform §8a](app-kit-platform.md#8a-ctxcrewmate-proposes-only-the-owners-press-creates)). Its create pins `approval_mode: "normal"` in the same write and sends no `first_greeting`; its evidence and Undo are `crewmate.create`'s (`change_card_catalog.CREWMATE_CREATING_KINDS`).
 Creating a crewmate is never a first-run chapter: neither the end of the tour nor
 a Crewmates visit opens anything by itself, and the page's New crewmate card is
 the one place a crewmate is created on the Crewmates page.
@@ -2881,12 +2887,12 @@ The transcript retains its delivery metadata for identity and recovery. `--bg-ho
 highcontrast-light and everforest-light (the bubble would vanish), while
 `--bg-hover` sits above the page in every shipped theme; in forced-colors mode
 the gray bubble draws a border instead. The `.crewmate-bubble` rule in
-`index.css` also scopes the surface tokens the reply's contents paint with
+`website/src/styles/chat-transcript.css` also scopes the surface tokens the reply's contents paint with
 (`--bg-hover`, `--bg-elevated`, `--card`) one step off the fill for its subtree
 — kiro-light's inline-code patch IS `var(--bg-hover)`, and so is every
 `hover:bg-bg-hover` control, so on the bare fill they would vanish; kiro-dark's
 literal code patch gets the same step by one scoped rule. Inside the accent bubble the
-`user-bubble-accent` hook in `index.css` REDEFINES the theme tokens for the
+`user-bubble-accent` hook in `website/src/styles/chat-transcript.css` REDEFINES the theme tokens for the
 subtree (`--text`, `--muted`, `--accent`, `--border`, the `--bg*` surfaces, …)
 as values derived from `--accent-fg` — text and strokes as `--accent-fg` mixes,
 surfaces as translucent black so a patch darkens the fill rather than pulling

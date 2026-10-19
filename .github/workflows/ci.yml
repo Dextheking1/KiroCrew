@@ -812,6 +812,9 @@ jobs:
         group: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       SHARD_COUNT: 8
+      # A temp entry a test leaves behind fails the job instead of warning (conftest.py
+      # `_TMP_RESIDUE_STRICT_ENV`). Each `Backend Tests*` job below sets it too.
+      KIROCREW_TMP_RESIDUE_STRICT: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1054,6 +1057,7 @@ jobs:
       # times out on plain `git add` here (#1673). Give git invocations a
       # wider budget on this job only.
       MDNB_GIT_TIMEOUT_SEC: 120
+      KIROCREW_TMP_RESIDUE_STRICT: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1161,6 +1165,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    env:
+      KIROCREW_TMP_RESIDUE_STRICT: "1"
     defaults:
       run:
         shell: bash
@@ -1241,6 +1247,8 @@ jobs:
     needs: [changes, await-fast-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      KIROCREW_TMP_RESIDUE_STRICT: "1"
     defaults:
       run:
         shell: bash
@@ -1683,6 +1691,8 @@ jobs:
     needs: [await-fast-gate]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      KIROCREW_TMP_RESIDUE_STRICT: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1806,7 +1816,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           CHANGED="$(git diff --name-only HEAD^1 HEAD)"
-          if printf '%s\n' "$CHANGED" | grep -Eq '^(src/kiro_crew/(.*memory.*|embeddings\.py|context\.py|context_assembly/.*|eval/bench/.*)|scripts/ci-member-memory-benchmark\.py|\.github/workflows/ci\.yml)$'; then
+          if printf '%s\n' "$CHANGED" | grep -Eq '^(src/kiro_crew/(.*memory.*|embeddings(_[a-z_]+)?\.py|context\.py|context_assembly/.*|eval/bench/.*)|scripts/ci-member-memory-benchmark\.py|\.github/workflows/ci\.yml)$'; then
             echo "selected=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -1875,6 +1885,8 @@ jobs:
     needs: [changes, await-fast-gate]
     runs-on: ${{ needs.changes.outputs.linux_runner || 'ubuntu-latest' }}
     timeout-minutes: 20
+    env:
+      KIROCREW_TMP_RESIDUE_STRICT: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

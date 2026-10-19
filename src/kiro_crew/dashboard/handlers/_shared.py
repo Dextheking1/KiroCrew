@@ -486,19 +486,19 @@ async def read_bounded_json(
     decision about an external contract, not part of this one.
 
     The other self-authenticating webhook, ``POST /api/hooks/agent``, reads raw
-    bytes through ``handlers/hooks.py::_read_hook_body`` (it must HMAC the exact
-    bytes) and is not a caller, so this gate does not reach it.
+    bytes through ``handlers/hooks_webhook_intake.py::_read_hook_body`` (it must HMAC
+    the exact bytes) and is not a caller, so this gate does not reach it.
 
     The four module-local JSON body guards read through this helper and keep
     only their module's answer shape:
     ``handlers_channel._json_object`` (raises, via
-    :func:`bounded_json_error_as_exception`), ``handlers/hooks.py::_json_object``
+    :func:`bounded_json_error_as_exception`), ``handlers/hooks_webhook_intake.py::_json_object``
     (``default_empty`` defaults an absent or ``invalid_json`` body, never a 415
     or 413), ``handlers/session_storage.py::_json_body`` (absent is ``{}``,
     malformed is its own ``invalid_body`` 400), and
-    ``handlers/artifacts.py::_read_json_body`` (``ArtifactValidationError`` for
-    the 400s, the 415 raised). So a handler that picks any of them gets the
-    media-type gate.
+    ``handlers/artifacts_parts/route_plumbing.py::_read_json_body``
+    (``ArtifactValidationError`` for the 400s, the 415 raised). So a handler
+    that picks any of them gets the media-type gate.
 
     What this does NOT cover: handlers that still call ``await request.json()``
     directly, and the builtin apps' own body helpers. Those parse whatever media
@@ -607,11 +607,11 @@ def bounded_json_error_as_exception(error: web.Response) -> web.HTTPException:
 
     For the callers whose contract is to RAISE rather than return a response
     (``handlers_channel._json_object``, the 415 from
-    ``handlers/artifacts.py::_read_json_body``). aiohttp answers a raised
-    ``HTTPException`` with its own status and body, so the client sees the same
-    status, ``code`` and JSON the returning callers send. Keeping the mapping
-    here means a raising caller cannot drop the 415 by translating it into the
-    wrong status.
+    ``handlers/artifacts_parts/route_plumbing.py::_read_json_body``). aiohttp
+    answers a raised ``HTTPException`` with its own status and body, so the
+    client sees the same status, ``code`` and JSON the returning callers send.
+    Keeping the mapping here means a raising caller cannot drop the 415 by
+    translating it into the wrong status.
     """
     kwargs: dict[str, Any] = {"text": error.text, "content_type": "application/json"}
     if error.status == 415:
@@ -3630,7 +3630,7 @@ def _session_has_persisted_history(slot_name: str) -> bool:
     :func:`_persisted_session_memory_mode` as well — file existence alone is
     not evidence that writes are permitted.
 
-    Used by ``api_lessons_create`` (in ``handlers/cron.py``) to distinguish
+    Used by ``api_lessons_create`` (in ``handlers/cron_lessons.py``) to distinguish
     between:
 
     * A legitimate MCP subprocess whose in-memory slot was evicted by the

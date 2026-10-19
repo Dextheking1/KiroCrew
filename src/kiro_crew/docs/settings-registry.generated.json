@@ -1652,7 +1652,7 @@
       "label": "Provider",
       "tab": "voice",
       "route": "/settings/voice?highlight=key%3Astt.provider",
-      "hint": "Local speech recognition runs on this machine and sends nothing anywhere. Transcribe uploads your audio to AWS.",
+      "hint": "Local speech recognition runs on this machine and sends nothing anywhere. Transcribe streams your audio to AWS.",
       "configKey": "stt.provider"
     },
     {
@@ -1661,6 +1661,14 @@
       "tab": "voice",
       "route": "/settings/voice?highlight=voice.provider-2",
       "description": "The built-in engine needs no setup; Piper is offline with better quality; Amazon Polly uses AWS credentials + network"
+    },
+    {
+      "id": "voice.send-when-i-stop-recording",
+      "label": "Send when I stop recording",
+      "tab": "voice",
+      "route": "/settings/voice?highlight=key%3Astt.submit_on_release",
+      "hint": "Stopping sends the message. Hold Shift, or slide sideways on the phone, to keep a draft.",
+      "configKey": "stt.submit_on_release"
     },
     {
       "id": "voice.shortcut-key",

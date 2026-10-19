@@ -552,13 +552,16 @@ class TestTheRoutingFlag:
 
         import kiro_crew.dashboard.channel_slots as channel_slots
         import kiro_crew.dashboard.chat_persistence as persistence
+        import kiro_crew.dashboard.chat_persistence_parts as persistence_parts
         import kiro_crew.dashboard.slot_persistence as slot_persistence
 
         # The facade composes the metadata-line writer and the restore checks from
-        # these owners, so they are sites that handle this file too.
+        # these owners, and its save and restore code from these parts, so they are
+        # sites that handle this file too.
         owners = [
-            importlib.import_module(f"{slot_persistence.__name__}.{info.name}")
-            for info in pkgutil.iter_modules(slot_persistence.__path__)
+            importlib.import_module(f"{package.__name__}.{info.name}")
+            for package in (slot_persistence, persistence_parts)
+            for info in pkgutil.iter_modules(package.__path__)
         ]
         assert owners, "the owner scan found no module, so it is measuring nothing"
         for module in (persistence, channel_slots, *owners):
@@ -750,9 +753,9 @@ class TestASwitchThatDoesNotTake:
     ):
         """`set_model` is not required to raise when it declines: a backend that judges
         the model VALUE exhausts its candidate ladder and returns, having stayed on the
-        backend default (`acp/session_handle.py`). The outcome row is durable and never
-        rewritten, so believing the call means the row claims a model the turn did not
-        run on -- and that row is what an owner reads when deciding what to pin.
+        backend default (`acp/session_handle_model_selection.py`). The outcome row is
+        durable and never rewritten, so believing the call means the row claims a model
+        the turn did not run on -- and that row is what an owner reads when deciding what to pin.
 
         The recording client here accepts the call and reports the same served model
         afterwards, which is exactly that shape."""

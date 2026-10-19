@@ -98,6 +98,9 @@ EXPECTED_SITES = {
     # persist emit (default True) would mis-file a linked-channel turn under the
     # slot's `dashboard` key.
     "dashboard/handlers/hooks.py": 1,
+    "dashboard/handlers/hooks_scripts.py": 0,
+    "dashboard/handlers/hooks_webhook_intake.py": 0,
+    "dashboard/handlers/hooks_webhooks.py": 0,
     "slack/gateway.py": 0,  # the facade: its owners persist the gateway's rows
     "slack/gateway_runtime/cron_turn.py": 2,  # 2 cron
     "slack/gateway_runtime/heartbeat_turns.py": 1,  # _persist_turn_row helper
@@ -105,7 +108,12 @@ EXPECTED_SITES = {
     # heartbeat + its timeout + monitor + its
     # timeout)
     "task_executor.py": 2,  # task step + self-review
-    "subagent_manager/run.py": 1,
+    "subagent_manager/run.py": 0,  # the facade: run_turn persists the sub-agent's row
+    "subagent_manager/run_lifecycle.py": 0,
+    "subagent_manager/run_records.py": 0,
+    "subagent_manager/run_start.py": 0,
+    "subagent_manager/run_turn.py": 1,
+    "subagent_manager/run_yields.py": 0,
     "workflows/agent_exec.py": 1,
 }
 

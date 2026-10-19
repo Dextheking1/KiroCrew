@@ -34,6 +34,7 @@ from kiro_crew.acp.types import (
     ACP_BACKEND_KAS,
     ACP_BACKENDS_INLINE_COMPACTION,
     ACP_BACKENDS_STRUCTURED_REFUSAL,
+    ACP_BACKENDS_UNMARKED_COMPACTION_PAIR,
     EVENT_COMPACTION_STATUS,
     METHOD_KAS_SESSION_COMPACT,
     STOP_REASON_END_TURN,
@@ -192,9 +193,9 @@ def _compacts_inline(self: AcpSessionHandle) -> bool:
     handle built through ``__new__`` has no ``_runtime`` at all, which is the
     shape several suites use to exercise the queue drain without spawning a
     process. Returning False there leaves such a handle on the waiting arm,
-    the behaviour it had before this capability existed. Claiming the
-    capability instead would tell every one of those callers a compaction
-    completed that nothing ever ran.
+    the one every backend outside ``ACP_BACKENDS_INLINE_COMPACTION`` takes.
+    Claiming the capability instead would tell every one of those callers a
+    compaction completed that nothing ever ran.
     """
     runtime = getattr(self, "_runtime", None)
     backend = getattr(runtime, "acp_backend", None)
@@ -348,10 +349,11 @@ async def _drain_post_compaction_metadata(
                     # Late compaction credits. This drain runs BETWEEN
                     # turns on the auto-compact path — credits tracked
                     # here land in a stats window nothing reads and the
-                    # next prompt's re-init wipes them. Pass the frame
-                    # through untouched instead: the re-queue hands it to
-                    # the next turn's dispatch loop, which bills it like
-                    # any other metering frame (the pre-drain behavior).
+                    # next prompt's re-init wipes them. Re-queuing the
+                    # frame untouched does not bill it either: on that path
+                    # the next turn's pre-turn drain in ``_run_turn``
+                    # discards it with the other leftover frames, so these
+                    # credits go uncounted.
                     frames.append(msg)
                     continue
                 self._track_metadata(msg)
@@ -512,8 +514,9 @@ def _codex_compaction_event(self: AcpSessionHandle, update: dict[str, Any]) -> A
     a frame like this is what landing inside the turn looks like. A harness
     that earns that membership inherits the translation by joining the set,
     with no edit here. claude is a member and is unaffected -- it reports
-    compaction as prose and stamps no marker, so the parser declines its
-    frames -- which is the point: the MARKER decides, and the set only bounds
+    compaction as prose, with no marker and outside
+    ``ACP_BACKENDS_UNMARKED_COMPACTION_PAIR``, so the parser declines its
+    frames -- which is the point: the FRAME decides, and the sets only bound
     who is asked.
 
     No ``failed`` arm exists because codex-acp sends no such status: a
@@ -523,13 +526,24 @@ def _codex_compaction_event(self: AcpSessionHandle, update: dict[str, Any]) -> A
     """
     if self._runtime.acp_backend not in ACP_BACKENDS_INLINE_COMPACTION:
         return None
-    status_type = parse_codex_compaction_update(update)
+    status_type = parse_codex_compaction_update(
+        update,
+        self._codex_compaction_pending,
+        allow_unmarked=self._runtime.acp_backend in ACP_BACKENDS_UNMARKED_COMPACTION_PAIR,
+    )
     if status_type is None:
         return None
     if status_type != "started" and not self._codex_compaction_pending:
         return None
     logger.info("Compaction status (codex): %s", status_type)
-    self._codex_compaction_pending = status_type == "started"
+    # The start's call id, so an unmarked (2.2.2) terminal can be matched to it.
+    call_id = update.get("toolCallId")
+    if status_type != "started":
+        self._codex_compaction_pending = False
+    elif isinstance(call_id, str) and call_id:
+        self._codex_compaction_pending = call_id
+    else:
+        self._codex_compaction_pending = True
     if status_type == "completed":
         self._compaction_failed_at = None
         self.last_prompt_stats.reset_after_compaction()

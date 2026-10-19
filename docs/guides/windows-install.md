@@ -667,7 +667,8 @@ module scope** — `_ProcessEntry32`, `_ProcessMemoryCounters`, `_MemoryStatusEx
 `_JobObjectBasicLimitInformation`, `_JobObjectExtendedLimitInformation` and
 `_ThreadEntry32` in `platform_compat_native` (read through `platform_compat`), plus
 `_SecurityAttributes` in `mcp_gateway/transport.py` and `_VMStatistics64` in
-`subagent.py`. Declaring one inside the function that uses it is a **memory
+`platform_compat_metrics` (read through `platform_compat`).
+Declaring one inside the function that uses it is a **memory
 leak**, not a style question: `ctypes.POINTER(T)` memoises `T -> POINTER(T)` in a
 module-level dict inside ctypes that is never evicted, so a locally-declared
 Structure pins a brand-new pair of type objects on every call. The affected
@@ -711,7 +712,7 @@ therefore routes through `platform_compat.symlink_or_junction`, which falls
 back to a directory **junction** — a reparse point that needs no privilege and
 is followed transparently by reads and by `resolve()`/`realpath` (so
 containment/escape checks still hold). Affected paths: app skill registration
-(`apps/bridges.py`), boot-time skill reconcile, and the dev-mode frontend dist
+(`apps/bridges_skills.py`), boot-time skill reconcile, and the dev-mode frontend dist
 link (`frontend.ensure_dev_dist_symlink`). Because a junction is not reported by
 `os.path.islink`/`Path.is_symlink`, code that must *detect or remove* such a
 link uses `platform_compat.is_link_or_junction` / `unlink_link_or_junction` —

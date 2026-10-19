@@ -30,6 +30,7 @@ import {
 import { parseErrorCode, parseErrorField, reportForError, sendErrorToChat } from '../../utils/errorReport'
 import { PttTestStrip } from '../../components/PttTestStrip'
 import AwsConsentGate from '../../components/AwsConsentGate'
+import SttRetentionNote from './SttRetentionNote'
 import {
   BARE_CODE_LABEL_KEY,
   BARE_CODE_LABEL_KEY_OTHER,
@@ -60,6 +61,7 @@ interface SttConfig {
   silence_ms?: number
   partial_interval_ms?: number
   endpointing?: boolean
+  submit_on_release?: boolean
   dictation_panel?: boolean
   transcribe_region?: string
   transcribe_profile?: string
@@ -1245,6 +1247,8 @@ export default function SttSettings({ cardIndex }: {
 
         <SettingsSelect label={i18nT('pages.settings.sttSettings.provider')} hint={i18nT('pages.settings.sttSettings.provider_desc')} value={provider} options={providerOptions} optionLabels={providerOptions.map(providerLabel)} onChange={handleProvider} disabled={saving} configKey="stt.provider" />
 
+        <SttRetentionNote provider={provider} />
+
         {/* Gated on a NON-EMPTY catalog, not just on the provider: the catalog is
             the status endpoint's to serve, and a picker with no options is worse
             than no picker at all: it reads as "this model list is empty" rather
@@ -1530,6 +1534,11 @@ export default function SttSettings({ cardIndex }: {
                   no dial. */}
             </>
           )}
+
+          {/* Outside the streaming block: a deliberate stop ends batch and
+              streaming dictation alike, so this works on every provider. Kept
+              apart from Auto-submit above, which judges the speech itself. */}
+          <SettingsToggle label={i18nT('pages.settings.sttSettings.submit_on_release')} hint={i18nT('pages.settings.sttSettings.submit_on_release_desc')} checked={!!stt.submit_on_release} onChange={v => set({ submit_on_release: v })} disabled={saving} configKey="stt.submit_on_release" />
 
           <SettingsToggle label={i18nT('pages.settings.sttSettings.dictation_panel')} hint={i18nT('pages.settings.sttSettings.show_an_animated_panel_while_recording_instead_of')} checked={stt.dictation_panel !== false} onChange={v => set({ dictation_panel: v })} disabled={saving} />
 
