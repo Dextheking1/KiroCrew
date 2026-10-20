@@ -19713,6 +19713,9 @@
     "direct_link_fallbacks": "Autres adresses",
     "direct_link_note": "Seules les personnes de votre liste autorisée Tailscale peuvent l’ouvrir.",
     "direct_link_advanced": "Avancé : liens de connexion pour les appareils sans Tailscale",
-    "people_direct_caveat": "Tailscale nomme la personne à qui appartient chaque appareil, pas celle qui l’utilise. Les personnes qui partagent un appareil apparaissent comme une seule ; chacune peut plutôt se connecter avec son propre lien du tableau de bord."
+    "people_direct_caveat": "Tailscale nomme la personne à qui appartient chaque appareil, pas celle qui l’utilise. Les personnes qui partagent un appareil apparaissent comme une seule ; chacune peut plutôt se connecter avec son propre lien du tableau de bord.",
+    "memory_change_preference": "{{name}} a modifié une préférence de la Crew : {{summary}}",
+    "memory_change_lesson": "{{name}} a modifié une leçon de la Crew : {{summary}}",
+    "memory_change_someone": "Quelqu’un"
   }
 }

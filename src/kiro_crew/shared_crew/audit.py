@@ -19,6 +19,10 @@ correlation id and the causal link. Two references ride in the record's
   trigger behind its session (:mod:`kiro_crew.shared_crew.trigger`). It is never
   set for a human initiator and never stands in for one.
 
+A ``memory_change`` record adds a third, ``memory_change``: the category and the
+clipped, redacted one-line summaries of the lessons replaced and the lesson that
+replaced them (:mod:`kiro_crew.shared_crew.memory_changes`).
+
 It never carries prompt text, message bodies, tool input, tokens or cookies,
 because :class:`ActionRecord` has no field for them.
 
@@ -83,6 +87,7 @@ def audit_principal(principal: Principal | None) -> dict[str, Any] | None:
 #: ``extra`` keys an action record carries beside the frozen fields.
 EXTRA_WORKLOAD_REF = "workload_identity_ref"
 EXTRA_TRIGGER = "trigger"
+EXTRA_MEMORY_CHANGE = "memory_change"
 
 
 def _unattended_trigger(initiator: Principal, session_key: str) -> dict[str, Any] | None:
@@ -108,17 +113,24 @@ def new_action_record(
     causal_action_id: str = "",
     now: float | None = None,
     workload_ref: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> ActionRecord:
     """Build a record for an action *initiator* asked for.
 
     *workload_ref* defaults to the Crew's current workload identity reference.
+    *extra* adds action-specific keys (:data:`EXTRA_MEMORY_CHANGE`); it cannot
+    replace the workload reference or the trigger.
     """
-    extra: dict[str, Any] = {
-        EXTRA_WORKLOAD_REF: _clip(
-            current_workload_identity_ref() if workload_ref is None else workload_ref
-        )
-        or WORKLOAD_UNAVAILABLE,
-    }
+    extra = {**(extra or {})}
+    extra.update(
+        {
+            EXTRA_WORKLOAD_REF: _clip(
+                current_workload_identity_ref() if workload_ref is None else workload_ref
+            )
+            or WORKLOAD_UNAVAILABLE,
+        }
+    )
+    extra.pop(EXTRA_TRIGGER, None)
     trigger = _unattended_trigger(initiator.principal, session_key)
     if trigger is not None:
         extra[EXTRA_TRIGGER] = trigger
@@ -182,6 +194,11 @@ def security_event(record: ActionRecord) -> Any:
             "target": record.target,
             EXTRA_WORKLOAD_REF: str(record.extra.get(EXTRA_WORKLOAD_REF) or WORKLOAD_UNAVAILABLE),
             EXTRA_TRIGGER: record.extra.get(EXTRA_TRIGGER),
+            **(
+                {EXTRA_MEMORY_CHANGE: record.extra[EXTRA_MEMORY_CHANGE]}
+                if EXTRA_MEMORY_CHANGE in record.extra
+                else {}
+            ),
         },
     )
 
@@ -230,6 +247,7 @@ def schedule_action_audit(
     target: str = "",
     responder: ActorContext | None = None,
     causal_action_id: str = "",
+    extra: dict[str, Any] | None = None,
 ) -> ActionRecord | None:
     """Record an action without making its caller wait for the write.
 
@@ -246,6 +264,7 @@ def schedule_action_audit(
         target=target,
         responder=responder,
         causal_action_id=causal_action_id,
+        extra=extra,
     )
     try:
         task = asyncio.get_running_loop().create_task(record_action(record))

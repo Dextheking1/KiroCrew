@@ -41,6 +41,8 @@ FRAME_CAPACITY = "shared_crew.capacity"
 FRAME_SEND_STATE = "shared_crew.send_state"
 #: Who holds a session's composer typing lease (``typing_lease``), or nobody.
 FRAME_TYPING_LEASE = "shared_crew.typing_lease"
+#: A lesson write replaced stored ones (``memory_changes``).
+FRAME_MEMORY_CHANGE = "shared_crew.memory_change"
 SERVER_FRAMES = frozenset(
     {
         FRAME_PRESENCE,
@@ -49,6 +51,7 @@ SERVER_FRAMES = frozenset(
         FRAME_CAPACITY,
         FRAME_SEND_STATE,
         FRAME_TYPING_LEASE,
+        FRAME_MEMORY_CHANGE,
     }
 )
 

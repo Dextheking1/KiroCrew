@@ -19147,6 +19147,9 @@
     "direct_link_fallbacks": "その他のアドレス",
     "direct_link_note": "Tailscale の許可リストにいる人だけが開けます。",
     "direct_link_advanced": "詳細: Tailscale のないデバイス用のサインインリンク",
-    "people_direct_caveat": "Tailscale が示すのは各デバイスの所有者で、実際に使っている人ではありません。1 台のデバイスを共有する人は 1 人として表示されます。それぞれが自分のダッシュボードリンクでサインインすることもできます。"
+    "people_direct_caveat": "Tailscale が示すのは各デバイスの所有者で、実際に使っている人ではありません。1 台のデバイスを共有する人は 1 人として表示されます。それぞれが自分のダッシュボードリンクでサインインすることもできます。",
+    "memory_change_preference": "{{name}} が Crew の設定を変更しました: {{summary}}",
+    "memory_change_lesson": "{{name}} が Crew のレッスンを変更しました: {{summary}}",
+    "memory_change_someone": "誰か"
   }
 }

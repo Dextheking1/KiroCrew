@@ -69,6 +69,7 @@ export type ActionType =
   | 'cancel'
   | 'retry'
   | 'control'
+  | 'memory_change'
 
 export type ActionOutcome = 'accepted' | 'applied' | 'rejected' | 'conflict' | 'failed'
 
@@ -487,6 +488,17 @@ export type SharedCrewServerFrame =
   | { type: 'shared_crew.capacity'; schema_version: number; capacity: CapacityResponse }
   | ({ type: 'shared_crew.send_state' } & SendState)
   | ({ type: 'shared_crew.typing_lease' } & TypingLease)
+  | { type: 'shared_crew.memory_change'; schema_version: number; change: MemoryChange }
+
+/** `memory_changes.MemoryChange.payload`: a lesson write that replaced stored
+ *  ones (newest wins). Summaries are clipped and redacted by the server. */
+export interface MemoryChange {
+  actor: { id: string; kind: string; name: string }
+  session_key: string
+  category: string
+  new: string
+  old: string[]
+}
 
 /** Client activity report. Carries no principal: the server stamps the connection's actor. */
 export interface SharedCrewActivityFrame {

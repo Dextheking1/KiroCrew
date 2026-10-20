@@ -11,7 +11,7 @@
  */
 import type { QueryClient } from '@tanstack/react-query'
 import { noteSendRevision } from '../../api/sendRace'
-import type { Activity, SendState, SharedCrewActivityFrame, SharedCrewServerFrame, TypingLease } from '../../api/sharedCrew'
+import type { Activity, MemoryChange, SendState, SharedCrewActivityFrame, SharedCrewServerFrame, TypingLease } from '../../api/sharedCrew'
 import { mergeDecision, mergeWork, type DecisionsResponse, type PresenceResponse, type WorkListResponse } from '../../api/sharedCrewUi'
 
 export const sharedCrewKeys = {
@@ -27,7 +27,11 @@ export const sharedCrewKeys = {
   decisions: (sessionKey: string) => ['shared-crew', 'decisions', sessionKey] as const,
   sendState: (sessionKey: string) => ['shared-crew', 'send-state', sessionKey] as const,
   typingLease: (sessionKey: string) => ['shared-crew', 'typing-lease', sessionKey] as const,
+  memoryChanges: ['shared-crew', 'memory-changes'] as const,
 }
+
+/** How many recent memory changes the cache keeps, newest first. */
+export const MEMORY_CHANGES_KEPT = 20
 
 /** Fold one server frame into the cache. `data` is the frame the gateway sent. */
 export function applySharedCrewFrame(queryClient: QueryClient, data: unknown): void {
@@ -75,6 +79,13 @@ export function applySharedCrewFrame(queryClient: QueryClient, data: unknown): v
     case 'shared_crew.typing_lease': {
       if (!frame.session_key) return
       queryClient.setQueryData<TypingLease | null>(sharedCrewKeys.typingLease(frame.session_key), typingLeaseOf(frame))
+      return
+    }
+    case 'shared_crew.memory_change': {
+      const change = frame.change
+      if (!change || typeof change.new !== 'string') return
+      queryClient.setQueryData<MemoryChange[]>(sharedCrewKeys.memoryChanges, prev =>
+        [change, ...(prev ?? [])].slice(0, MEMORY_CHANGES_KEPT))
       return
     }
   }

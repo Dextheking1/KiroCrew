@@ -422,6 +422,8 @@ class ActionType(str, enum.Enum):
     CANCEL = "cancel"
     RETRY = "retry"
     CONTROL = "control"
+    #: A lesson or preference write that replaced stored ones (newest wins).
+    MEMORY_CHANGE = "memory_change"
 
 
 class ActionOutcome(str, enum.Enum):

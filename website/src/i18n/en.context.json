@@ -865,6 +865,9 @@
     "sharedCrew.direct_link_fallbacks": "Fold that reveals the same link spelled with this machine's Tailscale IP addresses.",
     "sharedCrew.direct_link_note": "One-line note under the Tailscale URL: only allowlisted Tailscale logins can open it.",
     "sharedCrew.direct_link_advanced": "Fold in the phone dialog holding the older one-time sign-in links that carry a token.",
-    "sharedCrew.people_direct_caveat": "Note under the People list: Tailscale identifies a device's owner, so people sharing a device look like one person."
+    "sharedCrew.people_direct_caveat": "Note under the People list: Tailscale identifies a device's owner, so people sharing a device look like one person.",
+    "sharedCrew.memory_change_preference": "Chat notice in a shared Crew when a person's new preference replaced an older conflicting one. {{name}} is that person's display name, {{summary}} the new preference in one line.",
+    "sharedCrew.memory_change_lesson": "Chat notice in a shared Crew when a person's new lesson replaced older conflicting ones. {{name}} is that person's display name, {{summary}} the new lesson in one line.",
+    "sharedCrew.memory_change_someone": "Stands in for the person's name in the memory-change notice when no name is known."
   }
 }

@@ -19147,6 +19147,9 @@
     "direct_link_fallbacks": "其他地址",
     "direct_link_note": "只有你的 Tailscale 允许列表中的人能打开。",
     "direct_link_advanced": "高级：给没有 Tailscale 的设备用的登录链接",
-    "people_direct_caveat": "Tailscale 只能识别每台设备的所有者，而非实际使用者。共用一台设备时会显示为同一人；每人也可改用各自控制台链接登录。"
+    "people_direct_caveat": "Tailscale 只能识别每台设备的所有者，而非实际使用者。共用一台设备时会显示为同一人；每人也可改用各自控制台链接登录。",
+    "memory_change_preference": "{{name}} 更改了 Crew 偏好：{{summary}}",
+    "memory_change_lesson": "{{name}} 更改了 Crew 经验：{{summary}}",
+    "memory_change_someone": "有人"
   }
 }

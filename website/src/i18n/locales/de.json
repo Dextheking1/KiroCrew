@@ -19430,6 +19430,9 @@
     "direct_link_fallbacks": "Weitere Adressen",
     "direct_link_note": "Nur Personen auf Ihrer Tailscale-Zulassungsliste können ihn öffnen.",
     "direct_link_advanced": "Erweitert: Anmeldelinks für Geräte ohne Tailscale",
-    "people_direct_caveat": "Tailscale nennt die Person, der ein Gerät gehört, nicht die Person, die es gerade benutzt. Wer sich ein Gerät teilt, erscheint als eine Person; jede kann sich stattdessen mit einem eigenen Dashboard-Link anmelden."
+    "people_direct_caveat": "Tailscale nennt die Person, der ein Gerät gehört, nicht die Person, die es gerade benutzt. Wer sich ein Gerät teilt, erscheint als eine Person; jede kann sich stattdessen mit einem eigenen Dashboard-Link anmelden.",
+    "memory_change_preference": "{{name}} hat eine Crew-Einstellung geändert: {{summary}}",
+    "memory_change_lesson": "{{name}} hat eine Crew-Lektion geändert: {{summary}}",
+    "memory_change_someone": "Jemand"
   }
 }

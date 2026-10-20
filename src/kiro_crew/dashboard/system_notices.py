@@ -1,7 +1,7 @@
 """Assistant-role system notices the gateway injects into a slot's feed.
 
-Status reports -- the auto-compaction notices and the session-reload
-confirmation -- not real turns. Every scan that walks for "the last real
+Status reports -- the auto-compaction notices, the session-reload
+confirmation and the Shared Crew memory-change notice -- not real turns. Every scan that walks for "the last real
 message" (the conversation floor, the sidebar preview, backfill replay) must
 skip them, and the frontend keeps a twin of this set
 (``website/src/lib/systemNotice.ts``): a kind skipped on one side but not the
@@ -19,8 +19,12 @@ from kiro_crew.constants import (
 from kiro_crew.preview_text import drop_format_chars
 
 SESSION_RELOAD_KIND = "session_reload"
+#: ``shared_crew.memory_changes.NOTICE_KIND``: a lesson write replaced stored ones.
+MEMORY_CHANGE_KIND = "memory_change"
 
-SYSTEM_NOTICE_KINDS: frozenset[str] = frozenset({"compaction", SESSION_RELOAD_KIND})
+SYSTEM_NOTICE_KINDS: frozenset[str] = frozenset(
+    {"compaction", SESSION_RELOAD_KIND, MEMORY_CHANGE_KIND}
+)
 
 
 def is_system_notice(role: object, meta: object) -> bool:

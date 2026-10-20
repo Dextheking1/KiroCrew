@@ -19713,6 +19713,9 @@
     "direct_link_fallbacks": "Outros endereços",
     "direct_link_note": "Somente pessoas na sua lista de permitidos do Tailscale podem abri-lo.",
     "direct_link_advanced": "Avançado: links de login para dispositivos sem Tailscale",
-    "people_direct_caveat": "O Tailscale nomeia a pessoa dona de cada dispositivo, não quem o está usando. Pessoas que compartilham um dispositivo aparecem como uma só; cada uma pode entrar com o próprio link do painel."
+    "people_direct_caveat": "O Tailscale nomeia a pessoa dona de cada dispositivo, não quem o está usando. Pessoas que compartilham um dispositivo aparecem como uma só; cada uma pode entrar com o próprio link do painel.",
+    "memory_change_preference": "{{name}} alterou uma preferência da Crew: {{summary}}",
+    "memory_change_lesson": "{{name}} alterou uma lição da Crew: {{summary}}",
+    "memory_change_someone": "Alguém"
   }
 }

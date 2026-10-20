@@ -19147,6 +19147,9 @@
     "direct_link_fallbacks": "다른 주소",
     "direct_link_note": "Tailscale 허용 목록에 있는 사람만 열 수 있습니다.",
     "direct_link_advanced": "고급: Tailscale이 없는 기기용 로그인 링크",
-    "people_direct_caveat": "Tailscale은 각 기기의 소유자를 알려 줄 뿐, 지금 사용하는 사람을 알려 주지 않습니다. 한 기기를 같이 쓰는 사람들은 한 사람으로 보입니다. 각자 자신의 대시보드 링크로 로그인할 수 있습니다."
+    "people_direct_caveat": "Tailscale은 각 기기의 소유자를 알려 줄 뿐, 지금 사용하는 사람을 알려 주지 않습니다. 한 기기를 같이 쓰는 사람들은 한 사람으로 보입니다. 각자 자신의 대시보드 링크로 로그인할 수 있습니다.",
+    "memory_change_preference": "{{name}}님이 Crew 기본 설정을 변경했습니다: {{summary}}",
+    "memory_change_lesson": "{{name}}님이 Crew 레슨을 변경했습니다: {{summary}}",
+    "memory_change_someone": "누군가"
   }
 }

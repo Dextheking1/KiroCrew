@@ -524,6 +524,13 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def _lesson_writer(raw: object) -> dict[str, str] | None:
+    """The ``written_by`` value a lesson row stores, or ``None`` when no person is known."""
+    from kiro_crew.shared_crew.memory_changes import stamp_of
+
+    return stamp_of(raw)
+
+
 def _sanitize_decay_rates(raw: Mapping[str, object] | None) -> dict[str, float]:
     """Validate and clamp user-configured per-tag episodic decay rates.
 
@@ -3325,6 +3332,7 @@ class VectorMemoryStore:
         rule_emb_resolved: bool = False,
         defer_backfills: bool = False,
         facets: "memory_schema.MemoryFacets | None" = None,
+        written_by: Mapping[str, str] | None = None,
     ) -> LessonWriteResult:
         """Write a lesson as a semantic entry with key lesson.<hash>.
 
@@ -3504,6 +3512,11 @@ class VectorMemoryStore:
         # are the same answer here, which is why there is no stored sentinel.
         if applies:
             lesson_value["applies"] = applies
+        # Who wrote it (``shared_crew.memory_changes.writer_stamp``), added only
+        # when a person is known, so a write with no writer keeps the old shape.
+        writer = _lesson_writer(written_by)
+        if writer is not None:
+            lesson_value["written_by"] = writer
         value: object = lesson_value
         confidence = 1.0 if source == "user_explicit" else 0.9
         preflight = self.validate_semantic(key, value, confidence, source)
@@ -3564,6 +3577,9 @@ class VectorMemoryStore:
                 _flush_backfills()
                 return exact.result
             key, value, effective_applies = exact.key, exact.value, exact.applies
+            # An enrichment is a write by this writer: the row names who changed it last.
+            if writer is not None and isinstance(value, dict):
+                value = {**value, "written_by": writer}
 
         # Built once for the whole scan (query-side vector + norm are the same
         # for every row) rather than per candidate — see _stored_similarity_scorer.

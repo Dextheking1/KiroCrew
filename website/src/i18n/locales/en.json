@@ -10526,6 +10526,9 @@
     "direct_link_fallbacks": "Other addresses",
     "direct_link_note": "Only people on your Tailscale allowlist can open this.",
     "direct_link_advanced": "Advanced: sign-in links for devices without Tailscale",
-    "people_direct_caveat": "Tailscale names the person who owns each device, not whoever is using it. People who share one device show as one person; each can sign in with their own dashboard link instead."
+    "people_direct_caveat": "Tailscale names the person who owns each device, not whoever is using it. People who share one device show as one person; each can sign in with their own dashboard link instead.",
+    "memory_change_preference": "{{name}} changed a Crew preference: {{summary}}",
+    "memory_change_lesson": "{{name}} changed a Crew lesson: {{summary}}",
+    "memory_change_someone": "Someone"
   }
 }

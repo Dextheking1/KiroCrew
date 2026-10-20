@@ -504,7 +504,7 @@ personal Crew, or one that cannot attribute, hides the control and the bylines
 ### Audit
 
 `ActionRecord` audits a consequential shared action: session create, message,
-approval, question answer, steer, cancel, retry and control actions. It names the
+approval, question answer, steer, cancel, retry, control actions and memory changes. It names the
 initiator, the responder where one exists, the runtime reference, the outcome and a
 causal link. It carries ids, never prompt text or credentials.
 
@@ -543,6 +543,53 @@ Audited sites, all through `schedule_action_audit`:
 | `message` | `chat_api.chat_send` | request actor | | `accepted` |
 | `cancel` | `routes_admission.api_work_cancel`, target the work id | request actor | | `applied`, or `conflict` on a stale or illegal revision |
 | `approval`, `question_answer` | `DecisionRegistry.resolve` (`decisions.audit_decision_response`), target the decision id | the decision's initiator | the verified responder | `applied` for the winner, `conflict` for a different response that lost, including one that reaches the settled decision after its wait ended (`DecisionRegistry.classify_late`, from the question answer and approval routes); a replay of the winner and a response to nothing pending add no record |
+| `memory_change` | `cron.api_lessons_create` (`memory_changes.announce_replacement`), target `lesson:<category>` | the lesson's writer | | `applied`; only for a write that replaced stored lessons |
+
+### Memory changes
+
+Crew memory is fully shared. A lesson, correction or preference any admitted
+person teaches (the `learn_add` tool, the dashboard, the CLI) is written to the
+Crew's one store and applies to everyone, the owner included. The owner gets no
+priority. `memory_changes` (`shared_crew/memory_changes.py`) owns the three things
+around that write.
+
+Writer. `writer_principal` derives who the write is attributed to, never from the
+request body: the verified actor of a person's own dashboard request; for an agent
+write (`learn_add` posts through the internal caller), the author of the latest
+user turn in the calling session (`decisions.turn_initiator`); else Unknown. A
+known writer is stored on the row as `written_by` `{id, kind, name}` in both lesson
+stores. A row without one (every lesson written before this) loads unchanged.
+
+Newest wins. The lesson stores decide what conflicts. The vector store (V1) replaces
+an older lesson on topic overlap (shared keywords at least half the larger set) or
+cosine similarity above 0.85, whoever wrote either, since every route write is
+`user_explicit`. The JSONL store replaces a stored `preference` that overlaps a new
+explicit `preference` the same way. A member's private V2 store deletes only on an
+exact key. Two contradicting rules are never both kept, and the route reports what
+it replaced in `superseded`.
+
+Everyone is told. When `superseded` is not empty, `announce_replacement`:
+
+1. Schedules one `memory_change` audit record: initiator the writer, target
+   `lesson:<category>`, and in `extra` / the event metadata `memory_change`
+   `{category, old: [summary], new: summary}`. Summaries are redacted
+   (`_redact_memory_field`) and clipped to one line of `SUMMARY_MAX` (120)
+   characters, at most `OLD_MAX` (5) old ones. No full lesson body, prompt text or
+   secret.
+2. In a shared Crew only (`crew_is_shared`: the writer came over a network path, a
+   sharing path is on, or anyone but the operator has been seen), appends a system
+   notice to the session the write came from and sends a `shared_crew.memory_change`
+   frame `{type, schema_version, change}` to the owner and every collaborator
+   (`broadcast_to_collaborators`). The notice is an assistant row with
+   `meta.kind = "memory_change"` (a `SYSTEM_NOTICE_KINDS` member on both sides) and
+   `meta.memory_change` = the change payload `{actor: {id, kind, name}, session_key,
+   category, new, old}`. Its text is English ("Bob changed a Crew preference: ...");
+   the dashboard renders the localized `sharedCrew.memory_change_*` line from the
+   payload.
+
+A personal Crew has one person: the newer lesson still replaces the older one and
+the audit record is still written, but no "changed by" notice or frame is sent. A
+notice or audit failure never fails the write.
 
 ## 4. Admission and accepted work
 
@@ -1053,8 +1100,8 @@ all pages; `hidden_by_filter` counts the sessions it excluded.
 ### WebSocket
 
 The server pushes whole-value frames: `shared_crew.presence`, `shared_crew.work`,
-`shared_crew.decision`, `shared_crew.capacity`, `shared_crew.send_state` and
-`shared_crew.typing_lease` (`collab.SERVER_FRAMES`). The
+`shared_crew.decision`, `shared_crew.capacity`, `shared_crew.send_state`,
+`shared_crew.typing_lease` and `shared_crew.memory_change` (`collab.SERVER_FRAMES`). The
 client sends `shared_crew.activity` with a session, an `Activity` and, when the
 tab's draft is empty, `draft: "empty"`. The activity frame carries no principal and
 no text; the server stamps the connection's actor and ignores anything else. On reconnect the client refetches the HTTP state and treats the next frames as
@@ -1080,6 +1127,10 @@ the current record. A busy session's queued sends stay the queue stack's rows.
 | `rejected` | refusal notice by the composer, with whose limit and the next step | restored |
 | lost send race (`send_race`, never an `OperationState`) | notice above the composer: "X sent first", Send now, Dismiss; no bubble or error row | restored |
 | someone else typing (typing lease, never an `OperationState`) | composer read-only, button row replaced by "X is typing…"; Stop and Steer stay for a running turn | kept, read-only |
+
+A memory change in a shared Crew shows in its session as one info notice row
+("Bob changed a Crew preference: Always reply in English"). The frame is kept in
+the client cache, newest first, at most 20 (`sharedCrewKeys.memoryChanges`).
 
 ## 8. Capabilities
 
