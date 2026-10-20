@@ -135,6 +135,7 @@ def _reset_routing() -> None:
     routing._bind_locks.clear()
     routing._follow_up_locks.clear()
     routing._PENDING_TEMPS.clear()
+    status._quiet.clear()
 
 
 class Env:
