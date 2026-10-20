@@ -21,6 +21,37 @@ from kiro_crew.testing.wait import await_until
 # ── store_session_config: resolved-model capture ──
 
 
+def test_within_spawn_race_true_inside_the_window_false_outside():
+    """issue #21385: a snapshot captured within _READ_PATH_SPAWN_RACE_SECS of the
+    runtime spawn is flagged in-race (so the picker serves the full catalog); one
+    captured later, or with no spawn clock, is not."""
+    from kiro_crew.acp.session_handle_model_selection import _READ_PATH_SPAWN_RACE_SECS
+
+    rt, _, _ = _make_runtime()
+    q = _register(rt, "sA")
+    handle = AcpSessionHandle("sA", q["sA"], rt)
+
+    # No spawn clock yet -> never in-race (fail-safe: narrow as today).
+    rt._spawn_monotonic = None
+    handle._available_models_captured_at = time.monotonic()
+    assert handle.advertised_snapshot_within_spawn_race() is False
+
+    # Nothing captured yet -> not in-race.
+    rt._spawn_monotonic = time.monotonic()
+    handle._available_models_captured_at = 0.0
+    assert handle.advertised_snapshot_within_spawn_race() is False
+
+    # Captured just after spawn, inside the window -> in-race.
+    spawn = 1000.0
+    rt._spawn_monotonic = spawn
+    handle._available_models_captured_at = spawn + 1.0
+    assert handle.advertised_snapshot_within_spawn_race() is True
+
+    # Captured well past the window -> trustworthy again.
+    handle._available_models_captured_at = spawn + _READ_PATH_SPAWN_RACE_SECS + 1.0
+    assert handle.advertised_snapshot_within_spawn_race() is False
+
+
 def test_store_session_config_adopts_sole_advertised_model_when_no_current_id():
     """An unpinned session whose ``session/new`` advertises exactly one model
     but omits ``currentModelId`` must still resolve that model, so ``served_model``

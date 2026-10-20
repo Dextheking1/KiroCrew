@@ -235,6 +235,12 @@ _MEMBERS: dict[str, tuple[str, object, str, str]] = {
         "9de63ef05543",
         "session_handle_model_selection",
     ),
+    "advertised_snapshot_within_spawn_race": (
+        "function",
+        False,
+        "a6632a57e602",
+        "session_handle_model_selection",
+    ),
     "mcp_session_report": ("function", False, "ac691973b9b4", "session_handle_mcp"),
     "model": ("property", False, "bb418bb7ece8", "session_handle_class"),
     "native_child_overflow": ("property", False, "fa6cfecd5574", "session_handle_class"),

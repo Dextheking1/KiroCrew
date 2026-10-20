@@ -101,6 +101,7 @@ def _provider(
     probe: object = None,
     probe_raises: bool = False,
     probe_revalidating: bool = False,
+    within_spawn_race: bool = False,
 ) -> MagicMock:
     """A fake kiro session provider.
 
@@ -111,9 +112,13 @@ def _provider(
     Pass ``probe`` to simulate a probe that disagrees (a fuller entitlement),
     ``probe_raises`` to simulate a probe failure (fail open), or
     ``probe_revalidating`` to simulate the deadline-timeout signal.
+    ``within_spawn_race`` simulates a snapshot captured inside the startup
+    spawn-race window; the default False is the ordinary post-window case, so
+    the narrowing assertions are unaffected.
     """
     provider = MagicMock()
     provider._refresher_calls = 0
+    provider.advertised_snapshot_within_spawn_race = MagicMock(return_value=within_spawn_race)
     if not getter:
         # A provider type with no available_models attribute at all (the
         # claude-code placeholder before session init).
@@ -340,6 +345,33 @@ async def test_no_live_session_leaves_the_catalog_alone():
     # Nothing has initialized yet: entitlement is unknown, not "nothing".
     request = _request()
     assert await agents._entitled_kiro_models(request, CATALOG) == CATALOG
+
+
+@pytest.mark.asyncio
+async def test_spawn_race_snapshot_serves_the_full_catalog(monkeypatch):
+    # issue #21385: a session/new captured inside the startup spawn-race window
+    # can be the free-tier default answered while the lookup raced a token
+    # refresh. Narrowing with it would hide the Claude models the account has, so
+    # the authoritative --list-models catalog is served unfiltered until the
+    # window passes — even though the (equally in-window) probe agrees.
+    request = _request(
+        _provider([{"modelId": "auto"}, {"modelId": "claude-sonnet-5"}], within_spawn_race=True)
+    )
+    assert await agents._entitled_kiro_models(request, CATALOG) == CATALOG
+
+
+@pytest.mark.asyncio
+async def test_post_window_snapshot_still_narrows(monkeypatch):
+    # Once the snapshot is out of the spawn-race window it is trustworthy again,
+    # so a genuinely narrow entitlement still narrows the picker (a real
+    # downgrade is not masked by the race recovery).
+    request = _request(
+        _provider([{"modelId": "auto"}, {"modelId": "claude-sonnet-5"}], within_spawn_race=False)
+    )
+    assert _names(await agents._entitled_kiro_models(request, CATALOG)) == [
+        "auto",
+        "claude-sonnet-5",
+    ]
 
 
 @pytest.mark.asyncio

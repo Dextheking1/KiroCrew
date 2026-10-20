@@ -688,6 +688,18 @@ async def _entitled_kiro_models(request: web.Request, models: list[dict]) -> lis
             raise
         except Exception:
             pass
+        # Even after the heal, a snapshot captured inside the runtime's
+        # startup spawn-race window is untrustworthy: the ``session/new`` list
+        # (and a re-probe launched in the same window) can be the free-tier
+        # default answered while an entitlement lookup raced a token refresh, and
+        # narrowing with it hides models the account actually has (issue #21385).
+        # The ``--list-models`` catalog in hand is the authoritative vocabulary,
+        # so serve it unfiltered until the window passes rather than narrow with
+        # the suspect snapshot; entitlement is still enforced live at send time
+        # (``model_is_unusable``). Narrowing resumes once the snapshot ages out of
+        # the window or a probe outside it confirms a genuine tier.
+        if provider.advertised_snapshot_within_spawn_race():
+            return models
         advertised = ids
         break
     if not advertised:

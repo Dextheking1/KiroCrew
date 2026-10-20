@@ -153,6 +153,7 @@ class AcpSessionHandle:
     refresh_available_models = _sh_models.refresh_available_models
     _mark_available_models_captured = _sh_models._mark_available_models_captured
     maybe_refresh_available_models = _sh_models.maybe_refresh_available_models
+    advertised_snapshot_within_spawn_race = _sh_models.advertised_snapshot_within_spawn_race
     _sync_effort_levels = _sh_models._sync_effort_levels
     # Steering a live turn: ``kiro_crew.acp.session_handle_steering``.
     steer = _sh_steering.steer

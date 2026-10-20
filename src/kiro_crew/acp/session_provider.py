@@ -1412,6 +1412,11 @@ class AcpSessionProvider(LLMProvider):
         """
         return await self._guarded(self._handle.maybe_refresh_available_models(catalog_ids))
 
+    def advertised_snapshot_within_spawn_race(self) -> bool:
+        """Whether this session's advertised snapshot was captured inside the
+        runtime's startup spawn-race window (delegates to the handle)."""
+        return self._handle.advertised_snapshot_within_spawn_race()
+
     def pop_pending_oauth_requests(self) -> list[dict[str, str]]:
         """Drain OAuth requests captured while the shared session initialized."""
         return self._handle.pop_pending_oauth_requests()

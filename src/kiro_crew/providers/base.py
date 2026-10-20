@@ -842,6 +842,26 @@ class LLMProvider(ABC):
         """
         return self.available_models()
 
+    def advertised_snapshot_within_spawn_race(self) -> bool:
+        """True when the advertised snapshot was captured inside the backend's
+        startup spawn-race window.
+
+        The ``session/new`` entitlement list can be answered with the free-tier
+        default when the lookup races a token refresh soon after the backend
+        process spawned. A snapshot captured in that window is untrustworthy to
+        narrow the picker with — even a re-probe launched in the same window can
+        land degraded — so the model list serves the authoritative
+        ``--list-models`` catalog unfiltered while this is True, rather than
+        hiding models the account actually has.
+
+        Declared HERE rather than probed with ``getattr`` at the consumer: a
+        provider that cannot tell (no session, no spawn clock) answers False —
+        "not known to be in the race", the fail-safe that preserves today's
+        narrowing — so the consumer never mistakes a spelling difference for a
+        trustworthy snapshot.
+        """
+        return False
+
     def mcp_session_report(self) -> SessionMcpReport | None:
         """This session's own MCP registration report, or None if it keeps none.
 

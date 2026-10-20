@@ -823,6 +823,29 @@ def _mark_available_models_captured(self: AcpSessionHandle) -> None:
     self._available_models_probe_confirmed = False
 
 
+def advertised_snapshot_within_spawn_race(self: AcpSessionHandle) -> bool:
+    """True when this session's advertised snapshot was captured inside the
+    runtime's startup spawn-race window.
+
+    The same window :meth:`maybe_refresh_available_models` reads to decide a
+    snapshot is suspect: a ``session/new`` list captured within
+    ``_READ_PATH_SPAWN_RACE_SECS`` of the runtime's spawn can be the free-tier
+    default answered while an entitlement lookup raced a token refresh. The
+    picker read (``_entitled_kiro_models``) consults this to serve the
+    authoritative ``--list-models`` catalog unfiltered during the window rather
+    than narrow with the suspect snapshot — the recovery the read-path probe
+    alone cannot guarantee, because a re-probe launched in the same window can
+    itself land (and then confirm) a degraded answer. False when there is no
+    spawn clock or nothing was captured yet, which keeps today's narrowing.
+    """
+    spawn_at = self._runtime.spawn_monotonic
+    return (
+        spawn_at is not None
+        and self._available_models_captured_at > 0.0
+        and (self._available_models_captured_at - spawn_at) <= _READ_PATH_SPAWN_RACE_SECS
+    )
+
+
 async def maybe_refresh_available_models(
     self: AcpSessionHandle, catalog_ids: list[str]
 ) -> list[dict[str, str]]:
@@ -910,12 +933,7 @@ async def maybe_refresh_available_models(
         return snapshot
     auto_only = len(advertised) == 1 and advertised[0].strip().lower() == "auto"
     now = time.monotonic()
-    spawn_at = self._runtime.spawn_monotonic
-    within_spawn_race = (
-        spawn_at is not None
-        and self._available_models_captured_at > 0.0
-        and (self._available_models_captured_at - spawn_at) <= _READ_PATH_SPAWN_RACE_SECS
-    )
+    within_spawn_race = self.advertised_snapshot_within_spawn_race()
     suspect = not self._available_models_probe_confirmed or within_spawn_race or auto_only
     if not suspect:
         return snapshot
