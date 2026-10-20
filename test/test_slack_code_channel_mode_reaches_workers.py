@@ -374,12 +374,12 @@ def test_a_command_with_hidden_characters_is_shown_raw(chan: Any) -> None:  # no
 
 
 def test_the_runner_keeps_a_card_the_trust_rewrote() -> None:
-    """``_run_chat`` asks keep_card before it deletes a linked card (reverting fails)."""
+    """The permission prompt asks keep_card before it deletes a linked card (reverting fails)."""
     import inspect
 
     from kiro_crew.dashboard import chat_runner
 
-    src = inspect.getsource(chat_runner._run_chat)
+    src = inspect.getsource(chat_runner._on_permission_prompt)
     assert "and not keep_code_channel_card(" in src
     keep = src.index("and not keep_code_channel_card(")
     assert src.index("delete_message", keep) > keep

@@ -314,10 +314,10 @@ def test_finish_absorbs_a_cancelled_relay(relay: Any) -> None:
 
 
 def test_the_session_runner_relays_and_retires_worker_cards() -> None:
-    """_run_chat starts the relay without an await and retires it in the finally."""
+    """The permission prompt starts the relay without an await and retires it in the finally."""
     from kiro_crew.dashboard import chat_runner
 
-    src = inspect.getsource(chat_runner._run_chat)
+    src = inspect.getsource(chat_runner._on_permission_prompt)
     assert "_worker_relay = start_worker_approval_relay(" in src
     assert "await start_worker_approval_relay" not in src
     assert "perm_meta=perm_meta" in src and "linked_ts=_slack_approval_ts" in src

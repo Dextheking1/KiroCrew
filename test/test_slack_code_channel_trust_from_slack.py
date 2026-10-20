@@ -193,11 +193,11 @@ def test_an_ordinary_linked_thread_keeps_threading_and_has_no_trust_button(chan:
 
 
 def test_the_session_runner_posts_through_the_mirror_thread_rule() -> None:
-    """_run_chat picks the card's thread from the mirror helper (reverting fails here)."""
+    """The permission prompt picks the card's thread from the mirror helper (reverting fails)."""
     from kiro_crew.dashboard import chat_runner
 
-    src = inspect.getsource(chat_runner._run_chat)
-    assert "code_channel_post_thread(\n                            slot._slack_channel" in src
+    src = inspect.getsource(chat_runner._on_permission_prompt)
+    assert "code_channel_post_thread(slot._slack_channel, slot._slack_thread_ts)" in src
     assert "channel_trust=_approval_thread is None" in src
 
 
