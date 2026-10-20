@@ -10,6 +10,8 @@ and a patch of the method on the class or on an instance reaches every caller.
 
 Instance fields written: ``_permission_gate_events``, ``_permission_options``,
 ``_pi_gate_asked_ids``, ``_pi_gate_denied_ids``, ``_pi_gate_request_tool``,
+``_drain_mode_reports``, ``_mcp_notifications``, ``_mcp_report_frame_floor``,
+``_routing_answer_floor``,
 ``_turn_permission_denied``.
 
 Instance fields read: ``_acp_config_options``, ``_agent``, ``_deepseek_gate_nonce``,
@@ -55,7 +57,11 @@ from kiro_crew.acp.types import (
     AcpEvent,
     JsonRpcMessage,
 )
-from kiro_crew.agent_sdk.backends import ACP_BACKENDS_PERMISSION_KIND_FROM_TOOL_CALL
+from kiro_crew.agent_sdk.backends import (
+    ACP_BACKEND_FORBIDDEN_MODES,
+    ACP_BACKENDS_PERMISSION_KIND_FROM_TOOL_CALL,
+    session_config_drift_issue,
+)
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
 from kiro_crew.trust_patterns import GrantDeadline, GrantEnded, grant_deadline_guard
 
@@ -167,6 +173,31 @@ async def _apply_session_permission_routing(self: AcpClient) -> None:
         except acp_tool_gate.ToolGateUnroutable as gate_exc:
             raise AcpToolGateUnroutable(str(gate_exc)) from exc
         return
+
+    if backend in ACP_BACKEND_FORBIDDEN_MODES:
+        # Read the write back rather than trusting "no error": the response carries
+        # the session's configOptions, and a harness whose higher-ranked permission
+        # source wins could accept the write and still report the option on.
+        drift = session_config_drift_issue(
+            backend,
+            {"sessionUpdate": "config_option_update", "configOptions": self._acp_config_options},
+        )
+        if drift:
+            try:
+                acp_tool_gate.enforce_runtime_routing(
+                    backend,
+                    f"after Kiro Crew's write, {drift}",
+                    verdict=acp_tool_gate.Verdict.BYPASSED,
+                    remedy=acp_tool_gate.remediation_for(backend),
+                )
+            except acp_tool_gate.ToolGateUnroutable as gate_exc:
+                raise AcpToolGateUnroutable(str(gate_exc)) from None
+            return
+        # Frames buffered while the write was in flight can still name the value the
+        # session was restored in (measured -- a restored ``allow_all on`` is reported
+        # once more just before the write's own answer). The answer supersedes them;
+        # everything read after it is live and is checked.
+        self._routing_answer_floor = len(self._mcp_notifications)
 
     logger.info(
         "ACP permission route armed: %s=%s (%s)",
@@ -751,6 +782,134 @@ async def _tripwire_goose_mode(self: AcpClient, msg: JsonRpcMessage) -> None:
         )
     except acp_tool_gate.ToolGateUnroutable as exc:
         raise AcpToolGateUnroutable(str(exc)) from None
+
+
+async def _tripwire_permission_state(self: AcpClient, msg: JsonRpcMessage) -> None:
+    """The one frame-path check that a harness's own permission state has not moved.
+
+    Each enforced harness whose asking a session-level state can turn off names that
+    state in exactly one place: goose its seeded mode (``_tripwire_goose_mode``), a
+    session-config harness with a ``ACP_BACKEND_FORBIDDEN_MODES`` row its permission
+    option and forbidden modes (``_tripwire_session_config``). Both are membership
+    tests, so every other backend -- kiro-cli included -- reads the frame and returns.
+    """
+    if self._is_goose:
+        await self._tripwire_goose_mode(msg)
+    elif self.backend in ACP_BACKEND_FORBIDDEN_MODES:
+        await self._tripwire_session_config(msg)
+
+
+async def _tripwire_session_config(self: AcpClient, msg: JsonRpcMessage) -> None:
+    """Stop a session-config-routed harness that reports leaving its routed state.
+
+    The routing write (``_apply_session_permission_routing``) proves the permission
+    option's value when the session opens; it cannot hold the session there if the
+    harness moves itself. Copilot CLI 1.0.100 reports such a move as a
+    ``config_option_update`` (``allow_all`` on) or a ``current_mode_update``
+    (``autopilot``) on the session's own connection, so either is treated as the
+    open-time check treats the same state: the harness is stopped and the turn fails
+    with the gate's reason. A table lookup first (``ACP_BACKEND_FORBIDDEN_MODES``),
+    so a harness outside it -- kiro-cli included -- gains no work (harness-parity H13).
+    """
+    if self.backend not in ACP_BACKEND_FORBIDDEN_MODES:
+        return
+    params = msg.params if isinstance(msg.params, dict) else {}
+    issue = session_config_drift_issue(self.backend, params.get("update"))
+    if not issue:
+        return
+    logger.error(
+        "%s routing: %s; stopping the harness before it approves on its own [session=%s]",
+        self.backend,
+        issue,
+        self._session_id,
+    )
+    try:
+        sel_module.sel().log_tool_invocation(
+            session_key=self._session_key or "",
+            source="acp",
+            tool_name="session/set_config_option",
+            tool_kind="other",
+            outcome="denied",
+            metadata={
+                "reason": "session_config_tripwire",
+                "backend": self.backend,
+                "issue": _scrub_observed(issue),
+            },
+        )
+    except Exception:  # pragma: no cover - audit is best-effort
+        logger.debug("session-config tripwire: audit failed", exc_info=True)
+    await self._kill_process(force=True)
+    try:
+        acp_tool_gate.enforce_runtime_routing(
+            self.backend,
+            issue,
+            remedy=acp_tool_gate.remediation_for(self.backend),
+        )
+    except acp_tool_gate.ToolGateUnroutable as exc:
+        raise AcpToolGateUnroutable(str(exc)) from None
+
+
+def _drop_superseded_config_frames(self: AcpClient) -> None:
+    """Before the start's drain, drop the config reports the routing answer superseded.
+
+    The drain applies every ``config_option_update`` it finds, buffered or live. One
+    buffered while the routing write was in flight still names the state the
+    session was restored in, and applying it would put that stale value back over
+    the write's own answer. Only those frames -- config and mode reports from before
+    the answer -- are dropped; every other buffered frame (an OAuth request, an MCP
+    server's status) is left for the drain, and everything read after the answer is
+    applied and then checked (``_refuse_session_config_drift``). Called only for a
+    member of ``ACP_BACKEND_FORBIDDEN_MODES`` (the caller tests that, H13).
+    """
+    floor = min(getattr(self, "_routing_answer_floor", 0), len(self._mcp_notifications))
+    # Only config reports: the routing write moves ``allow_all`` and not the mode,
+    # so a mode report from before its answer is still the session's mode.
+    superseded = {"config_option_update"}
+
+    def _is_superseded(msg: JsonRpcMessage) -> bool:
+        update = msg.params.get("update") if isinstance(msg.params, dict) else None
+        return isinstance(update, dict) and update.get("sessionUpdate") in superseded
+
+    head = self._mcp_notifications[:floor]
+    kept = [msg for msg in head if not _is_superseded(msg)]
+    # The MCP report's own floor indexes into the same buffer; it falls by the
+    # frames removed below it so it still marks the same frame.
+    report_floor = getattr(self, "_mcp_report_frame_floor", 0)
+    removed_below = sum(1 for msg in head[:report_floor] if _is_superseded(msg))
+    self._mcp_notifications[:floor] = kept
+    self._mcp_report_frame_floor = max(0, report_floor - removed_below)
+    self._routing_answer_floor = 0
+
+
+async def _refuse_session_config_drift(self: AcpClient) -> None:
+    """Before a prompt, stop a harness whose last known state left its routed values.
+
+    The in-turn readers run :func:`_tripwire_session_config` on each frame they
+    read. Frames that arrive while a request outside a turn is waited on (an effort
+    or model write, a compaction wait) are only buffered, and a config write's
+    answer replaces the cached options without the reader seeing it -- and Copilot
+    CLI reports an ``allow_all`` move only on the NEXT config write. So the cached
+    options and every frame buffered since the start's drain are read here, before
+    the next prompt can run a tool. Called only for a member (the caller tests it).
+    """
+    pending = [
+        msg.params.get("update")
+        for msg in self._mcp_notifications
+        if isinstance(msg.params, dict) and isinstance(msg.params.get("update"), dict)
+    ]
+    # Mode reports the start's drain read (it applies none and clears its buffer).
+    pending.extend(self._drain_mode_reports)
+    self._drain_mode_reports = []
+    current = {"sessionUpdate": "config_option_update", "configOptions": self._acp_config_options}
+    for update in [*pending, current]:
+        issue = session_config_drift_issue(self.backend, update)
+        if issue:
+            await self._tripwire_session_config(
+                JsonRpcMessage(
+                    method="session/update",
+                    params={"sessionId": self._session_id, "update": update},
+                )
+            )
 
 
 async def _tripwire_pi_gate(self: AcpClient, msg: JsonRpcMessage) -> None:
