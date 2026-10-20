@@ -315,6 +315,19 @@ export function useWebSocket() {
             }
             break
           }
+          case 'reactions_changed': {
+            // A reaction was toggled on another tab or pop-out (or via the
+            // API). Mirror pins_changed: invalidate only the affected slot's
+            // ['chat-reactions', slotKey] cache so a second view updates
+            // without a remount, instead of holding stale reactions behind the
+            // app-wide staleTime: Infinity. The payload carries slot_key only
+            // — no reaction content crosses the WebSocket.
+            const slotKey = (data as { slot_key?: string }).slot_key
+            if (slotKey) {
+              queryClient.invalidateQueries({ queryKey: ['chat-reactions', slotKey] })
+            }
+            break
+          }
           case 'artifact_update':
             handleArtifactUpdate(queryClient, data)
             break

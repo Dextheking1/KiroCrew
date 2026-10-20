@@ -3,7 +3,13 @@ import { motion } from 'framer-motion'
 import { Pencil, Send, Copy, Check, Link2, MessageSquare, Target, Pin, PinOff, X, Clock, Quote, MoreHorizontal } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import { copySessionLink } from '../../utils/shareUrl'
-import { ICON_ACTION_ROW_CLS } from '../../utils/touchActions'
+import { ICON_ACTION_ROW_CLS, HOVER_NONE_ACTIONS_ROW_CLS } from '../../utils/touchActions'
+import { MessageReactionBar } from './MessageReactionBar'
+import type { ReactionError } from '../../hooks/useChatReactions'
+
+// Stable empty-set identity so an absent `activeReactions` prop never forces
+// a re-render of MessageReactionBar's memo comparison on every parent render.
+const EMPTY_REACTIONS: ReadonlySet<string> = new Set()
 import { useSearchHighlight, useCurrentOcc } from '../../hooks/SearchHighlightContext'
 import { useImeGuard } from '../../hooks/useImeGuard'
 import { applySearchHighlights, clearSearchHighlights } from '../../utils/domHighlight'
@@ -53,6 +59,18 @@ interface UserMessageProps {
   mode?: string
   pinned?: boolean
   onTogglePin?: () => void
+  /** Emoji the current caller has already placed on this message.
+   *  Absent or empty: the reaction row still renders when
+   *  `onToggleReaction` is given — `active` only decides which of the fixed
+   *  four start filled. */
+  activeReactions?: ReadonlySet<string>
+  /** Toggle one of the fixed reaction emoji on this message. Absent: no
+   *  reaction row is drawn, same opt-in contract as `onTogglePin`. */
+  onToggleReaction?: (emoji: string) => void
+  /** The last failed reaction on this message, surfaced inline by the bar so a
+   *  failure is never silent. */
+  reactionError?: ReactionError | null
+  onClearReactionError?: () => void
   /** Open (or start) the reply thread on this message. Only a crewmate's chat offers it. */
   onReplyInThread?: () => void
   /** Whether the slot currently has a running turn. Gates the pending-steer
@@ -101,7 +119,7 @@ interface UserMessageProps {
   onJumpToQuote?: (quote: MessageQuote) => void
 }
 
-const UserMessage = memo(function UserMessage({ content, meta, timestamp, timestampTitle, renderContent, canEdit, messageIndex, messageTs, onEditResend, doubleClickToEdit = false, slotKey, slotTitle, mode, pinned, onTogglePin, onReplyInThread, slotRunning, hideSteerBadge, tone = 'default', editRequest, onEditConsumed, onQuoteMessage, onJumpToQuote }: UserMessageProps) {
+const UserMessage = memo(function UserMessage({ content, meta, timestamp, timestampTitle, renderContent, canEdit, messageIndex, messageTs, onEditResend, doubleClickToEdit = false, slotKey, slotTitle, mode, pinned, onTogglePin, activeReactions, onToggleReaction, reactionError, onClearReactionError, onReplyInThread, slotRunning, hideSteerBadge, tone = 'default', editRequest, onEditConsumed, onQuoteMessage, onJumpToQuote }: UserMessageProps) {
   useLanguageGeneration() // memo() bails out of the provider-level repaint; subscribe directly
   const [editing, setEditing] = useState(false)
   const ime = useImeGuard()
@@ -747,6 +765,20 @@ const UserMessage = memo(function UserMessage({ content, meta, timestamp, timest
             the Font Family setting never writes. */}
         {timestamp && <span className="text-muted text-[12px] leading-5 tabular-nums" title={timestampTitle}>{timestamp}</span>}
       </div>
+      {/* Own row below the action strip. The bar manages its own reveal per
+          button: a placed emoji shows at rest as the "where I left off" marker,
+          and the unplaced ones (and the whole row on a message with none) stay
+          collapsed to zero height until the message is hovered or focused, so
+          the row costs no transcript density at rest. */}
+      {messageTs && onToggleReaction && (
+        <MessageReactionBar
+          active={activeReactions ?? EMPTY_REACTIONS}
+          onToggle={onToggleReaction}
+          error={reactionError}
+          onClearError={onClearReactionError}
+          className={`mt-0.5 ${HOVER_NONE_ACTIONS_ROW_CLS}`}
+        />
+      )}
       {/* No hand-off: the row's own inline editor and the composer draft are
           unsaved text a navigation would discard (same ruling as AssistantMessage). */}
       <ErrorNotice
