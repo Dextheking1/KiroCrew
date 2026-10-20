@@ -173,7 +173,7 @@ def defer_removal(self: CronService, job_id: str) -> None:
     """
     for job in self._jobs:
         if job.id == job_id:
-            job.enabled = False
+            job.hold_off_schedule()
             break
     self._pending_removals.add(job_id)
 

@@ -12,6 +12,7 @@ the in-memory ``enabled`` it is folded into -- are fields of it.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -179,6 +180,54 @@ class CronJob:
     # leave the store's pause state and failure count as they find them. None
     # for a record no run stamped: the run's pause state is applied as is.
     auto_paused_at_start: bool | None = None
+    # Runtime-only (never serialized): the EXECUTION-STATE REVISION, a per-job
+    # counter bumped by every execution-owned write of the auto-pause reason
+    # (``auto_paused`` / ``consecutive_failures``) on the loop thread --
+    # :meth:`record_failure`, :meth:`record_success`, and the failed-one-shot
+    # auto-pause in ``run_execution`` -- all through
+    # :meth:`_note_exec_state_change`. It is the fence
+    # :meth:`CronService._enable_job_locked` reads to roll a FAILED pause/resume
+    # save back correctly. A fixed snapshot/restore of those fields cannot: a
+    # concurrent ``record_failure`` crossing the auto-pause threshold in the
+    # save window must survive a failed pause (not be reverted), and a
+    # concurrent ``record_success`` clearing an auto-pause must survive a failed
+    # resume (not be reinstated) -- opposite directions no fixed field set
+    # satisfies, and a value comparison cannot tell "the run set it" from "the
+    # pause set it to the same value" (a resume sets auto_paused False, exactly
+    # as record_success does). ``_enable_job_locked`` snapshots this revision
+    # before mutating and, on a save failure, restores ``auto_paused`` /
+    # ``consecutive_failures`` ONLY when the revision is unchanged across the
+    # save; a changed revision keeps the run's write. ``user_paused`` is never
+    # execution-written, so it is ALWAYS restored. ``enabled`` is handled by
+    # branch: on the UNCHANGED-revision branch it is restored to its pre-call
+    # value EXACTLY (so an ``enabled=False`` a park left with no pause flag is
+    # preserved, not re-derived back to True); on the CHANGED-revision branch it
+    # is narrowed, ``enabled and not (user_paused or auto_paused)``, which keeps a
+    # concurrently-set False and never turns a disabled job back on. Because the
+    # unchanged branch trusts the revision to mean "no run touched these fields",
+    # EVERY loop-thread write of them -- including a park's bare ``enabled=False``
+    # -- MUST bump the revision (through ``hold_off_schedule`` / ``auto_pause_now``
+    # / ``set_enabled`` / ``record_failure`` / ``record_success``), or the restore
+    # would clobber it. Starts at 0 and only ever rises within a process; a store
+    # reload replaces the job object and resets it, which is harmless -- it is
+    # read only within one locked ``_enable_job`` transaction, never persisted or
+    # compared across reloads.
+    exec_state_revision: int = 0
+    # Serialises the in-memory reads and writes of the auto-pause fields and the
+    # revision above BETWEEN THREADS. ``_enable_job_locked`` runs on a worker
+    # thread (``asyncio.to_thread``) while ``record_failure`` / ``record_success``
+    # and the one-shot auto-pause run on the loop thread, so the revision counter
+    # alone leaves a check-then-act window: the GIL can switch threads between the
+    # worker's ``revision == before`` read and its restore write, letting a run's
+    # write land in between and be clobbered. Both sides take this lock ONLY for
+    # their tiny field reads/writes -- never across ``_save``, any I/O, or the run
+    # itself -- so it closes that window with no deadlock and no hot-path cost.
+    # Runtime-only (``compare=False``/``repr=False``, no store codec entry); a
+    # shallow ``copy.copy`` of the job shares the lock, which is correct -- the
+    # terminal-merge copy and the live job must serialise against each other.
+    exec_state_lock: threading.Lock = field(
+        default_factory=threading.Lock, compare=False, repr=False
+    )
     context_enabled: bool = False
     agent_id: str = ""
     # Member identity is distinct from the provider template in agent_id.
@@ -402,6 +451,65 @@ class CronJob:
         if not self.result_produced:
             self.last_result = ""
 
+    def _note_exec_state_change(self) -> None:
+        """Bump the execution-state revision for a loop-thread write.
+
+        THE INVARIANT: every loop-thread write to a field
+        ``_enable_job_locked``'s rollback restores -- ``enabled``,
+        ``auto_paused``, ``user_paused``, ``consecutive_failures`` -- goes
+        through this bump (under :attr:`exec_state_lock`), so the rollback can
+        tell a run wrote those fields during its save and keep the run's write
+        rather than reverting it. The run-lifecycle loop modules therefore never
+        assign those fields raw; they call :meth:`record_failure` /
+        :meth:`record_success` / :meth:`hold_off_schedule` (or bump inline under
+        the lock), and ``test_cron_exec_state_invariant.py`` fails the build if a
+        raw assignment slips into those modules. See ``exec_state_revision``.
+        """
+        self.exec_state_revision += 1
+
+    def hold_off_schedule(self) -> None:
+        """Hold the job off the schedule now (``enabled=False``) and bump the fence.
+
+        The one-shot park / held-off-schedule writes in the run lifecycle
+        (``run_execution``'s timeout and one-shot park, ``run_teardown``'s reap
+        and cancel park) set ``enabled`` False on the LIVE job on the loop
+        thread, provisionally, before the terminal merge persists it. A bare
+        ``enabled = False`` does not bump the execution-state revision, so a
+        concurrent ``_enable_job_locked`` save that fails with an unchanged
+        revision would restore the pre-park ``enabled`` and resurrect the parked
+        one-shot. Routing the write through here bumps the revision under
+        :attr:`exec_state_lock`, so the rollback sees it and keeps the park.
+        """
+        with self.exec_state_lock:
+            self.enabled = False
+            self._note_exec_state_change()
+
+    def auto_pause_now(self) -> None:
+        """Auto-pause the job now (``enabled=False``, ``auto_paused=True``) and bump.
+
+        The failed-one-shot auto-pause in the run lifecycle. Same fence reason as
+        :meth:`hold_off_schedule`: the write runs on the loop thread, so it bumps
+        the execution-state revision under :attr:`exec_state_lock` so a
+        concurrent ``_enable_job_locked`` rollback keeps it. The caller emits the
+        SEL audit AFTER this returns (the audit is I/O, not held under the lock).
+        """
+        with self.exec_state_lock:
+            self.enabled = False
+            self.auto_paused = True
+            self._note_exec_state_change()
+
+    def set_enabled(self, value: bool) -> None:
+        """Set ``enabled`` on the loop thread and bump the fence.
+
+        For a loop-thread write of ``enabled`` that is neither a park nor an
+        auto-pause -- the post-merge reconciliation in ``run_teardown`` that
+        re-derives ``enabled`` from the saved store's pause flags. Same fence
+        reason as :meth:`hold_off_schedule`.
+        """
+        with self.exec_state_lock:
+            self.enabled = value
+            self._note_exec_state_change()
+
     def _audit_pause_change(self, outcome: str) -> None:
         """Emit a SEL audit event for an auto-pause permission transition.
 
@@ -532,11 +640,22 @@ class CronJob:
         self.failure_recorded = True
         if self.auto_paused_at_start and not self.auto_paused:
             return
-        self.consecutive_failures += 1
-        limit = self.auto_pause_limit()
-        if limit is not None and self.consecutive_failures >= limit and not self.auto_paused:
-            self.enabled = False
-            self.auto_paused = True
+        # Hold exec_state_lock ONLY for the field reads/writes, so a concurrent
+        # _enable_job_locked rollback on the worker thread cannot interleave
+        # between its revision check and its restore (see exec_state_lock). The
+        # SEL audit is I/O and runs AFTER the lock is released. Bump the revision
+        # here, not at the top: the early-return path writes none of these
+        # fields and must not invalidate a concurrent rollback.
+        paused_now = False
+        with self.exec_state_lock:
+            self._note_exec_state_change()
+            self.consecutive_failures += 1
+            limit = self.auto_pause_limit()
+            if limit is not None and self.consecutive_failures >= limit and not self.auto_paused:
+                self.enabled = False
+                self.auto_paused = True
+                paused_now = True
+        if paused_now:
             self._audit_pause_change("auto_paused")
 
     def record_success(self) -> None:
@@ -568,11 +687,20 @@ class CronJob:
         reaper apply its pause state and count as they stand.
         """
         self.auto_paused_at_start = None
-        self.consecutive_failures = 0
-        self.last_failure_hash = ""
-        self.last_failure_at = 0.0
-        if self.auto_paused:
-            self.auto_paused = False
-            if not self.user_paused:
-                self.enabled = True
+        # Hold exec_state_lock ONLY for the field reads/writes (see
+        # exec_state_lock and record_failure); the SEL audit runs after release.
+        # This call always writes ``consecutive_failures`` (and may clear
+        # ``auto_paused``), all execution-owned, so it bumps the revision.
+        cleared_now = False
+        with self.exec_state_lock:
+            self._note_exec_state_change()
+            self.consecutive_failures = 0
+            self.last_failure_hash = ""
+            self.last_failure_at = 0.0
+            if self.auto_paused:
+                self.auto_paused = False
+                if not self.user_paused:
+                    self.enabled = True
+                cleared_now = True
+        if cleared_now:
             self._audit_pause_change("auto_pause_cleared")

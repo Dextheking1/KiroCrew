@@ -412,7 +412,7 @@ async def _execute_with_timeout(
         # is done here (the result merge persists it). A delete_after_run
         # one-shot is a failed run: the finally below auto-pauses it.
         if run_parks_one_shot(job):
-            job.enabled = False
+            job.hold_off_schedule()
         logger.error("Cron job '%s' timed out after %ds", job.name, deadline)
         # Alerted on the count's own terms: a run that already recorded its
         # failure was reported by the handler that recorded it, and a run whose
@@ -427,7 +427,10 @@ async def _execute_with_timeout(
         # never-started run is not a failed run and keeps its own handling.
         if job.delete_after_run and job.last_status == "error" and not job.auto_paused:
             if not (job.fire_time_denied or job.run_never_started):
-                job.enabled, job.auto_paused = False, True
+                # auto_pause_now() does the field writes + revision bump under
+                # exec_state_lock (the SEL audit is I/O, after the lock), so a
+                # concurrent _enable_job rollback sees this write and keeps it.
+                job.auto_pause_now()
                 job._audit_pause_change("auto_paused")
 
 
@@ -546,4 +549,4 @@ async def _execute(self: CronService, job: CronJob, claim: _RunClaim | None = No
     # own when policy loosens. A fire that never started is not parked
     # (see run_parks_one_shot): nothing ran, so it stays due and retries.
     if run_parks_one_shot(job):
-        job.enabled = False
+        job.hold_off_schedule()
