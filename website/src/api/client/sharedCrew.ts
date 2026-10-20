@@ -20,6 +20,7 @@ import type {
 } from '../sharedCrewUi'
 import type { CrewModeResponse } from '../sharedCrewMode'
 import type { CreateInvitesBody, TailscaleInvite, TailscaleInvitesStatus } from '../sharedCrewInvites'
+import { CONFIRM_IRREVERSIBLE_HEADER, type AccessView, type ApprovedPerson } from '../sharedCrewAccess'
 import type { ClientTransport } from './transport'
 
 export interface SharedCrewSessionQuery {
@@ -77,8 +78,9 @@ export function createSharedCrewEndpoints({ get, post, del, j }: ClientTransport
     tailscaleInvites: () => read<TailscaleInvitesStatus>('/api/shared-crew/tailscale/invites'),
     tailscaleConnect: async (key: string): Promise<TailscaleInvitesStatus> =>
       await j(await post('/api/shared-crew/tailscale/credential', { key })) as TailscaleInvitesStatus,
+    /** Removing the key cannot be undone: callers confirm first, and the header says so. */
     tailscaleDisconnect: async (): Promise<TailscaleInvitesStatus> =>
-      await j(await del('/api/shared-crew/tailscale/credential')) as TailscaleInvitesStatus,
+      await j(await del('/api/shared-crew/tailscale/credential', undefined, undefined, CONFIRM_IRREVERSIBLE_HEADER)) as TailscaleInvitesStatus,
     tailscaleCreateInvites: async (body: CreateInvitesBody): Promise<{ invites: TailscaleInvite[] }> =>
       await j(await post('/api/shared-crew/tailscale/invites', body)) as { invites: TailscaleInvite[] },
     tailscaleResendInvite: async (id: string): Promise<void> => {
@@ -88,6 +90,18 @@ export function createSharedCrewEndpoints({ get, post, del, j }: ClientTransport
       await j(await del('/api/shared-crew/tailscale/invites/' + encodeURIComponent(id))) as { revoked: string; member_removed: boolean },
     tailscaleUploadAvatar: async (dataBase64: string): Promise<{ avatar_id: string }> =>
       await j(await post('/api/shared-crew/tailscale/avatars', { data_base64: dataBase64 })) as { avatar_id: string },
+    /** Who may open this Crew: waiting, approved and the first-share warning. Owner-only. */
+    sharedCrewAccess: () => read<AccessView>('/api/shared-crew/access'),
+    sharedCrewAckFirstShare: async (): Promise<void> => {
+      await j(await post('/api/shared-crew/access/first-share/ack'))
+    },
+    sharedCrewApprove: async (userId: string): Promise<{ approved: ApprovedPerson }> =>
+      await j(await post('/api/shared-crew/access/waiting/' + encodeURIComponent(userId) + '/approve')) as { approved: ApprovedPerson },
+    sharedCrewDismiss: async (userId: string): Promise<void> => {
+      await j(await post('/api/shared-crew/access/waiting/' + encodeURIComponent(userId) + '/dismiss'))
+    },
+    sharedCrewRemoveApproved: async (userId: string): Promise<{ removed: string; stopped_running: number; cancelled_queued: number; closed_connections: number }> =>
+      await j(await del('/api/shared-crew/access/approved/' + encodeURIComponent(userId))) as { removed: string; stopped_running: number; cancelled_queued: number; closed_connections: number },
     /** Cancel exactly one work item at the revision the UI showed. A 409 is not
      *  an error: it carries the item's current state, which the UI adopts. */
     sharedCrewCancelWork: async (workId: string, expectedRevision: number): Promise<CancelWorkResult> => {

@@ -198,6 +198,7 @@ const API_KEY_ORDER = [
   'sharedCrewCapacity', 'sharedCrewWork', 'sharedCrewPresence', 'sharedCrewDecisions', 'sharedCrewSendState', 'sharedCrewTypingLease',
   'tailscaleInvites', 'tailscaleConnect', 'tailscaleDisconnect', 'tailscaleCreateInvites', 'tailscaleResendInvite',
   'tailscaleRevokeInvite', 'tailscaleUploadAvatar',
+  'sharedCrewAccess', 'sharedCrewAckFirstShare', 'sharedCrewApprove', 'sharedCrewDismiss', 'sharedCrewRemoveApproved',
   'sharedCrewCancelWork',
 ]
 

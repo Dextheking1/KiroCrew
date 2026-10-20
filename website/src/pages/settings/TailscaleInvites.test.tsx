@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { ApiError } from '../../api/apiError'
@@ -16,12 +16,17 @@ vi.mock('../../api/client', () => ({
     tailscaleResendInvite: vi.fn(),
     tailscaleRevokeInvite: vi.fn(),
     tailscaleUploadAvatar: vi.fn(),
+    sharedCrewAccess: vi.fn(),
+    sharedCrewAckFirstShare: vi.fn(),
   },
 }))
 const read = vi.mocked(api.tailscaleInvites)
 const connect = vi.mocked(api.tailscaleConnect)
 const create = vi.mocked(api.tailscaleCreateInvites)
 const revoke = vi.mocked(api.tailscaleRevokeInvite)
+const disconnect = vi.mocked(api.tailscaleDisconnect)
+const accessRead = vi.mocked(api.sharedCrewAccess)
+const ack = vi.mocked(api.sharedCrewAckFirstShare)
 
 const KEY = 'tskey-api-kAbC123CNTRL-Zz9yYxXwWvV'
 
@@ -42,7 +47,7 @@ function mount() {
   return render(<QueryClientProvider client={qc}><TailscaleInvites /></QueryClientProvider>)
 }
 
-beforeEach(() => { vi.clearAllMocks() })
+beforeEach(() => { vi.clearAllMocks(); accessRead.mockResolvedValue(null) })
 
 describe('TailscaleInvites', () => {
   it('without a key: shows the admin-console share path and the one-time key form', async () => {
@@ -135,6 +140,35 @@ describe('TailscaleInvites', () => {
     expect(screen.getByText(/closes their open Crew tabs/)).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('invite-revoke-confirm'))
     await waitFor(() => expect(revoke).toHaveBeenCalledWith('9'))
+  })
+
+  it('removes the API key only after a confirm, since it cannot be undone', async () => {
+    read.mockResolvedValue(status())
+    disconnect.mockResolvedValue(status({ connected: false }))
+    mount()
+    fireEvent.click(await screen.findByTestId('invite-disconnect'))
+    expect(disconnect).not.toHaveBeenCalled()
+    expect(await screen.findByText(/can't be undone/)).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove key' }))
+    await waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1))
+  })
+
+  it('asks the first-share question before the first invite, then sends', async () => {
+    read.mockResolvedValue(status())
+    accessRead.mockResolvedValue({
+      readable: true, waiting: [], approved: [], seeded: [], first_share_ack: false,
+      first_share: { needs_ack: true, sessions: 4, memory_items: 12, host: { state: 'available', reason: '', backend: 'caffeinate', laptop: false, laptop_reason: 'no_battery' } },
+    })
+    ack.mockResolvedValue(undefined)
+    create.mockResolvedValue({ invites: [invite()] })
+    mount()
+    fireEvent.change(await screen.findByTestId('invite-emails'), { target: { value: 'ann@example.com' } })
+    fireEvent.click(screen.getByTestId('invite-send'))
+    expect(await screen.findByText('They will see all 4 sessions and Crew memory (12 items).')).toBeInTheDocument()
+    expect(create).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Share it' }))
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(ack).toHaveBeenCalledTimes(1)
   })
 
   it('warns before the key expires and after it has', async () => {

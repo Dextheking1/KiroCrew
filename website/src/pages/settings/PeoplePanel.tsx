@@ -3,9 +3,11 @@
  *  and, when the Crew can tell, how much work that person has active and queued.
  *
  *  Access to a Crew is decided by the network and the sign-in in front of it.
- *  The one in-Crew control is the owner's Tailscale invite card
+ *  The in-Crew controls are the owner's Tailscale invite card
  *  (`TailscaleInvites.tsx`), which shares this machine through Tailscale and
- *  admits the login that accepted; there is no role or admin control, and no
+ *  admits the login that accepted, and the access card (`TailscaleAccess.tsx`),
+ *  where the owner approves a same-tailnet person who is waiting. The set of
+ *  people who get in is computed, never typed; there is no role or admin control, and no
  *  management URL is ever taken from a peer or from config. An enterprise Crew
  *  points to its console only when its capabilities say one is configured.
  *
@@ -23,6 +25,7 @@ import { capabilityUsable, membershipPointer, principalInitials, principalName, 
 import { SharedAccessSetup } from './SharedAccessSetup'
 import { ConsoleAccess, NetworkAdapters, RemoteControlCard, TeamConfigInvalid } from './PeopleModes'
 import { TailscaleInvites } from './TailscaleInvites'
+import { TailscaleAccess } from './TailscaleAccess'
 import { avatarUrl } from '../../api/sharedCrewInvites'
 import { effectiveMode } from '../../api/sharedCrewMode'
 import { useSharedCrewCapabilities, useSharedCrewMode, useSharedCrewPeople } from '../../hooks/sharedCrew/useSharedCrew'
@@ -100,6 +103,7 @@ export function PeoplePanel() {
     return (
       <div className="flex flex-col gap-4" data-testid="people-personal">
         <SharedAccessSetup capabilities={capabilities} />
+        <TailscaleAccess />
         <TailscaleInvites />
         <RemoteControlCard />
       </div>
@@ -138,6 +142,7 @@ export function PeoplePanel() {
           </SettingsCard>
         </SettingsSection>
       )}
+      <TailscaleAccess />
       <TailscaleInvites />
       <NetworkAdapters adapters={adapters} />
       <RemoteControlCard />
