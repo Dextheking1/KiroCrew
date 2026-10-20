@@ -82,6 +82,7 @@ class _ChatTurn:
     _directive_loop_gen: "int"
     _directive_channel_origin: "bool"
     _commands_off: "bool"
+    _recovery_echo_owed: "bool"
     _turn_actor: "str"
     regenerate_hint: "str"
     _on_consumed: "Callable[[bool], None] | None"
@@ -146,6 +147,7 @@ class _ChatTurn:
     _mirror_thread: "str | None"
     _mirror_stream_tried: "bool"
     _mirror_thinking_ts: "str"
+    _mirror_echo_posted: "bool"
     _native_card_output: "dict[str, list[str]]"
     _native_card_output_len: "dict[str, int]"
     _native_result_seen: "set[str]"
@@ -313,6 +315,7 @@ class _ChatTurn:
         _directive_loop_gen: "int",
         _directive_channel_origin: "bool",
         _commands_off: "bool",
+        _recovery_echo_owed: "bool",
         _turn_actor: "str",
         regenerate_hint: "str",
         _on_consumed: "Callable[[bool], None] | None",
@@ -341,6 +344,7 @@ class _ChatTurn:
         self._directive_loop_gen = _directive_loop_gen
         self._directive_channel_origin = _directive_channel_origin
         self._commands_off = _commands_off
+        self._recovery_echo_owed = _recovery_echo_owed
         self._turn_actor = _turn_actor
         self.regenerate_hint = regenerate_hint
         self._on_consumed = _on_consumed

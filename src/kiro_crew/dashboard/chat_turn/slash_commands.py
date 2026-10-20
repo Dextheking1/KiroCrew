@@ -712,6 +712,8 @@ async def _turn_slash_gate(turn: _ChatTurn) -> _Flow | None:
     turn._mirror_stream_tried = False
     # ts of the mirror's "Thinking…" placeholder; "" once it has been deleted.
     turn._mirror_thinking_ts = ""
+    # Whether this turn posted its prompt echo; a recovery requeue reads it.
+    turn._mirror_echo_posted = False
     _mirror_chan: str | None = ""
     turn._mirror_chan = _mirror_chan
     _mirror_active_task = ""

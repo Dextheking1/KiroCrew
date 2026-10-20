@@ -355,7 +355,8 @@ class TestHook:
         slot.append("assistant", "first reply")
         slot.append("user", "second message")
         slot.drain()
-        await _run_chat(state, slot, "second message")
+        # Stamped as the dashboard send handler stamps a person's send.
+        await _run_chat(state, slot, "second message", _directive_user_origin=True)
 
         echoes = [
             call.args
@@ -391,7 +392,7 @@ class TestHook:
         slot.append("user", prompt)
         slot.drain()
 
-        await _run_chat(state, slot, prompt)
+        await _run_chat(state, slot, prompt, _directive_user_origin=True)
 
         texts = [
             call.args[1]

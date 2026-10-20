@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         _tool_identity_fields,
         capabilities_of,
         crew_log_emit,
+        derive_tool_call_title,
         fire_tool_hooks,
         is_coding_event,
         logger,
@@ -189,6 +190,26 @@ def _tool_call_ws_payload(event: "LLMEvent") -> dict[str, str | bool]:
         "input_preview": _redact_tool_field(event.tool_input),
         **_tool_identity_fields(event),
     }
+
+
+def _mirror_task_label(event: Any) -> str:
+    """The Slack mirror's task-step label for a tool call with no purpose line.
+
+    The same derivation the dashboard transcript's rows and the channel task
+    labels render (``tool_call_title``, the Python half of
+    ``toolCallTitle.ts``), so a step reads "Git status" or "Wait" rather than
+    the raw ``@server/tool`` id. Falls back to the transport title only when
+    the derivation has nothing at all.
+    """
+    derived = derive_tool_call_title(
+        title=event.title or "",
+        kind=event.tool_kind or "",
+        raw_input=event.tool_input or "",
+        is_shell=bool(event.is_shell),
+        tool_name=event.tool_name or "",
+        mcp_server=event.mcp_server_name or "",
+    )
+    return derived.title or event.title or ""
 
 
 async def _on_tool_call(turn: _ChatTurn, event) -> None:
@@ -489,7 +510,7 @@ async def _on_tool_call(turn: _ChatTurn, event) -> None:
                 turn._mirror_task_counter = _mirror_task_counter
                 _mirror_active_task = f"tool_{_mirror_task_counter}"
                 turn._mirror_active_task = _mirror_active_task
-                _task_title = event.tool_purpose or event.title
+                _task_title = event.tool_purpose or _mirror_task_label(event)
                 _task_title, _ = redact_exfiltration_urls(_task_title)
                 _task_title, _ = redact_credentials(_task_title)
                 _task_title = _task_title[:75]

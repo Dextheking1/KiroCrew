@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from kiro_crew.dashboard.chat_turn.recipient import (
         _deliver_cross_surface_user_message,
         _prepare_mirror_msg,
+        _prompt_typed_in_dashboard,
     )
     from kiro_crew.dashboard.chat_turn.steer_queue import _has_user_queued_followup
     from kiro_crew.dashboard.chat_turn.turn_context import _detach_appended_context
@@ -481,7 +482,11 @@ async def _turn_dispatch_gates(turn: _ChatTurn) -> _Flow | None:
         turn._mirror_thread = _mirror_thread
         if _mirror_thread and _mirror_chan:
             try:
-                if not _is_synthetic:
+                # Only a prompt a person typed in the dashboard is quoted into
+                # the thread (see `_prompt_typed_in_dashboard`): a patrol wake,
+                # cron run, peer `session_send` or a message typed in Slack
+                # itself is never echoed. The placeholder and answer still post.
+                if _prompt_typed_in_dashboard(turn):
                     from kiro_crew.slack.format import (  # circular: slack.format -> dashboard.state -> chat
                         mirror_prompt_echo,
                     )
@@ -511,12 +516,18 @@ async def _turn_dispatch_gates(turn: _ChatTurn) -> _Flow | None:
                 )
             except Exception:
                 logger.debug("Failed to mirror user message to Slack", exc_info=True)
+            # The Slack leg is done: a cancel landing in the cross-surface leg
+            # below must not have a requeue quote the question here twice.
+            turn._mirror_echo_posted = True
 
     # Channel-neutral leg: mirror the user message to a linked non-Slack
     # proactive channel (e.g. Telegram) so the remote conversation reads
     # coherently (question then reply), matching the Slack echo above.
-    if not is_slash and not _is_synthetic:
+    if not is_slash and _prompt_typed_in_dashboard(turn):
         await _deliver_cross_surface_user_message(state, session_key, _user_msg_for_mirror)
+    # Past this point every echo this turn owes has been made (or the surfaces it
+    # would go to were unlinked), so a recovery requeue of it owes none.
+    turn._mirror_echo_posted = True
 
     _stop_reason = ""
     turn._stop_reason = _stop_reason

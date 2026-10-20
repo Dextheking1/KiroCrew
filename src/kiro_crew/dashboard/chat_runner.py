@@ -843,6 +843,7 @@ from kiro_crew.session_capabilities import CapabilityStartupError
 from kiro_crew.slack.handler import post_linked_approval, resolve_linked_approval
 from kiro_crew.slack.outbound import PostedOptions
 from kiro_crew.start_priority import StartPriority, person_priority
+from kiro_crew.tool_call_title import derive_tool_call_title
 from kiro_crew.tool_gate_busy import hook_gate_busy
 from kiro_crew.trust_patterns import (  # noqa: F401 -- compatibility re-export
     GrantDeadline,
@@ -1592,6 +1593,10 @@ async def _run_chat(
     # entry this way; without the switch, a channel's queued "/clear" would be the
     # one queued "/clear" in the system that ran instead of being said.
     _commands_off: bool = False,
+    # A verbatim recovery replay of a dashboard prompt whose first attempt died
+    # before the mirror posted its echo. Set only by the drain, from the entry's
+    # ``MIRROR_ECHO_OWED_META_KEY`` stamp, so the replay is echoed once.
+    _recovery_echo_owed: bool = False,
     # Who caused this turn, from the dispatch that knows -- a consumed queue
     # entry's enqueue-time ``kind`` tag, or an injector calling this runner
     # directly. Recorded in the session's log, so it must not be derivable from
@@ -1633,6 +1638,7 @@ async def _run_chat(
         _directive_loop_gen=_directive_loop_gen,
         _directive_channel_origin=_directive_channel_origin,
         _commands_off=_commands_off,
+        _recovery_echo_owed=_recovery_echo_owed,
         _turn_actor=_turn_actor,
         regenerate_hint=regenerate_hint,
         _on_consumed=_on_consumed,
