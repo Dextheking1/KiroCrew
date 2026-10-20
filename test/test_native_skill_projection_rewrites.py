@@ -29,6 +29,7 @@ from native_skill_projection_helpers import (
 )
 
 from kiro_crew.acp import skill_projection as projection
+from kiro_crew.acp.skill_projection_parts import inheritance_overlay
 
 # The shared fixtures, bound here by name so pytest registers them for this module.
 _no_eager_prune = native_skill_projection_helpers._no_eager_prune
@@ -1431,3 +1432,46 @@ def test_two_concurrent_releases_each_prune_their_own_view(native_tree, monkeypa
     )
     assert not list(projection._projection_lease_dir().iterdir()), "a lease outlived its release"
     _ = threads_before
+
+
+def test_unreadable_global_settings_falls_back_without_raising(native_tree, monkeypatch, caplog):
+    """A present-but-unreadable global cli.json keeps the authored agent, never crashes the spawn.
+
+    prepare_native_skill_projection runs on the session-creation path, so a raise
+    here surfaces as AcpRuntimeError and takes the whole session down. That is how
+    the warm-mint helper quarantined every OAuth generation -- its private work
+    dir's settings were unreadable through the credential gate -- leaving the
+    Connections card on "Waiting for approval" after the browser had completed
+    consent. The read-only twin inherits_default_resources already degrades the
+    same way; this pins the write-path sibling to the same contract.
+
+    A gate REFUSAL (file present, safe_read_file_bytes returns None) is what
+    _settings turns into ValueError, distinct from ABSENCE (missing file reads as
+    {} and still projects) -- so the global settings file is written and only its
+    gated read is made to fail.
+    """
+    home, agents, project = native_tree
+    (agents / "custom.json").write_text('{"name":"custom"}', encoding="utf-8")
+    global_settings = home / "settings" / "cli.json"
+    global_settings.parent.mkdir(parents=True, exist_ok=True)
+    global_settings.write_text("{}", encoding="utf-8")
+
+    original_read = inheritance_overlay.safe_read_file_bytes
+
+    def refuse_global_settings(path):
+        # The credential gate's refusal shape: the file is there, the read returns
+        # nothing. Only the global settings read is refused; every other read
+        # (agent specs, alias scan) still goes through.
+        if path == str(global_settings):
+            return None
+        return original_read(path)
+
+    monkeypatch.setattr(inheritance_overlay, "safe_read_file_bytes", refuse_global_settings)
+
+    with caplog.at_level(logging.WARNING, logger="kiro_crew.acp.skill_projection"):
+        prepared = projection.prepare_native_skill_projection(project)
+
+    assert prepared is None
+    assert any(
+        "global Kiro settings unreadable" in record.getMessage() for record in caplog.records
+    )

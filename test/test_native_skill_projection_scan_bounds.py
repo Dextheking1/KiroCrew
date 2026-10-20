@@ -1076,7 +1076,17 @@ class TestSettingsReadRetry:
         assert len(calls) == 3
         assert slept == [2.0]
 
-    def test_a_read_that_stays_refused_still_raises(self, native_tree, monkeypatch):
+    def test_a_read_that_stays_refused_falls_back_without_raising(self, native_tree, monkeypatch):
+        # The retry EXHAUSTS the same way (first attempt, immediate re-check, one
+        # pause, final attempt) -- what changed is the terminal outcome. A global
+        # settings read that stays refused used to raise out of
+        # prepare_native_skill_projection, which runs on the session-creation
+        # path, so the ValueError surfaced as AcpRuntimeError and aborted the
+        # session: that is how the warm-mint helper quarantined every OAuth
+        # generation. It now degrades to the no-projection fallback (keep the
+        # authored agent), matching inherits_default_resources and the disabled
+        # path. _settings itself still raises on a stuck read; only this caller
+        # now catches it.
         home, agents, project = native_tree
         (agents / "custom.json").write_text('{"name":"custom"}', encoding="utf-8")
         global_settings = home / "settings" / "cli.json"
@@ -1086,9 +1096,9 @@ class TestSettingsReadRetry:
         monkeypatch.setattr(projection, "_settings_read_sleep", slept.append)
         calls = self._flaky_reader(monkeypatch, refusals=10**6)
 
-        with pytest.raises(ValueError, match="Cannot read Kiro settings"):
-            projection.prepare_native_skill_projection(project)
-        # First attempt, immediate re-check, one pause, final attempt.
+        assert projection.prepare_native_skill_projection(project) is None
+        # The retry mechanics are unchanged: first attempt, immediate re-check,
+        # one pause, final attempt.
         assert len(calls) == 3
         assert slept == [2.0]
 

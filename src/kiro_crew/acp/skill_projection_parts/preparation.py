@@ -81,6 +81,7 @@ from kiro_crew.agent_discovery import (
 from kiro_crew.agent_spec_format import NATIVE_SKILL_ALIAS_PREFIX, SKILL_VIEW_PROJECTION_CEILING
 from kiro_crew.atomic_write import atomic_write
 from kiro_crew.config.paths import data_home, kiro_agents_dir, kiro_home, project_agents_dir
+from kiro_crew.hooks import FileTooLargeError
 from kiro_crew.user_json import copy_json_document
 from kiro_crew.workspace_cli_settings import workspace_cli_settings_lock
 
@@ -281,7 +282,27 @@ def prepare_native_skill_projection(
                 exc_info=True,
             )
         return None
-    global_settings = _settings(kiro_home() / "settings" / "cli.json")
+    try:
+        global_settings = _settings(kiro_home() / "settings" / "cli.json")
+    # A settings file that cannot be READ (present but refused by the credential
+    # gate, a stalled mount, a symlink loop) must degrade to the no-projection
+    # fallback, NOT abort the spawn: this runs on the session-creation path, so a
+    # raise here surfaces as AcpRuntimeError and takes the whole session down.
+    # That is exactly how the warm-mint helper quarantined every OAuth generation
+    # -- its private work dir's cli.json was unreadable through the gate -- so the
+    # Connections card sat on "Waiting for approval" forever after the browser had
+    # already completed consent. Matches the graceful read-only twin
+    # inherits_default_resources and this function's own disabled path, both of
+    # which treat unreadable settings as "keep the authored agent". Absence is a
+    # different case and is NOT caught here: _settings reads a missing file as {},
+    # so the authored agent still projects normally when no settings exist.
+    # RuntimeError: Path.resolve() reports a symlink loop that way before 3.13.
+    except (OSError, ValueError, RuntimeError, RecursionError, FileTooLargeError):
+        logger.warning(
+            "skill projection: global Kiro settings unreadable; keeping the authored agent",
+            exc_info=True,
+        )
+        return None
     # Whether kirocrew-core's per-session element can be mounted is decided
     # from the agent spec HERE and from the settings files BY THE MOUNT at each
     # session start (:func:`session_mcp.kiro_control_plane_servers`, whose
