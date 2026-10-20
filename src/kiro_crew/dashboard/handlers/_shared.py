@@ -203,6 +203,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         annotate_skills_with_agents,
         collect_skills_blocking,
         list_kiro_skills,
+        skill_rows_for_globs,
     )
     from kiro_crew.dashboard.handlers._shared_skill_roots import (  # noqa: F401
         LEAF_SYMLINK_PREFIX,
@@ -262,6 +263,7 @@ if TYPE_CHECKING:  # names it serves from outside the family, from their homes
     from kiro_crew.security import redact_credentials  # noqa: F401
     from kiro_crew.security import redact_exfiltration_urls  # noqa: F401
     from kiro_crew.skill_trust import is_project_trusted as _is_project_trusted  # noqa: F401
+    from kiro_crew.skills import _matches_any  # noqa: F401
     from kiro_crew.skills import _trusted_skill_roots  # noqa: F401
     from kiro_crew.skills import _with_canonical_globs  # noqa: F401
     from kiro_crew.skills import skills_dir  # noqa: F401
