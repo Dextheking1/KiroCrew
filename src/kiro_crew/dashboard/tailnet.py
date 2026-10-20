@@ -1402,9 +1402,11 @@ def login_allowed(login: str, allowed_logins: tuple[str, ...]) -> bool:
     """Whether *login* is on the operator's allowlist. Case-insensitive.
 
     Deny-by-default: an empty allowlist allows no one (and also disables
-    resolution upstream — see :func:`_forwarded_peer_candidate`). A login an
-    in-Crew invite granted or revoked since startup follows
-    :mod:`kiro_crew.dashboard.tailnet_live_allowlist`.
+    resolution upstream — see :func:`_forwarded_peer_candidate`). While the
+    gateway has installed Shared Crew's derived access set
+    (:mod:`kiro_crew.dashboard.tailnet_live_allowlist`), that set decides and
+    *allowed_logins* is not read; a login an in-Crew invite granted or revoked
+    since startup follows the same module.
     """
     from kiro_crew.dashboard import tailnet_live_allowlist
 

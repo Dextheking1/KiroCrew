@@ -1214,8 +1214,11 @@ class AdmissionService:
 
     # -- cancellation ------------------------------------------------------------
 
-    async def cancel(self, work_id: str, *, expected_revision: int) -> AcceptedWork:
-        """Cancel *work_id* at *expected_revision*. Raises the contract's conflict errors."""
+    async def cancel(
+        self, work_id: str, *, expected_revision: int, reason: ReasonCode | None = None
+    ) -> AcceptedWork:
+        """Cancel *work_id* at *expected_revision* for *reason*, a user stop by default."""
+        why = reason or ReasonCode.CANCELLED_BY_USER
         if self._store is None:
             raise KeyError(work_id)
         live = self._live.get(work_id)
@@ -1229,22 +1232,18 @@ class AdmissionService:
         if live is None:
             # A durable record this process does not run (reconciling after a
             # restart). Only a legal direct move is taken.
-            return await self._store.advance(
-                current, S.CANCELLED, reason=ReasonCode.CANCELLED_BY_USER
-            )
+            return await self._store.advance(current, S.CANCELLED, reason=why)
         if current.state is S.RECONCILING:
             # Being resolved against runtime ownership; its outcome is not ours to pick.
             raise InvalidTransition(current.state, S.CANCELLED)
-        live.cancel_reason = ReasonCode.CANCELLED_BY_USER
+        live.cancel_reason = why
         if live.merged_into and (primary := self._live.get(live.merged_into)) is not None:
             await self.cancel(primary.work.work_id, expected_revision=primary.work.revision)
             return live.work
         if current.state in (S.QUEUED, S.ADMITTED):
-            await self._end(live, S.CANCELLED, reason=ReasonCode.CANCELLED_BY_USER)
+            await self._end(live, S.CANCELLED, reason=why)
             return live.work
-        live.work = await self._store.advance(
-            live.work, S.CANCELLING, reason=ReasonCode.CANCELLED_BY_USER
-        )
+        live.work = await self._store.advance(live.work, S.CANCELLING, reason=why)
         if live.cancel_cb is not None:
             live.cancel_cb()
         else:

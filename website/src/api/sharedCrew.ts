@@ -76,6 +76,15 @@ export type CapabilityState = 'available' | 'degraded' | 'disabled' | 'unavailab
 export type EnforcementLevel = 'hard' | 'best_effort' | 'none'
 export type MembershipLink = '' | 'tailscale_admin' | 'console'
 
+/** `host_power.reported()`: the capabilities' `keep_awake` row. */
+export interface KeepAwakeCapability {
+  state: 'available' | 'unavailable'
+  reason: string
+  backend: string
+  laptop: boolean
+  laptop_reason: string
+}
+
 export interface SharedCrewCapabilities {
   schema_version: number
   attribution: CapabilityState
@@ -103,6 +112,8 @@ export interface SharedCrewCapabilities {
   tailnet_direct?: TailnetDirect
   /** Which verified path names people: `tailscale_direct`, or empty. */
   attribution_via?: '' | 'tailscale_direct'
+  /** Whether a shared Crew can keep this host awake, and whether it is a laptop. */
+  keep_awake?: KeepAwakeCapability
 }
 
 export type TailnetDirectState = 'active' | 'off' | 'unavailable'
@@ -349,6 +360,7 @@ export type ReasonCode =
   | 'grant_revoked'
   | 'policy_changed'
   | 'cancelled_by_user'
+  | 'access_removed'
   | 'stale_revision'
   | 'already_resolved'
   | 'idempotency_conflict'

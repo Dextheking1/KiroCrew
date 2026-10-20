@@ -151,6 +151,8 @@ class ReasonCode(str, enum.Enum):
     GRANT_REVOKED = "grant_revoked"
     POLICY_CHANGED = "policy_changed"
     CANCELLED_BY_USER = "cancelled_by_user"
+    #: The owner removed the person who asked for this work: it was stopped.
+    ACCESS_REMOVED = "access_removed"
     STALE_REVISION = "stale_revision"
     ALREADY_RESOLVED = "already_resolved"
     IDEMPOTENCY_CONFLICT = "idempotency_conflict"
@@ -179,6 +181,7 @@ REASON_HTTP_STATUS: Mapping[ReasonCode, int] = {
     ReasonCode.GRANT_REVOKED: 403,
     ReasonCode.POLICY_CHANGED: 409,
     ReasonCode.CANCELLED_BY_USER: 409,
+    ReasonCode.ACCESS_REMOVED: 403,
     ReasonCode.STALE_REVISION: 409,
     ReasonCode.ALREADY_RESOLVED: 409,
     ReasonCode.IDEMPOTENCY_CONFLICT: 409,

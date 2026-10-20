@@ -370,8 +370,14 @@ def queued_dispatch_recheck(principal_id: str, now: float) -> Optional[str]:
 
     With no enforcer installed (the public default) this is ``None`` for
     everyone. Otherwise a removed person, or a known member checked while the
-    feed is stale, is refused before their queued work starts.
+    feed is stale, is refused before their queued work starts. A person the
+    owner removed from the Tailscale access set (``access_set``) is refused the
+    same way, with or without an enforcer.
     """
+    from kiro_crew.shared_crew import access_set
+
+    if access_set.principal_removed(principal_id):
+        return "access_removed"
     enforcer = active_enforcer()
     if enforcer is None or not principal_id:
         return None

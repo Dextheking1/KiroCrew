@@ -90,6 +90,8 @@ REFUSE_NODE_CHANGED = "node_changed"
 REFUSE_ALLOWLIST_UNREADABLE = "allowlist_unreadable"
 REFUSE_TAGGED = "tagged_node_not_allowed"
 REFUSE_NOT_ALLOWED = "login_not_allowed"
+#: A verified person the Crew has not let in, now listed for the owner to approve.
+REFUSE_AWAITING_APPROVAL = "awaiting_approval"
 
 _FORWARD_HEADERS = ("Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-IP")
 _NODE_KEY_RE = re.compile(r"\A(?:nodekey:)?[0-9a-f]{64}\Z")
@@ -111,6 +113,8 @@ class DirectPeer:
     tags: tuple[str, ...] = ()
     shared_in: bool = False
     method: str = tailnet_localapi.METHOD_NONE
+    #: ``UserProfile.ProfilePicURL`` when it is a plain https URL; display only.
+    profile_pic_url: str = ""
 
     @property
     def tagged(self) -> bool:
@@ -142,6 +146,22 @@ def _display(raw: object) -> str:
         return ""
     text = "".join(ch for ch in raw.strip() if ch.isprintable())
     return text[:_DISPLAY_MAX]
+
+
+_PICTURE_MAX = 512
+
+
+def _picture(raw: object) -> str:
+    """A profile picture URL a browser may load: ``https``, no credentials, bounded."""
+    if not isinstance(raw, str) or len(raw) > _PICTURE_MAX:
+        return ""
+    url = raw.strip()
+    if not url.startswith("https://") or any(ch.isspace() or not ch.isprintable() for ch in url):
+        return ""
+    host = url[len("https://") :].split("/", 1)[0]
+    if not host or "@" in host:
+        return ""
+    return url
 
 
 def _tailnet_ip(raw: object) -> str:
@@ -194,6 +214,7 @@ def parse_whois(data: object, address: str, port: int, method: str) -> DirectPee
         tags=tags,
         shared_in=bool(_user_id(node.get("Sharer"))),
         method=method,
+        profile_pic_url=_picture(profile.get("ProfilePicURL")),
     )
 
 
@@ -263,6 +284,11 @@ def admission_refusal(
     """
     if identity_unknown:
         return REFUSE_ALLOWLIST_UNREADABLE
+    from kiro_crew.dashboard import tailnet_live_allowlist
+
+    derived = tailnet_live_allowlist.snapshot()
+    if derived is not None:
+        return _derived_refusal(peer, owner, derived)
     logins, tags = _split_allowlist(allowed_logins)
     if peer.tagged:
         if tags and any(t.lower() in tags for t in peer.tags):
@@ -275,6 +301,52 @@ def admission_refusal(
     ):
         return None
     if login_allowed(peer.login, tuple(sorted(logins))):
+        return None
+    return REFUSE_NOT_ALLOWED
+
+
+def is_owner(peer: DirectPeer, owner: SelfNode) -> bool:
+    """Whether the daemon named this machine's own Tailscale user: id and login both match."""
+    return bool(
+        owner.user_id
+        and not peer.tagged
+        and peer.user_id == owner.user_id
+        and peer.login.lower() == owner.login.lower()
+    )
+
+
+def _derived_refusal(peer: DirectPeer, owner: SelfNode, derived: Any) -> str | None:
+    """The admission answer while Shared Crew's derived access set is installed.
+
+    The owner, a person who accepted a Crew invite (by login), and a person the
+    owner approved (by stable user id) are admitted. A same-tailnet person the
+    Tailscale ACL lets reach this machine is not: they are refused and may be
+    listed as waiting for the owner. ``allowed_logins`` is not read at all.
+    """
+    from kiro_crew.dashboard import tailnet_live_allowlist
+
+    if peer.tagged:
+        if (
+            derived.tags
+            and not derived.unreadable
+            and any(t.lower() in derived.tags for t in peer.tags)
+        ):
+            return None
+        return REFUSE_TAGGED
+    if is_owner(peer, owner):
+        return None
+    if derived.unreadable:
+        return REFUSE_ALLOWLIST_UNREADABLE
+    if tailnet_live_allowlist.user_id_revoked(peer.user_id):
+        return REFUSE_NOT_ALLOWED
+    if tailnet_live_allowlist.decision(peer.login) is False and not (
+        peer.user_id in derived.approved_user_ids
+    ):
+        return REFUSE_NOT_ALLOWED
+    if derived.admits_person(peer.user_id, peer.login):
+        return None
+    if tailnet_live_allowlist.granted(peer.login):
+        # Granted by an invite accept the set has not been rebuilt for yet.
         return None
     return REFUSE_NOT_ALLOWED
 
@@ -341,7 +413,9 @@ class DirectGate:
         """
         if peer is None:
             return REFUSE_WHOIS_FAILED
-        return (
+        from kiro_crew.dashboard import tailnet_live_allowlist
+
+        reason = (
             admission_refusal(
                 peer,
                 allowed_logins=self.allowed_logins,
@@ -350,6 +424,21 @@ class DirectGate:
             )
             or ""
         )
+        if not reason:
+            if peer.user_id:
+                tailnet_live_allowlist.note_admitted(peer.login, peer.user_id)
+            return ""
+        if (
+            reason == REFUSE_NOT_ALLOWED
+            and peer.user_id
+            and not peer.tagged
+            and tailnet_live_allowlist.note_waiting(peer)
+        ):
+            return REFUSE_AWAITING_APPROVAL
+        return reason
+
+    def is_owner(self, peer: DirectPeer) -> bool:
+        return is_owner(peer, self.owner)
 
     async def verify(
         self, request: web.Request, *, fresh: bool = False
@@ -397,7 +486,8 @@ def _sockaddr(request: web.Request, name: str) -> tuple[str, int] | None:
 
 
 _REFUSAL_TEXT = {
-    REFUSE_NOT_ALLOWED: "Your Tailscale login is not on this Crew's allowlist. Ask the Crew owner to add it.",
+    REFUSE_NOT_ALLOWED: "Only people the Crew owner invited or approved can open this Crew. Ask the owner for an invite.",
+    REFUSE_AWAITING_APPROVAL: "You're waiting for the Crew owner to approve you. They can see your request in People. Reload this page once they approve.",
     REFUSE_TAGGED: "This is a tagged Tailscale device. Ask the Crew owner to allow its tag.",
     REFUSE_ALLOWLIST_UNREADABLE: "This Crew cannot read its Tailscale allowlist right now, so nobody is let in.",
     REFUSE_NODE_CHANGED: "Your Tailscale device changed during this connection. Reload the page.",
@@ -410,6 +500,11 @@ def refusal_response(request: web.Request, reason: str) -> web.Response:
     from aiohttp import web
 
     message = _REFUSAL_TEXT.get(reason, _REFUSAL_DEFAULT)
+    heading = (
+        "Waiting for the owner to approve you"
+        if reason == REFUSE_AWAITING_APPROVAL
+        else "You can't open this Crew"
+    )
     accept = request.headers.get("Accept", "")
     if request.method in ("GET", "HEAD") and "text/html" in accept:
         body = (
@@ -417,7 +512,7 @@ def refusal_response(request: web.Request, reason: str) -> web.Response:
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             "<title>Kiro Crew: access refused</title></head>"
             '<body style="font-family: system-ui, sans-serif; max-width: 36rem; margin: 4rem auto; padding: 0 1rem">'
-            '<h1 style="font-size: 1.25rem">You can\'t open this Crew</h1>'
+            f'<h1 style="font-size: 1.25rem">{html.escape(heading)}</h1>'
             f"<p>{html.escape(message)}</p>"
             f'<p style="color: #666; font-size: 0.875rem">Reason: <code>{html.escape(reason)}</code></p>'
             "</body></html>"
@@ -556,6 +651,7 @@ __all__ = [
     "SelfNode",
     "admission_refusal",
     "direct_origins",
+    "is_owner",
     "direct_urls",
     "parse_status",
     "parse_whois",

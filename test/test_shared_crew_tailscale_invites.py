@@ -25,7 +25,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from kiro_crew.dashboard import tailnet, tailnet_live_allowlist
-from kiro_crew.shared_crew import routes_invites, tailscale_allowlist
+from kiro_crew.shared_crew import access_set, routes_invites, tailscale_allowlist
 from kiro_crew.shared_crew import tailscale_invite_store as store
 from kiro_crew.shared_crew import tailscale_invites as invites
 from kiro_crew.shared_crew.contracts import ACTOR_REQUEST_KEY, ActorContext, Provenance, Transport
@@ -176,8 +176,10 @@ def fake(monkeypatch: pytest.MonkeyPatch):
         lambda: invites.DaemonSelf(NODE_KEY, ("100.64.0.1",), "example.ts.net", OWNER_LOGIN),
     )
     tailnet_live_allowlist.reset_for_tests()
+    access_set.reset_for_tests()
     yield api
     tailnet_live_allowlist.reset_for_tests()
+    access_set.reset_for_tests()
     stop()
 
 
@@ -460,7 +462,13 @@ async def test_revoke_deletes_share_removes_allowlist_and_closes_sockets(
 
     monkeypatch.setattr(invites, "connection_closer", closer)
     result = await invites.revoke(made[0]["id"], "owner")
-    assert result == {"revoked": made[0]["id"], "member_removed": True, "closed_connections": 2}
+    assert result == {
+        "revoked": made[0]["id"],
+        "member_removed": True,
+        "closed_connections": 2,
+        "cancelled_queued": 0,
+        "stopped_running": 0,
+    }
     assert made[0]["id"] not in fake.invites
     assert closed == ["a@example.com"]
     assert _logins(config_file) == [OWNER_LOGIN]
@@ -618,9 +626,13 @@ async def test_routes_connect_invite_and_never_echo_key(fake, not_restricted) ->
         resp = await client.post(routes_invites.CREDENTIAL_PATH, json={"key": KEY})
         text = await resp.text()
         assert resp.status == 200 and KEY not in text and "Zz9" not in text
-        resp = await client.post(
-            routes_invites.STATUS_PATH, json={"emails": [], "multi_use": False, "alias": "Ann"}
-        )
+        invite = {"emails": [], "multi_use": False, "alias": "Ann"}
+        resp = await client.post(routes_invites.STATUS_PATH, json=invite)
+        # The first share waits for the owner to see what teammates will see.
+        assert resp.status == 409
+        assert (await resp.json())["code"] == "first_share_ack_required"
+        access_set.acknowledge_first_share("owner")
+        resp = await client.post(routes_invites.STATUS_PATH, json=invite)
         assert resp.status == 200
         resp = await client.get(routes_invites.STATUS_PATH)
         text = await resp.text()

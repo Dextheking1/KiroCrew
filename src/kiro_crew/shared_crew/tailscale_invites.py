@@ -10,13 +10,16 @@ rest:
    with the optional alias and avatar the owner chose;
 3. :func:`sync` reads the device's invites back. For each newly accepted one it
    binds the accepting user's stable Tailscale id and real login to the alias,
-   adds that login to ``dashboard.tailscale.allowed_logins`` and grants it live
-   (:mod:`kiro_crew.dashboard.tailnet_live_allowlist`), so no restart is needed
-   once identity trust is on. The accepting login is used even when it differs
-   from the invited email: Tailscale lets an invite be accepted from any account,
-   and the account that accepted is the one that connects;
-4. :func:`revoke` deletes the invite at Tailscale, removes the login from the
-   allowlist, refuses it live and closes that person's open dashboard sockets.
+   grants it live (:mod:`kiro_crew.dashboard.tailnet_live_allowlist`) and
+   recomputes the derived access set (``access_set``), which admits that login.
+   The login is also mirrored into ``dashboard.tailscale.allowed_logins`` so the
+   ``tailscale serve`` path turns identity trust on; that list is not where the
+   direct listener reads access from. The accepting login is used even when it
+   differs from the invited email: Tailscale lets an invite be accepted from any
+   account, and the account that accepted is the one that connects;
+4. :func:`revoke` deletes the invite at Tailscale, takes the login out of the
+   set, refuses it live, closes that person's open dashboard sockets, cancels
+   their queued work and stops their running turn (``access_set.stop_work``).
 
 Alias and avatar are display only. Access always comes from the verified login.
 Every invite, accept and revoke is written to the security event log with the
@@ -31,6 +34,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from kiro_crew.shared_crew import access_set
 from kiro_crew.shared_crew import tailscale_invite_store as store
 from kiro_crew.shared_crew.tailscale_api import (
     CODE_NOT_FOUND,
@@ -413,6 +417,7 @@ async def sync(*, actor: str = "crew", force: bool = False) -> dict[str, Any]:
         from kiro_crew.dashboard import tailnet_live_allowlist
 
         tailnet_live_allowlist.grant(by.login)
+        await asyncio.to_thread(access_set.restore, by.login)
         admitted.append(
             {
                 "user_id": by.user_id,
@@ -451,6 +456,8 @@ async def sync(*, actor: str = "crew", force: bool = False) -> dict[str, Any]:
         s.update(backoff_secs=0.0, backoff_until=0.0, last_sync_at=store.now())
 
     await asyncio.to_thread(store.update_state, _mutate)
+    if admitted:
+        await asyncio.to_thread(access_set.rebuild)
     return {"admitted": [m["login"] for m in admitted], "restart_required": restart}
 
 
@@ -496,6 +503,7 @@ async def revoke(invite_id: str, actor: str) -> dict[str, Any]:
             )
             raise
     closed = 0
+    stopped = {"cancelled_queued": 0, "stopped_running": 0}
     if member:
         login = str(member.get("login") or "")
         from kiro_crew.dashboard import tailnet_live_allowlist
@@ -513,6 +521,10 @@ async def revoke(invite_id: str, actor: str) -> dict[str, Any]:
             s["members"].pop(member_id, None)
 
     await asyncio.to_thread(store.update_state, _mutate)
+    if member:
+        await asyncio.to_thread(access_set.rebuild)
+        # Their running turn stops now; the slot frees once its runtime has stopped.
+        stopped = await access_set.stop_work(login, frozenset(), actor=actor)
     await _audit_async(
         "revoke",
         "granted",
@@ -520,7 +532,12 @@ async def revoke(invite_id: str, actor: str) -> dict[str, Any]:
         email=row.get("email", ""),
         detail=f"closed_connections:{closed}",
     )
-    return {"revoked": invite_id, "member_removed": bool(member), "closed_connections": closed}
+    return {
+        "revoked": invite_id,
+        "member_removed": bool(member),
+        "closed_connections": closed,
+        **stopped,
+    }
 
 
 # ── background poll ──

@@ -27,7 +27,37 @@ logger = logging.getLogger(__name__)
 REASON_BIND_NOT_LOOPBACK = "bind_not_loopback"
 
 
+def _install_access_set(cfg: KiroCrewConfig) -> None:
+    """Publish Shared Crew's derived access set, seeding it once from the config list.
+
+    An unreadable tailnet section seeds nothing (the seed is taken only from a
+    list that was read), and a later start seeds from it then.
+    """
+    from kiro_crew.shared_crew import access_set, host_power
+
+    unknown = tailnet_identity_unknown(cfg.degraded_sections)
+    seed = None if unknown else tuple(cfg.dashboard.tailscale.allowed_logins)
+    access_set.install(seed)
+    host_power.note_host()
+
+
 def _resolve_blocking(
+    cfg: KiroCrewConfig, port: int, local_only: bool
+) -> tailnet_direct.DirectResolution:
+    try:
+        _install_access_set(cfg)
+    except Exception:  # noqa: BLE001 - the set fails closed inside install
+        logger.warning("shared crew access set could not be installed", exc_info=True)
+    resolution = _resolve_gate(cfg, port, local_only)
+    gate = resolution.gate
+    if gate is not None:
+        from kiro_crew.shared_crew import access_set
+
+        access_set.set_owner(gate.owner.login, gate.owner.user_id)
+    return resolution
+
+
+def _resolve_gate(
     cfg: KiroCrewConfig, port: int, local_only: bool
 ) -> tailnet_direct.DirectResolution:
     if not cfg.dashboard.shared_crew.tailnet_direct:

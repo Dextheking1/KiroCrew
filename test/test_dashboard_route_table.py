@@ -55,9 +55,9 @@ def test_registrar_tuple_is_explicit_and_not_alphabetical() -> None:
         "system",
         "shared_crew",
     )
-    assert list(routes_pkg.REGISTRAR_NAMES) != sorted(routes_pkg.REGISTRAR_NAMES), (
-        "the registrar order must stay the table's original order, not alphabetical"
-    )
+    assert list(routes_pkg.REGISTRAR_NAMES) != sorted(
+        routes_pkg.REGISTRAR_NAMES
+    ), "the registrar order must stay the table's original order, not alphabetical"
 
 
 def _slice_routes(slice_name: str) -> list[tuple[str, str]]:
@@ -156,10 +156,9 @@ async def test_route_table_ordering_invariants(tmp_path: Path, monkeypatch: Any)
     # 1. effective slice order
     positions = [(name, _anchor_index(name, pairs)) for name in routes_pkg.REGISTRAR_NAMES]
     ascending = [idx for _n, idx in positions]
-    assert ascending == sorted(ascending), (
-        "slices are registered out of declared order: "
-        + ", ".join(f"{n}@{i}" for n, i in positions)
-    )
+    assert ascending == sorted(
+        ascending
+    ), "slices are registered out of declared order: " + ", ".join(f"{n}@{i}" for n, i in positions)
 
     # 2. literal shadowed by an earlier pattern
     literal_hits: list[str] = []
@@ -194,9 +193,9 @@ async def test_route_table_ordering_invariants(tmp_path: Path, monkeypatch: Any)
                     f"{method} {path} -> {handler} (#{idx}) shadowed by "
                     f"{ppath} -> {phandler} (#{pidx})"
                 )
-    assert pattern_hits == [], (
-        "patterns registered after a different matching pattern:\n" + "\n".join(pattern_hits)
-    )
+    assert (
+        pattern_hits == []
+    ), "patterns registered after a different matching pattern:\n" + "\n".join(pattern_hits)
 
 
 def test_shared_crew_slice_matches_each_lane_registrar() -> None:
@@ -205,6 +204,7 @@ def test_shared_crew_slice_matches_each_lane_registrar() -> None:
 
     from kiro_crew.dashboard.routes import shared_crew
     from kiro_crew.shared_crew import (
+        routes_access,
         routes_admission,
         routes_capabilities,
         routes_collab,
@@ -228,6 +228,7 @@ def test_shared_crew_slice_matches_each_lane_registrar() -> None:
         routes_collab.register,
         routes_capabilities.register,
         routes_invites.register,
+        routes_access.register,
     )
 
 
