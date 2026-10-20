@@ -10,21 +10,24 @@ and a patch of the method on the class or on an instance reaches every caller.
 
 Instance fields written: ``_permission_gate_events``, ``_permission_options``,
 ``_pi_gate_asked_ids``, ``_pi_gate_denied_ids``, ``_pi_gate_request_tool``,
-``_turn_permission_denied``.
+``_drain_mode_reports``, ``_mcp_notifications``, ``_mcp_report_frame_floor``,
+``_routing_answer_floor``, ``_copilot_seeded_params``, ``_tool_call_diff_path``,
+``_tool_call_params``, ``_turn_permission_denied``.
 
 Instance fields read: ``_acp_config_options``, ``_agent``, ``_deepseek_gate_nonce``,
 ``_deepseek_read_only_issue``, ``_pi_gate_nonce``, ``_session_id``, ``_session_key``,
 ``_side_read_only``,
-``_spec_denied_tools``, ``_tool_call_diff_path``, ``_tool_call_harness_tool_name``,
+``_spec_denied_tools``, ``_tool_call_harness_tool_name``,
 ``_tool_call_identity_unreadable``, ``_tool_call_input_redacted``,
 ``_tool_call_inputs``, ``_tool_call_is_shell``, ``_tool_call_mcp_server``,
-``_tool_call_params``, ``_tool_call_tool_name``, ``_tool_call_unclassified``.
+``_tool_call_tool_name``, ``_tool_call_unclassified``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Callable
 
 from kiro_crew import acp_tool_gate, permission_floor
@@ -55,7 +58,12 @@ from kiro_crew.acp.types import (
     AcpEvent,
     JsonRpcMessage,
 )
-from kiro_crew.agent_sdk.backends import ACP_BACKENDS_PERMISSION_KIND_FROM_TOOL_CALL
+from kiro_crew.agent_sdk.backends import (
+    ACP_BACKEND_FORBIDDEN_MODES,
+    ACP_BACKENDS_PERMISSION_KIND_FROM_TOOL_CALL,
+    session_config_drift_issue,
+)
+from kiro_crew.platform.tool_paths import WRITE_PLANE_KINDS, target_paths
 from kiro_crew.security import redact_credentials, redact_exfiltration_urls
 from kiro_crew.trust_patterns import GrantDeadline, GrantEnded, grant_deadline_guard
 
@@ -167,6 +175,31 @@ async def _apply_session_permission_routing(self: AcpClient) -> None:
         except acp_tool_gate.ToolGateUnroutable as gate_exc:
             raise AcpToolGateUnroutable(str(gate_exc)) from exc
         return
+
+    if backend in ACP_BACKEND_FORBIDDEN_MODES:
+        # Read the write back rather than trusting "no error": the response carries
+        # the session's configOptions, and a harness whose higher-ranked permission
+        # source wins could accept the write and still report the option on.
+        drift = session_config_drift_issue(
+            backend,
+            {"sessionUpdate": "config_option_update", "configOptions": self._acp_config_options},
+        )
+        if drift:
+            try:
+                acp_tool_gate.enforce_runtime_routing(
+                    backend,
+                    f"after Kiro Crew's write, {drift}",
+                    verdict=acp_tool_gate.Verdict.BYPASSED,
+                    remedy=acp_tool_gate.remediation_for(backend),
+                )
+            except acp_tool_gate.ToolGateUnroutable as gate_exc:
+                raise AcpToolGateUnroutable(str(gate_exc)) from None
+            return
+        # Frames buffered while the write was in flight can still name the value the
+        # session was restored in (measured -- a restored ``allow_all on`` is reported
+        # once more just before the write's own answer). The answer supersedes them;
+        # everything read after it is live and is checked.
+        self._routing_answer_floor = len(self._mcp_notifications)
 
     logger.info(
         "ACP permission route armed: %s=%s (%s)",
@@ -291,6 +324,8 @@ async def approve_tool(
     pi_gate_tool = getattr(self, "_pi_gate_request_tool", {}).pop(str(request_id), None)
     resolved_id = option_id
     recorded: dict[str, str] | None = None
+    # Read before the pop below: the Copilot downgrade needs the offered ids.
+    offered = (self._permission_options.get(request_id) or {}) if self._is_copilot else {}
     if resolved_id is None:
         recorded = self._permission_options.pop(request_id, None)
         # A recorded entry may carry only a "reject" id (a request that
@@ -299,6 +334,15 @@ async def approve_tool(
         resolved_id = (recorded or {}).get("always" if always else "once")
         if resolved_id is None:
             resolved_id = OPTION_ALLOW_ALWAYS if always else OPTION_ALLOW_ONCE
+    if self._is_copilot and resolved_id in (OPTION_ALLOW_ALWAYS, offered.get("always")):
+        # Copilot CLI's allow-always stops it asking about that tool for the rest
+        # of the session, so every later call -- each later file of a patch
+        # included -- would run with no permission frame for Crew's gates to
+        # judge. Crew keeps its own approval memory; Copilot is answered once,
+        # with its own once id, or the canonical one when the frame recorded
+        # allow-always in that slot too.
+        once = offered.get("once")
+        resolved_id = once if once and once != offered.get("always") else OPTION_ALLOW_ONCE
     # The wait for the write lock is the last await before the answer goes
     # out, so the withdrawal is read again under that lock.
     recheck: dict[str, Callable[[], None]] = {}
@@ -753,6 +797,134 @@ async def _tripwire_goose_mode(self: AcpClient, msg: JsonRpcMessage) -> None:
         raise AcpToolGateUnroutable(str(exc)) from None
 
 
+async def _tripwire_permission_state(self: AcpClient, msg: JsonRpcMessage) -> None:
+    """The one frame-path check that a harness's own permission state has not moved.
+
+    Each enforced harness whose asking a session-level state can turn off names that
+    state in exactly one place: goose its seeded mode (``_tripwire_goose_mode``), a
+    session-config harness with a ``ACP_BACKEND_FORBIDDEN_MODES`` row its permission
+    option and forbidden modes (``_tripwire_session_config``). Both are membership
+    tests, so every other backend -- kiro-cli included -- reads the frame and returns.
+    """
+    if self._is_goose:
+        await self._tripwire_goose_mode(msg)
+    elif self.backend in ACP_BACKEND_FORBIDDEN_MODES:
+        await self._tripwire_session_config(msg)
+
+
+async def _tripwire_session_config(self: AcpClient, msg: JsonRpcMessage) -> None:
+    """Stop a session-config-routed harness that reports leaving its routed state.
+
+    The routing write (``_apply_session_permission_routing``) proves the permission
+    option's value when the session opens; it cannot hold the session there if the
+    harness moves itself. Copilot CLI 1.0.100 reports such a move as a
+    ``config_option_update`` (``allow_all`` on) or a ``current_mode_update``
+    (``autopilot``) on the session's own connection, so either is treated as the
+    open-time check treats the same state: the harness is stopped and the turn fails
+    with the gate's reason. A table lookup first (``ACP_BACKEND_FORBIDDEN_MODES``),
+    so a harness outside it -- kiro-cli included -- gains no work (harness-parity H13).
+    """
+    if self.backend not in ACP_BACKEND_FORBIDDEN_MODES:
+        return
+    params = msg.params if isinstance(msg.params, dict) else {}
+    issue = session_config_drift_issue(self.backend, params.get("update"))
+    if not issue:
+        return
+    logger.error(
+        "%s routing: %s; stopping the harness before it approves on its own [session=%s]",
+        self.backend,
+        issue,
+        self._session_id,
+    )
+    try:
+        sel_module.sel().log_tool_invocation(
+            session_key=self._session_key or "",
+            source="acp",
+            tool_name="session/set_config_option",
+            tool_kind="other",
+            outcome="denied",
+            metadata={
+                "reason": "session_config_tripwire",
+                "backend": self.backend,
+                "issue": _scrub_observed(issue),
+            },
+        )
+    except Exception:  # pragma: no cover - audit is best-effort
+        logger.debug("session-config tripwire: audit failed", exc_info=True)
+    await self._kill_process(force=True)
+    try:
+        acp_tool_gate.enforce_runtime_routing(
+            self.backend,
+            issue,
+            remedy=acp_tool_gate.remediation_for(self.backend),
+        )
+    except acp_tool_gate.ToolGateUnroutable as exc:
+        raise AcpToolGateUnroutable(str(exc)) from None
+
+
+def _drop_superseded_config_frames(self: AcpClient) -> None:
+    """Before the start's drain, drop the config reports the routing answer superseded.
+
+    The drain applies every ``config_option_update`` it finds, buffered or live. One
+    buffered while the routing write was in flight still names the state the
+    session was restored in, and applying it would put that stale value back over
+    the write's own answer. Only those frames -- config and mode reports from before
+    the answer -- are dropped; every other buffered frame (an OAuth request, an MCP
+    server's status) is left for the drain, and everything read after the answer is
+    applied and then checked (``_refuse_session_config_drift``). Called only for a
+    member of ``ACP_BACKEND_FORBIDDEN_MODES`` (the caller tests that, H13).
+    """
+    floor = min(getattr(self, "_routing_answer_floor", 0), len(self._mcp_notifications))
+    # Only config reports: the routing write moves ``allow_all`` and not the mode,
+    # so a mode report from before its answer is still the session's mode.
+    superseded = {"config_option_update"}
+
+    def _is_superseded(msg: JsonRpcMessage) -> bool:
+        update = msg.params.get("update") if isinstance(msg.params, dict) else None
+        return isinstance(update, dict) and update.get("sessionUpdate") in superseded
+
+    head = self._mcp_notifications[:floor]
+    kept = [msg for msg in head if not _is_superseded(msg)]
+    # The MCP report's own floor indexes into the same buffer; it falls by the
+    # frames removed below it so it still marks the same frame.
+    report_floor = getattr(self, "_mcp_report_frame_floor", 0)
+    removed_below = sum(1 for msg in head[:report_floor] if _is_superseded(msg))
+    self._mcp_notifications[:floor] = kept
+    self._mcp_report_frame_floor = max(0, report_floor - removed_below)
+    self._routing_answer_floor = 0
+
+
+async def _refuse_session_config_drift(self: AcpClient) -> None:
+    """Before a prompt, stop a harness whose last known state left its routed values.
+
+    The in-turn readers run :func:`_tripwire_session_config` on each frame they
+    read. Frames that arrive while a request outside a turn is waited on (an effort
+    or model write, a compaction wait) are only buffered, and a config write's
+    answer replaces the cached options without the reader seeing it -- and Copilot
+    CLI reports an ``allow_all`` move only on the NEXT config write. So the cached
+    options and every frame buffered since the start's drain are read here, before
+    the next prompt can run a tool. Called only for a member (the caller tests it).
+    """
+    pending = [
+        msg.params.get("update")
+        for msg in self._mcp_notifications
+        if isinstance(msg.params, dict) and isinstance(msg.params.get("update"), dict)
+    ]
+    # Mode reports the start's drain read (it applies none and clears its buffer).
+    pending.extend(self._drain_mode_reports)
+    self._drain_mode_reports = []
+    current = {"sessionUpdate": "config_option_update", "configOptions": self._acp_config_options}
+    for update in [*pending, current]:
+        issue = session_config_drift_issue(self.backend, update)
+        if issue:
+            await self._tripwire_session_config(
+                JsonRpcMessage(
+                    method="session/update",
+                    params={"sessionId": self._session_id, "update": update},
+                )
+            )
+
+
 async def _tripwire_pi_gate(self: AcpClient, msg: JsonRpcMessage) -> None:
     """Refuse to continue a gated session whose harness ran a tool the gate never saw.
 
@@ -1081,6 +1253,151 @@ def _note_pi_gate_asked(self: AcpClient, msg: JsonRpcMessage) -> None:
         self._pi_gate_request_tool[str(msg.id)] = tool_call_id
 
 
+#: The target a Copilot CLI edit frame is judged by when it names no absolute path.
+#: Relative on purpose: the edit gates read a relative diff-block path as UNANCHORED
+#: and deny, so a frame whose target Crew cannot see is refused, never let through
+#: as a call with no target. It is always the FIRST target, the one the event's
+#: ``diff_path`` carries, because only that slot is read as unanchored.
+_COPILOT_UNRESOLVED_EDIT_TARGET = "copilot-edit-target-unresolved"
+
+#: ACP kinds a Copilot frame is a write under even without write-shaped params:
+#: the shared write plane plus ``move``, which ACP defines and the shared set lacks.
+_COPILOT_WRITE_KINDS = WRITE_PLANE_KINDS | {"move"}
+
+
+def _copilot_diff_header_paths(diff: object) -> tuple[list[str], bool]:
+    """The absolute paths a Copilot permission frame's ``diff`` names, and whether
+    any header could not be read.
+
+    Copilot renders each file's change as a git diff of absolute paths with the
+    leading ``/`` folded into the ``a/`` / ``b/`` prefix (``--- a/w/src.txt``). A
+    move is one frame whose ``fileName`` is the DESTINATION only (measured on a
+    ``*** Move to:`` patch); the source it removes is named only in the ``---``
+    header, so the headers are read too. Only header lines count: a file section
+    opens at ``diff --git`` (or the start) and its header ends at the first
+    ``@@``, so a body line that happens to start ``-- a/`` is not read as one.
+    Lines split on ``\n`` alone with one trailing ``\r`` dropped, as the shared
+    patch reader does; a header that still holds another break character, a
+    ``---``/``+++`` line in any other form (quoted, unprefixed), or a ``rename``
+    line makes the diff unreadable, and the caller denies. A path carrying a tab
+    (git's suffix after a name with spaces) is judged both whole and cut at the
+    tab. ``/dev/null`` is the git spelling of "no file" and is not a target.
+    """
+    if not isinstance(diff, str):
+        return [], False
+    found: list[str] = []
+    unreadable = False
+    in_header = True
+    for line in diff.split("\n"):
+        if line.endswith("\r"):
+            line = line[:-1]
+        if line.startswith("diff --git "):
+            in_header = True
+            continue
+        if not in_header:
+            continue
+        if line.startswith("@@"):
+            in_header = False
+            continue
+        if line.startswith(("rename ", "copy ")):
+            unreadable = True
+            continue
+        if not line.startswith(("---", "+++")):
+            continue
+        prefix = "--- a/" if line.startswith("---") else "+++ b/"
+        if not line.startswith(prefix) or (line and line.splitlines() != [line]):
+            unreadable = True
+            continue
+        rest = line[len(prefix) :]
+        # A Windows drive path keeps its drive (``a/C:/w/x``), never a leading ``/``.
+        is_drive = len(rest) > 2 and rest[0].isalpha() and rest[1] == ":" and rest[2] in "/\\"
+        path = rest if is_drive else "/" + rest
+        for spelling in (path, path.split("\t", 1)[0]):
+            if spelling != "/dev/null" and spelling not in found:
+                found.append(spelling)
+    return found, unreadable
+
+
+def _seed_copilot_edit_targets(self: AcpClient, msg: JsonRpcMessage) -> None:
+    """Put a Copilot CLI edit's real targets where the shared permission parser reads them.
+
+    Copilot CLI 1.0.100 streams its ``apply_patch`` call with a STRING ``rawInput``
+    (the patch text), which the tool-call cache drops, and asks permission once PER
+    FILE with the file's absolute path as ``rawInput.fileName`` and in ``locations``
+    -- keys the shared target extraction does not read -- and names a move's source
+    only in its diff headers. Without this the permission event carried no write
+    target, so a ``filesystem.write`` ceiling and the edit gates judged an edit with
+    nothing to judge. Measured on a two-file patch: two frames under one
+    ``toolCallId``, each naming its own file.
+
+    A frame is seeded when its kind is a write kind (``edit``, ``delete``, ``move``)
+    or its params are write-shaped (``fileName`` or ``diff``), and its tool_call was
+    not identified as a shell or MCP call: routing either onto the write plane would
+    trade its command or server checks for the edit gate's, so those keep the shared
+    parser's reading. A read (``{path}``) is left alone too. Nothing is rewritten
+    about the call's kind or shell classification. The targets are MERGED into the
+    trusted params the preceding ``tool_call`` frame cached, under ``path``, beside
+    any content-block path it cached; the first becomes the diff-block path every
+    gate routes on, and the always-enforced checks read the whole trusted set. A later frame for the same id merges into the same base again, not
+    into the previous frame's seed, so each frame is judged by its own file. A frame
+    naming no absolute path, any relative path, or a diff Crew cannot read puts the
+    relative marker first, which the gates read as unanchored and deny. Called only
+    for copilot (the caller tests it, harness-parity H13).
+    """
+    params = msg.params if isinstance(msg.params, dict) else {}
+    tool_call = params.get("toolCall")
+    if not isinstance(tool_call, dict):
+        return
+    raw = tool_call.get("rawInput")
+    write_shaped = isinstance(raw, dict) and ("fileName" in raw or "diff" in raw)
+    if tool_call.get("kind") not in _COPILOT_WRITE_KINDS and not write_shaped:
+        return
+    tool_call_id = tool_call.get("toolCallId")
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        return
+    if self._tool_call_is_shell.get(tool_call_id) or self._tool_call_mcp_server.get(tool_call_id):
+        return
+    cached = self._tool_call_params.get(tool_call_id)
+    cached_diff = self._tool_call_diff_path.get(tool_call_id)
+    seeded = self._copilot_seeded_params.get(tool_call_id)
+    if seeded is not None and seeded[0] is cached:
+        base, base_diff = seeded[1], seeded[2]
+    else:
+        base, base_diff = cached, cached_diff
+    unresolved = False
+    candidates: list[object] = [base_diff] if base_diff else []
+    if isinstance(raw, dict):
+        if raw.get("fileName") is not None:
+            candidates.append(raw.get("fileName"))
+        # Every accepted path spelling at any depth, as the shared parser reads them.
+        nested = target_paths(raw)
+        unresolved = nested.truncated
+        candidates.extend(nested)
+        header_paths, unreadable = _copilot_diff_header_paths(raw.get("diff"))
+        unresolved = unresolved or unreadable
+        candidates.extend(header_paths)
+    locations = tool_call.get("locations")
+    for location in locations if isinstance(locations, list) else []:
+        if isinstance(location, dict) and location.get("path") is not None:
+            candidates.append(location.get("path"))
+    targets: list[str] = []
+    for candidate in candidates:
+        if not (isinstance(candidate, str) and os.path.isabs(candidate)):
+            unresolved = True
+        elif candidate not in targets:
+            targets.append(candidate)
+    if unresolved or not targets:
+        targets.insert(0, _COPILOT_UNRESOLVED_EDIT_TARGET)
+    merged: dict = dict(base) if isinstance(base, dict) else {}
+    prior = merged.get("path")
+    prior_paths = list(prior) if isinstance(prior, list) else ([] if prior is None else [prior])
+    # The seeded targets go first so the marker, when present, stays the first target.
+    merged["path"] = [*targets, *prior_paths]
+    self._tool_call_params[tool_call_id] = merged
+    self._copilot_seeded_params[tool_call_id] = (merged, base, base_diff)
+    self._tool_call_diff_path[tool_call_id] = targets[0]
+
+
 def _build_permission_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | None:
     """Build one permission event through the transport-shared parser.
 
@@ -1089,6 +1406,8 @@ def _build_permission_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | 
     classification distinguishable from a cache miss and preserves cached
     raw parameters across repeated permission frames for the same tool call.
     """
+    if self._is_copilot:
+        self._seed_copilot_edit_targets(msg)
     # Compat-shaped like the caches below: an instance built without ``__init__``
     # has no nonce, and no nonce means no dialog is ever read as a gate envelope.
     _gate_nonce = getattr(self, "_pi_gate_nonce", "")

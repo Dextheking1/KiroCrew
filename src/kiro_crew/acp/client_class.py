@@ -53,6 +53,7 @@ from kiro_crew.acp.skill_reads import SkillReadTracker
 from kiro_crew.acp.transport_errors import AcpError
 from kiro_crew.acp.types import (
     ACP_BACKEND_CLAUDE,
+    ACP_BACKEND_COPILOT,
     ACP_BACKEND_DEEPSEEK,
     ACP_BACKEND_GOOSE,
     ACP_BACKEND_KIRO,
@@ -296,6 +297,14 @@ class AcpClient:
         # be republished before each request that starts a pi process and removed
         # once the session is established (``acp.harness.pi``).
         self._pi_mcp_handoff: tuple[str, bytes] = ("", b"")
+        # The Copilot CLI launch MCP config file this spawn wrote, removed once the
+        # session exists (``acp.harness.copilot``).
+        self._copilot_mcp_config_path = ""
+        # Length of the notification buffer when the routing write answered: the
+        # config reports below it were superseded by that answer.
+        self._routing_answer_floor = 0
+        # Mode reports the start's drain read, kept for the drift check after it.
+        self._drain_mode_reports: list = []
         # Every server name that handoff carried (the member mounts AND the pooled
         # stubs), which is what a pi MCP tool title is spelled after.
         self._pi_mcp_server_names: tuple[str, ...] = ()
@@ -527,6 +536,10 @@ class AcpClient:
         # permission event can carry diff_path for the edit gate when the params
         # themselves carry no path key. Mirrors AcpSessionHandle's cache.
         self._tool_call_diff_path: dict[str, str] = {}
+        # Copilot CLI edit frames seeded into ``_tool_call_params``: toolCallId ->
+        # (the dict seeded, the tool_call frame's own params and content-block path
+        # it was merged with). Cleared with ``_tool_call_params``.
+        self._copilot_seeded_params: dict[str, tuple[dict, dict | None, str | None]] = {}
         # Map JSON-RPC request id → {"once": optionId, "always": optionId} so
         # the host can echo back the exact optionIds the agent advertised.
         # kiro-cli uses "allow_once"/"allow_always"; claude-agent-acp uses
@@ -724,9 +737,11 @@ class AcpClient:
     _claude_session_mcp_servers = _client_mcp_array._claude_session_mcp_servers
     _opencode_session_mcp_servers = _client_mcp_array._opencode_session_mcp_servers
     _deepseek_session_mcp_servers = _client_mcp_array._deepseek_session_mcp_servers
+    _copilot_session_mcp_servers = _client_mcp_array._copilot_session_mcp_servers
     _pi_session_mcp_servers = _client_mcp_array._pi_session_mcp_servers
     _republish_pi_mcp_handoff = _client_mcp_array._republish_pi_mcp_handoff
     _discard_pi_mcp_handoff = _client_mcp_array._discard_pi_mcp_handoff
+    _discard_copilot_mcp_config = _client_mcp_array._discard_copilot_mcp_config
     _goose_session_mcp_servers = _client_mcp_array._goose_session_mcp_servers
     _invalidate_session_mcp_projection = _client_mcp_array._invalidate_session_mcp_projection
     _prepare_session_mcp = _client_mcp_array._prepare_session_mcp
@@ -798,6 +813,10 @@ class AcpClient:
     @property
     def _is_deepseek(self) -> bool:
         return self.backend == ACP_BACKEND_DEEPSEEK
+
+    @property
+    def _is_copilot(self) -> bool:
+        return self.backend == ACP_BACKEND_COPILOT
 
     @property
     def _model_registry_namespace(self) -> str:
@@ -1224,6 +1243,11 @@ class AcpClient:
     _note_pi_adapter_version = _client_permissions._note_pi_adapter_version
     _note_goose_version = _client_permissions._note_goose_version
     _tripwire_goose_mode = _client_permissions._tripwire_goose_mode
+    _tripwire_session_config = _client_permissions._tripwire_session_config
+    _seed_copilot_edit_targets = _client_permissions._seed_copilot_edit_targets
+    _tripwire_permission_state = _client_permissions._tripwire_permission_state
+    _drop_superseded_config_frames = _client_permissions._drop_superseded_config_frames
+    _refuse_session_config_drift = _client_permissions._refuse_session_config_drift
     _tripwire_pi_gate = _client_permissions._tripwire_pi_gate
     _audit_spec_restriction = _client_permissions._audit_spec_restriction
     _deny_zero_tools = _client_permissions._deny_zero_tools
