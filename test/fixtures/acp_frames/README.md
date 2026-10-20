@@ -167,7 +167,7 @@ than by prose; see `docs/system-specs/modules/agent-host-contract.md`.
 
 ## Provenance of what is committed today
 
-Seven of the eight backends carry a live capture reaching all seven required
+Eight of the nine backends carry a live capture reaching all seven required
 classes. `codex/` is the one exception: it carries a live capture of four of them
 beside a synthesized file holding the other three, because a corpus is judged per
 directory and a four-class file cannot satisfy the seven-class gate on its own;
