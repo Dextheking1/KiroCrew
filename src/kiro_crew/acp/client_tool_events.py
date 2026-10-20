@@ -13,7 +13,8 @@ Instance fields written: ``_jsonl_pos``, ``_stale_eligible``, ``_tool_call_diff_
 ``_tool_call_inputs``, ``_tool_call_is_shell``, ``_tool_call_mcp_server``,
 ``_tool_call_params``, ``_tool_call_tool_name``, ``_tool_dispatched``.
 
-Instance fields read: ``_active_tool_calls``, ``_agent``, ``_audit_source``,
+Instance fields read: ``_active_tool_calls``, ``_agent``, ``_audit_source``, ``_copilot_ambiguous_mcp_calls``,
+``_copilot_seeded_params``, ``_copilot_unmatched_titles``,
 ``_observed_tool_calls``, ``_session_id``, ``_session_key``,
 ``_tool_call_harness_tool_name``, ``_tool_call_unclassified``, ``last_prompt_stats``.
 """
@@ -439,6 +440,7 @@ def _extract_tool_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | None
         if tool_call_id and isinstance(raw_input, dict) and raw_input:
             if len(self._tool_call_params) > _MAX_CACHED_TOOL_PARAMS:
                 self._tool_call_params.clear()
+                getattr(self, "_copilot_seeded_params", {}).clear()
             self._tool_call_params[tool_call_id] = raw_input
         # Redact LLM-influenced fields before dashboard display
         if purpose:
@@ -501,6 +503,9 @@ def _extract_tool_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | None
                 and self.backend in ACP_BACKENDS_PERMISSION_KIND_FROM_TOOL_CALL
             ):
                 self._tool_call_identity_unreadable[tool_call_id] = True
+            # Copilot only (H13): it names an MCP call nowhere but its title.
+            if self._is_copilot and not identity.mcp_server_name and not is_shell:
+                self._recover_copilot_mcp_identity(tool_call_id, update)
         title = _select_tool_title(title, raw_input, kind, is_shell=is_shell) or ""
         if title:
             title, _ = redact_exfiltration_urls(title)
@@ -537,6 +542,63 @@ def _extract_tool_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | None
             diff_path=_diff_path,
         )
     return None
+
+
+def _recover_copilot_mcp_identity(self: AcpClient, tool_call_id: str, update: dict) -> None:
+    """Recover a Copilot CLI MCP call's server and tool from its ``tool_call`` title.
+
+    Copilot CLI 1.0.100 carries no ``_meta`` identity: its ``tool_call`` frame titles a
+    served tool ``<server>-<tool>`` (``probe-marker``, measured in
+    ``mcp-stdio-mount-live.jsonl``) and its permission frame names the bare tool
+    (``marker``). Without the server, the gate judged the call by its title and never
+    asked the ``mcp`` scope, so a ceiling denying ``@probe/marker`` permitted it. The
+    title is matched against the names Crew itself placed on this session's array --
+    the whole server universe Copilot was handed, its built-in MCP servers being off
+    (``--disable-builtin-mcps``) -- and a unique match is cached as the trusted identity
+    the permission event inherits, exactly as a ``_meta`` channel would fill it. A
+    title two placed names could both have produced (``a`` serving ``b-c`` and ``a-b``
+    serving ``c``) is recorded as ambiguous, and its permission request is refused
+    (:func:`~kiro_crew.acp.client_permissions._refuse_identity_drift`): judging it as
+    either server could permit what the other's rule denies. A title matching no
+    placed name is not an MCP call and keeps the shared reading.
+    """
+    title = update.get("title")
+    if update.get("kind") != "other" or not isinstance(title, str) or not title:
+        return
+    ambiguous = getattr(self, "_copilot_ambiguous_mcp_calls", None)
+    if ambiguous is None:
+        return
+    try:
+        elements = self._session_mcp_servers()
+    except Exception:  # noqa: BLE001 - a missing array means nothing to match
+        elements = []
+    placed: set[str] = set()
+    for element in elements:
+        name = element.get("name") if isinstance(element, dict) else None
+        if isinstance(name, str) and name:
+            placed.add(name)
+    matches = sorted(
+        name for name in placed if title.startswith(f"{name}-") and len(title) > len(name) + 1
+    )
+    if len(matches) > 1:
+        ambiguous.add(tool_call_id)
+        return
+    ambiguous.discard(tool_call_id)
+    unmatched = getattr(self, "_copilot_unmatched_titles", None)
+    if not matches:
+        # Kept so the permission frame can show this was a served tool after all
+        # (``<anything>-<its bare name>``) whose server no placed name matched.
+        if unmatched is not None and "-" in title:
+            unmatched[tool_call_id] = title
+        return
+    if unmatched is not None:
+        unmatched.pop(tool_call_id, None)
+    server = matches[0]
+    self._tool_call_mcp_server[tool_call_id] = server
+    self._tool_call_tool_name[tool_call_id] = title[len(server) + 1 :]
+    unclassified = getattr(self, "_tool_call_unclassified", None)
+    if unclassified is not None:
+        unclassified[tool_call_id] = False
 
 
 def _extract_tool_call_update(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | None:
@@ -694,6 +756,7 @@ def _extract_tool_call_refinement(self: AcpClient, msg: JsonRpcMessage) -> AcpEv
     if tool_use_id and isinstance(raw_input, dict) and raw_input:
         if len(self._tool_call_params) > _MAX_CACHED_TOOL_PARAMS:
             self._tool_call_params.clear()
+            getattr(self, "_copilot_seeded_params", {}).clear()
         self._tool_call_params[tool_use_id] = raw_input
     # Build the input string the same way `_extract_tool_event` does so
     # the merged toolLog entry / message meta lines up across both events.
