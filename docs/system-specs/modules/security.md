@@ -735,8 +735,10 @@ Security properties:
   share this machine. It lives in its own `SecretVault` at
   `.vault/shared-crew-tailscale/` (`shared_crew.tailscale_invite_store`), apart from
   the user vault, so no `secret://` reference can name it and no `/api/secrets` call
-  lists it. The invite records and avatars sit beside it, so an agent can neither
-  read the key nor plant an accepted invite or swap a teammate's avatar. The key is
+  lists it. The invite records, the derived access set (`access.json`: approvals,
+  the waiting list, the first-share acknowledgment) and avatars sit beside it, so
+  an agent can neither read the key nor plant an accepted invite or an approval or
+  swap a teammate's avatar. The key is
   sent only to `api.tailscale.com` with redirects refused, never logged and never
   returned by a route; `test_shared_crew_tailscale_invites.py` pins that the path is
   under the masked `.vault` and fenced by `is_sensitive_path`, and that the key is
@@ -2554,7 +2556,7 @@ permission-time refusal can reach it. Details: [messaging](messaging.md).
 
 **SSH tunnel instructions** — All SSH tunnel commands printed by `kirocrew gateway` and `kirocrew doctor` use the `-N` flag (`ssh -NL ...`) to suppress remote shell allocation. The tunnel purely forwards the port without opening an interactive session on the remote host.
 
-**Local-only resolution** (`dashboard/urls.py:is_local_only()`, re-exported by `origin.py`): the public build always binds loopback (`127.0.0.1`), whatever `dashboard.url` names; exposing the dashboard beyond loopback is a reverse proxy's job (its origin added via `dashboard.url` or `KIROCREW_CORS_ORIGINS`). `KIROCREW_BIND` (env) overrides the bind ADDRESS only (`bind_address_for`), for containers whose published ports map to the bridge interface. Beside a loopback bind, the gateway also binds this machine's own Tailscale addresses on the same port while `dashboard.shared_crew.tailnet_direct` is on (the default) and Tailscale runs (`server_runtime.tailnet_direct_listener`); requests there are authenticated by daemon `whois` plus the login allowlist instead of a token (`dashboard-token-auth.md`, Direct tailnet listener). That exposure is an explicit operator decision, recorded in [shared-crew.md](shared-crew.md) section 2.
+**Local-only resolution** (`dashboard/urls.py:is_local_only()`, re-exported by `origin.py`): the public build always binds loopback (`127.0.0.1`), whatever `dashboard.url` names; exposing the dashboard beyond loopback is a reverse proxy's job (its origin added via `dashboard.url` or `KIROCREW_CORS_ORIGINS`). `KIROCREW_BIND` (env) overrides the bind ADDRESS only (`bind_address_for`), for containers whose published ports map to the bridge interface. Beside a loopback bind, the gateway also binds this machine's own Tailscale addresses on the same port while `dashboard.shared_crew.tailnet_direct` is on (the default) and Tailscale runs (`server_runtime.tailnet_direct_listener`); requests there are authenticated by daemon `whois` plus Shared Crew's derived access set (owner, accepted invites, owner approvals) instead of a token (`dashboard-token-auth.md`, Direct tailnet listener). That exposure is an explicit operator decision, recorded in [shared-crew.md](shared-crew.md) section 2.
 
 **Token authentication** (`token_auth.py`):
 - HMAC-SHA256 signed tokens with dual expiry: 5-minute link click window (`exp`) + session TTL up to 20 hours (`session_exp`)
