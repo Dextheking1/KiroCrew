@@ -271,6 +271,10 @@ def request_check_refresh_now(
 # It exists because "rollup unavailable" and "rollup empty" are otherwise the
 # same absent `ci` key, and only the former may keep a glyph an earlier read knew.
 _CHIP_CI_UNAVAILABLE = "ciUnavailable"
+# Internal marker too, stripped by the same consumer: ``"<passed>/<total>/<running>"``
+# for the rollup the ``ci`` glyph came from (skipped checks not counted). Only
+# the Slack code-channel board reads it, straight from ``_fetch_check_status``.
+_CHIP_CI_COUNTS = "ciCounts"
 
 
 async def _refresh_check_status(url: str, on_update: _CheckUpdateCallback | None = None) -> None:
@@ -316,6 +320,7 @@ async def _refresh_check_status(url: str, on_update: _CheckUpdateCallback | None
         # cache entries feed owner slot serialization, which must only ever
         # carry the documented chip keys.
         ci_unavailable = bool(status.pop(_CHIP_CI_UNAVAILABLE, None))
+        status.pop(_CHIP_CI_COUNTS, None)
         if not status:
             status = None
     # A transient provider failure must not erase a known status. It still
@@ -495,6 +500,10 @@ async def _fetch_check_status(url: str) -> dict[str, str] | None:
                 ci = projection._rollup_ci(buckets)
                 if ci is not None:
                     result["ci"] = ci
+                    counted = [b for b in buckets if b != "skipped"]
+                    result[_CHIP_CI_COUNTS] = (
+                        f"{counted.count('passed')}/{len(counted)}/{counted.count('pending')}"
+                    )
         raw_state = str(data.get("state") or "").upper()
         state = projection._project_state(raw_state, draft=bool(data.get("isDraft")))
         if state is not None:

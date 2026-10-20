@@ -1059,7 +1059,9 @@ async def test_github_check_status_collapses_superseded_runs(monkeypatch) -> Non
 
     status = await source._fetch_check_status("https://github.com/acme/repo/pull/12")
 
-    assert status == {"state": "open", "ci": "passed"}
+    # ``ciCounts`` (passed/total/running) counts the same collapsed rollup: the
+    # superseded run is not a check. The chip consumer strips it before caching.
+    assert status == {"state": "open", "ci": "passed", "ciCounts": "1/1/0"}
 
 
 @pytest.mark.asyncio
