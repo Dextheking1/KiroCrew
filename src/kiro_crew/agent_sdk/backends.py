@@ -304,6 +304,15 @@ ACP_BACKEND_GOOSE = "goose"
 # closure -- so one global install is the whole precondition, with no workspace
 # checkout and no per-profile dependency step.
 ACP_BACKEND_DEEPSEEK = "deepseek"
+# GitHub Copilot CLI: a single binary that serves ACP itself (``copilot --acp
+# --stdio``), so its install probe names ONE component, like opencode and goose. Its
+# permission route is an ACP v1 session config option (``allow_all``), the shape
+# codex has -- see :data:`Routing.SESSION_CONFIG`.
+#
+# VERIFIED RANGE: Copilot CLI 1.0.100 is the recorded binary
+# (``test/fixtures/acp_frames/copilot/``). Its ``allow_all`` option and its
+# ``session/request_permission`` per tool call are wire facts of that release.
+ACP_BACKEND_COPILOT = "copilot"
 # The kiro-cli backend is spelled as the empty string throughout, so name it
 # rather than leaving every call site to infer it from "not claude".
 ACP_BACKEND_KIRO = ""
@@ -333,6 +342,7 @@ ACP_BACKENDS_KNOWN: FrozenSet[str] = frozenset(
         ACP_BACKEND_PI,
         ACP_BACKEND_GOOSE,
         ACP_BACKEND_DEEPSEEK,
+        ACP_BACKEND_COPILOT,
     }
 )
 
@@ -348,6 +358,7 @@ ACP_BACKENDS_INDEPENDENT_SETUP: FrozenSet[str] = frozenset(
         ACP_BACKEND_PI,
         ACP_BACKEND_GOOSE,
         ACP_BACKEND_DEEPSEEK,
+        ACP_BACKEND_COPILOT,
     }
 )
 
@@ -443,6 +454,17 @@ ACP_BACKENDS_INDEPENDENT_SETUP: FrozenSet[str] = frozenset(
 #:   marker, keyed to this session's nonce and to Crew's sealed file, read before the
 #:   first prompt. See :data:`Routing.VERIFIED_GATE_EXTENSION` and
 #:   :data:`Readback.LOAD_MARKER`.
+#:
+#: ``ACP_BACKEND_COPILOT`` is included on the same two conditions, met by Codex's
+#: mechanism:
+#:
+#: * ``backend_install`` probes for the ``copilot`` binary, one component, because
+#:   the harness's own package ships the executable that serves ACP.
+#: * its tool calls are ROUTED. Copilot CLI advertises an ``allow_all`` session
+#:   config option on every ``session/new`` and ``session/load``; Crew verifies the
+#:   ``off`` value is advertised and applies it before the first prompt, refusing
+#:   the session otherwise, so a user's own allow-all default cannot reach a Crew
+#:   session. See :data:`Routing.SESSION_CONFIG`.
 BASELINE_SELECTABLE_BACKENDS: FrozenSet[str] = frozenset(
     {
         ACP_BACKEND_KIRO,
@@ -453,6 +475,7 @@ BASELINE_SELECTABLE_BACKENDS: FrozenSet[str] = frozenset(
         ACP_BACKEND_PI,
         ACP_BACKEND_GOOSE,
         ACP_BACKEND_DEEPSEEK,
+        ACP_BACKEND_COPILOT,
     }
 )
 
@@ -478,6 +501,7 @@ POLICY_ID_BY_BACKEND: dict = {
     ACP_BACKEND_PI: ACP_BACKEND_PI,
     ACP_BACKEND_GOOSE: ACP_BACKEND_GOOSE,
     ACP_BACKEND_DEEPSEEK: ACP_BACKEND_DEEPSEEK,
+    ACP_BACKEND_COPILOT: ACP_BACKEND_COPILOT,
 }
 
 #: The backend a deployment policy may never deny.
@@ -839,10 +863,14 @@ from kiro_crew.agent_sdk.backends_models import (  # noqa: E402,F401 - re-export
     resolve_cc_permission_mode,
 )
 from kiro_crew.agent_sdk.backends_routing import (  # noqa: E402,F401 - re-exported vocabulary
+    _PROMPT_COMMAND_NAME,
+    _PROMPT_LEADING_FILLER,
+    ACP_BACKEND_FORBIDDEN_MODES,
     ACP_BACKEND_GATE_PROBE_COMMAND,
     ACP_BACKEND_GATE_READBACK,
     ACP_BACKEND_PERMISSION_CONFIG,
     ACP_BACKEND_PERMISSION_SETTING,
+    ACP_BACKEND_PROMPT_COMMAND_ALLOWLIST,
     ACP_BACKEND_ROUTING,
     ACP_BACKENDS_CREW_FIRES_SPEC_HOOKS,
     ACP_BACKENDS_HOOKS_LIST,
@@ -857,7 +885,9 @@ from kiro_crew.agent_sdk.backends_routing import (  # noqa: E402,F401 - re-expor
     gate_readback_for,
     permission_config_for,
     permission_setting_for,
+    prompt_command_issue,
     routing_for,
+    session_config_drift_issue,
 )
 from kiro_crew.agent_sdk.backends_sessions import (  # noqa: E402,F401 - re-exported vocabulary
     ACP_BACKENDS_ACP_CLIENT_SPAWNABLE,

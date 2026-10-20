@@ -13,7 +13,7 @@ Instance fields written: ``_jsonl_pos``, ``_stale_eligible``, ``_tool_call_diff_
 ``_tool_call_inputs``, ``_tool_call_is_shell``, ``_tool_call_mcp_server``,
 ``_tool_call_params``, ``_tool_call_tool_name``, ``_tool_dispatched``.
 
-Instance fields read: ``_active_tool_calls``, ``_agent``, ``_audit_source``,
+Instance fields read: ``_active_tool_calls``, ``_agent``, ``_audit_source``, ``_copilot_seeded_params``,
 ``_observed_tool_calls``, ``_session_id``, ``_session_key``,
 ``_tool_call_harness_tool_name``, ``_tool_call_unclassified``, ``last_prompt_stats``.
 """
@@ -439,6 +439,7 @@ def _extract_tool_event(self: AcpClient, msg: JsonRpcMessage) -> AcpEvent | None
         if tool_call_id and isinstance(raw_input, dict) and raw_input:
             if len(self._tool_call_params) > _MAX_CACHED_TOOL_PARAMS:
                 self._tool_call_params.clear()
+                getattr(self, "_copilot_seeded_params", {}).clear()
             self._tool_call_params[tool_call_id] = raw_input
         # Redact LLM-influenced fields before dashboard display
         if purpose:
@@ -694,6 +695,7 @@ def _extract_tool_call_refinement(self: AcpClient, msg: JsonRpcMessage) -> AcpEv
     if tool_use_id and isinstance(raw_input, dict) and raw_input:
         if len(self._tool_call_params) > _MAX_CACHED_TOOL_PARAMS:
             self._tool_call_params.clear()
+            getattr(self, "_copilot_seeded_params", {}).clear()
         self._tool_call_params[tool_use_id] = raw_input
     # Build the input string the same way `_extract_tool_event` does so
     # the merged toolLog entry / message meta lines up across both events.
