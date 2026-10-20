@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         format_approval_no_budget_card,
         format_approval_timeout_card,
         is_read_only_bash,
+        keep_code_channel_card,
         logger,
         pin_human_approval,
         post_linked_approval,
@@ -657,7 +658,11 @@ async def _on_permission_prompt(
         if _slack_approval_ts is not None:
             try:
                 resolve_linked_approval(slot._slack_channel, _slack_approval_ts)
-                if state.slack_client:
+                # A code-channel card its Trust answered says so in
+                # place; every other card goes once decided.
+                if state.slack_client and not keep_code_channel_card(
+                    slot._slack_channel, _slack_approval_ts
+                ):
                     await state.slack_client.delete_message(slot._slack_channel, _slack_approval_ts)
             except Exception:
                 logger.debug(
