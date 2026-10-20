@@ -164,7 +164,7 @@ describe('TailscaleInvites', () => {
     mount()
     fireEvent.change(await screen.findByTestId('invite-emails'), { target: { value: 'ann@example.com' } })
     fireEvent.click(screen.getByTestId('invite-send'))
-    expect(await screen.findByText('They will see all 4 sessions and Crew memory (12 items).')).toBeInTheDocument()
+    expect(await screen.findByText('They will see every session (4 now) and Crew memory (12 items).')).toBeInTheDocument()
     expect(create).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Share it' }))
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))

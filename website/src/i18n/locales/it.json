@@ -19734,7 +19734,7 @@
     "waitlist_err_gone": "Questa persona non è più in attesa.",
     "waitlist_err_generic": "Non ha funzionato. Riprova.",
     "first_share_title": "Condividere questo Crew?",
-    "first_share_body": "Vedranno tutte le {{sessions}} sessioni e la memoria del Crew ({{memory}} elementi).",
+    "first_share_body": "Vedranno tutte le sessioni ({{sessions}} ora) e la memoria del Crew ({{memory}} elementi).",
     "first_share_body_uncounted": "Vedranno ogni sessione e la memoria del Crew.",
     "first_share_laptop": "Questo computer è un portatile. Quando va in sospensione, perdono l'accesso finché non si riattiva. Crew lo tiene sveglio finché qualcun altro è connesso o il suo lavoro è in corso.",
     "first_share_laptop_no_keep_awake": "Questo computer è un portatile. Quando va in sospensione, perdono l'accesso finché non si riattiva.",

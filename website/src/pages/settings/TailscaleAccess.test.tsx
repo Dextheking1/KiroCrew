@@ -83,7 +83,7 @@ describe('TailscaleAccess', () => {
     approve.mockResolvedValue({ approved: { user_id: '31', login: 'mallory@example.com', display_name: 'Mallory', avatar_url: '', first_seen: 0, approved_at: 1, approved_by: 'o' } })
     mount()
     fireEvent.click(await screen.findByTestId('waiting-approve'))
-    expect(await screen.findByText('They will see all 7 sessions and Crew memory (31 items).')).toBeInTheDocument()
+    expect(await screen.findByText('They will see every session (7 now) and Crew memory (31 items).')).toBeInTheDocument()
     expect(screen.getByTestId('first-share-laptop')).toHaveTextContent('Crew keeps it awake')
     expect(approve).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Share it' }))

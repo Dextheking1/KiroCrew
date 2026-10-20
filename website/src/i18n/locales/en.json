@@ -10547,7 +10547,7 @@
     "waitlist_err_gone": "This person isn't waiting anymore.",
     "waitlist_err_generic": "That didn't work. Try again.",
     "first_share_title": "Share this Crew?",
-    "first_share_body": "They will see all {{sessions}} sessions and Crew memory ({{memory}} items).",
+    "first_share_body": "They will see every session ({{sessions}} now) and Crew memory ({{memory}} items).",
     "first_share_body_uncounted": "They will see every session and Crew memory.",
     "first_share_laptop": "This computer is a laptop. When it sleeps, they lose access until it wakes. Crew keeps it awake while someone else is connected or their work is running.",
     "first_share_laptop_no_keep_awake": "This computer is a laptop. When it sleeps, they lose access until it wakes.",

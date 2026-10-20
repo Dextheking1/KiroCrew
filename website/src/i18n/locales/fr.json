@@ -19734,7 +19734,7 @@
     "waitlist_err_gone": "Cette personne n'attend plus.",
     "waitlist_err_generic": "Ça n'a pas marché. Réessaie.",
     "first_share_title": "Partager ce Crew ?",
-    "first_share_body": "Ils verront les {{sessions}} sessions et la mémoire du Crew ({{memory}} éléments).",
+    "first_share_body": "Ils verront toutes les sessions ({{sessions}} pour l'instant) et la mémoire du Crew ({{memory}} éléments).",
     "first_share_body_uncounted": "Ils verront toutes les sessions et la mémoire du Crew.",
     "first_share_laptop": "Cet ordinateur est un portable. Quand il se met en veille, ils perdent l'accès jusqu'à son réveil. Crew le garde éveillé tant que quelqu'un d'autre est connecté ou que son travail tourne.",
     "first_share_laptop_no_keep_awake": "Cet ordinateur est un portable. Quand il se met en veille, ils perdent l'accès jusqu'à son réveil.",

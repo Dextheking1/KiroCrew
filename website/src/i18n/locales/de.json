@@ -19451,7 +19451,7 @@
     "waitlist_err_gone": "Diese Person wartet nicht mehr.",
     "waitlist_err_generic": "Das hat nicht geklappt. Versuch es noch mal.",
     "first_share_title": "Diesen Crew teilen?",
-    "first_share_body": "Sie sehen alle {{sessions}} Sitzungen und das Crew-Gedächtnis ({{memory}} Einträge).",
+    "first_share_body": "Sie sehen jede Sitzung (jetzt {{sessions}}) und das Crew-Gedächtnis ({{memory}} Einträge).",
     "first_share_body_uncounted": "Sie sehen jede Sitzung und das Crew-Gedächtnis.",
     "first_share_laptop": "Dieser Computer ist ein Laptop. Wenn er schläft, verlieren sie den Zugriff, bis er aufwacht. Crew hält ihn wach, solange jemand anderes verbunden ist oder dessen Arbeit läuft.",
     "first_share_laptop_no_keep_awake": "Dieser Computer ist ein Laptop. Wenn er schläft, verlieren sie den Zugriff, bis er aufwacht.",
