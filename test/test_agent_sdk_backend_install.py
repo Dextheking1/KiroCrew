@@ -918,6 +918,7 @@ class TestEndpointPayloadShape:
         assert [r["policy_id"] for r in rows] == [
             "claude",
             "codex",
+            "copilot",
             "deepseek",
             "goose",
             "kas",
