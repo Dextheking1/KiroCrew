@@ -1083,99 +1083,23 @@ class CronService:
                 if job.id == job_id:
                     if expected_owner is not None and job.created_by != expected_owner:
                         raise PermissionError("Cron job ownership violation")
-                    # Snapshot the auto-pause fields AND the execution-state
-                    # revision, then mutate -- all UNDER exec_state_lock, so a
-                    # concurrent record_failure/record_success/one-shot auto-pause
-                    # on the loop thread cannot interleave with the snapshot or
-                    # the mutation. These fields are execution-owned, so a fixed
-                    # snapshot/restore races a run either way (reinstating an
-                    # auto-pause a success cleared, or reverting one a failure
-                    # set), and a value comparison cannot tell the run's write
-                    # from our own identical one. The revision is the fence: every
-                    # execution write of the auto-pause fields bumps it under the
-                    # same lock, so an unchanged revision across the save means
-                    # ours is the only write and an exact restore is safe; a
-                    # changed one means keep the run's write. user_paused is never
-                    # execution-written (always restored) and enabled is always
-                    # re-derived, so neither needs the fence. The lock is held
-                    # ONLY for these in-memory reads/writes -- never across
-                    # _save() below -- so it cannot park the loop or deadlock.
-                    cleared_autopause = False
-                    with job.exec_state_lock:
-                        before_enabled = job.enabled
-                        before_user_paused = job.user_paused
-                        before_auto_paused = job.auto_paused
-                        before_failures = job.consecutive_failures
-                        before_revision = job.exec_state_revision
-                        job.user_paused = not enabled
-                        job.enabled = enabled
-                        # Re-enabling clears an execution auto-pause; without this
-                        # a job auto-paused after failures would be re-derived as
-                        # disabled on the next reload despite the explicit resume.
-                        if enabled and job.auto_paused:
-                            job.auto_paused = False
-                            # Reset the counter too: the user re-enabled expecting
-                            # a fresh set of attempts. Left at the threshold, the
-                            # next failure would immediately re-auto-pause the job.
-                            # Mirrors record_success, which resets on recovery.
-                            job.consecutive_failures = 0
-                            cleared_autopause = True
-                    try:
-                        self._save()
-                    except BaseException:
-                        # The whole check-and-restore is ONE critical section
-                        # under exec_state_lock, so a loop-thread record_* cannot
-                        # land between the revision read and the restore write and
-                        # be clobbered -- the check-then-act window the counter
-                        # alone left open.
-                        with job.exec_state_lock:
-                            # user_paused is NEVER written by execution, so the
-                            # failed save left the disk copy's user_paused at its
-                            # pre-call value: always restore it, whatever a run
-                            # did.
-                            job.user_paused = before_user_paused
-                            if job.exec_state_revision == before_revision:
-                                # No run touched the auto-pause fields in the save
-                                # window, so ours is the ONLY write: undo it
-                                # exactly, enabled included. Restoring the pre-call
-                                # enabled (rather than re-deriving it) is what
-                                # preserves an enabled=False a run_teardown park
-                                # left in memory with no pause flag set -- deriving
-                                # `not (user_paused or auto_paused)` there would
-                                # wrongly re-enable a cancelled one-shot. The
-                                # failed _save never reached _record_fingerprint,
-                                # so the tracked digest still matches the untouched
-                                # file and no fingerprint reset is needed.
-                                job.auto_paused = before_auto_paused
-                                job.consecutive_failures = before_failures
-                                job.enabled = before_enabled
-                            else:
-                                # A concurrent record_failure/record_success/
-                                # one-shot auto-pause/park wrote the fields
-                                # during the save; keep that write -- it may have
-                                # crossed the threshold, cleared a pause, or
-                                # parked the job, which no fixed restore
-                                # reproduces. Narrow enabled rather than derive it
-                                # fresh: a park sets enabled=False with NO pause
-                                # flag, so `not (user_paused or auto_paused)`
-                                # would flip it back on and resurrect a parked
-                                # one-shot. `enabled and not (...)` keeps a
-                                # concurrently-set False and only ever clears
-                                # enabled further for a pause flag -- it never
-                                # turns a disabled job back on.
-                                job.enabled = job.enabled and not (
-                                    job.user_paused or job.auto_paused
-                                )
-                        raise
-                    if cleared_autopause:
-                        # A user resume that lifted an execution auto-pause
-                        # restored execute permission -- audit it like the
-                        # auto-pause transition. Emitted only AFTER the save
-                        # LANDED: on a failed save the rollback puts auto_paused
-                        # back, so an audit emitted earlier would record a
-                        # permission restore that neither memory nor disk ever
-                        # made. Outside the lock: the audit is I/O.
+                    job.user_paused = not enabled
+                    job.enabled = enabled
+                    # Re-enabling clears an execution auto-pause; without this a
+                    # job auto-paused after failures would be re-derived as
+                    # disabled on the next reload despite the explicit resume.
+                    if enabled and job.auto_paused:
+                        job.auto_paused = False
+                        # Reset the counter too: the user re-enabled expecting a
+                        # fresh set of attempts. Left at the threshold, the very
+                        # next failure would immediately re-auto-pause the job
+                        # (consecutive_failures already >= threshold). Mirrors
+                        # record_success, which resets the counter on recovery.
+                        job.consecutive_failures = 0
+                        # A user resume that lifts an auto-pause restores execute
+                        # permission — audit it like the auto-pause transition.
                         job._audit_pause_change("auto_pause_cleared")
+                    self._save()
                     logger.info("%s cron job %s", "Enabled" if enabled else "Disabled", job_id)
                     return True
             if expected_owner is not None:

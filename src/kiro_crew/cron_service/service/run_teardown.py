@@ -292,7 +292,7 @@ async def _force_reap(
             ran = taken.job if taken.job is not None else job
             park_one_shot = taken.started_monotonic is not None and run_parks_one_shot(ran)
             if park_one_shot:
-                job.hold_off_schedule()
+                job.enabled = False
             # A reaped run that started counts toward auto-pause, like the
             # wait_for timeout arm; one that never started does not. The same
             # test decides whether the user is told (below).
@@ -519,7 +519,7 @@ async def cancel(self: CronService, job_id: str) -> bool:
             # whose failed-run auto-pause parks it.
             park_one_shot = job.schedule.kind == "at" and not job.delete_after_run
             if park_one_shot:
-                job.hold_off_schedule()
+                job.enabled = False
             # Why the park was not saved, or None once a store write that
             # holds it has returned (the merge's own answer).
             park_failure: str | None = None
@@ -555,9 +555,9 @@ async def cancel(self: CronService, job_id: str) -> bool:
                 if live is not None and (
                     live.run_generation > generation or live.schedule.kind != "at"
                 ):
-                    live.set_enabled(not (live.user_paused or live.auto_paused))
+                    live.enabled = not (live.user_paused or live.auto_paused)
                 elif live is not None and live.run_generation < generation:
-                    live.hold_off_schedule()
+                    live.enabled = False
                 if live is None or live.user_paused or live.auto_paused:
                     saved = await asyncio.to_thread(self._saved_job_state, job_id)
             note, message = seams._cancelled_park_report(live, park_failure, saved)
