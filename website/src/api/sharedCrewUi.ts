@@ -238,7 +238,7 @@ export function limitScope(reason: ReasonCode | null | undefined, capacity?: Cap
 const KNOWN_REASONS: ReadonlySet<string> = new Set<ReasonCode>([
   'principal_active_limit', 'principal_queue_full', 'crew_active_limit', 'crew_queue_full',
   'session_create_rate', 'request_too_large', 'storage_limit', 'containment_unavailable',
-  'queue_expired', 'run_deadline', 'runtime_error', 'grant_revoked', 'policy_changed', 'cancelled_by_user',
+  'queue_expired', 'run_deadline', 'runtime_error', 'grant_revoked', 'policy_changed', 'cancelled_by_user', 'access_removed',
   'stale_revision', 'already_resolved', 'idempotency_conflict', 'invalid_transition', 'not_found',
 ])
 

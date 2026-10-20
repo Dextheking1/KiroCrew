@@ -304,7 +304,7 @@ describe('PeoplePanel direct tailnet link', () => {
     urls: ['http://crew.tail1234.ts.net:5476/', 'http://100.64.0.1:5476/'], addresses: ['100.64.0.1'],
   }
 
-  it('shows the plain link with copy, the allowlist note and the device-owner caveat', async () => {
+  it('shows the plain link with copy, the who-can-open note and the device-owner caveat', async () => {
     caps.mockResolvedValue({ ...SHARED, attribution: 'available', attribution_via: 'tailscale_direct', tailnet_direct: DIRECT })
     people.mockResolvedValue({ ...EMPTY, people: [row('p_b', 'Bob')] })
     modeApi.mockResolvedValue(modeBody('network'))
@@ -313,7 +313,7 @@ describe('PeoplePanel direct tailnet link', () => {
     const field = link.querySelector('input') as HTMLInputElement
     expect(field.value).toBe('http://crew.tail1234.ts.net:5476/')
     expect(field.value).not.toMatch(/token/)
-    expect(screen.getByText('Only people on your Tailscale allowlist can open this.')).toBeInTheDocument()
+    expect(screen.getByText('Only you and people you invited or approved can open this.')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Copy' }).length).toBeGreaterThan(0)
     expect(screen.getByTestId('people-direct-caveat').textContent).toMatch(/owns each device/)
   })

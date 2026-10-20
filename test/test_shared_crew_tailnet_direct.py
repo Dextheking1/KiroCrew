@@ -305,14 +305,15 @@ def test_tagged_node_is_a_machine_keyed_by_node():
 
 
 @pytest.mark.asyncio
-async def test_owner_is_admitted_without_a_token_as_a_named_person():
+async def test_owner_is_admitted_without_a_token_with_owner_rights():
     client = await _client(_gate())
     try:
         status, body = await _get(client, _direct("100.64.0.1"))
     finally:
         await client.close()
     assert status == 200
-    assert body["user"] == "tailnet:uid:11"
+    # whois proved the owner, so the request carries the owner's dashboard subject.
+    assert body["user"] == "local-app"
     assert (body["login"], body["name"], body["provenance"]) == (
         "owner@example.com",
         "Owner Person",
@@ -421,7 +422,7 @@ async def test_browser_refusal_is_a_readable_page():
     finally:
         await client.close()
     assert status == 403
-    assert "allowlist" in body and "login_not_allowed" in body
+    assert "invited or approved" in body and "login_not_allowed" in body
 
 
 @pytest.mark.asyncio

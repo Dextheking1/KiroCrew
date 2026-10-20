@@ -13,6 +13,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from kiro_crew.shared_crew import (
+    routes_access,
     routes_admission,
     routes_capabilities,
     routes_collab,
@@ -49,3 +50,13 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/shared-crew/tailscale/avatars", routes_invites.api_upload_avatar)
     app.router.add_get("/api/shared-crew/tailscale/avatars/{avatar_id}", routes_invites.api_avatar)
     routes_invites.install_poller(app)
+    app.router.add_get("/api/shared-crew/access", routes_access.api_access)
+    app.router.add_post("/api/shared-crew/access/first-share/ack", routes_access.api_ack)
+    app.router.add_post(
+        "/api/shared-crew/access/waiting/{user_id}/approve", routes_access.api_approve
+    )
+    app.router.add_post(
+        "/api/shared-crew/access/waiting/{user_id}/dismiss", routes_access.api_dismiss
+    )
+    app.router.add_delete("/api/shared-crew/access/approved/{user_id}", routes_access.api_remove)
+    routes_access.install_closer(app)

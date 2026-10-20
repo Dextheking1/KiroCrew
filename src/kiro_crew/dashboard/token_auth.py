@@ -25,6 +25,7 @@ from typing import Any, Sequence, cast
 from aiohttp import web
 
 from kiro_crew import platform_compat
+from kiro_crew.dashboard import tailnet_owner
 from kiro_crew.dashboard.boot_id import current_boot_id
 from kiro_crew.dashboard.origin import (
     is_https_request,
@@ -2895,11 +2896,13 @@ def token_auth_middleware(
         query_token = request.query.get("token") or ""
         if query_token and claims_an_app_unverified(query_token):
             return None, wrapped
-        request["user"] = (
-            f"tailnet:uid:{direct_peer.user_id}"
-            if direct_peer.user_id
-            else f"tailnet:node:{direct_peer.node}"
-        )
+        # The owner's own Tailscale user gets the owner subject (tailnet_owner).
+        subject, unconfirmed = tailnet_owner.direct_subject(request, tailnet_direct, direct_peer)
+        if unconfirmed is not None:
+            mark_audit_claimed(request)
+            _log_auth(request, direct_peer.login, "denied", "tailnet direct: confirm required")
+            return unconfirmed, wrapped
+        request["user"] = subject
         request["app"] = ""
         request["auth_token"] = ""
         request["auth_tailnet_direct"] = True

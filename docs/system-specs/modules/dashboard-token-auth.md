@@ -368,17 +368,27 @@ it before step 1, and no other request is affected: loopback, the unix socket an
    daemon's `whois` of that peer `ip:port` must name a node and a user with a
    stable id. A `Tailscale-User-*` header is never read. Any failure is a 403
    (`code: tailnet_direct_refused` with a `reason`); there is no fallback.
-2. The user must be the Crew owner (the login and user id of this machine's own
-   node) or a login on `dashboard.tailscale.allowed_logins`; with no login listed,
-   only the owner. A tagged node needs one of its tags listed as `tag:<name>`. An
-   unreadable allowlist admits nobody.
+2. The user must be in Shared Crew's derived access set (`shared_crew.access_set`,
+   published through `tailnet_live_allowlist`): the Crew owner (the login and user
+   id of this machine's own node), a login that accepted a Crew invite or came from
+   the one-time migration seed of `dashboard.tailscale.allowed_logins`, or a stable
+   user id the owner approved. A later edit of `allowed_logins` admits nobody. A
+   tagged node needs a carried-over `tag:<name>` entry. A refused, verified person
+   is listed for the owner's approval and refused `awaiting_approval`. An
+   unreadable set admits only the owner; an unreadable config allowlist admits
+   nobody.
 3. Strict internal paths and `X-Internal-Secret` are refused on this listener.
 4. An app token (`?token=` claiming an app) runs the token flow so its scope holds.
-   Any other token or cookie is ignored: the request is the dashboard user
-   `tailnet:uid:<id>` with `auth_tailnet_direct` set, `auth_token` empty, no cookie
-   minted, and the Shared Crew actor is the verified person. That subject never
-   matches the owner subject, so owner-gated routes refuse it, and
-   `_caller_bounds` lends it no lifetime, so it cannot mint a bearer link.
+   Any other token or cookie is ignored. The owner is the owner's dashboard subject
+   (`owner_id`, else `local-app`) with `auth_owner_whois`, so owner-gated routes
+   answer it (`dashboard.tailnet_owner`); `DELETE
+   /api/shared-crew/tailscale/credential` and `DELETE /api/sessions` from it also
+   need `X-Kirocrew-Confirm: irreversible`, else 428 `confirm_required`. Anyone
+   else is the dashboard user `tailnet:uid:<id>`, which never matches the owner
+   subject, so owner-gated routes refuse it. Either way `auth_tailnet_direct` is
+   set, `auth_token` is empty, no cookie is minted, the Shared Crew actor is the
+   verified person, and `_caller_bounds` lends this listener no lifetime, so
+   nobody on it can mint a bearer link.
 5. `whois` is cached per `ip:port` (30 s, failures 2 s, bounded), asked again on
    every WebSocket upgrade, and repeated on an open WebSocket every 60 s; a
    failure or a different node key closes it.

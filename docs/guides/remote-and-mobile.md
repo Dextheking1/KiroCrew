@@ -469,7 +469,10 @@ the same and the difference is the whole security story:
   }
   ```
   `allowed_logins` is mandatory — `trust_identity` with an empty list is refused
-  at startup, and a verified peer whose login is not listed is denied. The
+  at startup, and a verified peer who is not allowed is denied. Who is allowed
+  comes from the Shared Crew access set (you, accepted invites and approvals;
+  see [Share one Crew with teammates](#share-one-crew-with-teammates)); this list
+  is read once, at the first start, as its starting point. The
   identity is resolved from the local `tailscale whois` daemon, never from a
   header. When identity cannot be resolved (daemon stopped, Tailscale absent,
   Windows — where resolution is not yet verified), a NEW login falls back to
@@ -900,7 +903,29 @@ http://<this-machine>.<your-tailnet>.ts.net:<port>/
 ```
 
 The link carries no token. Tailscale tells the gateway who is connecting, and
-only people on the allowlist get in. With no allowlist, only you do.
+Tailscale is the only thing that decides who gets in. Crew keeps no list you
+type: the people who get in are worked out for you, and they are
+
+- you (this machine's own Tailscale account), with full owner rights, including
+  settings, the API key, invites and approvals, and no token needed;
+- people who accepted a Crew Tailscale invite;
+- people you approved in **Settings > People > Who can open this Crew**.
+
+Someone else on your tailnet whom the Tailscale ACL lets reach this machine is
+not let in on their own. They see "Waiting for the owner to approve you", and
+they show up under **Waiting for you** with their Tailscale name, picture and
+when they first tried. **Approve** lets that Tailscale account in (by its stable
+user id, so a second account with the same email does not ride along).
+**Dismiss** takes them off the list for a day. The list holds the 50 newest.
+
+The first time you share (the first invite or approve, while nobody else has
+access) Crew asks once: they will see every session and Crew memory, with the
+real counts. On a laptop it adds that teammates lose the Crew while it sleeps;
+while a teammate is connected or their work is running, Crew keeps the machine
+awake (`caffeinate` on macOS, `systemd-inhibit` on Linux, the system's own
+keep-awake request on Windows) and lets it sleep again when they leave. Nothing
+is installed for this; `GET /api/shared-crew/capabilities` reports `keep_awake`
+with its state and reason.
 
 The easiest way to add a teammate is to invite them from Crew:
 
@@ -915,25 +940,28 @@ The easiest way to add a teammate is to invite them from Crew:
 3. Type one or more email addresses and select **Send invite**, or switch to
    **Invite link** for a single-use link (or a reusable one, up to 1,000 people).
    You can add a name and picture to show for that person.
-4. When the teammate accepts, Crew adds the Tailscale login they accepted with to
-   `dashboard.tailscale.allowed_logins` and lets it in. That may be a different
-   account than the email you typed. The first accepted invite turns on identity
-   trust and asks for one restart; later teammates get in without one. An
-   invited login opens the direct link without a token right away.
-5. **Revoke** removes the share in Tailscale, takes the login off the allowlist
-   and closes that person's open Crew tabs.
+4. When the teammate accepts, Crew lets in the Tailscale login they accepted
+   with. That may be a different account than the email you typed. They open the
+   direct link without a token right away. (For `tailscale serve`, the first
+   accepted invite also turns on identity trust and asks for one restart.)
+5. **Revoke** removes the share in Tailscale and takes the person out. **Remove**
+   on an approved person does the same for an approval. Either way their next
+   click is refused, their open Crew tabs close, their queued work is cancelled
+   and a turn of theirs that is running stops at once. Finished work stays.
 
 Without a key, the card links the admin console's Machines page, where you can
-share this machine by hand (**Share**). To manage the allowlist yourself instead,
-list each person's tailnet login:
+share this machine by hand (**Share**). When that person opens the Crew, approve
+them under **Waiting for you**.
 
-```bash
-kirocrew config set dashboard.tailscale.allowed_logins '["alice@example.com", "bob@example.com"]'
-```
+`dashboard.tailscale.allowed_logins` is not how you add people. The first time
+the gateway starts with this version it carries the logins and `tag:` entries
+already in that list over once, and People shows them as carried over. After
+that, editing the list changes nothing. A tagged device (a CI runner, a server)
+gets in only when one of its tags was carried over that way.
 
-A tagged device (a CI runner, a server) gets in only when one of its tags is
-listed, for example `"tag:ci"`. Restart the gateway after changing the list.
-Everyone else sees a page saying why they were refused. Each person is named by
+Removing the Tailscale API key and deleting every stored session cannot be
+undone, so even you, signed in through Tailscale, confirm them once more in the
+dashboard. Each person is named by
 their Tailscale account, on Linux, macOS and Windows alike. Tailscale names the
 owner of a device, not whoever is typing on it: people who share one device
 show as one person, and each of them can sign in with their own dashboard link
@@ -981,7 +1009,7 @@ kirocrew config set dashboard.tailscale.trust_identity true
 | macOS | Each person is named | Allowed people get in, shown as Unattributed |
 | Windows | Each person is named | Allowed people get in, shown as Unattributed |
 
-Through `tailscale serve` on a Mac, teammates on the allowlist get in but their
+Through `tailscale serve` on a Mac, teammates who were invited or approved get in but their
 sessions and messages read Unattributed, and Settings > People points at the
 direct link. `GET /api/shared-crew/capabilities` reports the serve-only case as
 `attribution` `unavailable` with reason `platform_unprovable` (macOS, Windows)
@@ -1009,15 +1037,16 @@ a setting (3 to 60 seconds):
 kirocrew config set dashboard.shared_crew.typing_idle_seconds 15
 ```
 
-Who can connect is decided by Tailscale and the allowlist. The invite card is
-the one place in Kiro Crew that changes it, and only the Crew's owner sees it;
-there are no role controls. Teammates who reach a
+Who can connect is decided by Tailscale: you, your accepted invites and the
+people you approved. The invite card and the Who can open this Crew card are
+the only places in Kiro Crew that change it, and only the Crew's owner sees
+them; there are no role controls. Teammates who reach a
 cloud-hosted Crew through AWS Systems Manager are governed by IAM and Session
 Manager; their connections arrive as local connections, so their work reads
 Unattributed. A Crew managed through an organization Console shows its Team
 Access list and the Console link instead, with no Tailscale or Remote Control
 setup. A team setup that cannot be used (for example both a Console team and
-Tailscale sharing, or an unreadable allowlist) turns teammate access off and
+Tailscale sharing, or an unreadable access list) turns teammate access off and
 Settings > People shows the reason code; fix the setup and the Crew picks it up.
 
 To give every

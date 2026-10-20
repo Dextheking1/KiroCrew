@@ -20,12 +20,12 @@ import json
 import logging
 from typing import Any
 
-from aiohttp import WSCloseCode, web
+from aiohttp import web
 
 from kiro_crew.shared_crew import tailscale_invite_store as store
 from kiro_crew.shared_crew import tailscale_invites as invites
 from kiro_crew.shared_crew.contracts import Provenance
-from kiro_crew.shared_crew.identity import PROVIDER_TAILSCALE, tailnet_principal, viewer_principal
+from kiro_crew.shared_crew.identity import PROVIDER_TAILSCALE, viewer_principal
 from kiro_crew.shared_crew.tailscale_api import CODE_RATE_LIMITED, TailscaleApiError
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,11 @@ async def _owner_refusal(request: web.Request) -> web.Response | None:
         return _error(403, "owner_only")
     viewer = viewer_principal(request)
     if viewer.provenance is Provenance.LOCAL_OPERATOR:
+        return None
+    from kiro_crew.dashboard.tailnet_owner import OWNER_WHOIS_REQUEST_KEY
+
+    if request.get(OWNER_WHOIS_REQUEST_KEY) is True:
+        # The direct listener's whois proved this is this machine's own user.
         return None
     if viewer.provider == PROVIDER_TAILSCALE:
         me = await asyncio.to_thread(invites.daemon_self_reader)
@@ -153,6 +158,14 @@ async def api_create(request: web.Request) -> web.Response:
     body = await _json(request)
     if body is None:
         return _error(400, "bad_request")
+    from kiro_crew.shared_crew import access_set
+
+    try:
+        # The first share needs the owner to have seen what teammates will see.
+        if await asyncio.to_thread(store.credential_present):
+            await asyncio.to_thread(access_set.require_first_share_ack)
+    except access_set.AccessError as exc:
+        return _error(409, exc.code)
     try:
         emails = invites.clean_emails(body.get("emails", []))
         made = await invites.create_invites(
@@ -255,21 +268,13 @@ def decorate_people(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _closer_for(app: web.Application) -> Any:
+    """Close a revoked login's sockets: by login, and by each user id it came in under."""
+
     async def close(login: str) -> int:
-        pid = tailnet_principal(login, "", Provenance.TAILSCALE_SERVE).id
-        state = app.get("state")
-        sockets = list(getattr(state, "_ws_clients", None) or ())
-        closed = 0
-        for ws in sockets:
-            try:
-                actor = ws.get(WS_ACTOR_KEY)
-                owner_id = getattr(getattr(actor, "principal", None), "id", "")
-                if owner_id == pid and not ws.closed:
-                    await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"access revoked")
-                    closed += 1
-            except Exception:  # noqa: BLE001 -- one socket never blocks the rest
-                logger.debug("closing a revoked socket failed", exc_info=True)
-        return closed
+        from kiro_crew.shared_crew.access_set import principal_ids_for
+        from kiro_crew.shared_crew.routes_access import close_sockets
+
+        return await close_sockets(app, principal_ids_for(login, frozenset()), login)
 
     return close
 

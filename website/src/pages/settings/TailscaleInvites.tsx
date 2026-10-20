@@ -33,6 +33,8 @@ import { copyToClipboard } from '../../utils/clipboard'
 import { sharedCrewKeys } from '../../hooks/sharedCrew/sharedCrewSocket'
 import { fmtDateTime } from '../../i18n/format'
 import { i18nT } from '../../i18n/t'
+import { useConfirm } from '../../components/ConfirmDialog'
+import { sharedCrewAccessKey, useFirstShareGate } from './TailscaleAccess'
 
 export const tailscaleInvitesKey = [...sharedCrewKeys.all, 'tailscale-invites'] as const
 
@@ -120,6 +122,7 @@ function ConnectForm() {
 
 function InviteForm() {
   const qc = useQueryClient()
+  const { guard, firstShareDialog } = useFirstShareGate()
   const [mode, setMode] = useState<'email' | 'link'>('email')
   const [emails, setEmails] = useState('')
   const [alias, setAlias] = useState('')
@@ -146,6 +149,7 @@ function InviteForm() {
       setAlias('')
       setAvatarId('')
       void qc.invalidateQueries({ queryKey: tailscaleInvitesKey })
+      void qc.invalidateQueries({ queryKey: sharedCrewAccessKey })
     },
   })
   const upload = useMutation({
@@ -164,8 +168,9 @@ function InviteForm() {
     <form
       className="flex flex-col gap-3 min-w-0"
       data-testid="invite-form"
-      onSubmit={e => { e.preventDefault(); if (canSend && !create.isPending) create.mutate() }}
+      onSubmit={e => { e.preventDefault(); if (canSend && !create.isPending) void guard(() => create.mutate()) }}
     >
+      {firstShareDialog}
       <div role="tablist" aria-label={i18nT('sharedCrew.invite_title')} className="flex flex-wrap gap-2">
         <Btn type="button" role="tab" aria-selected={mode === 'email'} primary={mode === 'email'} onClick={() => setMode('email')} data-testid="invite-mode-email">
           <Mail size={14} className="lucide-inline" aria-hidden /> {i18nT('sharedCrew.invite_by_email')}
@@ -286,17 +291,28 @@ function InviteRow({ invite }: { invite: TailscaleInvite }) {
 
 function Connected({ status }: { status: TailscaleInvitesStatus }) {
   const qc = useQueryClient()
+  const { confirm, confirmDialog } = useConfirm()
   const disconnect = useMutation({
     mutationFn: () => api.tailscaleDisconnect(),
     onSuccess: data => qc.setQueryData(tailscaleInvitesKey, data),
   })
+  // Removing the key cannot be undone, so it asks first.
+  const onDisconnect = async () => {
+    const ok = await confirm({
+      title: i18nT('sharedCrew.invite_key_remove_title'),
+      body: i18nT('sharedCrew.invite_key_remove_body'),
+      confirmLabel: i18nT('sharedCrew.invite_key_remove'),
+    })
+    if (ok) disconnect.mutate()
+  }
   return (
     <div className="flex flex-col gap-3 min-w-0" data-testid="invite-connected">
       <div className="flex flex-wrap items-center gap-2 min-w-0">
         <span className="text-[13px] text-text">{i18nT('sharedCrew.invite_connected_as', { tailnet: status.tailnet || '—' })}</span>
         {status.key_expired && <Badge variant="err">{i18nT('sharedCrew.invite_key_expired')}</Badge>}
         {!status.key_expired && status.key_expires_soon && <Badge variant="warn">{i18nT('sharedCrew.invite_key_expires_soon')}</Badge>}
-        <Btn type="button" onClick={() => disconnect.mutate()} disabled={disconnect.isPending} data-testid="invite-disconnect">{i18nT('sharedCrew.invite_key_remove')}</Btn>
+        <Btn type="button" onClick={() => { void onDisconnect() }} disabled={disconnect.isPending} data-testid="invite-disconnect">{i18nT('sharedCrew.invite_key_remove')}</Btn>
+        {confirmDialog}
       </div>
       {status.key_expires && (
         <p className="text-[12px] text-muted" data-testid="invite-key-expiry">
