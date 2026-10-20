@@ -1381,7 +1381,9 @@ async def _complete(request: web.Request, rec: dict[str, Any], *, partial: bool)
         undo_reason=reason,
         status=cards.STATUS_PARTIAL if partial else cards.STATUS_APPLIED,
     )
-    if rec["kind"] == catalog.KIND_CREWMATE_CAPABILITIES:
+    from kiro_crew import crewmate_v2
+
+    if rec["kind"] == catalog.KIND_CREWMATE_CAPABILITIES and crewmate_v2.enabled():
         # A card press starts no turn: tell the crewmate, so the work that waited
         # on the capability moves to a worker that has it.
         from kiro_crew.dashboard import goal_setup

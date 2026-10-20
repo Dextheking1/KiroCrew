@@ -493,7 +493,11 @@ def build_member_section(
             + _MEMBER_DASHBOARD_ITEM
         )
         # Every crewmate-only concept and tool, named once in one compact block.
-        parts.append(_prompt("conductor.crew_log_section"))
+        # A Crewmate 2.0 piece (``kiro_crew.crewmate_v2``): absent while off.
+        from kiro_crew import crewmate_v2
+
+        if crewmate_v2.enabled():
+            parts.append(_prompt("conductor.crew_log_section"))
     if rules:
         # The header names what it outranks. Without the protocol layer there
         # is no "working protocol above" to name, so that clause goes with it.

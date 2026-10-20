@@ -330,8 +330,13 @@ def note_turn_end(state: Any, slot: Any, reply_text: str | None) -> None:
     A worker's turn end records its report for its crewmate and schedules the
     wake; *reply_text* is ``None`` for a turn that ended before it reached the
     model, which reports nothing. A crewmate thread's own turn end schedules the
-    delivery of anything still pending for it.
+    delivery of anything still pending for it. Nothing at all while Crewmate 2.0
+    is off (``kiro_crew.crewmate_v2``): no conductor hands work to a worker then.
     """
+    from kiro_crew import crewmate_v2
+
+    if not crewmate_v2.enabled():
+        return
     try:
         creator = reporting_creator(state, slot) if reply_text is not None else None
         if creator is not None:

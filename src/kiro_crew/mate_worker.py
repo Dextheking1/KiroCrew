@@ -108,8 +108,13 @@ def member_chat_template(template_id: str) -> str:
     record naming the crewmate's own file chats on the conductor. A record
     written while the dispatch snapshot did not know that file yet names the
     file itself; read through here it is still the conductor, so the chat, the
-    hand-off and the spawn gate agree. Any other template is returned as named.
+    hand-off and the spawn gate agree. Any other template is returned as named,
+    and so is every template while Crewmate 2.0 is off (:mod:`kiro_crew.crewmate_v2`).
     """
+    from kiro_crew import crewmate_v2
+
+    if not crewmate_v2.enabled():
+        return template_id
     if not template_id or template_id == MATE_CONDUCTOR_AGENT:
         return template_id
     return MATE_CONDUCTOR_AGENT if is_mate_owned_agent(template_id) else template_id
@@ -203,11 +208,13 @@ def member_chat_agent(kiro_agent: str) -> str:
 
     The conductor when the binding owns a crewmate file
     (:func:`is_mate_owned_agent`), else the bound name through
-    ``dispatch_kiro_agent``. The crewmate file never reaches the chat.
+    ``dispatch_kiro_agent``. The crewmate file never reaches the chat. With
+    Crewmate 2.0 off (:mod:`kiro_crew.crewmate_v2`) it is always the bound name.
     """
+    from kiro_crew import crewmate_v2
     from kiro_crew.config.loader import dispatch_kiro_agent
 
-    if is_mate_owned_agent(kiro_agent):
+    if crewmate_v2.enabled() and is_mate_owned_agent(kiro_agent):
         return MATE_CONDUCTOR_AGENT
     return dispatch_kiro_agent(kiro_agent)
 
@@ -542,10 +549,14 @@ def is_own_worker_execution(execution: Any) -> bool:
 
     Positive identity from the attested record ``session_create`` binds at the
     child's birth: a ``template`` selection running :data:`MATE_WORKER_AGENT`
-    with a member id. Every other record, and no record, answers False.
+    with a member id. Every other record, and no record, answers False, and so
+    does every record while Crewmate 2.0 is off (no kit, no backend route).
     """
+    from kiro_crew import crewmate_v2
+
     return (
-        execution is not None
+        crewmate_v2.enabled()
+        and execution is not None
         and getattr(execution, "selection_kind", "") == "template"
         and getattr(execution, "template_id", "") == MATE_WORKER_AGENT
         and bool(getattr(execution, "member_id", None))

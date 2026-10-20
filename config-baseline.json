@@ -7477,6 +7477,7 @@
         "restore_sessions": false,
         "dynamic_dashboard_cards": false,
         "crewmate_threads": false,
+        "crewmate_v2": false,
         "crewmates_in_agent_picker": false,
         "qr_session_until_restart": true,
         "qr_session_persist_across_restart": false,
@@ -7730,6 +7731,21 @@
       "hasChildren": false,
       "enumValues": null,
       "defaultValue": false
+    },
+    {
+      "path": "dashboard.crewmate_v2",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "label": "Crewmate 2.0",
+      "help": "Each crewmate gets its own file, chats on its conductor and hands every task to its own worker session; existing crewmates are moved onto that shape at startup. Off by default: crewmates chat on their template as before, and turning it off again moves every crewmate back to the template it had. Worker tools added on cards are kept but unused while off. Takes effect after a restart.",
+      "hasChildren": false,
+      "enumValues": null,
+      "defaultValue": false,
+      "requiresRestart": true
     },
     {
       "path": "dashboard.crewmates_in_agent_picker",

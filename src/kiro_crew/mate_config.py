@@ -175,14 +175,19 @@ def adopt_own_file(name: str) -> str:
     directly. Reads whatever ``kiro_agent`` resolves to now, copies it with
     :func:`write_mate_config`, records the worker kit for a template other than
     the default one, and repoints ``kiro_agent`` to *name*. Returns an outcome
-    code: ``copied``, ``no_binding``, ``no_source`` or ``already_owned``; raises
-    :class:`MateConfigError` when the copy cannot be written.
+    code: ``copied``, ``no_binding``, ``no_source``, ``already_owned`` or
+    ``switched_off`` (Crewmate 2.0 is off, :mod:`kiro_crew.crewmate_v2`: nothing is
+    written and the binding keeps its template); raises :class:`MateConfigError`
+    when the copy cannot be written.
     """
+    from kiro_crew import crewmate_v2
     from kiro_crew.agent_files import is_kirocrew_default_agent
     from kiro_crew.config.loader import KiroCrewConfig, _invalidate_config_cache
     from kiro_crew.mate_worker_kit import record_initial_kit
     from kiro_crew.memory_stores import persist_member_config
 
+    if not crewmate_v2.enabled():
+        return "switched_off"
     _invalidate_config_cache()
     cfg = KiroCrewConfig.load()
     binding = cfg.agents.get(name)
@@ -203,4 +208,13 @@ def adopt_own_file(name: str) -> str:
         record_initial_kit(name, source)
     binding.kiro_agent = name
     persist_member_config(cfg, name, expected_store=prior_store, changed_fields={"kiro_agent"})
+    # Named in ``migrated.json`` with the agent it was created on, like a migrated
+    # crewmate, so turning Crewmate 2.0 off puts it back on that agent
+    # (``mate_config_migration.reverse_migration``). Best-effort.
+    try:
+        from kiro_crew.mate_config_migration import _record_migrated
+
+        _record_migrated(name, source)
+    except OSError:
+        logger.warning("crewmate %s: not recorded in migrated.json", name, exc_info=True)
     return "copied"

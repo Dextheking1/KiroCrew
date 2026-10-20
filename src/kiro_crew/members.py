@@ -169,9 +169,16 @@ def is_crewmate_worker_session(session_key: str | None) -> bool:
     """Whether *session_key* is a session this process knows as a crewmate's worker.
 
     Positive identity: only a key whose execution record was read as the
-    crewmate's worker (the worker template on that crewmate's store) answers True.
+    crewmate's worker (the worker template on that crewmate's store) answers True,
+    and only while Crewmate 2.0 is on (:mod:`kiro_crew.crewmate_v2`).
     """
-    return bool(session_key) and _slot_part(str(session_key)) in _CREWMATE_WORKER_SLOTS
+    from kiro_crew import crewmate_v2
+
+    return (
+        bool(session_key)
+        and crewmate_v2.enabled()
+        and _slot_part(str(session_key)) in _CREWMATE_WORKER_SLOTS
+    )
 
 
 def select_provider_backend(

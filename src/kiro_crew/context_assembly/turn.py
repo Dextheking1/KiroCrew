@@ -308,10 +308,12 @@ def rail_parts(
             "this directory. Prefer files and patterns from this project "
             "when answering questions.\n\n"
         )
+        from kiro_crew import crewmate_v2
         from kiro_crew.crewmate_worktree import describe as _crewmate_worktree
         from kiro_crew.crewmate_worktree import take_base_note as _crewmate_worktree_base_note
 
-        _worktree = _crewmate_worktree(project)
+        # The per-crewmate worktree is a Crewmate 2.0 piece: no line while off.
+        _worktree = _crewmate_worktree(project) if crewmate_v2.enabled() else None
         if _worktree is not None:
             _wt_path, _wt_repo, _wt_branch = _worktree
             _wt_prefix = _wt_branch.rsplit("/", 1)[0] + "/"

@@ -2405,8 +2405,15 @@ async def start_dashboard(
     # kinds of crewmate at once. Additive and idempotent (see
     # mate_config_migration.py), so a failure here is logged and left for the
     # next boot rather than blocking startup.
+    # Only while Crewmate 2.0 is on (``dashboard.crewmate_v2``, read once here
+    # for the whole run). Off, a run that migrated before is undone instead:
+    # bindings and thread records go back to the agent they had.
+    from kiro_crew import crewmate_v2
+    from kiro_crew.mate_config_reversal import migrate_or_reverse
+
+    crewmate_v2_on = crewmate_v2.latch()
     try:
-        await asyncio.to_thread(migrate_existing_crewmates, cfg)
+        await asyncio.to_thread(migrate_or_reverse, cfg, crewmate_v2_on, migrate_existing_crewmates)
     except Exception:
         logger.warning("mate-owned-config migration failed", exc_info=True)
 
@@ -2414,11 +2421,12 @@ async def start_dashboard(
 
     # A crewmate the migration above moved tells its user once, in its own
     # thread; a thread not open yet is offered it at its next turn end.
-    from kiro_crew.dashboard.mate_thread_wakes import offer_upgrade_notices
+    if crewmate_v2_on:
+        from kiro_crew.dashboard.mate_thread_wakes import offer_upgrade_notices
 
-    _notice_task = asyncio.create_task(offer_upgrade_notices(state))
-    state._background_tasks.add(_notice_task)
-    _notice_task.add_done_callback(state._background_tasks.discard)
+        _notice_task = asyncio.create_task(offer_upgrade_notices(state))
+        state._background_tasks.add(_notice_task)
+        _notice_task.add_done_callback(state._background_tasks.discard)
 
     # Relaunch agents in non-archived channels. A gateway defers this batch
     # until its restore/open task completes; a standalone dashboard preserves

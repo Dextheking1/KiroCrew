@@ -234,9 +234,13 @@ def grant_mate_tools_to_new_member(
 def _grant(member: str, catalog: Callable[[str], dict[str, str]]) -> str:
     """The outcome for crewmate *member*; writes nothing to its own file.
 
-    ``catalog`` is unused, kept in the signature so callers and tests are
-    unchanged.
+    ``catalog`` is unused while Crewmate 2.0 is on; off, the old enrollment
+    (:func:`_grant_by_enrollment`) runs with it.
     """
+    from kiro_crew import crewmate_v2
+
+    if not crewmate_v2.enabled():
+        return _grant_by_enrollment(member, catalog)
     from kiro_crew.agent_files import AGENT_FILENAME
     from kiro_crew.config.loader import KiroCrewConfig, _invalidate_config_cache
     from kiro_crew.mate_config import has_mate_config
@@ -258,3 +262,61 @@ def _grant(member: str, catalog: Callable[[str], dict[str, str]]) -> str:
     # So nothing is written: an entry here could only be an override with no
     # transport, which a session that ran the file would wait on and never start.
     return PLATFORM_PROVIDED
+
+
+def _grant_by_enrollment(member: str, catalog: Callable[[str], dict[str, str]]) -> str:
+    """The creation-time grant while Crewmate 2.0 is off: the enrollment main runs.
+
+    The crewmate has no file of its own then, so the server is set on its
+    private copy through the capability editor, as before the switch existed.
+    """
+    from kiro_crew.agent_capabilities import CapabilityError, CapabilityService
+    from kiro_crew.agent_files import AGENT_FILENAME
+    from kiro_crew.config.loader import KiroCrewConfig, _invalidate_config_cache
+
+    _invalidate_config_cache()
+    binding = KiroCrewConfig.load().agents.get(member)
+    if binding is None or member == "default":
+        return NOT_A_MEMBER
+    if binding.kiro_agent == Path(AGENT_FILENAME).stem:
+        return DEFAULT_TEMPLATE
+    service = CapabilityService(catalog)
+    try:
+        view = service.get(member)
+    except CapabilityError as exc:
+        logger.info("mate tools not added to %r: %s", member, exc.code)
+        return f"refused:{exc.code}"
+    if view.get("mode") != "shared":
+        return ALREADY_ENROLLED
+    ops = _operations(view)
+    if isinstance(ops, str):
+        return ops
+    if not _policy_permits(member):
+        return POLICY_WITHHOLDS
+    if any(op["section"] == "mcpServers" for op in ops):
+        from kiro_crew.agent_capabilities import _member_platform_transport
+
+        if _member_platform_transport(MATE_SERVER) is None:
+            return SERVER_UNAVAILABLE
+    body = {"revision": view["revision"], "enroll": True, "operations": ops}
+    try:
+        preview = service.preview(member, body)
+        if preview.get("backend_warning"):
+            return BACKEND_UNSUPPORTED
+        service.put(member, {**body, "preview_token": preview["preview_token"]})
+    except CapabilityError as exc:
+        logger.info("mate tools not added to %r: %s", member, exc.code)
+        return f"refused:{exc.code}"
+    try:
+        from kiro_crew.sel import sel
+
+        sel().log_api_access(
+            caller="system",
+            operation="member_capabilities.mate_tools_granted",
+            outcome="success",
+            source="agent_create",
+            resources=member,
+        )
+    except Exception:
+        logger.debug("SEL audit unavailable for the mate grant", exc_info=True)
+    return GRANTED

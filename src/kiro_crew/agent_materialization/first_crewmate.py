@@ -24,6 +24,8 @@ FIRST_CREWMATE_MARKER = "mate_member_created.json"
 #: importing it here would pull dashboard code into boot-time crewmate
 #: creation. See rfc-mate-owned-agent-config.md, migration step 1.
 _ORDINARY_TEMPLATE = "kirocrew-mate-conductor"
+#: The same fallback while Crewmate 2.0 (``kiro_crew.crewmate_v2``) is off.
+_OFF_TEMPLATE = "kirocrew"
 
 
 def _default_template(*sections: object) -> str:
@@ -36,7 +38,10 @@ def _default_template(*sections: object) -> str:
     for section in sections:
         if isinstance(section, dict) and isinstance(section.get("default_agent"), str):
             template = section["default_agent"].strip()
-    return template or _ORDINARY_TEMPLATE
+    from kiro_crew import crewmate_v2
+
+    # The conductor only while Crewmate 2.0 is on; off, the default spec as before.
+    return template or (_ORDINARY_TEMPLATE if crewmate_v2.enabled() else _OFF_TEMPLATE)
 
 
 def _marker(name: str):

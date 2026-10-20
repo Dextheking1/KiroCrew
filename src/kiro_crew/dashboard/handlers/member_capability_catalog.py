@@ -96,8 +96,13 @@ async def api_member_self_capabilities(request: web.Request) -> web.Response:
     or more characters, ``registry`` (MCP registry results, redacted), plus
     ``next`` saying how to ask for one.
     """
+    from kiro_crew import crewmate_v2
     from kiro_crew.dashboard.handlers.mcp_discover import search_registry
     from kiro_crew.dashboard.handlers.member_self import _caller_member
+
+    if not crewmate_v2.enabled():
+        # The catalog is a Crewmate 2.0 piece (``kiro_crew.crewmate_v2``).
+        return web.json_response({"error": "not found", "code": "not_found"}, status=404)
 
     try:
         slot_key, sk = await _resolve(request)

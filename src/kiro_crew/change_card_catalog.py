@@ -162,6 +162,9 @@ _CRON_EXPR_RE = re.compile(r"^[0-9*/,\- A-Za-z?#LW]{1,100}$")
 #: entry orders the values from tightest to widest, so a move toward the end is
 #: ``widen`` and a move toward the start is ``tighten``.
 _SETTING_ORDER: dict[str, tuple[Any, ...]] = {
+    # Crewmate 2.0 hands each crewmate's work to a worker carrying its own kit, so
+    # turning it on is the wider direction and asks for the acknowledgement.
+    "dashboard.crewmate_v2": (False, True),
     "agent.approval_mode": ("interactive", "auto"),
     "agent.sandbox": ("strict", "auto", "off"),
     "agent.yolo_duration": ("30m", "1h", "6h", "12h", "24h", "until_shutdown"),

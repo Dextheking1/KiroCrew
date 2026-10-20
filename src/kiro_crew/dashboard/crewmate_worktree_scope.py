@@ -103,7 +103,14 @@ def resolve_worker_project(config: Any, name: str, project: str, message: str) -
 async def scope_worker_turn(
     state: Any, slot: Any, config: Any, execution: Any, message: str
 ) -> str:
-    """Move *slot*'s project to its crewmate's worktree; return the new project or ``""``."""
+    """Move *slot*'s project to its crewmate's worktree; return the new project or ``""``.
+
+    Never while Crewmate 2.0 is off (``kiro_crew.crewmate_v2``).
+    """
+    from kiro_crew import crewmate_v2
+
+    if not crewmate_v2.enabled():
+        return ""
     name = _worker_crewmate(config, execution)
     if not name:
         return ""

@@ -356,9 +356,12 @@ def dashboard_line(slug: str) -> str:
     A page of its own is a ``kind="dashboard"`` package bound to the crewmate
     (:func:`kiro_crew.dashboard_agentic.bound_package`, the lookup the Dashboard tab
     reads), so the line stops on the wake after the crewmate's first
-    ``dashboard_apply``. An empty or unknown *slug* gets no line. Blocking IO.
+    ``dashboard_apply``. An empty or unknown *slug* gets no line, and neither does
+    any crewmate while Crewmate 2.0 is off (``kiro_crew.crewmate_v2``). Blocking IO.
     """
-    if not slug:
+    from kiro_crew import crewmate_v2
+
+    if not slug or not crewmate_v2.enabled():
         return ""
     from kiro_crew import dashboard_agentic
 

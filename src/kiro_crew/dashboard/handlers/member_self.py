@@ -236,10 +236,13 @@ async def api_member_self_propose(request: web.Request) -> web.Response:
     if not isinstance(raw, dict):
         _audit(sk, OP_PROPOSE_SELF, "denied", "invalid_params")
         return _deny(400, "invalid_params", "'params' must be an object")
+    from kiro_crew import crewmate_v2
+
+    v2 = crewmate_v2.enabled()
     if (
         request.get(REQ_OWN_GOAL_TURN) is True
         and name not in OWN_GOAL_PROPOSALS
-        and not (name == "capabilities" and _gateway_servers_only(raw.get("draft")))
+        and not (v2 and name == "capabilities" and _gateway_servers_only(raw.get("draft")))
     ):
         _audit(sk, OP_PROPOSE_SELF, "denied", "not a user turn")
         return _deny(
@@ -250,6 +253,10 @@ async def api_member_self_propose(request: web.Request) -> web.Response:
     if name == "capabilities":
         draft = raw.get("draft")
         params = {"member": member, "draft": draft}
+        if isinstance(draft, dict) and "additions" in draft and not v2:
+            # Named additions are the Crewmate 2.0 catalog (``crewmate_v2``).
+            _audit(sk, OP_PROPOSE_SELF, "denied", "crewmate_v2_off")
+            return _deny(400, "invalid_params", "a draft takes operations")
         if isinstance(draft, dict) and "additions" in draft:
             # Named additions (find_capabilities' catalog): the gateway resolves
             # each into operations and records where it comes from; the caller

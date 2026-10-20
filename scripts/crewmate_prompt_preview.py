@@ -101,6 +101,7 @@ def _record(fx: dict[str, Any], slug: str, member: str) -> dict[str, Any]:
 def assemble(fx: dict[str, Any], member: str) -> dict[str, str]:
     """Each piece's assembled text for fixture *fx*, keyed by piece name."""
     from kiro_crew import context as ctx
+    from kiro_crew import crewmate_v2
     from kiro_crew import mate_capability_catalog as cc
     from kiro_crew import mate_upgrade_notice, mate_worker, members
     from kiro_crew.context_assembly import member as cm
@@ -112,6 +113,8 @@ def assemble(fx: dict[str, Any], member: str) -> dict[str, str]:
         mate_welcome,
     )
 
+    # The preview is of the Crewmate 2.0 prompts, whatever the host config says.
+    crewmate_v2._latched = True
     slug = members.slug_for_name(member)
     rec = _record(fx, slug, member)
     tools = fx.get("has_mate_tools", True)

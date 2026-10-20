@@ -53,6 +53,10 @@ def _note(app: Any, caller_history_key: str, target_history_key: str) -> str:
 
 async def own_worker_note(app: Any, state: Any, caller_session_key: str, target_key: str) -> str:
     """The capability line for this hand-off, or ``""`` when it is not conductor to own worker."""
+    from kiro_crew import crewmate_v2
+
+    if not crewmate_v2.enabled():
+        return ""
     from kiro_crew.dashboard.chat_utils import slot_history_key
     from kiro_crew.dashboard.session_control_parts.caller_access import caller_slot_key
 

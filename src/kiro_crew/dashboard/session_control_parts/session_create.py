@@ -1442,8 +1442,13 @@ def _hands_off_to_own_worker(
     resolution, so a peer bound elsewhere stays refused. Everything else -- no
     agent, the worker, the stock worker, the crewmate's own name, any template,
     a name nothing resolves -- is the crewmate's worker. False for every caller
-    that is not a conductor. Blocking config read; callers run it off the loop.
+    that is not a conductor, and for every caller while Crewmate 2.0 is off
+    (:mod:`kiro_crew.crewmate_v2`). Blocking config read; callers run it off the loop.
     """
+    from kiro_crew import crewmate_v2
+
+    if not crewmate_v2.enabled():
+        return False
     if not _conducts_for_a_worker(caller_slot, caller_execution):
         return False
     if agent_kind == "template" or not requested:

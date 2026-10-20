@@ -3251,6 +3251,57 @@ could not be read, so the server took the request) all show "N comments sent".
 
 ## Conductor and worker
 
+**Behind the Crewmate 2.0 switch.** Everything in this section, and the
+migration below, runs only while `dashboard.crewmate_v2` is on
+(`kiro_crew/crewmate_v2.py`, default **off**, `restart=True`: `crewmate_v2.latch`
+reads it once at gateway start and `enabled` answers that value for the whole
+run, so a crewmate is never half on its template and half on its conductor). Its
+toggle, labelled **Crewmate 2.0**, sits inside the Crew Members card of Settings
+> Developer > Feature Previews and is drawn only while that card's per-device
+Crewmates preview is on (`pages/settings/CrewmateV2Toggle.tsx`, a config PATCH
+with the schema's restart pill). Off, the gateway behaves as it did before the
+split:
+
+| Entry point | Off |
+| --- | --- |
+| `dashboard/server.py` startup, `mate_config_reversal.migrate_or_reverse` | no `migrate_existing_crewmates`, no upgrade notices; `reverse_migration` runs instead (below) |
+| `mate_config.adopt_own_file` (create route and `agent create`) | `switched_off`: no file written, the binding keeps its template |
+| `agent_materialization/first_crewmate._default_template` | the first crewmate is created on `kirocrew`, not the conductor |
+| `member_mate_tools.grant_mate_tools_to_new_member` | the capability-editor enrollment of the mate tools (`_grant_by_enrollment`) |
+| `mate_worker.member_chat_agent`, `member_chat_template` | the bound name, never `kirocrew-mate-conductor` |
+| `mate_worker.is_own_worker_execution`, `members.is_crewmate_worker_session` | False: no worker kit, no worker backend route, no allocation refusal |
+| `session_create._hands_off_to_own_worker` | False: no redirect to `kirocrew-mate-worker` |
+| `mate_thread_wakes.note_turn_end` | no worker-report wake (so no `[Worker report]`, no MISSING CAPABILITY line) |
+| `crewmate_dispatch_capabilities.own_worker_note` | no dispatch capability summary |
+| `crewmate_worktree_scope.scope_worker_turn`, `context_assembly/turn.rail_parts` | no per-crewmate worktree and no worktree line on `[PROJECT]` |
+| `context_assembly/member.build_member_section` | no `[YOUR CREW LOG, DASHBOARD AND TOOLS]` block |
+| `goal_reminder.dashboard_line` | no build-your-page line in the heartbeat, daily wake or goal kickoff |
+| `mcp_mate._list_tools` / `_call_tool_inner`, `member_capability_catalog.api_member_self_capabilities` | no `find_capabilities` (404 on its route); `request_capabilities` keeps its raw-operations draft, and a named-`additions` draft is refused |
+| `member_self.api_member_self_propose` | the hidden-turn capabilities admission is withdrawn |
+| `handlers/change_cards._complete` | no `[Capabilities added]` nudge |
+
+Independent of the switch, because none of them reads the conductor/worker
+split: the heartbeat check-in, milestones by number and the milestones-met line,
+the `goal` and `waiting` crew-log folds and the Dashboard page drawn from them,
+the `view.html`-only page refusal, theme drawing, and a `kiro` member backend
+read as `kas`. **Reversal at the next start with the switch off**
+(`mate_config_reversal.reverse_migration`, idempotent, never raises, one log
+line per crewmate): every crewmate `migrated.json` names (a migrated one, or
+one created while on, which `adopt_own_file` records the same way) whose
+`kiro_agent` is still its own id goes back to its recorded `from` agent, or to
+`kirocrew` when it has none (it was on the conductor); any other binding still
+on the conductor goes to `kirocrew`; each repointed thread record whose
+`template_id` is still the conductor gets its recorded agent back through the
+migration's own compare-and-set (`bind_session_execution(..., expected=current,
+vouch=False)`), so a record that moved meanwhile is left; the crewmate files stay
+on disk (worker tools added on cards are kept, unused while off) and the
+crewmate leaves `migrated` (and `threads`), noted under `reversed`, so turning
+the switch on again migrates it afresh, which rewrites its file from its
+template. A crewmate it cannot restore stays recorded and is tried at the next
+start (`test/test_crewmate_v2_switch.py`). The test suite runs with the switch
+latched on (`test/conftest.py::_crewmate_v2_on`); the switch's own file pins the
+off shape.
+
 A crewmate whose binding owns its own file (`kiro_agent` names a spec found in
 `~/.kiro/mates/agents/` and NOT in `~/.kiro/agents/`;
 `mate_worker.is_mate_owned_agent`, an in-memory set

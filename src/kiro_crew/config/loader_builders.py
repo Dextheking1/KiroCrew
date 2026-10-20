@@ -939,6 +939,7 @@ def _build_dashboard_config(_degraded: set[str], dashboard_data: dict) -> Dashbo
         ),
         restore_sessions=section.get("restore_sessions"),
         crewmate_threads=section.read("crewmate_threads", _safe_bool),
+        crewmate_v2=section.read("crewmate_v2", _safe_bool),
         crewmates_in_agent_picker=section.read("crewmates_in_agent_picker", _safe_bool),
         dynamic_dashboard_cards=section.read("dynamic_dashboard_cards", _safe_bool),
         qr_session_until_restart=section.read("qr_session_until_restart", _safe_bool),

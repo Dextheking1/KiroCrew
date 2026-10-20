@@ -435,9 +435,20 @@ def _tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
+#: The tools that exist only with Crewmate 2.0 on (``kiro_crew.crewmate_v2``):
+#: the worker capability catalog. ``request_capabilities`` predates it and stays,
+#: taking a raw operations draft only while the switch is off.
+_CREWMATE_V2_TOOLS = frozenset({"find_capabilities"})
+
+
 def _list_tools() -> list[dict[str, Any]]:
-    """Unconditional: reaching this process means a spec granted the set."""
-    return _tool_definitions()
+    """Every tool a spec granted, less the Crewmate 2.0 ones while it is off."""
+    from kiro_crew import crewmate_v2
+
+    tools = _tool_definitions()
+    if crewmate_v2.enabled():
+        return tools
+    return [t for t in tools if t["name"] not in _CREWMATE_V2_TOOLS]
 
 
 def _strict_session_key() -> tuple[str, str]:
@@ -549,7 +560,9 @@ def _goal_call(name: str, args: dict[str, Any], sk: str) -> str:
 
 
 def _call_tool_inner(name: str, args: dict[str, Any]) -> str:
-    if name not in _TOOL_NAMES:
+    from kiro_crew import crewmate_v2
+
+    if name not in _TOOL_NAMES or (name in _CREWMATE_V2_TOOLS and not crewmate_v2.enabled()):
         return f"Error: unknown tool '{name}'"
     sk, err = _strict_session_key()
     if err:
