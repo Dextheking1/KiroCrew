@@ -138,7 +138,7 @@ omit the policy.
 > Both decisions take the concrete target as well as a label, because a name is
 > self-chosen while the URL or target determines where bytes go; an allowlist pinned
 > to the target stops admitting a provider that repoints at a different host.
-> `_shared.py::admits_registry` / `admits_cloud_deployment` are the single call
+> `_shared_access.py::admits_registry` / `admits_cloud_deployment` are the single call
 > points: they deny on a composed-adapter error (reaching that fallback means an
 > operator intended to restrict something), let `PlatformCompositionError`
 > propagate, and SEL-audit **both** outcomes — a log carrying only denials cannot
@@ -1378,7 +1378,8 @@ catalogs, prompt sources and capability management each own a dedicated Protocol
 layer keeps its "one adapter per concern" shape; every edition hook lands on its
 own interface rather than accreting onto the nearest existing one.
 
-**Agent discovery.** `agent_discovery.py` owns it, and `AgentInfo` is the record
+**Agent discovery.** `agent_discovery.py`, the facade of the `agent_discovery_parts/` owners,
+owns it, and `AgentInfo` is the record
 it yields. The `source` classification is generic — no product-specific hardcode:
 `"kirocrew"` for `kirocrew.json` / `kirocrew-lite.json`, `"package"` for a
 package-installed agent, `"builtin"` for the rest. It has many consumers —

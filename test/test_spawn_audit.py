@@ -334,6 +334,21 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # ``test_the_routing_read_back_runs_off_the_event_loop`` in
         # ``test/test_acp_opencode_backend.py`` pins that.
         "acp/harness/opencode.py::_verify_opencode_routing",
+        # The opencode version gate's probe. ONE fixed argv -- the resolved
+        # harness binary plus the literal words in ``_OPENCODE_VERSION_ARGS``
+        # (``--version``) -- no shell, a 15s timeout, and a cwd that is the session
+        # work dir rather than anything the agent names in a turn; the agent
+        # supplies nothing to it, and stdout is read for the major version alone.
+        # SANDBOX-WRAPPED before it is spawned, exactly like the routing read-back
+        # above: the caller (``_opencode_version_refusal``) hands it an argv already
+        # through ``wrap_argv_async`` with the same ``extra_hidden_dirs`` credential
+        # mask, and reclaims the launcher artifact on every path. Listed rather than
+        # routed for the same reason the read-back is: ``sandboxed_spawn_argv`` is
+        # for agent-INFLUENCED argv, and nothing about this one comes from a turn.
+        # Called from a worker thread, never the event loop --
+        # ``test_the_version_child_is_wrapped_like_the_read_back`` in
+        # ``test/test_acp_opencode_backend.py`` pins that.
+        "acp/harness/opencode.py::_opencode_reported_major",
         # The pi gate read-back, the same shape as the opencode one above. ONE fixed
         # argv -- Kiro Crew's own gate launcher (a file this core wrote into the
         # sandbox run directory, execing the resolved ``pi`` binary) plus the three
@@ -661,8 +676,8 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # the auto-improvement PR asked for it. These two remain listed because the
         # detector attributes the spawn to the enclosing prompt-authoring helpers as
         # well, and those do not spawn anything themselves.
-        "apps/builtins/auto_improvement/spine/agent_runner.py::author_bug_fix",
-        "apps/builtins/auto_improvement/spine/agent_runner.py::author_perf_fix",
+        "apps/builtins/auto_improvement/spine/agent_runner_authoring.py::author_bug_fix",
+        "apps/builtins/auto_improvement/spine/agent_runner_authoring.py::author_perf_fix",
         # NOT a subprocess spawn: the AST heuristic matches ``asyncio.run`` (attr ``run``
         # on base ``asyncio``) in ``SessionAgentRunner.run``, which drives the in-process
         # provider and creates no child at all. Same classification as the other
@@ -1709,18 +1724,18 @@ BENIGN_SPAWNS: frozenset[str] = frozenset(
         # purpose is to make the sandbox constructible in the first place.
         "service/apparmor.py::parser_version",
         "service/apparmor.py::validate",
-        "service/linux.py::_current_group",
+        "service/linux_unit.py::_current_group",
         # Read-only diagnostic: `loginctl show-user <user> -p Linger`, with
         # `Linger=` parsed from the Key=value output (no `--value`), a
         # fixed argv whose only variable is the service account name taken from
         # $USER/$LOGNAME (never agent-supplied). Same class as
-        # service/linux.py::_current_group — an identity/state query the install
+        # service/linux_unit.py::_current_group — an identity/state query the install
         # makes to warn the operator when runtimes would die at logout. No shell,
         # no agent-influenced argument, nothing written.
-        "service/linux.py::_linger_enabled",
-        "service/linux.py::_sudo_run",
-        "service/linux.py::_systemctl",
-        "service/linux.py::_write_unit_via_sudo",
+        "service/linux_unit.py::_linger_enabled",
+        "service/linux_systemctl.py::_sudo_run",
+        "service/linux_systemctl.py::_systemctl",
+        "service/linux_install.py::_write_unit_via_sudo",
         "service/macos.py::_launchctl",
         "session_pid.py::kill_orphan_mcps",
         "session_pid_orphan_scan.py::_our_orphan_pids",

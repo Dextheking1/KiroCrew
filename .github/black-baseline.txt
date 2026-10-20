@@ -225,7 +225,6 @@ src/kiro_crew/mcp_gateway/verdict_cache.py
 src/kiro_crew/mcp_tools/apps.py
 src/kiro_crew/mcp_tools/artifacts.py
 src/kiro_crew/metrics/http_metrics.py
-src/kiro_crew/metrics/provider.py
 src/kiro_crew/metrics/recorder.py
 src/kiro_crew/notifications/resource_pressure.py
 src/kiro_crew/perf_sampler.py
@@ -236,7 +235,6 @@ src/kiro_crew/publish_sync.py
 src/kiro_crew/sel.py
 src/kiro_crew/service/apparmor.py
 src/kiro_crew/service/common.py
-src/kiro_crew/service/linux.py
 src/kiro_crew/service/macos.py
 src/kiro_crew/session_workspace.py
 src/kiro_crew/skill_usage.py

@@ -1034,7 +1034,7 @@ jobs:
             #     an-invariant-line-needs-a-mutation-pin, tests-are-deterministic,
             #     an-async-test-respects-the-on-loop-lock, a-stopwatch-is-not-a-
             #     barrier,
-            #     a-bound-bounds-every-field-it-retains,
+            #     a-bound-bounds-every-field-it-retains, keep-modules-small,
             #     an-operator-facing-string-states-what-was-measured, and the
             #     website UI rules other than frontend-security --
             #     availability/hygiene classes with bounded harm.
@@ -1182,7 +1182,7 @@ jobs:
           (steps.adj_input.outputs.adjudicable != '' && steps.adj_input.outputs.adjudicable != '0')
           || (steps.adj_input.outputs.fenced != '' && steps.adj_input.outputs.fenced != '0')
           )
-        uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
+        uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
         with:
           use_bedrock: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}

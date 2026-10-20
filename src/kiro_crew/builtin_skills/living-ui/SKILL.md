@@ -115,6 +115,18 @@ file.
    - `?slow=0.05` runs `requestAnimationFrame` and `performance.now` at 1/20
      speed, so a 100 ms envelope lands on several frames.
 
+   For a Dashboard page, pass its `view.html`, a JSON file of sample field
+   values, and one `--push` file of new values for each change to watch:
+
+   ```bash
+   python3 scripts/harness.py view.html --fields now.json --push next.json
+   ```
+
+   The frame is then the Dashboard tab's: inline script only, so a CDN script
+   fails as it does there, and the host fills the bound cells and answers
+   `window.kirocrew.fields` and `subscribe`. A button above the frame sends
+   each push file in as the next refill, so a slowed run can show the change.
+
    A script error shows above the frame with its line in your file, and a
    load the CSP blocks shows there with its address. Fix every one.
 2. **Capture** each of these with a `web-verify` backend, in light and in dark:
@@ -189,6 +201,15 @@ LivingUI.settle(s = { x, v }, target, dt, seconds = 0.4, calm = false) -> boolea
 LivingUI.smooth(a, b, x) -> number // smoothstep, 0 to 1
 LivingUI.burst(age, rise = 0.08, fall = 0.13) -> number // event envelope, 0 to 1
 
+// The idle tour (rule L). Each frame it calls at(t): t is the ms since the
+// current loop began, from 0 up to period, the length of one loop in ms. It
+// starts once the stage has been in view for `start` ms, pauses at once on
+// input inside the stage, resumes `resume` ms after the last one, and rests
+// after `loops` loops with one last call, at(period). active is true only
+// while it drives.
+LivingUI.tour(stage, at: (t) => void, { start = 1400, resume = 3600, period, loops = 3 } = {})
+  -> { readonly active, play(), pause(), takeOver() }
+
 // The figure's words. say() writes the visible readout and may run every
 // frame; describe() writes target's aria-valuetext, on a state change only;
 // phase() writes the live region once 700 ms pass with no newer phase.
@@ -198,6 +219,13 @@ LivingUI.readout(el, { target, live } = {}) -> { say(text), describe(text), phas
 // The one lit element: chosen gets data-lui-on and root gets data-lui-focus;
 // null takes both away. It never moves keyboard focus.
 LivingUI.focusOne(root, chosen) -> void
+
+// The exploded view (rule X): one spring per part, items in the order the
+// parts leave. open(true) starts each part `stagger` ms after the one
+// before; open(false) brings them home in reverse order. step moves each el
+// by its share of move and returns true while a part still moves or waits.
+LivingUI.explode(items: [{ el, move: [dx, dy] }], { stagger = 35, k = 64, c = 14.2 } = {})
+  -> { open(apart), toggle(), step(dt, calm) -> boolean }
 
 // The CSS rules the helpers rely on, as a string for a <style> element.
 LivingUI.css -> string
@@ -223,6 +251,31 @@ markup. `focusOne` moves the lit element (rule F): hover, the keyboard and the
 tour each call it with the part they pick, or with `null` when none is picked.
 It takes `data-lui-on` from every other element inside `root`, so a part lit
 in the still markup steps down with the rest when another part is picked.
+
+`tour` is for an explainer, never a Dashboard page. Its `at(t)` acts as an
+input would: it sets the targets for time `t`, calls the loop's `kick()` and
+calls `focusOne` to pick the lit element. Leave `phase` out of `at`, since the
+idle tour never writes the live region. Give `tour` a `period` above 0, since
+without one it never runs, and start and end each loop on the settled state
+the markup shows: the last call, `at(period)`, lands the figure there when the
+tour rests. Input inside the stage pauses the tour, so put the play/pause
+button outside the stage and have it call `pause()` and `play()`. It says
+Pause while the tour is on, even while the tour waits out an input, and Play
+once its own click pauses the tour or `at` gets `t === period`. Any other
+control outside the stage that moves the figure calls `takeOver()`.
+
+`explode` takes a figure apart (rule X), and the markup draws it assembled.
+Give each part an element of its own with no transform, such as a `<g>`, and
+a `move` in px (user units inside an SVG) that clears its neighbours. Order
+the parts so nothing passes through another: a part that sits in another's
+way out comes first. Call `step(dt, calm)` in every tick, not behind a `||`,
+and keep the loop running while it returns true. Hover, a tap or a key opens
+it. `pointerenter` and `pointerleave` on the stage call `open(true)` and
+`open(false)` only when `pointerType` is `mouse`, since every tap fires both;
+a `pointerup` that is not from a mouse, and Space or Enter, call `toggle()`,
+while a swipe that scrolls the page ends in `pointercancel` and toggles
+nothing. Each one then calls `kick()`. Light the part the reader picks with
+`focusOne` (rule F), and name it in the readout.
 
 A value that follows the pointer, with its readout:
 
@@ -400,6 +453,85 @@ LivingUI.burst = (age, rise = 0.08, fall = 0.13) => {
 };
 ```
 
+#### `tour`
+
+```js
+// Adapted from anatomy by Ryan (MIT License): see living-ui/LICENSE-anatomy.md.
+var LivingUI = LivingUI || {};
+// The idle tour of an explainer (rule L). Each frame it calls at(t), and at
+// sets the same targets an input would. t is the tour's own time in ms since
+// the current loop began, from 0 up to period, and it stands still whenever
+// the tour does not drive. The tour starts once the stage has been in view
+// for `start` ms and rests after `loops` loops, with at(period) as its last
+// call, so the figure lands on the loop's end. Pointer, keyboard focus and
+// key input inside the stage pause it at once, and it resumes `resume` ms
+// after the last one; takeOver() pauses it the same way, for a control
+// outside the stage. pause() holds it until play(), and play() after a rest
+// starts the loops over. It never calls at offscreen, in a hidden tab, under
+// reduced motion or without a period above 0, and active is true only while
+// it drives. It never moves keyboard focus and writes nothing to the page.
+LivingUI.tour = (stage, at, { start = 1400, resume = 3600, period, loops = 3 } = {}) => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  const end = loops * period;
+  // delay is how long the tour waits before it drives: `resume` after an input
+  // until it drives again, even across a spell offscreen, and `start` otherwise.
+  let frame = 0, timer = 0, last = -1, time = 0, delay = start, inView = false, held = false;
+  const ready = () => inView && !held && !reduce.matches && !document.hidden && time < end;
+  const stop = () => {
+    cancelAnimationFrame(frame);
+    clearTimeout(timer);
+    frame = timer = 0;
+  };
+  // The first frame after a wait counts no time, and a gap counts 1/30 s at most.
+  const step = (now) => {
+    time += last < 0 ? 0 : Math.min(now - last, 100 / 3);
+    last = now;
+    frame = time < end ? requestAnimationFrame(step) : 0;
+    at(frame ? time % period : period);
+  };
+  const drive = () => {
+    stop();
+    if (!ready()) return;
+    delay = start;
+    last = -1;
+    frame = requestAnimationFrame(step);
+  };
+  // Stops at once, then drives after `delay` ms unless something stops it first.
+  const wait = () => {
+    stop();
+    if (ready()) timer = setTimeout(drive, delay);
+  };
+  const takeOver = () => {
+    delay = resume;
+    wait();
+  };
+  for (const type of ['pointerdown', 'pointermove', 'focusin', 'keydown']) {
+    stage.addEventListener(type, takeOver);
+  }
+  // In view means in the viewport itself, with no margin, so the reader sees
+  // the still figure first. Only the newest entry says where the stage is now.
+  new IntersectionObserver((entries) => {
+    inView = entries[entries.length - 1].isIntersecting;
+    wait();
+  }).observe(stage);
+  reduce.addEventListener('change', wait);
+  document.addEventListener('visibilitychange', wait);
+  return {
+    get active() { return frame > 0; },
+    play() {
+      held = false;
+      if (time >= end) time = 0;
+      if (!frame) drive();
+    },
+    pause() {
+      held = true;
+      stop();
+    },
+    takeOver,
+  };
+};
+```
+
 #### `readout`
 
 ```js
@@ -451,6 +583,75 @@ LivingUI.focusOne = (root, chosen) => {
   }
   if (chosen) chosen.toggleAttribute('data-lui-on', true);
   root.toggleAttribute('data-lui-focus', !!chosen);
+};
+```
+
+#### `explode`
+
+```js
+// Adapted from anatomy by Ryan (MIT License): see living-ui/LICENSE-anatomy.md.
+var LivingUI = LivingUI || {};
+// The exploded view (rule X). items holds one { el, move: [dx, dy] } for
+// each part, in the order the parts leave. Each part rides its own spring
+// with stiffness k and damping c, from 0, where the markup draws the part,
+// to 1, where it sits moved by move. The defaults sit just under critical
+// damping: a part passes its target by under 1% and lands about 1.4 s after
+// it starts. open(true) starts the parts in order, each `stagger` ms after
+// the one before, and open(false) brings them home in reverse order. A
+// reversal part-way re-staggers only the parts whose target changes: a part
+// still waiting to leave stays home, and the last one out is the first one
+// back, at once. toggle() flips between open and closed. step(dt, calm)
+// moves the parts, with dt in seconds as loop passes it, and returns true
+// while a part still moves or waits; under calm every part lands on its
+// target at once. A part's el gets a CSS translate in px (user units inside
+// an SVG), written only when the part moves and taken away at 0, so the
+// assembled figure is the markup itself.
+LivingUI.explode = (items, { stagger = 35, k = 64, c = 14.2 } = {}) => {
+  // clock is the view's own time in ms. Each part keeps its spring (x, v),
+  // its target `to`, and `at`, when its target turns to goal.
+  let clock = 0, goal = 0;
+  const parts = items.map(({ el, move }) => ({ el, move, x: 0, v: 0, to: 0, at: Infinity }));
+  const open = (apart) => {
+    const next = apart ? 1 : 0;
+    if (next === goal) return;
+    goal = next;
+    let n = 0;
+    for (const part of apart ? parts : [...parts].reverse()) {
+      part.at = part.to === goal ? Infinity : clock + stagger * n++;
+    }
+  };
+  return {
+    open,
+    toggle() { open(!goal); },
+    step(dt, calm) {
+      clock += dt * 1000;
+      let moving = false;
+      for (const part of parts) {
+        const from = part.x;
+        if (calm || part.at <= clock) {
+          part.to = goal;
+          part.at = Infinity;
+        }
+        // Four substeps a frame keep a stiff spring stable.
+        for (let i = 0; i < 4 && !calm; i++) {
+          part.v += (k * (part.to - part.x) - c * part.v) * dt / 4;
+          part.x += part.v * dt / 4;
+        }
+        if (calm || (Math.abs(part.to - part.x) < 5e-4 && Math.abs(part.v) < 5e-4)) {
+          part.x = part.to;
+          part.v = 0;
+        } else {
+          moving = true;
+        }
+        if (part.at < Infinity) moving = true;
+        if (part.x !== from) {
+          const [dx, dy] = part.move;
+          part.el.style.transform = part.x ? `translate(${dx * part.x}px, ${dy * part.x}px)` : '';
+        }
+      }
+      return moving;
+    },
+  };
 };
 ```
 

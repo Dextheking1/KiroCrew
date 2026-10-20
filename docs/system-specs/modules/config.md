@@ -91,9 +91,9 @@ it bound before its owners existed, and serves each owner-defined name from the
 owner that defines it. Its own code is the effective-model resolution
 (`resolve_effective_model`, `resolve_app_spawn_model`, `app_model_pin`, the
 kiro-agent reference check) and `build_provider_factory`, the platform seam in
-front of `KiroCrewConfig.create_provider_factory`. That method reaches
-`AcpProvider` through `agent_sdk.acp_provider_class`, so no config module imports
-the ACP layer. The rest lives in one owner per responsibility, lowest layer first:
+front of `KiroCrewConfig.create_provider_factory`. That method builds
+`AcpProvider` through `agent_sdk.drivers.acp.build_acp_provider`, so no config
+module imports the ACP layer. The rest lives in one owner per responsibility, lowest layer first:
 
 | Owner | Owns |
 |---|---|
@@ -1482,7 +1482,7 @@ keys`. Three exclusions from that warning are named in code:
   is the point at which this becomes an app-declared registration.
 - `validation._CORE_OWNED_TOP_KEYS` (`voice_reply`, `connections`) — a section this core itself
   writes and reads but does not model as a field. The settings UI persists it
-  (`slack/interactions.py`, `dashboard/chat_voice.py`) and the gateway reads it
+  (`slack/interactions_modals.py`, `dashboard/chat_voice.py`) and the gateway reads it
   back on startup via `load_voice_reply_config` (`slack/handler_runtime/voice.py`,
   and read by `telegram/transport_dispatch.py`). Captured and round-tripped like any unknown
   section, and NOT reported as unrecognized because the product wrote it itself.
@@ -1956,8 +1956,8 @@ recurring gateway stall the loop-stall watchdog blames on chat.
 Async callers therefore **warm the cache before resolving**:
 `agent_discovery.warm_project_agent_names()` runs the scan on
 `executors.discovery_executor()` (the pool `/api/agents/installed` uses), after which
-the on-loop read is a hit. `chat_runner._run_chat` and the side-turn handler both do
-this.
+the on-loop read is a hit. The turn's admission phase (`_turn_admit`, in
+`dashboard/chat_turn/turn_admission.py`) and the side-turn handler both do this.
 
 `subagent._validate_agent` cannot warm — `spawn()` is synchronous and already on the
 loop — so it reads the project scope from `cached_project_agent_names()` only. A
@@ -1993,7 +1993,7 @@ publication. The execution record also persists a unique publication revision to
 distinguish repeated selections during compare-and-set; neither revision grants
 memory access.
 
-#### App-slot cold-snapshot self-heal & fail-loud (`dashboard/chat_runner._run_chat`)
+#### App-slot cold-snapshot self-heal & fail-loud (`dashboard/chat_turn/turn_admission._turn_admit`)
 The one-turn cold fallback above is acceptable for an ordinary session (the next
 turn self-heals), but it is **not** acceptable for an **app-owned** slot
 (`slot._app` truthy — an App-Kit slot bound to an app's own kiro agent, e.g.
@@ -2003,7 +2003,7 @@ turn self-heals), but it is **not** acceptable for an **app-owned** slot
 `requested_resolved=False`. The result is silent: the slot still advertises the
 requested name while the generic default agent answers **with none of the app's
 MCP tools and no error**, leaving the app unusable until a gateway restart happens
-to re-warm the snapshot. `_run_chat` therefore guards the resolve, strictly behind
+to re-warm the snapshot. `_turn_admit` therefore guards the resolve, strictly behind
 `slot._app and not bindings.requested_resolved` (zero extra work / I/O on the
 common hot path — no `_app`, or already resolved):
 
@@ -2862,7 +2862,7 @@ happens to notice — which is the bug class this closes.
 | `_atomic_json_write` | `agent.py` — via `_notify_if_config_write`, and ONLY when the target resolves to `config_path()`. A safety net rather than a route: no handler writes `config.json` through it — the per-channel savers (`messaging._LockedSectionWrite`), the STT PUT and the MCP gateway-enable toggle all go through `update_config_locked`, and `TestTheAtomicJsonWriteConfigFamilyIsRatcheted` pins that population to an empty baseline so a new saver cannot reopen it |
 
 A handler that must answer only after the new value is in force calls
-`ConfigWatch.refresh_now()` (`handlers/core.py::_hot_apply_after_write`), which
+`ConfigWatch.refresh_now()` (`handlers/core_config_view.py::_hot_apply_after_write`), which
 forces one cycle and is a no-op before the watcher is started. The config PUT
 and every per-channel saver (the `*_settings.py` owners in `dashboard/messaging_api/`,
 the WhatsApp saver in `handlers/whatsapp_setup.py`) do, because their writes carry authorization: a
@@ -3483,7 +3483,7 @@ a prompt-injected agent with file-write access) bypassed that gate entirely. Eac
 knob controls a resource-consumption dimension (concurrent subagent processes,
 per-subagent turn budget, pre-warmed pool processes), so an inflated on-disk value
 could exhaust host memory/CPU/the process table (DoS). The dashboard write gate
-(`dashboard/handlers/core.py`) and the runtime pool cap **import these same
+(`dashboard/handlers/core_config_view.py`) and the runtime pool cap **import these same
 constants**, so write-gate / load-clamp / runtime-cap cannot drift apart —
 closing the direct-config-edit DoS gap.
 

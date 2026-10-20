@@ -712,7 +712,7 @@ ENABLED apps — so the resurrected bridge stayed live and callable.
 reserved *from this endpoint* — the raw editor is not one of its writers. Two paths
 legitimately put a colon-containing key here: `_register_mcp_servers` (every app
 bridge, as `<app>:<server>`) and the MCP page's
-`handlers/mcp.py::_sync_mcp_to_agent_unlocked` (a global mcp.json server copied in
+`handlers/mcp_agent_sync.py::_sync_mcp_to_agent_unlocked` (a global mcp.json server copied in
 under `mcp_server_alias`, which returns a slash-free name unchanged and so keeps a
 colon). A name either of them actually wrote is present on disk, and therefore
 untouched.
@@ -901,7 +901,7 @@ complete). The callers act on it as follows:
 A session a palette command opens for its app's own agent (`app_agent_owner`) runs
 only on a backend whose routing is `Routing.AGENT_SPEC` (KAS and Kiro), the hosts that
 launch the agent from its spec. Any other backend would run the app-authored prompt
-without the app's spec, so `dashboard/chat_runner.py` refuses the turn before the
+without the app's spec, so `dashboard/chat_turn/turn_admission.py` (`_turn_admit`) refuses the turn before the
 claim (the selected backend) and again after it (the claimed provider's
 capabilities), with `apps.manager.app_agent_backend_refusal` as the message and the
 `app_agent_refused` row kind. The bare-name check `app_command_agent_refusal` runs
@@ -2910,6 +2910,16 @@ it: a `subdirectory` the lexical gate rejects is not joined, an absolute path or
 URL is left untouched, and no normalisation happens, so a `..` in the asset path
 still reaches the blob route's own rejection.
 
+**Where the detail page's code lives.** `website/src/pages/AppDetailPage.tsx` is the
+page and its only import path: it loads the app (`load()` resolves the art fields
+described here), holds the page's state, and renders the actions and the info
+cards. Two owners beside it never import it. `AppDetailPageArt.tsx` renders the
+art, `HeroBanner` and `ScreenshotGallery`, each with its local-art second chance and
+the same-origin gate on that fallback, so new work on the banner, the gallery or its
+lightbox goes there. `appDetailPageTypes.ts` holds the page's view model (`AppInfo`
+and the manifest and registry-row types it joins), which is where a new view-model
+field goes.
+
 **An INSTALLED app's art is served from its own install directory, not the blob
 proxy.** `GET /apps/{name}/art/{path}` (`handle_app_art_file`) reads the bytes
 the install itself wrote, and the four surfaces that render an installed app's
@@ -3019,7 +3029,7 @@ file outside the install directory would open cleanly, report `S_ISREG`, sit und
 cap, and have its bytes served with a 200 — laundering, through an unsandboxed
 gateway, a read the app's own sandboxed code can be refused. Every other
 descriptor-validated read in the tree applies the same gate (`memory_files.py`,
-`memory_stores.py`, the `spec_builder` repository, `onboarding_scan.py`,
+`memory_stores.py`, the `spec_builder` duplicate transaction, `onboarding_scan.py`,
 `pinned_fs.copy_file_pinned`), so this route
 was the outlier rather than a new rule.
 
@@ -3131,7 +3141,8 @@ Writers: builtin `app.json` manifests, `apps/registry_pipeline/manifests.py`
 `apps/routes.py` (`handle_app_art_file`),
 `website/src/components/appstore/appManifest.ts`,
 `website/src/components/appstore/useHeroArt.ts`,
-`website/src/pages/AppDetailPage.tsx`, and
+`website/src/pages/AppDetailPage.tsx`,
+`website/src/pages/AppDetailPageArt.tsx`, and
 `website/scripts/check-app-manifest-sync.mjs`.
 
 ## 17. A backend's health is a standing observation, not a startup verdict
@@ -3528,15 +3539,21 @@ records which module owns which part, so a change lands in its owner.
 | `orchestration/duplicate.py` | The duplicate's staged publication transaction |
 | `runtime.py` | The worker session binding: slot scoping, turn relay, turn and slot stop, and the transcript projection |
 | `decisions.py` | The protected decision ledger and its outbox rows |
-| `repository.py`, `parsers.py` | The index, the documents, settings, and state-file projections |
+| `repository.py`, `parsers.py` | The index, settings, deletion tombstones and slot identity, the safe filesystem, and the document reads |
+| `repository_duplicate.py` | The duplicate's staged copy, its publication without replacement, and recovery of an abandoned one |
+| `repository_sentinel.py` | The STOP sentinel and the handoff gate that arms it |
+| `repository_discovery.py` | Spec discovery, each spec's phase and documents, and new spec directories |
+| `repository_git.py` | The audited git spawn and the worktree helpers |
 
 Imports only point down this order: `routes`, `handlers`, the `orchestration`
-owners, `runtime`, `decisions`, `repository`, `parsers`. There is no cycle, and no
-owner imports the facade. `handlers.py` re-exports each route entry point straight
+owners, `runtime`, `decisions`, the `repository_*` owners, `repository`, `parsers`.
+There is no cycle, and no owner imports the facade. A `repository_*` owner imports
+only `repository` and `parsers`, never another owner. `handlers.py` re-exports each route entry point straight
 from its owner, one hop, so `routes.py` keeps a single import surface.
 
 Two placements are constraints rather than style. Only the modules listed in
 `NON_EGRESS_REDACTION_MODULES` (`handlers.py`, `runtime.py`, `repository.py`,
+`repository_discovery.py`, `repository_git.py`, `repository_sentinel.py`,
 `parsers.py`) call the redactor, so a redacting projection stays in one of them. The
 persisted-transcript read stays in `_serialize_messages` in `runtime.py`, the
 plumbing site the transcript-derivation seam allowlists.
@@ -3944,12 +3961,13 @@ pickle names the path callers import.
 The placements are constraints rather than style. `CORE_APP_ROUTE_SEGMENTS` stays in
 `manifest.py` because `website/src/test/fileMenuContributions.test.tsx` reads its
 literal there. `JobSDK._execute` stays beside `_write_terminal` in `job_sdk.py` because
-`test_job_sdk.py` reads the text between them there; its two one-site counts (the
-interruption fields' assignments, the message table's spellings) read the facade joined
-with its owners, so a second site in any of them fails. `test_setup_hooks_contract.py`
-excludes `manifest_sections.py`, where every `setup` hook is declared and serialized,
-from its runtime scan; `test_agent_spec_hardened_reads.py` keys the hardened agent-spec
-read under `manifest_containment.py`; and `NON_EGRESS_REDACTION_MODULES` names
+`test_job_sdk_returns.py` reads the text between them there; its one-site count of the
+message table's spellings and `test_job_sdk_invariants.py`'s of the interruption fields'
+assignments read the facade joined with its owners, so a second site in any of them
+fails. `test_setup_hooks_contract.py` excludes `manifest_sections.py`, where every
+`setup` hook is declared and serialized, from its runtime scan;
+`test_agent_spec_hardened_reads.py` keys the hardened agent-spec read under
+`manifest_containment.py`; and `NON_EGRESS_REDACTION_MODULES` names
 `apps/job_sdk_records.py`, whose `_redact` is the ingest scrub.
 
 Writers: `apps/manifest.py`, `apps/manifest_names.py`, `apps/manifest_containment.py`,
