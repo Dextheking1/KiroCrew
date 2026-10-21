@@ -30,6 +30,7 @@ from kiro_crew.dashboard.state_parts.slot_session import (
     VALID_MEMORY_MODES,
 )
 from kiro_crew.dashboard.state_parts.slot_turns import _log_task_exception
+from kiro_crew.messaging.link import is_channel_session_key
 from kiro_crew.security.credential_sources import CredentialEvidence
 
 if TYPE_CHECKING:
@@ -827,10 +828,17 @@ class _ChatSlot:
 
         Unbound slots never consult the probe; a probe that is unwired or
         raises answers False, leaving the slot's own task as the only signal.
+        Only a CHANNEL session key is read: that is the binding whose turns run
+        elsewhere, and the only one whose lease flips push a slots update
+        (``channel_slots._linked_running_flipped``). Other bindings (a cron or
+        workflow slot, a resumed session) hold the same lease for runs of their
+        own. A compaction on the channel session holds it too and reads as
+        running, on purpose: Stop during it is the compaction escape
+        (``stop_slot_turn``'s declined-then-forced press).
         """
         key = self.linked_session_key
         probe = self._linked_session_busy
-        if not key or probe is None:
+        if not key or probe is None or not is_channel_session_key(key):
             return False
         try:
             return probe(key) is True

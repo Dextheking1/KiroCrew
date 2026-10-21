@@ -302,6 +302,16 @@ class SlotProjection:
         # it only stops the summary from reading its trailing user row as an
         # interruption, and reports the row as running like any other turn.
         turn_in_flight = slot.turn_running or getattr(slot, "linked_turn_running", False) is True
+        # A turn running only on the linked session has no number here, so the
+        # row names none, as the slot detail does: naming the slot's last
+        # dashboard turn would tell the open pane, which already saw that turn
+        # end, that this running row is stale, and the pane would stay idle --
+        # no Stop, and Resume offered on a reply still being written.
+        turn_identity: dict[str, object] = (
+            {}
+            if turn_in_flight and not slot.turn_running
+            else {"turn": slot._turn_generation, "turn_gen": chunk_generation()}
+        )
         last_turn_ts = last_ts
         if turn_in_flight:
             prompt_ts = next(
@@ -433,8 +443,7 @@ class SlotProjection:
             "wake_starting": bool(
                 slot.turn_running and getattr(slot, "_wake_starting_task", None) is slot.task
             ),
-            "turn": slot._turn_generation,
-            "turn_gen": chunk_generation(),
+            **turn_identity,
             # An automatic compaction in flight on this session. Separate from
             # `running` because it is NOT a dashboard turn: the composer reads
             # idle while it holds the session, which without this field looks

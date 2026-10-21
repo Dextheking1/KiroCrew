@@ -451,3 +451,33 @@ def test_a_queued_interrupt_cancels_the_channel_turn_only_once_validated(
         assert status == 400
         state.sessions.stop_turn.assert_not_awaited()
         start.assert_not_awaited()
+
+
+def test_a_linked_turns_row_names_no_turn_so_the_open_pane_runs(state: Any) -> None:
+    """The row's ``turn`` is the slot's LAST dashboard turn, which the open pane
+    already saw end. Beside ``running: true`` that reads to the pane as a stale
+    row, so the pane would stay idle and its composer offer Resume while the
+    Slack thread is still answering. Running only on the lease, the row names
+    none -- the slot detail's rule -- and an idle row still names its turn."""
+    slot = _surface(state)
+    slot._turn_generation = 7
+
+    idle = slot.to_dict()
+    assert idle["running"] is False
+    assert idle["turn"] == 7 and idle["turn_gen"]
+
+    state._test_busy.add(CHANNEL_KEY)
+    running = slot.to_dict()
+    assert running["running"] is True
+    assert "turn" not in running and "turn_gen" not in running
+
+
+def test_a_non_channel_binding_does_not_read_the_lease(state: Any) -> None:
+    """A cron or resumed slot's linked session holds the same lease for its own
+    runs and for compaction; only a channel binding's turns run elsewhere."""
+    state._test_busy.add("cron:nightly")
+    slot = state.get_or_create_slot("cron-nightly", linked_session_key="cron:nightly")
+    slot.messages.append({"role": "user", "content": "run", "ts": "t1"})
+
+    assert slot.linked_turn_running is False
+    assert slot.to_dict()["running"] is False
