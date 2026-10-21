@@ -9,7 +9,10 @@
  * is PATCHed to config and read back through the shared `['kirocrewConfig']`
  * query, like the Crewmates section's reply-threads switch. The gateway reads it
  * once at startup (`kiro_crew/crewmate_v2.py`), so a change says "restart to
- * apply" until the page is reloaded.
+ * apply" until the page is reloaded. On by default.
+ *
+ * Dynamic capabilities is not here: it is a per-crewmate preview on each
+ * crewmate's own Profile card (`pages/members/CrewProfileSettings.tsx`).
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'

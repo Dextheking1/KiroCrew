@@ -43,8 +43,14 @@ def _note(app: Any, caller_history_key: str, target_history_key: str) -> str:
         or target.member_id != caller.member_id
     ):
         return ""
-    member = crewmate_name_for(KiroCrewConfig.load(), caller)
+    from kiro_crew import crewmate_dynamic_capabilities
+
+    config = KiroCrewConfig.load()
+    member = crewmate_name_for(config, caller)
     if not member or not mate_capabilities.binding_is_mate(member):
+        return ""
+    if not crewmate_dynamic_capabilities.enabled_for(member, config):
+        # This crewmate's Dynamic capabilities preview is off: no card to invite.
         return ""
     catalog = _capability_service(app)._mate_catalog(member)
     spec = catalog_mod.worker_spec(member)
@@ -55,6 +61,8 @@ async def own_worker_note(app: Any, state: Any, caller_session_key: str, target_
     """The capability line for this hand-off, or ``""`` when it is not conductor to own worker."""
     from kiro_crew import crewmate_v2
 
+    # The summary invites a capability card, so it is the crewmate-driven path:
+    # Crewmate 2.0 here, and the crewmate's own preview in ``_note``.
     if not crewmate_v2.enabled():
         return ""
     from kiro_crew.dashboard.chat_utils import slot_history_key

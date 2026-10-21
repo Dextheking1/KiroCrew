@@ -3253,14 +3253,16 @@ could not be read, so the server took the request) all show "N comments sent".
 
 **Behind the Crewmate 2.0 switch.** Everything in this section, and the
 migration below, runs only while `dashboard.crewmate_v2` is on
-(`kiro_crew/crewmate_v2.py`, default **off**, `restart=True`: `crewmate_v2.latch`
+(`kiro_crew/crewmate_v2.py`, default **on** for a fresh install and for an
+upgrade with no key set, `restart=True`: `crewmate_v2.latch`
 reads it once at gateway start and `enabled` answers that value for the whole
 run, so a crewmate is never half on its template and half on its conductor). Its
 toggle, labelled **Crewmate 2.0**, sits inside the Crew Members card of Settings
 > Developer > Feature Previews and is drawn only while that card's per-device
 Crewmates preview is on (`pages/settings/CrewmateV2Toggle.tsx`, a config PATCH
-with the schema's restart pill). Off, the gateway behaves as it did before the
-split:
+with the schema's restart pill). A config that cannot be read answers on and is
+not latched, so a failed read never reverses the migration. Off, the gateway
+behaves as it did before the split:
 
 | Entry point | Off |
 | --- | --- |
@@ -3817,6 +3819,47 @@ read-time pass (`kas_agents._ceiling_permitted`) withholds again, so an addition
 cannot lift the worker above POLICY ∩ PROFILE; a withheld grant leaves the
 server mounted and its calls prompting. Crew's PreToolUse gate evaluates every
 call regardless.
+
+### Dynamic capabilities
+
+**A per-crewmate preview, off by default.** Each crewmate's record carries
+`dynamic_capabilities` (`agents.<name>` in `config.json`,
+`KiroCrewAgentConfig.dynamic_capabilities`, a strict bool; absent or any other
+value is off). It holds only that crewmate's crewmate-driven capability path: it
+finding a skill or an MCP server for its own worker and asking for it on a card.
+There is no global key. It is set on the crewmate's own Profile card
+(`pages/members/CrewProfileSettings.tsx`: a **Dynamic capabilities** row with a
+**Preview** tag, shown only while Crewmate 2.0 is on), which writes
+`PUT /api/agents/{name}` `{dynamic_capabilities}` for that crewmate alone; the
+roster serves it. `kiro_crew/crewmate_dynamic_capabilities.py` reads it per
+request: `enabled_for(member)` is 2.0 AND the crewmate's flag,
+`restricted_for(member)` is 2.0 on and the flag off. A check with no crewmate in
+scope (no name, not on the roster) is off. While 2.0 is off neither applies, so
+the shape before the split keeps `request_capabilities` with a raw operations
+draft. A running conductor keeps the tool list it started with; the routes
+refuse at once. Off, for that crewmate, with 2.0 on:
+
+| Entry point | Off |
+| --- | --- |
+| `handlers/sessions_parts/tool_policy.api_session_tool_policy` (`_crewmate_withheld_tools`) | the crewmate's own thread's policy excludes `find_capabilities` and `request_capabilities`, so `tools/list` leaves them out and `tools/call` refuses them; the shared `kirocrew-mate` server (`mcp_mate._withheld_tools`) withholds by the 2.0 switch only |
+| `member_capability_catalog.api_member_self_capabilities` | 404 for that crewmate (`find_capabilities`' route) |
+| `member_self.api_member_self_propose` | 404 for `request: capabilities` (operations or `additions`); the other crewmate cards are proposed as before |
+| `handlers/change_cards.api_cards_agent_propose` (`_crewmate_drives_capabilities_off`) | 403 `dynamic_capabilities_off` for a `crewmate.capabilities` card from the crewmate's thread or its worker (judged by that worker's own crewmate; one that cannot be named counts as off); any other caller proposes it |
+| `crewmate_dispatch_capabilities._note` | no capability summary on `session_create` / `session_send` |
+| `mate_thread_wakes.report_prompt` (`_missing_capability_line`, read in `_flush` off the loop) | a worker's gap (the `MISSING CAPABILITY:` line or the prose "blocked, no X tool") gets `worker_report.missing_capability_manual`: tell the user in one plain line to add it in the crewmate's advanced settings; no card |
+| `handlers/change_cards._complete` | no `[Capabilities added]` nudge (the card's `params.member`) |
+| `mate_worker.resolve_worker_spec` (`_with_principles`, `mate_worker_prompt`) | the worker's prompt carries `worker.principles_manual`: names what it could not do, asks for no `MISSING CAPABILITY:` line; the installed base carries that version, and a crewmate with the flag on gets `worker.principles` in its worker |
+| `context_assembly/member.build_member_section` | `conductor.mate_tools_identity_manual` and `conductor.crew_log_section_manual`: neither tool named |
+
+Not this switch's, so on either way: the user adding or removing worker
+capabilities by hand in the crewmate's advanced settings
+(`/api/agents/{member}/capabilities` through `mate_capabilities.put`, and the
+custom agent template through `/api/agents/{member}/worker-kit`), the worker kit
+built from base, template and what the user added, the conductor, the hand-off,
+worktrees, heartbeat and the Dashboard. The suite runs with every crewmate's
+flag on (`test/conftest.py::_crewmate_dynamic_capabilities_on`, the module's
+`_override` seam); `test/test_crewmate_dynamic_capabilities.py` pins the
+per-crewmate reads.
 
 ## Selection: the `select_crew` contract
 

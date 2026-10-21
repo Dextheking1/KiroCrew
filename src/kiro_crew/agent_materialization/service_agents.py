@@ -198,17 +198,17 @@ def _install_mate_worker_agent() -> None:
     from kiro_crew.mate_worker import (
         MATE_WORKER_AGENT,
         MATE_WORKER_EXCLUDED_TOOLS,
-        MATE_WORKER_PROMPT,
+        mate_worker_prompt,
     )
 
     config = agent_mod.build_agent_config()
     config["name"] = MATE_WORKER_AGENT
     config["description"] = "The agent a crewmate's worker sessions run on."
-    # The worker's own principles ride after the shared base prompt.
+    # The worker's own principles ride after the shared base prompt. Which ones
+    # follows Dynamic capabilities (``mate_worker.mate_worker_prompt``).
+    principles = mate_worker_prompt()
     base_prompt = config.get("prompt") if isinstance(config.get("prompt"), str) else ""
-    config["prompt"] = (
-        f"{base_prompt.rstrip()}\n\n{MATE_WORKER_PROMPT}" if base_prompt else (MATE_WORKER_PROMPT)
-    )
+    config["prompt"] = f"{base_prompt.rstrip()}\n\n{principles}" if base_prompt else principles
     # Asking the user for a capability is the conductor's: a worker reports a
     # missing tool back to the chat that opened it.
     _exclude(config, MATE_WORKER_EXCLUDED_TOOLS)

@@ -161,15 +161,23 @@ and its charged budgets. Fixed call, byte, cache and iframe limits and the disab
 contract are documented in
 [learn-cron-dashboard](learn-cron-dashboard.md#automatic-session-status-cards).
 
-`dashboard.crewmate_v2` (**Crewmate 2.0**) is default false and `restart=True`:
+`dashboard.crewmate_v2` (**Crewmate 2.0**) is default true and `restart=True`
+(a fresh install and an upgrade with no key set both run it):
 `kiro_crew/crewmate_v2.py` latches it once at gateway start, so the conductor and
 worker split, the startup crewmate migration and their prompt pieces follow the
 value the gateway started with, and a change waits for the next start (the
 Settings toggle shows the schema's restart pill). Off at a start after a run
 with it on, the migration is reversed from `migrated.json`. A config that cannot
-be read answers off and is not latched. Card-editable and classified
+be read answers the default (on) and is not latched, so a failed read never
+reverses the migration. Card-editable and classified
 `(False, True)` in `change_card_catalog._SETTING_ORDER`, so a card turning it on
 asks for the widen acknowledgement. Owned by [crew-mode](crew-mode.md#conductor-and-worker).
+
+Dynamic capabilities is not a `dashboard.*` key: it is a per-crewmate field,
+`agents.<name>.dynamic_capabilities` (default false), set on the crewmate's
+Profile card and read per request. A config that still holds an old
+`dashboard.crewmate_dynamic_capabilities` key loads unchanged; the key is not
+read. Owned by [crew-mode](crew-mode.md#dynamic-capabilities).
 
 ## Orchestration prompt contract
 

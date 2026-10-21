@@ -1,4 +1,4 @@
-"""The Crewmate 2.0 switch: ``dashboard.crewmate_v2``, off by default.
+"""The Crewmate 2.0 switch: ``dashboard.crewmate_v2``, on by default.
 
 Crewmate 2.0 is the conductor/worker split: a crewmate owns its file under
 ``~/.kiro/mates/agents/``, its chat runs on ``kirocrew-mate-conductor``, every
@@ -15,8 +15,9 @@ must never be half on the conductor and half on its template within one run. The
 Settings toggle sits under the Crew Members preview card
 (``FeaturePreviewsSection.tsx``).
 
-A config that cannot be read answers off and is not latched, so a later read can
-still find the setting.
+A config that cannot be read answers the default (on) and is not latched, so a
+later read can still find the setting. Answering off there would reverse the
+migration at a start whose config read failed, which is not something the user asked for.
 """
 
 from __future__ import annotations
@@ -28,6 +29,9 @@ logger = logging.getLogger(__name__)
 #: The config path of the switch (``config/sections_dashboard.py``).
 CONFIG_KEY = "dashboard.crewmate_v2"
 
+#: What the switch answers with no key set, and when the config cannot be read.
+DEFAULT = True
+
 _latched: bool | None = None
 
 
@@ -36,8 +40,10 @@ def _read() -> bool | None:
         from kiro_crew.config.loader import KiroCrewConfig
 
         return bool(KiroCrewConfig.load().dashboard.crewmate_v2)
-    except Exception:  # noqa: BLE001 - an unreadable config is "off", not latched
-        logger.debug("crewmate 2.0: config unreadable, reading the switch as off", exc_info=True)
+    except Exception:  # noqa: BLE001 - an unreadable config is the default, not latched
+        logger.debug(
+            "crewmate 2.0: config unreadable, reading the switch as its default", exc_info=True
+        )
         return None
 
 
@@ -47,7 +53,7 @@ def enabled() -> bool:
     if _latched is None:
         value = _read()
         if value is None:
-            return False
+            return DEFAULT
         _latched = value
     return _latched
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Crewmate 2.0 behind ``dashboard.crewmate_v2``, off by default.
+"""Crewmate 2.0 behind ``dashboard.crewmate_v2``, on by default.
 
-Off is the shape before the conductor/worker split: no startup migration, no
+A fresh install and an upgrade with no key set both run it. Off is the shape before the conductor/worker split: no startup migration, no
 crewmate file on create, the chat on the bound template, no worker redirect or
 worker backend route, and none of the conductor-only prompt pieces. A run that
 migrated with the switch on is reversed at the next start with it off, and
@@ -54,13 +54,15 @@ def reversal_cfg(monkeypatch):
 # ── the switch itself ──
 
 
-def test_the_switch_ships_off_and_is_a_restart_setting():
+def test_the_switch_ships_on_and_is_a_restart_setting():
     from kiro_crew.config import loader
     from kiro_crew.config.schema import requires_restart
     from kiro_crew.dashboard.handlers import core
 
-    assert KiroCrewConfig().dashboard.crewmate_v2 is False
-    assert loader._build_dashboard_config(set(), {"crewmate_v2": True}).crewmate_v2 is True
+    # A fresh install (no config) and an upgrade whose dashboard section has no key.
+    assert KiroCrewConfig().dashboard.crewmate_v2 is True
+    assert loader._build_dashboard_config(set(), {}).crewmate_v2 is True
+    assert loader._build_dashboard_config(set(), {"crewmate_v2": False}).crewmate_v2 is False
     assert requires_restart(crewmate_v2.CONFIG_KEY)
     assert core._EDITABLE_CONFIG[crewmate_v2.CONFIG_KEY] == {"type": "bool"}
 
@@ -73,11 +75,29 @@ def test_the_switch_is_read_once_per_process(monkeypatch):
     assert crewmate_v2.enabled() is True
 
 
-def test_an_unreadable_config_reads_off_and_is_not_latched(monkeypatch):
+def test_an_unreadable_config_reads_the_default_and_is_not_latched(monkeypatch):
+    # On, not off: off would reverse the migration at a start whose read failed.
     crewmate_v2._latched = None
     monkeypatch.setattr(crewmate_v2, "_read", lambda: None)
-    assert crewmate_v2.enabled() is False
+    assert crewmate_v2.enabled() is True
     assert crewmate_v2._latched is None
+
+
+def test_an_upgrade_with_no_key_set_latches_on(tmp_path, monkeypatch):
+    """The real read: a config.json from before the switch existed runs 2.0."""
+    from kiro_crew.config import loader
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"dashboard": {"crewmate_threads": True}}), encoding="utf-8")
+    monkeypatch.setattr(loader, "config_path", lambda: path)
+    loader._invalidate_config_cache()
+    try:
+        # The file itself was read (not the unreadable-config default).
+        assert loader.KiroCrewConfig.load().dashboard.crewmate_threads is True
+        assert crewmate_v2._read() is True
+        assert crewmate_v2.latch() is True
+    finally:
+        loader._invalidate_config_cache()
 
 
 # ── off: the chat, the hand-off, the worker ──

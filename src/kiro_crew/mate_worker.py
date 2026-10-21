@@ -62,6 +62,39 @@ MATE_WORKER_PROMPT = crewmate_prompts.fill(
     "worker.principles", missing_prefix=MISSING_CAPABILITY_PREFIX
 )
 
+#: The same principles while a crewmate's Dynamic capabilities preview is off
+#: under Crewmate 2.0: the worker still names what it could not do, but is asked
+#: for no ``MISSING CAPABILITY:`` line, because no card follows from one.
+MATE_WORKER_PROMPT_MANUAL = crewmate_prompts.text("worker.principles_manual")
+
+
+def mate_worker_prompt(member: str | None = None) -> str:
+    """The worker principles for crewmate *member* (:mod:`kiro_crew.crewmate_dynamic_capabilities`).
+
+    The installed base takes the no-crewmate answer (off: the manual version);
+    :func:`resolve_worker_spec` puts each crewmate's own in its worker's prompt.
+    """
+    from kiro_crew import crewmate_dynamic_capabilities
+
+    if crewmate_dynamic_capabilities.restricted_for(member):
+        return MATE_WORKER_PROMPT_MANUAL
+    return MATE_WORKER_PROMPT
+
+
+def _with_principles(spec: dict[str, Any], member_id: str | None) -> dict[str, Any]:
+    """*spec* with the principles in its prompt swapped for crewmate *member_id*'s own."""
+    prompt = spec.get("prompt")
+    if not isinstance(prompt, str):
+        return spec
+    from kiro_crew import crewmate_dynamic_capabilities
+
+    want = mate_worker_prompt(crewmate_dynamic_capabilities.member_name(member_id))
+    for have in (MATE_WORKER_PROMPT, MATE_WORKER_PROMPT_MANUAL):
+        if have != want and have in prompt:
+            return {**spec, "prompt": prompt.replace(have, want)}
+    return spec
+
+
 #: The sub-agent tools a crewmate's conductor does not mount. Its hand-off is a
 #: worker session (``session_create`` / ``session_send`` /
 #: ``session_read_message``), so ``spawn_run`` and the tools that only act on a
@@ -504,6 +537,15 @@ def _with_global_tool_offs(base: dict[str, Any], additions: dict[str, Any]) -> d
 
 
 def resolve_worker_spec(base: dict[str, Any], member_id: str | None) -> dict[str, Any]:
+    """The worker spec a session of *member_id*'s worker runs on, its principles its own.
+
+    :func:`_resolve_worker_spec` with the worker principles in the prompt set by
+    the crewmate's Dynamic capabilities preview (:func:`mate_worker_prompt`).
+    """
+    return _with_principles(_resolve_worker_spec(base, member_id), member_id)
+
+
+def _resolve_worker_spec(base: dict[str, Any], member_id: str | None) -> dict[str, Any]:
     """The worker spec a session of *member_id*'s worker runs on.
 
     *base* is the source-defined worker spec with its prompt already literal.

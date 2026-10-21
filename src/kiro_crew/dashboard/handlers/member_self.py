@@ -236,8 +236,16 @@ async def api_member_self_propose(request: web.Request) -> web.Response:
     if not isinstance(raw, dict):
         _audit(sk, OP_PROPOSE_SELF, "denied", "invalid_params")
         return _deny(400, "invalid_params", "'params' must be an object")
-    from kiro_crew import crewmate_v2
+    from kiro_crew import crewmate_dynamic_capabilities, crewmate_v2
 
+    if name == "capabilities" and await asyncio.to_thread(
+        crewmate_dynamic_capabilities.restricted_for, member
+    ):
+        # ``request_capabilities`` is not mounted while this crewmate's Dynamic
+        # capabilities preview is off under Crewmate 2.0: the user adds worker
+        # capabilities by hand.
+        _audit(sk, OP_PROPOSE_SELF, "denied", "dynamic_capabilities_off")
+        return web.json_response({"error": "not found", "code": "not_found"}, status=404)
     v2 = crewmate_v2.enabled()
     if (
         request.get(REQ_OWN_GOAL_TURN) is True

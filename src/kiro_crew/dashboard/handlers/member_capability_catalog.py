@@ -96,7 +96,7 @@ async def api_member_self_capabilities(request: web.Request) -> web.Response:
     or more characters, ``registry`` (MCP registry results, redacted), plus
     ``next`` saying how to ask for one.
     """
-    from kiro_crew import crewmate_v2
+    from kiro_crew import crewmate_dynamic_capabilities, crewmate_v2
     from kiro_crew.dashboard.handlers.mcp_discover import search_registry
     from kiro_crew.dashboard.handlers.member_self import _caller_member
 
@@ -114,6 +114,11 @@ async def api_member_self_capabilities(request: web.Request) -> web.Response:
         _audit(sk, OP_FIND_CAPABILITIES, "denied", "not a crewmate thread")
         return _deny(403, "not_a_crewmate", "only a crewmate, in its own chat, can read this")
     member, _store = who
+    if not await asyncio.to_thread(crewmate_dynamic_capabilities.enabled_for, member):
+        # The crewmate-driven capability path, this crewmate's own preview
+        # (``kiro_crew.crewmate_dynamic_capabilities``): off, as if not mounted.
+        _audit(sk, OP_FIND_CAPABILITIES, "denied", "dynamic_capabilities_off")
+        return web.json_response({"error": "not found", "code": "not_found"}, status=404)
     query = body.get("query", "")
     if not isinstance(query, str) or len(query) > _QUERY_MAX:
         return _deny(400, "invalid_query", f"'query' is text of at most {_QUERY_MAX} characters")
