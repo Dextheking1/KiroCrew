@@ -910,6 +910,14 @@ class TurnDriver:
                         tool_kind=getattr(event, "tool_kind", ""),
                         tool_purpose=_purpose,
                         text_held=segment_tail is not None,
+                        # The whole command behind a raw-fallback title, which
+                        # the title cuts to a line; a renderer that rewrites
+                        # the label for its audience starts from all of it.
+                        raw_title=(
+                            ""
+                            if _derived.derived or not _derived.title
+                            else _redact(_derived.raw_title)
+                        ),
                     )
                 )
                 # Forgery gate: record the directive-tool name ONLY from the

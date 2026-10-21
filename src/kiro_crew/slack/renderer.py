@@ -87,7 +87,9 @@ from kiro_crew.slack.handler import (
     build_timing_footer,
 )
 from kiro_crew.slack.outbound import PostedOptions
+from kiro_crew.slack.step_labels import slack_step_label
 from kiro_crew.slack.transport import SLACK_CAPABILITIES
+from kiro_crew.tool_call_title import format_raw_command
 
 logger = logging.getLogger(__name__)
 
@@ -715,6 +717,8 @@ class SlackRenderer(Renderer):
         # a valid root (``authorize_upload_root``).
         self._scratch_root = ""
         self._uploads_allowed = uploads_allowed
+        #: The session's cwd once known (``authorize_upload_root``), for step labels.
+        self._label_root = self._upload_root
 
     async def on_turn_start(self) -> None:
         # Native sets the working thread-status before streaming and arms the
@@ -931,6 +935,8 @@ class SlackRenderer(Renderer):
         (``outbound_files.session_scratch_root``) before it counts.
         """
         self._upload_root = root if os.path.isabs(root) else ""
+        # Step labels show paths under the session's cwd relative to it.
+        self._label_root = self._upload_root
         self._scratch_root = (
             scratch_root if self._upload_root and os.path.isabs(scratch_root) else ""
         )
@@ -1499,13 +1505,24 @@ class SlackRenderer(Renderer):
         if self._controller is not None and self._tool_to_phase is not None:
             self._controller.set_phase(self._tool_to_phase(tool_name, tool_kind))
             self._controller.on_progress()
+        # What the thread shows of the step: the derived title and purpose
+        # without env assignments, absolute paths or this host's name. A raw
+        # command is scrubbed whole and then cut to a line, so the cut lands on
+        # what the reader sees rather than on the paths taken out.
+        if self.current_tool_raw_title:
+            label = format_raw_command(
+                slack_step_label(self.current_tool_raw_title, self._label_root)
+            ) or slack_step_label(tool_name, self._label_root)
+        else:
+            label = slack_step_label(tool_name, self._label_root)
+        purpose = slack_step_label(tool_purpose, self._label_root) if tool_purpose else ""
         # Best-effort: MUST NOT raise. Decoration only — a raise
         # escapes to the transport catch-all and fakes a terminal error on a
         # live turn.
         self._status_on_tool = True
         try:
             await self.slack.set_thread_status(
-                self.channel, self.thread_ts or "", f"is using {tool_name}"
+                self.channel, self.thread_ts or "", _display_safe(f"is using {label}")
             )
         except Exception:
             logger.warning("Slack set_thread_status failed — skipping tool status", exc_info=True)
@@ -1518,20 +1535,20 @@ class SlackRenderer(Renderer):
         self._task_counter += 1
         self._active_task_id = f"tool_{self._task_counter}"
         self._active_tool_call_id = tool_call_id or ""
-        self._active_task_title = tool_purpose or tool_name
+        self._active_task_title = purpose or label
         if narration is not None and self.tool_text_held:
             # Its last run is still held by the driver's redactor and arrives
             # with the first text after this call (``on_text_continuation``).
             # The step's details are written once, whole, when it does, so no
             # half sentence is ever shown.
-            self._narration_pending = (self._active_task_id, tool_name, self._stream_ts)
+            self._narration_pending = (self._active_task_id, label, self._stream_ts)
             await self._append_task(self._active_task_id, self._active_task_title, "in_progress")
         else:
             await self._append_task(
                 self._active_task_id,
                 self._active_task_title,
                 "in_progress",
-                details=await self._step_details(narration or "", tool_name),
+                details=await self._step_details(narration or "", label),
             )
         self._start_tool_timer()
         # The `wait` tool blocks MCP for up to 30min — finalize the streaming

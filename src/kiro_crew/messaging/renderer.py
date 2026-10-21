@@ -129,6 +129,9 @@ class OutputEvent:
     # tool_call: the text before this call is not complete yet -- its last run
     # is still held and arrives later as a ``continues_segment`` chunk.
     text_held: bool = False
+    # tool_call: the whole (redacted) command when ``title`` is its raw
+    # fallback cut to one line, ``""`` when ``title`` is a derived action.
+    raw_title: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -147,6 +150,7 @@ class OutputEvent:
             "notice": self.notice,
             "continues_segment": self.continues_segment,
             "text_held": self.text_held,
+            "raw_title": self.raw_title,
         }
 
 
@@ -847,6 +851,10 @@ class Renderer(ABC):
     #: before the hook runs. True means its last run arrives later through
     #: :meth:`on_text_continuation`.
     tool_text_held: bool = False
+    #: The whole command behind the raw-fallback title of the tool call
+    #: ``on_tool_call`` is rendering (``OutputEvent.raw_title``), set by
+    #: :meth:`dispatch` before the hook runs; ``""`` for a derived title.
+    current_tool_raw_title: str = ""
     #: The driver's empty-turn verdict for the turn being finalized
     #: (``OutputEvent.notice`` on ``DONE``), set by :meth:`dispatch` before
     #: ``on_done`` runs. Non-empty means the turn closed with no assistant text
@@ -1071,6 +1079,7 @@ class Renderer(ABC):
         elif event.kind == TOOL_CALL:
             self.current_tool_name = event.tool_name or ""
             self.tool_text_held = event.text_held
+            self.current_tool_raw_title = event.raw_title
             await self.on_tool_call(
                 event.tool_call_id, event.title, event.tool_kind, event.tool_purpose
             )
