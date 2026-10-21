@@ -297,11 +297,22 @@ def _mirrorless_member_mounts(self: AcpClient, stubbed: Collection[str]) -> list
 
     Fail-closed: a spec that cannot be read mounts nothing, and the thread runs
     as plain chat.
+
+    The same parse also answers the spec's ``"tools": []`` for a mirror-less host
+    whose array Crew composes (``ACP_BACKENDS_SESSION_MCP_ARRAY``: pi). No mirror
+    reports :attr:`SessionMcpProjection.zero_tools` there, and the harness reads no
+    spec of Crew's, so nothing else could know the agent claims zero tools. Read
+    here, beside the mounts, rather than by a second parse: a spec edited between
+    two reads could otherwise mount by one generation and ban by another. It only
+    RECORDS the answer; :attr:`_enforces_zero_tool_ban` decides whether this
+    backend's permission requests are refused on it. kiro-cli is not in that set,
+    reads its spec itself through ``--agent`` and never reaches this record.
+    An unreadable spec leaves it False, the same as a mirror that could not parse.
     """
-    if (
-        self.backend not in ACP_BACKENDS_MEMBER_DISPATCH
-        and self.backend not in ACP_BACKENDS_MEMBER_PANEL
-    ):
+    members = (
+        self.backend in ACP_BACKENDS_MEMBER_DISPATCH or self.backend in ACP_BACKENDS_MEMBER_PANEL
+    )
+    if not members and self.backend not in ACP_BACKENDS_SESSION_MCP_ARRAY:
         return []
     try:
         from kiro_crew.acp.session_mcp import session_mcp_projection
@@ -311,11 +322,15 @@ def _mirrorless_member_mounts(self: AcpClient, stubbed: Collection[str]) -> list
         )
     except Exception:
         logger.warning(
-            "member session %s: agent spec unreadable, so no member tools are "
-            "mounted -- the DM thread runs as plain chat this session",
+            "session %s: agent spec unreadable, so no member tools are mounted and "
+            "its tools list is not read -- a DM thread runs as plain chat this session",
             self._session_key,
             exc_info=True,
         )
+        return []
+    if self.backend in ACP_BACKENDS_SESSION_MCP_ARRAY:
+        self._spec_zero_tools = projection.zero_tools
+    if not members:
         return []
     narrowed = frozenset(server for server, _tool in projection.disabled_tools)
     self._session_mcp_unhonoured = narrowed
