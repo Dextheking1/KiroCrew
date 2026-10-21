@@ -451,7 +451,7 @@ def test_overlapping_flushes_cannot_roll_the_file_back(tmp_path, monkeypatch):
     # then buries once released.
     deadline = time.monotonic() + 1.0
     while not completed_payloads and time.monotonic() < deadline:
-        time.sleep(0.01)
+        time.sleep(0.01)  # flake-ok: negative proof; B must still be parked when this closes
 
     release_first_write.set()
     flush_a.join(5)

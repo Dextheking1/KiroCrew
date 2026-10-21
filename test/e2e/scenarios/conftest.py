@@ -40,7 +40,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -53,6 +52,7 @@ import pytest
 from kiro_crew.loopback_http import build_loopback_opener
 from kiro_crew.platform_compat import IS_WINDOWS
 from kiro_crew.pod import provision as prov
+from kiro_crew.testing.wait import wait_until
 
 # The pod plane these scenarios run on is hermetic: its own roots, its own unit
 # prefix and its own port band, so a run can never collide with (or reclaim) a
@@ -477,15 +477,18 @@ def _wait_for(deadline_secs: float, probe, want) -> Any:
     clock that may already have passed a deadline computed a fork earlier and
     skips its only body, reporting a timeout on a question nobody asked.
     """
-    deadline = time.monotonic() + deadline_secs
     last: Any = None
-    while True:
+
+    def _accepted() -> bool:
+        nonlocal last
         last = probe()
-        if want(last):
-            return last
-        if time.monotonic() >= deadline:
-            return last
-        time.sleep(POLL_INTERVAL)
+        return bool(want(last))
+
+    try:
+        wait_until(_accepted, timeout=deadline_secs, interval=POLL_INTERVAL)
+    except AssertionError:
+        pass  # the caller judges the last value itself
+    return last
 
 
 @pytest.fixture(scope="session")

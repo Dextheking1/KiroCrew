@@ -492,7 +492,7 @@ class TestCompactionFailureTurnBudget:
                 # The consumer holds this frame past the WHOLE budget — the
                 # shape of a human answering an approval card slowly.
                 parked = True
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.3)  # flake-ok: the hold IS the stimulus, past the budget
                 resumed_at = time.monotonic()
         ended_at = time.monotonic()
 

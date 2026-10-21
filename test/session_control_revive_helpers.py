@@ -97,8 +97,9 @@ def _settle_metadata_rewrite_before_read(monkeypatch):
             except OSError:
                 if time.monotonic() >= deadline:
                     return
-                # flake-ok: pre-existing 5 ms poll pacing inside that bounded wait; moved verbatim
-                time.sleep(0.005)
+                # The shim runs on whichever thread the writer uses, the event loop's
+                # included, where the loop-refusing ``wait_until`` cannot pace this retry.
+                time.sleep(0.005)  # flake-ok: handle-release retry pacing under the deadline above
 
     # Both metadata writers reach the rename through this module-level name:
     # ``clear_closed``/close via ``atomic_write`` (which calls it) and

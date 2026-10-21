@@ -56,7 +56,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
@@ -79,6 +78,8 @@ from e2e.test_gateway_boot_matrix import (
     _Client,
     _unresolved,
 )
+
+from kiro_crew.testing.wait import wait_until
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("KIROCREW_E2E"),
@@ -303,14 +304,19 @@ def _await_quiet(home: Path, ignore: frozenset[int]) -> Inventory:
     reports what was still there rather than re-reading a machine that may have
     settled in the meantime.
     """
-    deadline = time.monotonic() + QUIET_TIMEOUT
-    latest = inventory(home, ignore_pids=ignore)
-    while time.monotonic() < deadline:
-        _background, foreign = _split_background_runtimes(home, latest.owned_alive)
-        if not (foreign or latest.owned_dead or latest.unowned_alive):
-            return latest
-        time.sleep(QUIET_POLL_SECS)
+    latest: Inventory | None = None
+
+    def _quiet() -> bool:
+        nonlocal latest
         latest = inventory(home, ignore_pids=ignore)
+        _background, foreign = _split_background_runtimes(home, latest.owned_alive)
+        return not (foreign or latest.owned_dead or latest.unowned_alive)
+
+    try:
+        wait_until(_quiet, timeout=QUIET_TIMEOUT, interval=QUIET_POLL_SECS)
+    except AssertionError:
+        pass  # the caller reports what the last inventory still held
+    assert latest is not None  # the predicate is read at least once
     return latest
 
 

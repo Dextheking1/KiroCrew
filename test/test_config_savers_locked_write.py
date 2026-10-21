@@ -933,7 +933,7 @@ def test_save_cancelled_during_the_config_commit_still_writes_the_credential(
             task = asyncio.ensure_future(getattr(mod, handler_name)(req))
             # Let the save validate and park on the held sidecar lock.
             for _ in range(50):
-                await asyncio.sleep(0.02)
+                await asyncio.sleep(0.02)  # flake-ok: negative proof; the save must still be parked
                 if json.loads(cfg.read_text(encoding="utf-8"))[channel]["enabled"]:
                     break
             assert not task.done(), "the save did not wait for the sidecar lock"

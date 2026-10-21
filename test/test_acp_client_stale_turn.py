@@ -1089,7 +1089,7 @@ class TestToolStallKeepalive:
         async def keepalive_pinger():
             while not stop.is_set():
                 client.touch_activity()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)  # flake-ok: the keepalive cadence IS the stimulus
 
         pinger = asyncio.create_task(keepalive_pinger())
 

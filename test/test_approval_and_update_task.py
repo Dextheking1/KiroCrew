@@ -18,6 +18,7 @@ import pytest
 from kiro_crew.task_models import Project, Task
 from kiro_crew.task_planner import update_plan_tasks
 from kiro_crew.taskrunner import Step, StepStatus, TaskRun, TaskRunner
+from kiro_crew.testing.wait import await_until
 
 # ── Helpers ──
 
@@ -318,12 +319,12 @@ class TestApprovalCancelledError:
 
     @pytest.mark.asyncio
     async def test_cancelled_error_returns_false(self) -> None:
-        """Simulate CancelledError during wait_for → returns False."""
+        """Simulate CancelledError during the approval wait → returns False."""
         fut: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
 
         async def _wait():
             try:
-                return await asyncio.wait_for(fut, timeout=1.0)
+                return await await_until(fut, what="the approval answer")
             except asyncio.CancelledError:
                 return False
 

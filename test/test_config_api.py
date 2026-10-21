@@ -1308,7 +1308,7 @@ async def test_binding_only_update_serializes_against_generic_snapshot_save(tmp_
                         loop,
                     )
                     try:
-                        fired["task"].result(timeout=0.5)
+                        fired["task"].result(timeout=0.5)  # flake-ok: the window IS the probe
                     except concurrent.futures.TimeoutError:
                         pass
                 return real_owner(crew, target)

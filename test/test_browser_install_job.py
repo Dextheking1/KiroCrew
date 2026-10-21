@@ -17,6 +17,7 @@ import pytest
 from kiro_crew.browser_cli import install as browser_cli_install
 from kiro_crew.browser_cli import install_job as job_mod
 from kiro_crew.dashboard.handlers import messaging as msg
+from kiro_crew.testing.wait import async_wait_until
 
 _JOB_KEYS = {
     "id",
@@ -125,12 +126,7 @@ class _Gate:
 
 
 async def _until(predicate: Any, timeout: float = 5.0) -> None:
-    loop = asyncio.get_running_loop()
-    end = loop.time() + timeout
-    while not predicate():
-        if loop.time() > end:
-            raise AssertionError("condition never became true")
-        await asyncio.sleep(0.01)
+    await async_wait_until(predicate, timeout=timeout)
 
 
 def _wire(monkeypatch: pytest.MonkeyPatch, gate: _Gate) -> None:

@@ -130,7 +130,7 @@ async def test_api_releases_does_not_freeze_the_event_loop(monkeypatch):
     async def ticker() -> None:
         nonlocal ticks
         while True:
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.01)  # flake-ok: the tick cadence IS the measurement
             ticks += 1
 
     task = asyncio.create_task(ticker())
