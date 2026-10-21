@@ -667,7 +667,7 @@ class TestTheBoundaryScanRunsBeforeTheReset:
 
 
 class TestTheCardsGiveRecoveryAdviceThatWorks:
-    """Source-level guard over the two turn-end card texts (issue #22398).
+    """Source-level guard over the two turn-end card texts.
 
     A leaked call stays in the chat's own context, so on a re-send the model
     tends to write the same plain-text call again. A card that promises a
