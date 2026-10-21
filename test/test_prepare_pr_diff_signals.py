@@ -268,6 +268,82 @@ def test_table_rows_exclude_headers_separators_fences_and_other_sections() -> No
     assert ds.what_changed_table_rows("## Problem\n\n| a |\n") is None
 
 
+# Each block holds 20 table rows and 4 words of prose; none of it may count.
+_FENCED_EXAMPLE = "| fenced | row |\n" * 20 + "four words of code\n"
+
+
+@pytest.mark.parametrize(
+    "opener, closer",
+    [
+        ("~~~", "~~~"),
+        ("~~~~ text", "~~~~~"),
+        ("   ```", "  ```"),
+        ("  ```python", "```"),
+        ("````", "````"),
+    ],
+    ids=["tilde", "long-tilde", "indented-backtick", "indented-info", "four-backticks"],
+)
+def test_fence_forms_skip_both_word_and_row_counts(opener: str, closer: str) -> None:
+    body = (
+        "## What changed\n\nx/y.py sends once.\n\n"
+        + opener
+        + "\n"
+        + _FENCED_EXAMPLE
+        + closer
+        + "\n\nDone.\n\n## Tests\n\nt\n"
+    )
+    assert ds.what_changed_table_rows(body) == 0
+    prose = ds.what_changed_prose(body)
+    assert prose is not None
+    assert ds.word_count(prose) == 4
+    assert "code" not in prose
+
+
+@pytest.mark.parametrize(
+    "opener, inner",
+    [
+        ("~~~", "```"),  # the other character does not close
+        ("````", "```"),  # a shorter run does not close
+        ("```", "``` x"),  # a closer carries no info string
+    ],
+)
+def test_a_non_closing_line_stays_inside_the_fence(opener: str, inner: str) -> None:
+    body = (
+        "## What changed\n\nShort.\n\n"
+        + opener
+        + "\n"
+        + inner
+        + "\n"
+        + _FENCED_EXAMPLE
+        + opener
+        + "\n"
+    )
+    assert ds.what_changed_table_rows(body) == 0
+    assert ds.word_count(ds.what_changed_prose(body)) == 1
+
+
+def test_four_space_indent_is_not_a_fence_and_unclosed_fence_runs_to_the_end() -> None:
+    # Four spaces is an indented code line, not a fence opener: the rows count.
+    body = "## What changed\n\nShort.\n\n    ```\n| a | b |\n| c | d |\n    ```\n"
+    assert ds.what_changed_table_rows(body) == 2
+    # An unclosed fence swallows the rest of the section, as CommonMark renders it.
+    body = "## What changed\n\nShort.\n\n~~~\n" + _FENCED_EXAMPLE + "\n## Tests\n\nt\n"
+    assert ds.what_changed_table_rows(body) == 0
+    assert ds.word_count(ds.what_changed_prose(body)) == 1
+
+
+def test_a_heading_inside_a_fence_still_ends_the_section() -> None:
+    # Residual, not changed here: the section is cut at the first ``## `` line
+    # before fences are stripped, so a heading inside a fence ends it.
+    # The prose and rows after the fence are then not counted (today's answer).
+    body = (
+        "## What changed\n\nShort.\n\n```\n## not a heading\n```\n\nLost prose here.\n"
+        + "| r |\n" * 9
+    )
+    assert ds.what_changed_table_rows(body) == 0
+    assert ds.word_count(ds.what_changed_prose(body)) == 1
+
+
 def test_check_body_nine_table_rows_is_twenty_one(capsys) -> None:
     assert ds.TABLE_ROW_LIMIT == 8
     rc = ds.check_body(_table_body(9), "M\tsrc/kiro_crew/x/y.py\n")

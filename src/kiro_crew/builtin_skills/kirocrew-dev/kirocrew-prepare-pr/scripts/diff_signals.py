@@ -251,12 +251,41 @@ def unaccounted_areas(paths, body):
     return missing
 
 
+# A CommonMark fence: up to three spaces of indent, then three or more backticks
+# or tildes. A backtick fence's info string may not hold a backtick.
+_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+
+
+def _strip_fences(text):
+    """``text`` with every fenced code block removed, fence lines included.
+
+    A block closes on a line of the same character, at least as long as the
+    opener, indented up to three spaces and followed only by blanks. An
+    unclosed block runs to the end, as CommonMark renders it.
+    """
+    kept = []
+    close = None
+    for line in text.splitlines():
+        if close is None:
+            m = _FENCE_OPEN.match(line)
+            if m:
+                fence = m.group(1)
+                close = re.compile(
+                    r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$"
+                )
+            else:
+                kept.append(line)
+        elif close.match(line):
+            close = None
+    return "\n".join(kept)
+
+
 def _what_changed_unfenced(body):
     """The ``## What changed`` section with fenced blocks removed, or None if absent."""
     m = re.search(r"^## +What changed[^\n]*\n(.*?)(?=^## |\Z)", body, re.MULTILINE | re.DOTALL)
     if not m:
         return None
-    return re.sub(r"^```.*?^```[ \t]*$", "", m.group(1), flags=re.MULTILINE | re.DOTALL)
+    return _strip_fences(m.group(1))
 
 
 _TABLE_SEPARATOR = re.compile(r"^\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$")
