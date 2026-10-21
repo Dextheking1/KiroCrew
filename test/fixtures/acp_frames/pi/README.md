@@ -1,6 +1,6 @@
 # Pi frame corpus
 
-Four files, all live. Read `../README.md` first for what a fixture is and what
+Six files, all live. Read `../README.md` first for what a fixture is and what
 the corpus does and does not prove.
 
 | File | Provenance | Frame classes it carries |
@@ -10,6 +10,7 @@ the corpus does and does not prove.
 | `session-load-live.jsonl` | live | a `session/load` from a second process: the replayed `user_message_chunk` / `agent_message_chunk` / `tool_call` updates and the load result, which carries `configOptions`, `models` and `modes` |
 | `compact-live.jsonl` | live | the initialize and `session/new` responses, four ordinary turns (`agent_message_chunk`, `usage_update`, `session/prompt` result), the `/compact` turn (pi's `Compaction completed` chunk and an `end_turn` result with no `usage_update` and no status frame), and one ordinary turn after it |
 | `mcp-stdio-mount-live.jsonl` | live | the initialize and `session/new` responses, a `tool_call` for `mcp__probe_server__echo`, the `session/request_permission` the adapter forwarded from Kiro Crew's gate extension, the updates through `completed` carrying the server's own result, and the result |
+| `zero-tools-refused-live.jsonl` | live | four turns on an agent spec declaring `"tools": []`: a `write`, a `bash` and an `mcp__probe_server__echo` call, each with the `session/request_permission` the gate extension raised and the `tool_call_update` that ended it `failed`, and a `frobnicate` call pi failed itself with no permission frame |
 
 Captured off `pi-acp` 0.0.33 spawning `pi` 0.85.1 and driving a locally
 served model configured in pi's own `models.json`, with agent-to-client lines
@@ -43,6 +44,29 @@ raised `session/request_permission` through the gate first; and the server's res
 (`ECHO:ping`) reached the turn. The same drive with a same-named server in pi's own
 `mcp.json` ended the call `failed` with the gate's refusal, and the file-configured
 server was never asked `tools/call`. An array-only drive spawns no server at all.
+
+## What the zero-tool capture establishes
+
+`zero-tools-refused-live.jsonl` was recorded by the in-product recorder
+(`KIROCREW_ACP_RECORD_FRAMES`) while an `AcpClient(acp_backend="pi")` session ran an
+agent spec declaring `"tools": []`, off `pi-acp` 0.0.34 spawning `pi` 1.2.0 through the
+gate launcher, against a scripted model on the loopback interface named in pi's own
+`models.json`, with one stdio MCP server handed over through the per-session handoff.
+The consumer driving it approved every permission event it was handed, the way a user
+clicking yes would, and was handed none: the client answered each of the three
+`session/request_permission` frames (`write`, `bash`, `mcp__probe_server__echo`) with
+the advertised reject option itself (`AcpClient._deny_zero_tools`), pi ended each call
+`failed`, no file was written, the `touch` never ran, and the MCP server's own log
+recorded `initialize`, `notifications/initialized` and `tools/list` but no `tools/call`.
+The fourth call named a tool pi does not have; pi failed it (`Tool frobnicate not
+found`) before any extension saw it. The same drive on a spec with no `tools` key
+handed the consumer all three requests and each took effect.
+
+The recording host refuses user namespaces, so no sandbox backend runs there and the
+routing's refuse-then-mask preflight refuses an enforced harness. The capture replaced
+that one preflight with "no mask"; the gate extension seal, its read-back, the envelope
+nonce and the permission path ran as shipped. The refusal is after the spawn and does
+not read the sandbox.
 
 ## What the permission capture establishes
 
