@@ -25,13 +25,25 @@
  * registers each server with pi's built-in MCP support, and refuses any call to
  * a Kiro Crew server name that pi resolved to a different server: a same-named
  * entry in pi's own `mcp.json` outranks an extension's registration.
+ *
+ * And it carries a user's mid-turn message (a steer) into the running turn. pi-acp
+ * has no steer verb, so the host writes each steer as its own file in the same
+ * artifact directory, sealed with a key only this process's environment carries
+ * and bound to this launch's nonce, this pi session's id and the steer's sequence
+ * number. At each `turn_end` that did not abort or fail, this extension opens the
+ * oldest steer it has not delivered and hands it to pi with
+ * `pi.sendUserMessage(text, { deliverAs: "steer" })`, the queue pi's own steer
+ * uses, which the agent loop reads before its next model call in the same run.
+ * When pi starts that message, it notifies an envelope naming the steer's sequence
+ * number, which the host reads as "consumed". A steer still on disk when the run
+ * settles is retired, never delivered later: the host queues it as the next turn.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createDecipheriv } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 /** Registered so the host can ask pi's command registry whether this file loaded. */
 const PROBE_COMMAND = "kiro-crew-gate";
@@ -54,9 +66,33 @@ const MCP_HANDOFF_MARKER = "kiro-crew-mcp";
  */
 const MCP_KEY_ENV = "KIROCREW_PI_MCP_KEY";
 
-/** Open the host's seal: AES-256-GCM, the nonce as associated data, tag appended. */
-function openSeal(record: Record<string, unknown>, nonce: string): unknown {
-  const key = Buffer.from(process.env[MCP_KEY_ENV] ?? "", "hex");
+/**
+ * Names the host's steer channel for THIS launch: the artifact directory and the
+ * file-name stem every steer file starts with (`<stem><10-digit seq>.json`).
+ */
+const STEER_ENV = "KIROCREW_PI_STEER";
+
+/** The hex AES-256-GCM key that opens THIS launch's steer files, on this environment alone. */
+const STEER_KEY_ENV = "KIROCREW_PI_STEER_KEY";
+
+/** Marker a steer file and its consumed notification carry, beside the session nonce. */
+const STEER_MARKER = "kiro-crew-steer";
+
+/** A steer file's name after its stem: the zero-padded sequence number. */
+const STEER_SEQ_RE = /^(\d{10})\.json$/;
+
+/** Larger than any steer the host writes (64000 chars of text, sealed and base64'd). */
+const MAX_STEER_FILE_BYTES = 512 * 1024;
+
+/** How long a `turn_end` handler waits for its steer to reach pi's queue. */
+const STEER_QUEUE_WAIT_MS = 2000;
+
+/**
+ * Open a host seal: AES-256-GCM under the hex key in `keyEnv`, `aad` as associated
+ * data, tag appended. Null on any mismatch, so a forged or foreign file is ignored.
+ */
+function openSeal(record: Record<string, unknown>, aad: string, keyEnv: string): unknown {
+  const key = Buffer.from(process.env[keyEnv] ?? "", "hex");
   if (key.length !== 32 || typeof record.iv !== "string" || typeof record.sealed !== "string") {
     return null;
   }
@@ -65,7 +101,7 @@ function openSeal(record: Record<string, unknown>, nonce: string): unknown {
   if (iv.length !== 12 || sealed.length < 16) return null;
   try {
     const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
-    decipher.setAAD(Buffer.from(nonce, "utf8"));
+    decipher.setAAD(Buffer.from(aad, "utf8"));
     decipher.setAuthTag(sealed.subarray(sealed.length - 16));
     const plain = Buffer.concat([
       decipher.update(sealed.subarray(0, sealed.length - 16)),
@@ -75,6 +111,69 @@ function openSeal(record: Record<string, unknown>, nonce: string): unknown {
   } catch {
     return null;
   }
+}
+
+/** A steer's associated data: the marker, this launch's nonce, the pi session, the sequence. */
+function steerAad(nonce: string, sessionId: string, seq: number): string {
+  return [STEER_MARKER, nonce, sessionId, String(seq)].join("\u0000");
+}
+
+type Steer = { seq: number; text: string };
+
+/**
+ * The steers the host wrote for THIS launch and THIS pi session with a sequence
+ * number above `floor`, oldest first. A file is counted only when its name, its
+ * body, and its seal all agree on the nonce, the session and the number; the seal
+ * binds all three, so a file copied from another session or renamed does not open.
+ */
+function readSteers(sessionId: string, floor: number): Steer[] {
+  const stemPath = process.env[STEER_ENV];
+  const nonce = process.env[NONCE_ENV] ?? "";
+  if (!stemPath || !nonce || !sessionId) return [];
+  const dir = dirname(stemPath);
+  const stem = basename(stemPath);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const out: Steer[] = [];
+  for (const name of names) {
+    if (!name.startsWith(stem)) continue;
+    const match = STEER_SEQ_RE.exec(name.slice(stem.length));
+    if (!match) continue;
+    const seq = Number(match[1]);
+    if (!Number.isSafeInteger(seq) || seq <= floor) continue;
+    const path = join(dir, name);
+    let record: Record<string, unknown>;
+    try {
+      if (statSync(path).size > MAX_STEER_FILE_BYTES) continue;
+      const parsed = JSON.parse(readFileSync(path, "utf8"));
+      if (!parsed || typeof parsed !== "object") continue;
+      record = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (record[STEER_MARKER] !== 1 || record.nonce !== nonce || record.seq !== seq) continue;
+    const opened = openSeal(record, steerAad(nonce, sessionId, seq), STEER_KEY_ENV);
+    if (!opened || typeof opened !== "object") continue;
+    const body = opened as Record<string, unknown>;
+    if (body.seq !== seq || body.session !== sessionId || typeof body.text !== "string") continue;
+    if (!body.text) continue;
+    out.push({ seq, text: body.text });
+  }
+  return out.sort((a, b) => a.seq - b.seq);
+}
+
+/** The text of a pi message's content, as pi itself compares queued steers. */
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => part && typeof part === "object" && part.type === "text")
+    .map((part) => String(part.text ?? ""))
+    .join("");
 }
 
 /** pi's agent directory override; `~/.pi/agent` otherwise. */
@@ -226,7 +325,7 @@ function readMcpHandoff(): Record<string, Record<string, unknown>> | null {
   if (record[MCP_HANDOFF_MARKER] !== 1 || !nonce) return null;
   // The session binding is the seal itself: this process's nonce is the
   // associated data, so a file sealed for any other nonce does not open.
-  const opened = openSeal(record, nonce);
+  const opened = openSeal(record, nonce, MCP_KEY_ENV);
   if (!opened || typeof opened !== "object") return null;
   const servers = (opened as Record<string, unknown>).servers;
   if (!servers || typeof servers !== "object" || Array.isArray(servers)) return null;
@@ -306,6 +405,55 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       ctx.ui.notify("Kiro Crew tool gate: active", "info");
     },
+  });
+
+  // Steers. `steerFloor` is the highest sequence number that can no longer be
+  // delivered: raised to each steer as it is handed to pi (so a file is delivered
+  // once) and, when a run settles, to every steer still on disk (so a steer is
+  // never delivered into a later turn than the one it was written for).
+  let steerFloor = 0;
+  // Steers handed to pi and not yet started, by text, as pi matches its own queue.
+  const steersInFlight = new Map<string, number>();
+
+  pi.on("turn_end", async (event, ctx) => {
+    // An aborted or failed model call ends the run without reading pi's steering
+    // queue, and a steer queued then would surface at the start of the NEXT run.
+    const stop = (event.message as { stopReason?: unknown } | undefined)?.stopReason;
+    if (event.outcome !== "completed" || stop === "error" || stop === "aborted") return;
+    if (ctx.signal?.aborted || ctx.isIdle()) return;
+    const next = readSteers(ctx.sessionManager.getSessionId(), steerFloor)[0];
+    if (!next) return;
+    steerFloor = next.seq;
+    steersInFlight.set(next.text, next.seq);
+    pi.sendUserMessage(next.text, { deliverAs: "steer" });
+    // pi reads its steering queue right after this handler returns, and
+    // sendUserMessage queues asynchronously, so wait for it to land.
+    const deadline = Date.now() + STEER_QUEUE_WAIT_MS;
+    while (!ctx.hasPendingMessages() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  });
+
+  pi.on("message_start", async (event, ctx) => {
+    const message = event.message as { role?: unknown; content?: unknown } | undefined;
+    if (steersInFlight.size === 0 || message?.role !== "user") return;
+    const text = messageText(message.content);
+    const seq = steersInFlight.get(text);
+    if (seq === undefined) return;
+    steersInFlight.delete(text);
+    if (ctx.hasUI) {
+      ctx.ui.notify(
+        JSON.stringify({ [STEER_MARKER]: 1, nonce: process.env[NONCE_ENV] ?? "", seq }),
+        "info",
+      );
+    }
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    steersInFlight.clear();
+    for (const steer of readSteers(ctx.sessionManager.getSessionId(), steerFloor)) {
+      steerFloor = Math.max(steerFloor, steer.seq);
+    }
   });
 
   pi.on("tool_call", async (event, ctx) => {
