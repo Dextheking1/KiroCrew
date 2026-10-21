@@ -581,6 +581,61 @@ class TestReadConfig:
         assert mk.call_args.kwargs["acp_backend"] == ACP_BACKEND_OPENCODE
 
     @pytest.mark.asyncio
+    async def test_a_pi_worker_carries_the_extraction_model_pin(self, tmp_path):
+        """pi reads no spec of Crew's, so the knowledge model pin reaches the
+        client explicitly; without it extraction silently ran on pi's default."""
+        mock_client = _zero_tool_client()
+        mock_client.is_ready = True
+        with (
+            patch("kiro_crew.knowledge.llm_pool._get_acp_backend", return_value=ACP_BACKEND_PI),
+            patch(
+                "kiro_crew.knowledge.llm_pool._knowledge_spec_model",
+                return_value="local/extract-small",
+            ),
+            patch("kiro_crew.knowledge.llm_pool.AcpClient", return_value=mock_client) as mk,
+        ):
+            worker = AcpWorker()
+            await worker.start()
+        assert mk.call_args.kwargs["acp_backend"] == ACP_BACKEND_PI
+        assert mk.call_args.kwargs["model"] == "local/extract-small"
+
+    @pytest.mark.asyncio
+    async def test_a_kiro_worker_reads_the_pin_from_its_spec(self, tmp_path):
+        """kiro-cli reads the spec's own model, so its construction is unchanged."""
+        mock_client = _zero_tool_client()
+        mock_client.is_ready = True
+        with (
+            patch("kiro_crew.knowledge.llm_pool._get_acp_backend", return_value=ACP_BACKEND_KIRO),
+            patch(
+                "kiro_crew.knowledge.llm_pool._knowledge_spec_model",
+                side_effect=AssertionError("kiro must not read the pin here"),
+            ),
+            patch("kiro_crew.knowledge.llm_pool.AcpClient", return_value=mock_client) as mk,
+        ):
+            worker = AcpWorker()
+            await worker.start()
+        assert mk.call_args.kwargs["model"] is None
+
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            ({"model": "local/extract-small"}, "local/extract-small"),
+            ({"model": " local/x "}, "local/x"),
+            ({"model": "auto"}, None),
+            ({"model": ""}, None),
+            ({"model": 7}, None),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_the_pin_is_the_spec_model(self, spec, expected):
+        with patch("kiro_crew.acp.session_mcp.agent_spec_snapshot", return_value=spec) as snap:
+            from kiro_crew.knowledge.llm_pool import AGENT_NAME, _knowledge_spec_model
+
+            assert _knowledge_spec_model() == expected
+        assert snap.call_args.args == (AGENT_NAME,)
+
+    @pytest.mark.asyncio
     async def test_start_degrades_a_non_enforced_backend_to_kiro(self, tmp_path):
         """A configured ``codex`` backend must not reach ``AcpClient`` for this
         pool: codex needs ``AcpRuntime``, which ``AcpClient`` doesn't drive, so

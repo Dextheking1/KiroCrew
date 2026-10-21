@@ -246,6 +246,28 @@ def _log_capability_fallback(resolved: str, declared: bool, reason: str) -> None
     )
 
 
+def _knowledge_spec_model() -> str | None:
+    """The ``model`` the installed knowledge spec pins, or None for no pin.
+
+    Read through ``acp.session_mcp.agent_spec_snapshot`` against the pool
+    client's own work dir, so it is the spec, in the same resolution order
+    (project checkout first), that the session's projection parses. ``"auto"``,
+    a blank or a non-string value is no pin. Blocking (reads a file) and never
+    raises; callers run it off the loop.
+    """
+    from kiro_crew.acp.session_mcp import agent_spec_snapshot
+
+    try:
+        spec = agent_spec_snapshot(AGENT_NAME, work_dir=config_dir() / "workspace")
+    except Exception:
+        logger.debug("knowledge spec unreadable; no model pin", exc_info=True)
+        return None
+    model = spec.get("model") if isinstance(spec, dict) else None
+    if not isinstance(model, str) or not model.strip() or model.strip() == "auto":
+        return None
+    return model.strip()
+
+
 def _get_idle_ttl(config: Optional[dict] = None) -> float:
     """Seconds the pool may sit fully idle before scaling to zero.
 
@@ -526,12 +548,25 @@ class AcpWorker(Worker):
         ``ensure_ready`` spawns the harness, and the result is returned so the
         post-start confirmation can require both reads to agree when no projection
         was prepared. Any other backend returns False.
+
+        The model pin follows the same split. A ``Routing.AGENT_SPEC`` harness reads
+        the spec's own ``model`` (the installer resolves ``knowledge.extraction_model``
+        → ``agent.model`` → ``"auto"`` into it), so nothing is passed and its
+        construction is unchanged. Every other harness reads no spec of Crew's, so
+        the same ``model`` is read from that spec, in the resolution order the
+        session's own projection uses, and handed to the client, whose startup
+        model application scopes it to this backend (a model another harness
+        serves falls back to the backend default rather than being sent).
         """
+        model: str | None = None
+        if routing_for(acp_backend) is not Routing.AGENT_SPEC:
+            model = await asyncio.to_thread(_knowledge_spec_model)
         client = AcpClient(
             agent=AGENT_NAME,
             sandbox_mode=sandbox_mode,
             acp_backend=acp_backend,
             audit_source="subagent",
+            model=model,
         )
         self._client = client
         self._effective_effort = None
