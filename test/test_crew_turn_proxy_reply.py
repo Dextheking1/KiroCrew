@@ -36,7 +36,7 @@ class TestTheCrewsReplyIsRedactedBeforeItReachesTheCaller:
     in a transcript, so it is redacted on the way out like every other peer reply.
     """
 
-    _KEY = "AKIAIOSFODNN7EXAMPLE"
+    _KEY = "glpat-IOSFODNN7EXAMPLE"
 
     @pytest.mark.asyncio
     async def test_a_non_streamed_reply_is_redacted(self, monkeypatch):
@@ -134,7 +134,7 @@ class TestTheCrewsReplyIsRedactedBeforeItReachesTheCaller:
         _wire_handler(monkeypatch, status=_connected())
         _capture_stream(monkeypatch)
         # The literal bytes never spell the key id: only a JSON decode produces it.
-        escaped = b"\\u0041" + self._KEY[1:].encode()
+        escaped = ("\\u%04x" % ord(self._KEY[0])).encode() + self._KEY[1:].encode()
         event = b"\xef\xbb\xbf" + b'data: {"delta": "key ' + escaped + b'"}\n\n'
         _install_session(monkeypatch, [], resp=_FakeResp(status=200, chunks=(event,)))
         resp = await mod.api_crew_turn(_turn_request({"message": "hi", "thread": "t"}))
@@ -162,7 +162,7 @@ class TestTheCrewsReplyIsRedactedBeforeItReachesTheCaller:
 
         _wire_handler(monkeypatch, status=_connected())
         _capture_stream(monkeypatch)
-        escaped = b"\\u0041" + self._KEY[1:].encode()
+        escaped = ("\\u%04x" % ord(self._KEY[0])).encode() + self._KEY[1:].encode()
         stream = b"\xef\xbb\xbf" + b'data: {"delta": "key ' + escaped + b'"}\n\n'
         _install_session(
             monkeypatch,
@@ -370,7 +370,7 @@ class TestTheCrewsRefusalIsRedactedBeforeItIsCut:
     redacted whole, and only then cut.
     """
 
-    _KEY = "AKIAIOSFODNN7EXAMPLE"
+    _KEY = "glpat-IOSFODNN7EXAMPLE"
 
     @staticmethod
     def _detail(out):
@@ -409,7 +409,9 @@ class TestTheCrewsRefusalIsRedactedBeforeItIsCut:
         _wire_handler(monkeypatch, status=_connected())
         _capture_stream(monkeypatch)
         # The literal bytes never spell the key id: only a JSON decode produces it.
-        escaped = '{"detail": "refused for \\u0041' + self._KEY[1:] + '"}'
+        escaped = (
+            '{"detail": "refused for ' + ("\\u%04x" % ord(self._KEY[0])) + self._KEY[1:] + '"}'
+        )
         assert self._KEY not in escaped
         _install_session(monkeypatch, [], resp=_FakeResp(status=403, text=escaped))
         out = await mod.api_crew_turn(_turn_request({"message": "hi", "thread": "t"}))
@@ -459,7 +461,7 @@ class TestANonStreamedCrewErrorIsARefusalNotAContentTypeComplaint:
     capped, redacted slice the streamed frame carries.
     """
 
-    _KEY = "AKIAIOSFODNN7EXAMPLE"
+    _KEY = "glpat-IOSFODNN7EXAMPLE"
 
     @staticmethod
     def _payload(resp):

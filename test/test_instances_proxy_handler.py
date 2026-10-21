@@ -360,7 +360,7 @@ class TestProxyRedactsPeerReplies:
     the read-path redaction point: a credential the peer emits never reaches
     the browser, in a JSON body or in an SSE frame."""
 
-    SECRET = "AKIAIOSFODNN7EXAMPLE"
+    SECRET = "glpat-IOSFODNN7EXAMPLE"
 
     def _req(self, tmp_path, monkeypatch, *, path, chunks, content_type):
         _enable(tmp_path, monkeypatch)
@@ -420,7 +420,7 @@ class TestProxyRedactsPeerReplies:
     async def test_json_escape_cannot_hide_a_secret(self, tmp_path, monkeypatch):
         from kiro_crew.dashboard.handlers_instances import api_instances_proxy
 
-        hidden = '{"content": "\\u0041' + self.SECRET[1:] + '"}'
+        hidden = '{"content": "' + ("\\u%04x" % ord(self.SECRET[0])) + self.SECRET[1:] + '"}'
         req = self._req(
             tmp_path,
             monkeypatch,
@@ -451,7 +451,7 @@ class TestProxyRedactsPeerReplies:
     async def test_a_leading_bom_cannot_hide_an_escaped_secret(self, tmp_path, monkeypatch):
         from kiro_crew.dashboard.handlers_instances import api_instances_proxy
 
-        body = '\ufeff{"content": "\\u0041' + self.SECRET[1:] + '"}'
+        body = '\ufeff{"content": "' + ("\\u%04x" % ord(self.SECRET[0])) + self.SECRET[1:] + '"}'
         req = self._req(
             tmp_path,
             monkeypatch,
@@ -466,7 +466,14 @@ class TestProxyRedactsPeerReplies:
     async def test_json_python_cannot_decode_is_refused_not_forwarded(self, tmp_path, monkeypatch):
         from kiro_crew.dashboard.handlers_instances import api_instances_proxy
 
-        body = '{"n": ' + "9" * 5000 + ', "content": "\\u0041' + self.SECRET[1:] + '"}'
+        body = (
+            '{"n": '
+            + "9" * 5000
+            + ', "content": "'
+            + ("\\u%04x" % ord(self.SECRET[0]))
+            + self.SECRET[1:]
+            + '"}'
+        )
         req = self._req(
             tmp_path,
             monkeypatch,
@@ -537,13 +544,14 @@ class TestRedactSseEvent:
     """The browser joins an event's data lines before parsing, so redaction
     must see the joined payload, whatever the line ending."""
 
-    SECRET = "AKIA" + "IOSFODNN7EXAMPLE"
+    SECRET = "glpat-" + "IOSFODNN7EXAMPLE"
 
     def test_secret_split_over_data_lines_behind_an_escape_is_redacted(self):
         from kiro_crew.dashboard.handlers_instances import _redact_sse_event
 
         event = (
-            'event: chat_message\ndata: {"slot": "s1",\ndata: "content": "\\u0041'
+            'event: chat_message\ndata: {"slot": "s1",\ndata: "content": "'
+            + ("\\u%04x" % ord(self.SECRET[0]))
             + self.SECRET[1:]
             + '"}'
         ).encode()
@@ -573,7 +581,9 @@ class TestRedactSseEvent:
             async def write_eof(self):
                 return None
 
-        payload = ('data: {"c": "\\u0041' + self.SECRET[1:] + '"}\n\n').encode()
+        payload = (
+            'data: {"c": "' + ("\\u%04x" % ord(self.SECRET[0])) + self.SECRET[1:] + '"}\n\n'
+        ).encode()
         stream = b"\xef\xbb\xbf" + payload
         req = TestProxyRedactsPeerReplies()._req(
             tmp_path,
@@ -607,7 +617,9 @@ class TestRedactSseEvent:
             async def write_eof(self):
                 return None
 
-        stream = ('data: {"a":\rdata: "\\u0041' + self.SECRET[1:] + '"}\r\r').encode()
+        stream = (
+            'data: {"a":\rdata: "' + ("\\u%04x" % ord(self.SECRET[0])) + self.SECRET[1:] + '"}\r\r'
+        ).encode()
         req = TestProxyRedactsPeerReplies()._req(
             tmp_path,
             monkeypatch,
