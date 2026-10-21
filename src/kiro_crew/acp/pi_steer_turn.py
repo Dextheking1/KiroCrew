@@ -6,11 +6,13 @@ channel for each prompt turn, writes a steer only while that turn is open, reads
 extension's consumed notification back out of the turn's stream, and removes every
 steer file when the turn closes.
 
-Every function here takes the client as its first argument and keeps its state on it:
-``_pi_steer_turn`` (the open turn's request id, or ``None``), ``_pi_steers_pending``
-(sequence number -> the wrapped text the caller's pending entry is matched by) and
-``_pi_steer_lock`` (serializes a write against the turn's close, so no file is
-written after its turn closed).
+Every function here takes the client as its first argument and keeps its state in
+the fields ``AcpClient.__init__`` creates: ``_pi_steer_turn`` (the open turn's request
+id, or ``None``), ``_pi_steers_pending`` (sequence number -> the wrapped text the
+caller's pending entry is matched by) and ``_pi_steer_lock`` (serializes a write
+against the turn's close, so no file is written after its turn closed). Only the
+channel is read with a default, because every client reaches these entry points and
+only a pi launch mints one.
 
 Fields read: ``_pi_steer_channel``, ``_session_id``, ``_turn_done``, ``_cancelled``.
 """
@@ -20,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from kiro_crew.acp.harness.pi_steer import steer_echo_seq
@@ -38,20 +41,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("kiro_crew.acp.client")
 
 
-def _lock(client: AcpClient) -> asyncio.Lock:
-    lock = getattr(client, "_pi_steer_lock", None)
-    if lock is None:
-        lock = client._pi_steer_lock = asyncio.Lock()
-    return lock
-
-
-def _pending(client: AcpClient) -> dict[int, str]:
-    pending = getattr(client, "_pi_steers_pending", None)
-    if pending is None:
-        pending = client._pi_steers_pending = {}
-    return pending
-
-
 def ready(client: AcpClient) -> bool:
     """Whether this session's pi launch minted a steer channel."""
     return getattr(client, "_pi_steer_channel", None) is not None
@@ -62,7 +51,7 @@ def open_turn(client: AcpClient, req_id: int) -> None:
     if not ready(client):
         return
     client._pi_steer_turn = req_id
-    _pending(client).clear()
+    client._pi_steers_pending.clear()
 
 
 async def close_turn(client: AcpClient, req_id: int) -> None:
@@ -76,14 +65,36 @@ async def close_turn(client: AcpClient, req_id: int) -> None:
     channel = getattr(client, "_pi_steer_channel", None)
     if channel is None:
         return
-    async with _lock(client):
-        if getattr(client, "_pi_steer_turn", None) == req_id:
-            client._pi_steer_turn = None
-            _pending(client).clear()
+    async with client._pi_steer_lock:
+        if client._pi_steer_turn not in (req_id, None):
+            # A later turn is open (this close is a late ``finally``): its files
+            # are its own, and its terminal removes them.
+            return
+        client._pi_steer_turn = None
+        client._pi_steers_pending.clear()
         try:
             await asyncio.to_thread(channel.discard)
         except OSError as exc:
             logger.warning("pi steer files not removed: %s", type(exc).__name__)
+
+
+async def _undo_write(channel: Any, write: asyncio.Future[int], seq: int) -> None:
+    """Wait out a write its caller stopped waiting for, then remove what it wrote.
+
+    Every further cancel is absorbed until both are done, still under the write lock,
+    so the file cannot land after the lock is released and outlive its turn.
+    """
+    while not write.done():
+        with suppress(asyncio.CancelledError):
+            await asyncio.shield(write)
+    if not write.cancelled():
+        write.exception()  # retrieved, so a failed write never logs as unhandled
+    remove = asyncio.ensure_future(asyncio.to_thread(channel.remove, seq))
+    while not remove.done():
+        with suppress(asyncio.CancelledError):
+            await asyncio.shield(remove)
+    if not remove.cancelled() and remove.exception() is not None:
+        logger.warning("pi steer file not removed: %s", type(remove.exception()).__name__)
 
 
 async def steer(client: AcpClient, text: str) -> bool:
@@ -97,35 +108,40 @@ async def steer(client: AcpClient, text: str) -> bool:
     already waiting, or a write that failed -- sends the caller down its queue path.
     """
     channel = getattr(client, "_pi_steer_channel", None)
-    aimed_at = getattr(client, "_pi_steer_turn", None)
-    if channel is None or aimed_at is None or not client._session_id:
+    if channel is None:
         return False
-    pending = _pending(client)
-    if len(text) > MAX_STEERING_TEXT_CHARS or len(pending) >= MAX_STEERING_ANSWERS:
+    aimed_at = client._pi_steer_turn
+    if aimed_at is None or not client._session_id:
+        return False
+    if len(text) > MAX_STEERING_TEXT_CHARS:
         return False
     wrapped = f"<user_message>\n{text}\n</user_message>"
-    async with _lock(client):
+    async with client._pi_steer_lock:
+        pending = client._pi_steers_pending
         if (
-            getattr(client, "_pi_steer_turn", None) != aimed_at
+            client._pi_steer_turn != aimed_at
             or client._turn_done.is_set()
             or client._cancelled
+            or len(pending) >= MAX_STEERING_ANSWERS
         ):
             return False
         # Registered BEFORE the write: the read loop can see the extension's
         # notification before this coroutine resumes from the thread.
         expected = channel.seq + 1
         pending[expected] = wrapped
+        write = asyncio.ensure_future(asyncio.to_thread(channel.publish, client._session_id, text))
         try:
-            seq = await asyncio.to_thread(channel.publish, client._session_id, text)
+            # Shielded: the thread runs on if this call is cancelled, so the write
+            # is waited out here, still under the lock, and undone.
+            await asyncio.shield(write)
+        except asyncio.CancelledError:
+            pending.pop(expected, None)
+            await _undo_write(channel, write, expected)
+            raise
         except Exception as exc:
             pending.pop(expected, None)
             logger.info("pi steer not written: %s", type(exc).__name__)
             return False
-    if seq != expected:
-        # Unreachable while every write holds the lock; kept so a mismatch is
-        # queued rather than reported against the wrong entry.
-        pending.pop(expected, None)
-        return False
     client._last_steer_monotonic = time.monotonic()
     return True
 
@@ -158,7 +174,7 @@ def echo_event(client: AcpClient, msg: JsonRpcMessage) -> AcpEvent | None | bool
     seq = steer_echo_seq(text, channel.nonce)
     if seq is None:
         return False
-    wrapped = _pending(client).pop(seq, None)
+    wrapped = client._pi_steers_pending.pop(seq, None)
     if wrapped is None:
         return None
     return AcpEvent(kind=EVENT_STEER_CONSUMED, text=wrapped)

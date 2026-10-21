@@ -245,14 +245,14 @@
     "events": [
       {
         "kind": "text_chunk",
-        "text": "{\"kiro-crew-steer\":1,\"nonce\":\"6686a479cfb641d388a1429561a8c8b8\",\"seq\":1}"
+        "text": "{\"kiro-crew-steer\":1,\"nonce\":\"8ad50edfb70b49958dc0aa0f55af4386\",\"seq\":1}"
       }
     ],
     "frame": "session/update",
     "pi_steer_consumed": 1,
     "session_update": "agent_message_chunk",
     "text_chunk": {
-      "text": "{\"kiro-crew-steer\":1,\"nonce\":\"6686a479cfb641d388a1429561a8c8b8\",\"seq\":1}",
+      "text": "{\"kiro-crew-steer\":1,\"nonce\":\"8ad50edfb70b49958dc0aa0f55af4386\",\"seq\":1}",
       "thinking": false
     }
   },

@@ -31,12 +31,15 @@
  * artifact directory, sealed with a key only this process's environment carries
  * and bound to this launch's nonce, this pi session's id and the steer's sequence
  * number. At each `turn_end` that did not abort or fail, this extension opens the
- * oldest steer it has not delivered and hands it to pi with
- * `pi.sendUserMessage(text, { deliverAs: "steer" })`, the queue pi's own steer
- * uses, which the agent loop reads before its next model call in the same run.
- * When pi starts that message, it notifies an envelope naming the steer's sequence
- * number, which the host reads as "consumed". A steer still on disk when the run
- * settles is retired, never delivered later: the host queues it as the next turn.
+ * oldest steer it has not delivered and puts it on pi's steering queue with
+ * `pi.sendMessage(message, { deliverAs: "steer" })`, which the agent loop reads
+ * before its next model call in the same run and hands the model as a user message.
+ * That call queues synchronously while pi is streaming; `pi.sendUserMessage` would
+ * first await pi's input handlers, so its steer could miss that read and surface in
+ * a later run, or start a run of its own once pi went idle. When pi starts the
+ * message, this extension notifies an envelope naming the steer's sequence number,
+ * which the host reads as "consumed". A steer still on disk when the run settles is
+ * retired, never delivered later: the host queues it as the next turn.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -81,11 +84,11 @@ const STEER_MARKER = "kiro-crew-steer";
 /** A steer file's name after its stem: the zero-padded sequence number. */
 const STEER_SEQ_RE = /^(\d{10})\.json$/;
 
-/** Larger than any steer the host writes (64000 chars of text, sealed and base64'd). */
+/**
+ * Larger than any steer the host writes: 64000 characters, UTF-8 (at most 4 bytes
+ * each), sealed and base64'd.
+ */
 const MAX_STEER_FILE_BYTES = 512 * 1024;
-
-/** How long a `turn_end` handler waits for its steer to reach pi's queue. */
-const STEER_QUEUE_WAIT_MS = 2000;
 
 /**
  * Open a host seal: AES-256-GCM under the hex key in `keyEnv`, `aad` as associated
@@ -166,14 +169,12 @@ function readSteers(sessionId: string, floor: number): Steer[] {
   return out.sort((a, b) => a.seq - b.seq);
 }
 
-/** The text of a pi message's content, as pi itself compares queued steers. */
-function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part) => part && typeof part === "object" && part.type === "text")
-    .map((part) => String(part.text ?? ""))
-    .join("");
+/** The sequence number a steer message this extension queued carries, or null. */
+function steerMessageSeq(message: unknown): number | null {
+  const m = message as { role?: unknown; customType?: unknown; details?: unknown } | undefined;
+  if (m?.role !== "custom" || m.customType !== STEER_MARKER) return null;
+  const seq = (m.details as { seq?: unknown } | undefined)?.seq;
+  return typeof seq === "number" && Number.isSafeInteger(seq) ? seq : null;
 }
 
 /** pi's agent directory override; `~/.pi/agent` otherwise. */
@@ -412,8 +413,8 @@ export default function (pi: ExtensionAPI) {
   // once) and, when a run settles, to every steer still on disk (so a steer is
   // never delivered into a later turn than the one it was written for).
   let steerFloor = 0;
-  // Steers handed to pi and not yet started, by text, as pi matches its own queue.
-  const steersInFlight = new Map<string, number>();
+  // Sequence numbers of steers queued on pi and not yet started.
+  const steersInFlight = new Set<number>();
 
   pi.on("turn_end", async (event, ctx) => {
     // An aborted or failed model call ends the run without reading pi's steering
@@ -424,23 +425,25 @@ export default function (pi: ExtensionAPI) {
     const next = readSteers(ctx.sessionManager.getSessionId(), steerFloor)[0];
     if (!next) return;
     steerFloor = next.seq;
-    steersInFlight.set(next.text, next.seq);
-    pi.sendUserMessage(next.text, { deliverAs: "steer" });
-    // pi reads its steering queue right after this handler returns, and
-    // sendUserMessage queues asynchronously, so wait for it to land.
-    const deadline = Date.now() + STEER_QUEUE_WAIT_MS;
-    while (!ctx.hasPendingMessages() && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    steersInFlight.add(next.seq);
+    // Synchronous from the streaming check above to pi's steering queue: pi
+    // converts a custom message to a user message for the model, and nothing
+    // awaits before it is queued, so it is queued before this handler returns
+    // and pi reads the queue.
+    pi.sendMessage(
+      {
+        customType: STEER_MARKER,
+        content: [{ type: "text", text: next.text }],
+        display: true,
+        details: { seq: next.seq },
+      },
+      { deliverAs: "steer" },
+    );
   });
 
   pi.on("message_start", async (event, ctx) => {
-    const message = event.message as { role?: unknown; content?: unknown } | undefined;
-    if (steersInFlight.size === 0 || message?.role !== "user") return;
-    const text = messageText(message.content);
-    const seq = steersInFlight.get(text);
-    if (seq === undefined) return;
-    steersInFlight.delete(text);
+    const seq = steerMessageSeq(event.message);
+    if (seq === null || !steersInFlight.delete(seq)) return;
     if (ctx.hasUI) {
       ctx.ui.notify(
         JSON.stringify({ [STEER_MARKER]: 1, nonce: process.env[NONCE_ENV] ?? "", seq }),

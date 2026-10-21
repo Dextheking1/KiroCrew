@@ -195,9 +195,10 @@ file for the gate extension already running inside pi (`acp/harness/pi_steer.py`
 sandbox mounts read-only for pi children, sealed AES-256-GCM under a per-launch key
 carried only in that launch's environment, bound to the gate nonce, the pi session id
 and a strictly increasing sequence number. At each `turn_end` that did not abort or
-fail the extension hands the oldest undelivered steer to
-`pi.sendUserMessage(text, {deliverAs: "steer"})`, pi's own steering queue, read before
-the next model call of the same run, and notifies an envelope when pi starts it; that
+fail the extension puts the oldest undelivered steer on pi's steering queue with
+`pi.sendMessage(message, {deliverAs: "steer"})` (synchronous while pi streams, and
+handed to the model as a user message), read before the next model call of the same
+run, and notifies an envelope when pi starts it; that
 echo (an `agent_message_chunk` carrying `_meta.piAcp.notify`) is the only thing
 reported consumed. The client writes only while its prompt turn is open and removes
 every steer file at the turn's terminal under the same lock; the extension retires

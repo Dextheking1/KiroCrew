@@ -3,7 +3,7 @@
 pi-acp has no steer verb, and a second ``session/prompt`` lands in its turn queue as
 a turn of its own, after the running one. pi itself has a steering queue its agent
 loop reads before each model call, and Crew's gate extension runs inside pi with the
-extension API's ``pi.sendUserMessage(text, {deliverAs: "steer"})`` onto that queue.
+extension API's ``pi.sendMessage(message, {deliverAs: "steer"})`` onto that queue.
 So the host hands each steer to the extension directly, bypassing the adapter:
 
 * **Who can write.** Each steer is one file in the owner-only pi gate artifact
@@ -65,7 +65,7 @@ def _aad(nonce: str, session_id: str, seq: int) -> bytes:
 
 @dataclass
 class PiSteerChannel:
-    """One pi launch's steer channel: its nonce, its key, and the files it wrote.
+    """One pi launch's steer channel: its nonce, its directory, its key, its sequence.
 
     *artifact_dir* is the owner-only pi gate artifact directory the launch already
     resolved and verified when it sealed the extension there; a channel whose launch
@@ -76,7 +76,6 @@ class PiSteerChannel:
     artifact_dir: str
     key: bytes = field(repr=False)
     seq: int = 0
-    written: set[str] = field(default_factory=set)
 
     def _stem(self) -> str:
         """The path every steer file of this launch starts with."""
@@ -96,8 +95,10 @@ class PiSteerChannel:
         self.seq += 1
         seq = self.seq
         iv = os.urandom(12)
+        # UTF-8 rather than ``\\u`` escapes, so a steer at the text bound stays within
+        # the size the extension reads (an escaped astral character is 12 bytes).
         plaintext = json.dumps(
-            {"seq": seq, "session": session_id, "text": text}, sort_keys=True
+            {"seq": seq, "session": session_id, "text": text}, sort_keys=True, ensure_ascii=False
         ).encode("utf-8")
         sealed = AESGCM(self.key).encrypt(iv, plaintext, _aad(self.nonce, session_id, seq))
         body = {
@@ -123,21 +124,33 @@ class PiSteerChannel:
             raise OSError("the pi gate artifact directory moved since this launch")
         seq, payload = self.seal(session_id, text)
         name = os.path.basename(self._stem()) + f"{seq:0{_SEQ_WIDTH}d}.json"
-        path = _publish_gate_artifact(
+        _publish_gate_artifact(
             self.artifact_dir, name, payload, stage_prefix=f"kirocrew_pi_gate_{os.getpid()}_"
         )
-        self.written.add(path)
         return seq
 
-    def discard(self) -> None:
-        """Remove every steer file this channel wrote; absent already is the same.
+    def remove(self, seq: int) -> None:
+        """Remove steer *seq*'s file; absent already is the same. Blocking."""
+        path = self._stem() + f"{seq:0{_SEQ_WIDTH}d}.json"
+        with suppress(FileNotFoundError):
+            os.remove(path)
 
-        Blocking; callers run it off the loop.
+    def discard(self) -> None:
+        """Remove every steer file of this launch; absent already is the same.
+
+        Every file in the directory carrying this launch's stem, so a write that
+        landed after its caller stopped waiting is removed too. Blocking; callers
+        run it off the loop.
         """
-        for path in sorted(self.written):
-            with suppress(FileNotFoundError):
-                os.remove(path)
-        self.written.clear()
+        stem = os.path.basename(self._stem())
+        try:
+            names = os.listdir(self.artifact_dir)
+        except FileNotFoundError:
+            names = []
+        for name in names:
+            if name.startswith(stem):
+                with suppress(FileNotFoundError):
+                    os.remove(os.path.join(self.artifact_dir, name))
 
 
 def new_pi_steer_channel(nonce: str, artifact_dir: str) -> PiSteerChannel:
@@ -160,8 +173,8 @@ def steer_echo_seq(text: str, nonce: str) -> int | None:
         return None
     if not isinstance(body, dict) or set(body) != {_PI_STEER_MARKER, "nonce", "seq"}:
         return None
-    seq = body.get("seq")
-    if body.get(_PI_STEER_MARKER) != 1 or body.get("nonce") != nonce:
+    seq, marker = body.get("seq"), body.get(_PI_STEER_MARKER)
+    if type(marker) is not int or marker != 1 or body.get("nonce") != nonce:
         return None
     if not isinstance(seq, int) or isinstance(seq, bool) or seq <= 0:
         return None

@@ -162,11 +162,13 @@ ACP_BACKENDS_STEER = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_KAS})
 # pi (``acp.harness.pi_steer``: owner-only directory the sandbox mounts read-only,
 # AES-256-GCM under a per-launch key bound to the gate nonce, the pi session id and a
 # strictly increasing sequence number). At each ``turn_end`` that did not abort or
-# fail, the extension hands the oldest undelivered steer to
-# ``pi.sendUserMessage(text, {deliverAs: "steer"})``, the queue pi's own steer uses,
-# which pi 1.3.0's agent loop reads right after that boundary and before its next
-# model call in the same run (``agent-loop.js``; ``finishTurn`` never ends a run in
-# 1.3.0). When pi starts the message the extension notifies an envelope naming the
+# fail, the extension puts the oldest undelivered steer on pi's steering queue with
+# ``pi.sendMessage(message, {deliverAs: "steer"})``, which queues it synchronously
+# while pi streams and which pi hands the model as a user message; pi 1.3.0's agent
+# loop reads that queue right after the boundary and before its next model call in
+# the same run (``agent-loop.js``; no ``finishTurn`` in 1.3.0 ends a run there).
+# ``pi.sendUserMessage`` is not used: it awaits pi's input handlers before it queues,
+# so its steer could miss that read and surface in a later run. When pi starts the message the extension notifies an envelope naming the
 # steer, which pi-acp forwards as an ``agent_message_chunk`` with
 # ``_meta.piAcp.notify``; that echo is reported as ``EVENT_STEER_CONSUMED``. In the
 # capture a steer written during a running ``bash`` call was echoed after the tool

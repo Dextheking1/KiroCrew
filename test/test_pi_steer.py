@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import stat
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -37,6 +38,7 @@ from kiro_crew.acp.types import (
     MAX_STEERING_ANSWERS,
     MAX_STEERING_TEXT_CHARS,
 )
+from kiro_crew.testing.wait import await_until, until_parked
 
 _SID = "pi-session-1"
 _NONCE = "0123456789abcdef0123456789abcdef"
@@ -98,6 +100,11 @@ def _open(path: str, key: bytes, nonce: str, session: str) -> dict[str, Any]:
     return json.loads(plain)
 
 
+def _path(channel: PiSteerChannel, seq: int) -> str:
+    """Where *channel* writes steer *seq*."""
+    return f"{channel._stem()}{seq:010d}.json"
+
+
 def _steer_files(gate: str) -> list[str]:
     return sorted(n for n in os.listdir(gate) if "_steer_" in n)
 
@@ -130,7 +137,7 @@ def test_a_steer_file_is_sealed_to_its_launch_session_and_sequence(gate_dir: str
     with pytest.raises(InvalidTag):
         _open(first, channel.key, _NONCE, "another-session")
     with pytest.raises(InvalidTag):
-        _open(first, os.urandom(32), _NONCE, _SID)
+        _open(first, bytes(range(32, 64)), _NONCE, _SID)
     with pytest.raises(InvalidTag):
         _open(first, channel.key, "f" * 32, _SID)
     channel.discard()
@@ -162,8 +169,8 @@ def test_a_steer_is_written_only_into_a_real_owner_only_gate_leaf(
     gate_dir: str, tmp_path: Path
 ) -> None:
     channel = new_pi_steer_channel(_NONCE, gate_dir)
-    # Loosened between spawn and steer: the write re-secures the leaf first.
-    os.chmod(gate_dir, 0o755)
+    # Loosened between spawn and steer (the case under test): the write re-secures it.
+    os.chmod(gate_dir, 0o710)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions  # noqa: E501  # fmt: skip
     channel.publish(_SID, "use blue")
     assert stat.S_IMODE(os.stat(gate_dir).st_mode) == 0o700
     channel.discard()
@@ -184,6 +191,7 @@ def test_a_steer_is_written_only_into_a_real_owner_only_gate_leaf(
         (_echo(3, nonce="f" * 32), None),
         (json.dumps({"kiro-crew-steer": 1, "nonce": _NONCE, "seq": 3, "x": 1}), None),
         (json.dumps({"kiro-crew-steer": 1, "nonce": _NONCE, "seq": True}), None),
+        (json.dumps({"kiro-crew-steer": True, "nonce": _NONCE, "seq": 3}), None),
         (json.dumps({"kiro-crew-steer": 1, "nonce": _NONCE, "seq": 0}), None),
         (json.dumps({"kiro-crew-steer": 2, "nonce": _NONCE, "seq": 3}), None),
         ("Steer received: PINEAPPLE.", None),
@@ -243,7 +251,7 @@ async def test_a_steer_is_written_and_reported_consumed_on_the_extensions_echo(
     def _publish(session: str, text: str) -> int:
         seq = real_publish(session, text)
         seen_files.append(_steer_files(gate_dir))
-        assert _open(sorted(channel.written)[0], channel.key, _NONCE, _SID)["text"] == text
+        assert _open(_path(channel, seq), channel.key, _NONCE, _SID)["text"] == text
         return seq
 
     channel.publish = _publish  # type: ignore[method-assign]
@@ -328,6 +336,36 @@ async def test_a_steer_over_the_bounds_is_queued_instead(gate_dir: str, tmp_path
     assert _steer_files(gate_dir) == []
 
 
+def _gate_publish(channel: PiSteerChannel) -> tuple[asyncio.Event, threading.Event]:
+    """Hold *channel*'s writes in their thread: ``entered`` is set once a write is
+    inside ``publish``, and it lands only after ``release`` is set."""
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    real_publish = channel.publish
+
+    def _held(session: str, text: str) -> int:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(timeout=120), "the test never released the write"
+        return real_publish(session, text)
+
+    channel.publish = _held  # type: ignore[method-assign]
+    return entered, release
+
+
+async def _parked_behind(lock: asyncio.Lock, count: int) -> asyncio.Task[None]:
+    """A task queued on *lock* behind every task already runnable; returns once
+    *count* waiters are parked there, so every earlier ready step has run."""
+
+    async def _probe() -> None:
+        async with lock:
+            pass
+
+    probe = asyncio.ensure_future(_probe())
+    await until_parked(lock, count=count)
+    return probe
+
+
 @pytest.mark.asyncio
 async def test_a_write_in_flight_lands_before_the_close_removes_it(
     gate_dir: str, tmp_path: Path
@@ -337,24 +375,85 @@ async def test_a_write_in_flight_lands_before_the_close_removes_it(
     client, _ = _client(tmp_path, channel)
     client._turn_done.clear()
     pi_steer_turn.open_turn(client, _PROMPT_ID)
-    release = asyncio.Event()
-    real_publish = channel.publish
-    loop = asyncio.get_running_loop()
-
-    def _slow(session: str, text: str) -> int:
-        asyncio.run_coroutine_threadsafe(release.wait(), loop).result(timeout=10)
-        return real_publish(session, text)
-
-    channel.publish = _slow  # type: ignore[method-assign]
+    entered, release = _gate_publish(channel)
     steering = asyncio.ensure_future(client.steer("use blue"))
-    await asyncio.sleep(0.05)
+    await await_until(entered, what="the write entering publish")
     closing = asyncio.ensure_future(pi_steer_turn.close_turn(client, _PROMPT_ID))
-    await asyncio.sleep(0.05)
+    await until_parked(client._pi_steer_lock)
     assert not closing.done(), "the close must wait for the write it races"
     release.set()
-    assert await steering is True
-    await closing
+    assert await await_until(steering, what="the steer call") is True
+    await await_until(closing, what="the close")
     assert _steer_files(gate_dir) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancels", [1, 2])
+async def test_a_cancelled_steer_waits_out_its_write_and_undoes_it(
+    gate_dir: str, tmp_path: Path, cancels: int
+) -> None:
+    """A caller cancelled mid-write -- once, or again while it waits -- queues its
+    text, so the file must not stay behind, and the lock is held until it is gone."""
+    channel = new_pi_steer_channel(_NONCE, gate_dir)
+    client, _ = _client(tmp_path, channel)
+    client._turn_done.clear()
+    pi_steer_turn.open_turn(client, _PROMPT_ID)
+    entered, release = _gate_publish(channel)
+    steering = asyncio.ensure_future(client.steer("use blue"))
+    await await_until(entered, what="the write entering publish")
+    probes = []
+    for n in range(cancels):
+        steering.cancel()
+        # Queued behind the cancel: once it is parked, the cancel has been handled.
+        probes.append(await _parked_behind(client._pi_steer_lock, n + 1))
+    closing = asyncio.ensure_future(pi_steer_turn.close_turn(client, _PROMPT_ID))
+    await until_parked(client._pi_steer_lock, count=cancels + 1)
+    assert not steering.done(), "the cancelled call waits for its write"
+    assert not closing.done(), "the lock is held until the write is undone"
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await await_until(steering, what="the cancelled steer call")
+    await await_until(closing, what="the close")
+    for probe in probes:
+        await await_until(probe, what="the lock probe")
+    assert _steer_files(gate_dir) == []
+    assert client._pi_steers_pending == {}
+
+
+@pytest.mark.asyncio
+async def test_a_late_close_of_an_old_turn_leaves_the_open_turns_steers(
+    gate_dir: str, tmp_path: Path
+) -> None:
+    """The ``finally`` of a turn can run after the next turn opened."""
+    client, _ = _client(tmp_path, new_pi_steer_channel(_NONCE, gate_dir))
+    client._turn_done.clear()
+    pi_steer_turn.open_turn(client, _PROMPT_ID + 1)
+    assert await client.steer("use blue") is True
+    await pi_steer_turn.close_turn(client, _PROMPT_ID)
+    assert len(_steer_files(gate_dir)) == 1
+    assert client._pi_steers_pending and client._pi_steer_turn == _PROMPT_ID + 1
+    await pi_steer_turn.close_turn(client, _PROMPT_ID + 1)
+    assert _steer_files(gate_dir) == []
+
+
+def test_discard_removes_every_file_of_the_launch_and_no_other(gate_dir: str) -> None:
+    channel = new_pi_steer_channel(_NONCE, gate_dir)
+    channel.publish(_SID, "use blue")
+    stray = channel._stem() + "0000000009.json"
+    Path(stray).write_text("{}")
+    other = new_pi_steer_channel("f" * 32, gate_dir)
+    theirs = other.publish(_SID, "theirs")
+    channel.discard()
+    assert _steer_files(gate_dir) == [os.path.basename(_path(other, theirs))]
+
+
+def test_a_steer_at_the_text_bound_fits_the_size_the_extension_reads(gate_dir: str) -> None:
+    channel = new_pi_steer_channel(_NONCE, gate_dir)
+    # Astral characters: 4 bytes in UTF-8, 12 as a JSON escape.
+    seq = channel.publish(_SID, "\U0001f34d" * MAX_STEERING_TEXT_CHARS)
+    size = os.path.getsize(_path(channel, seq))
+    assert size < 512 * 1024
+    assert "MAX_STEER_FILE_BYTES = 512 * 1024" in Path(pi_mod.pi_gate_extension_path()).read_text()
 
 
 @pytest.mark.asyncio
@@ -387,7 +486,7 @@ async def test_the_live_capture_reports_the_steer_consumed_and_shows_no_envelope
     start = next(i for i, f in enumerate(frames) if f.get("id") == 3) + 1
     turn = frames[start:]
     prompt_id = turn[-1]["id"]
-    channel = PiSteerChannel(nonce=nonce, artifact_dir=str(tmp_path), key=os.urandom(32))
+    channel = PiSteerChannel(nonce=nonce, artifact_dir=str(tmp_path), key=bytes(range(32)))
     client, reader = _client(tmp_path, channel)
     client._session_id = "pi-session-1"
     client._turn_done.clear()

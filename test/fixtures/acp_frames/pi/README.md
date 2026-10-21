@@ -146,8 +146,8 @@ namespaces), so the capture driver ran the session with the sandbox off and the
 floor that refuses an unsandboxed pi neutered, in the driver only. The scripted model
 on the loopback interface called `bash` with a four-second sleep; one second into it
 the client steered, which writes a sealed file rather than a frame, so the steer
-itself is not on the wire. After the tool result the extension handed the steer to
-`pi.sendUserMessage(text, {deliverAs: "steer"})` at `turn_end`; when pi started that
+itself is not on the wire. After the tool result the extension queued the steer with
+`pi.sendMessage(message, {deliverAs: "steer"})` at `turn_end`; when pi started that
 message it notified the consumed envelope (the `kiro-crew-steer` marker, the gate
 nonce in `_meta.gate_envelope_nonce`, sequence 1), which `AcpClient` reports as
 `EVENT_STEER_CONSUMED` and never shows as text. The model's next request carried the

@@ -1,7 +1,7 @@
 """Kiro Crew's pi gate extension delivering steers, run under Node against a stand-in pi.
 
-The extension reads the host's sealed steer files at each ``turn_end`` and hands the
-oldest undelivered one to ``pi.sendUserMessage(text, {deliverAs: "steer"})``, then
+The extension reads the host's sealed steer files at each ``turn_end`` and queues the
+oldest undelivered one with ``pi.sendMessage(message, {deliverAs: "steer"})``, then
 notifies a consumed envelope when pi starts that message. These cases load the
 SHIPPED file and drive its handlers the way pi does, with files sealed by the host's
 own :class:`~kiro_crew.acp.harness.pi_steer.PiSteerChannel`, and pin each guard: the
@@ -43,16 +43,20 @@ const steps = JSON.parse(readFileSync(stepsPath, "utf8"));
 const handlers = {};
 const sent = [];
 const notes = [];
-let pending = false;
+let streaming = true;
+const queued = [];
 const pi = {
   registerCommand() {},
   registerMcpServer() {},
   getMcpServers() { return []; },
   on(event, fn) { handlers[event] = fn; },
-  sendUserMessage(text, options) {
-    sent.push({ text, deliverAs: options?.deliverAs ?? null });
-    // pi queues a steer asynchronously, after an await of its own.
-    setTimeout(() => { pending = true; }, 1);
+  sendUserMessage() { throw new Error("sendUserMessage awaits input handlers; not used"); },
+  // pi's sendCustomMessage: queued at once while streaming, appended otherwise.
+  sendMessage(message, options) {
+    if (!streaming) throw new Error("a steer was queued on an idle agent");
+    const text = message.content.map((p) => p.text).join("");
+    sent.push({ text, deliverAs: options?.deliverAs ?? null, triggerTurn: options?.triggerTurn });
+    queued.push({ role: "custom", ...message });
   },
 };
 function ctx(step) {
@@ -61,7 +65,7 @@ function ctx(step) {
     hasUI: true,
     isIdle: () => Boolean(step.idle),
     signal: { aborted: Boolean(step.signalAborted) },
-    hasPendingMessages: () => pending,
+    hasPendingMessages: () => queued.length > 0,
     sessionManager: { getSessionId: () => step.session ?? "pi-session-1" },
     ui: { notify(message, level) { notes.push({ message, level }); }, async confirm() { return true; } },
   };
@@ -72,7 +76,7 @@ for (const step of steps) {
   if (step.write) {
     copyFileSync(step.write.src, join(gateDir, step.write.name));
   } else if (step.turn_end) {
-    const queuedBefore = sent.length;
+    streaming = !step.idle;
     await handlers.turn_end(
       {
         type: "turn_end",
@@ -81,13 +85,15 @@ for (const step of steps) {
       },
       ctx(step),
     );
-    if (sent.length > queuedBefore && !pending) throw new Error("returned before the steer was queued");
   } else if (step.message_start !== undefined) {
-    pending = false;
-    await handlers.message_start(
-      { type: "message_start", message: { role: "user", content: [{ type: "text", text: step.message_start }] } },
-      ctx(step),
-    );
+    // pi starts the next queued message, or a plain user message of that text.
+    const next = queued[0];
+    const isNext = next && next.content.map((p) => p.text).join("") === step.message_start;
+    if (isNext) queued.shift();
+    const message = isNext
+      ? next
+      : { role: "user", content: [{ type: "text", text: step.message_start }] };
+    await handlers.message_start({ type: "message_start", message }, ctx(step));
   } else if (step.settled) {
     await handlers.agent_settled({ type: "agent_settled", aborted: false }, ctx(step));
   }
@@ -175,7 +181,9 @@ class _Rig:
 
 
 def _sent(out: dict[str, Any]) -> list[str]:
-    assert all(s["deliverAs"] == "steer" for s in out["sent"])
+    # Queued as a steer, and never with triggerTurn: false, which pi would hold to
+    # the end of the turn instead of reading before the next model call.
+    assert all(s["deliverAs"] == "steer" and s.get("triggerTurn") is None for s in out["sent"])
     return [s["text"] for s in out["sent"]]
 
 
@@ -274,6 +282,16 @@ def test_a_steer_its_run_settled_without_is_retired_not_carried_over(node, tmp_p
     rig.turn_end()
     out = rig.run(node)
     assert _sent(out) == ["next turn's"]
+
+
+def test_a_user_message_with_the_steers_text_is_not_its_echo(node, tmp_path) -> None:
+    rig = _Rig(tmp_path)
+    rig.write("use blue")
+    rig.steps.append({"message_start": "use blue"})  # nothing queued yet: a plain user message
+    rig.turn_end()
+    rig.message_start("use blue")
+    out = rig.run(node)
+    assert [e["seq"] for e in _echoes(out)] == [1]
 
 
 def test_an_echo_is_not_sent_for_a_message_the_extension_did_not_deliver(node, tmp_path) -> None:
