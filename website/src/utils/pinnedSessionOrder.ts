@@ -8,8 +8,11 @@ import { safeGetItem, safeRemoveItem } from './safeStorage'
  * the flyout, the Sessions page and every browser the person opens agree.
  *
  * Pinned rows without a rank follow the ranked ones in the surface's own sort.
- * Before any reorder no row has a rank, so the pinned section keeps its plain
- * sort.
+ * No reorder is needed for rows to gain a rank: the sidebar's first list-view
+ * load seeds the order it is showing (this browser's old local order, then the
+ * natural order), so later pins append instead of re-sorting. Pinned rows stay
+ * unranked, and keep the plain sort, only on a board view with no old local
+ * order, on an empty roster, or until the seed's request answers.
  */
 
 /**
