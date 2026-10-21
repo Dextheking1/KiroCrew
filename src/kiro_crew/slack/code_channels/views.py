@@ -116,25 +116,48 @@ def recorded(record: Any, key: str) -> dict[str, str] | None:
     return None
 
 
+#: One per channel: every read-modify-write of the recorded views holds it, so a
+#: tool write and a refresh recording views together never lose one.
+_record_locks: dict[str, asyncio.Lock] = {}
+
+
+def _record_lock(channel_id: str) -> asyncio.Lock:
+    lock = _record_locks.get(channel_id)
+    if lock is None:
+        if len(_record_locks) > 4096:
+            for key in [k for k, v in _record_locks.items() if not v.locked()]:
+                _record_locks.pop(key, None)
+        lock = _record_locks[channel_id] = asyncio.Lock()
+    return lock
+
+
+def _protected_first(entries: list[dict[str, str]]) -> list[dict[str, str]]:
+    """*entries* cut to :data:`MAX_RECORDED`, the agent's oldest dropped first."""
+    if len(entries) <= MAX_RECORDED:
+        return entries
+    spare = [v for v in entries if v.get("key") not in PROTECTED_KEYS and not is_pr_tab(v)]
+    drop = {id(v) for v in spare[: len(entries) - MAX_RECORDED]}
+    return [v for v in entries if id(v) not in drop][-MAX_RECORDED:]
+
+
 async def record_view(channel_id: str, *, key: str, view_id: str, type: str, url: str = "") -> None:
     """Remember that this gateway wrote view *key* (made or updated) just now."""
-    record = await get_async(channel_id)
-    kept = [dict(v) for v in (record.views if record else ()) if v.get("key") != key]
-    kept.append(
-        _entry(
-            {"key": key, "view_id": view_id, "type": type, "at": f"{time.time():.3f}", "url": url}
-        )
-    )
-    await update_async(channel_id, views=kept[-MAX_RECORDED:])
+    entry = {"key": key, "view_id": view_id, "type": type, "at": f"{time.time():.3f}", "url": url}
+    async with _record_lock(channel_id):
+        record = await get_async(channel_id)
+        kept = [dict(v) for v in (record.views if record else ()) if v.get("key") != key]
+        kept.append(_entry(entry))
+        await update_async(channel_id, views=_protected_first(kept))
 
 
 async def forget_view(channel_id: str, key: str) -> None:
-    record = await get_async(channel_id)
-    if record is None:
-        return
-    kept = [dict(v) for v in record.views if v.get("key") != key]
-    if len(kept) != len(record.views):
-        await update_async(channel_id, views=kept)
+    async with _record_lock(channel_id):
+        record = await get_async(channel_id)
+        if record is None:
+            return
+        kept = [dict(v) for v in record.views if v.get("key") != key]
+        if len(kept) != len(record.views):
+            await update_async(channel_id, views=kept)
 
 
 async def reconcile(client: Any, channel_id: str) -> list[dict[str, str]]:
@@ -144,20 +167,34 @@ async def reconcile(client: Any, channel_id: str) -> list[dict[str, str]]:
     listed view that merely shares a key (another agent's) never makes it ours.
     Raises :class:`CodeChannelApiError` when the list cannot be read.
     """
+    # Recorded times are kept to the millisecond: compare against the same.
+    asked_at = round(time.time(), 3) - 0.001
     listed = await client.list_views(channel_id)
     live_ids = {str(v.get("view_id") or "") for v in listed if v.get("view_id")}
-    record = await get_async(channel_id)
-    recorded_views = [dict(v) for v in (record.views if record else ())]
-    ours = [v for v in recorded_views if v.get("view_id") and v["view_id"] in live_ids]
-    changes: dict[str, Any] = {}
-    if len(ours) != len(recorded_views):
-        changes["views"] = ours
-    if record is not None and record.plan_view_id and record.plan_view_id not in live_ids:
-        # The Plan tab is gone (removed in Slack): the next publish re-attaches it.
-        changes["plan_view_id"] = ""
-    if changes:
-        await update_async(channel_id, **changes)
-    return ours
+
+    def _listed(view: dict[str, str]) -> bool:
+        # A view recorded after the list was asked for may simply be newer than
+        # it: kept, never pruned as "gone".
+        if view.get("view_id") in live_ids:
+            return True
+        try:
+            return float(view.get("at") or 0) >= asked_at
+        except ValueError:
+            return False
+
+    async with _record_lock(channel_id):
+        record = await get_async(channel_id)
+        recorded_views = [dict(v) for v in (record.views if record else ())]
+        ours = [v for v in recorded_views if v.get("view_id") and _listed(v)]
+        changes: dict[str, Any] = {}
+        if len(ours) != len(recorded_views):
+            changes["views"] = ours
+        if record is not None and record.plan_view_id and record.plan_view_id not in live_ids:
+            # The Plan tab is gone (removed in Slack): the next publish re-attaches it.
+            changes["plan_view_id"] = ""
+        if changes:
+            await update_async(channel_id, **changes)
+    return [v for v in ours if v.get("view_id") in live_ids]
 
 
 def _candidates(ours: list[dict[str, str]], for_key: str) -> list[dict[str, str]]:
@@ -183,6 +220,9 @@ async def make_room(client: Any, channel_id: str, *, for_key: str) -> str:
     cap together each find what the other left. Raises nothing: a read or
     removal Slack refuses leaves the channel as it was and answers "".
     """
+    if len(_locks) > 4096:
+        for key in [k for k, v in _locks.items() if not v.locked()]:
+            _locks.pop(key, None)
     lock = _locks.setdefault(channel_id, asyncio.Lock())
     async with lock:
         return await _make_room(client, channel_id, for_key=for_key)

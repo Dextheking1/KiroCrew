@@ -297,7 +297,8 @@ def _rich(elements: list[dict]) -> dict:
     return {"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": elements}]}
 
 
-def _details(row: model.WorkerRow, now: datetime) -> list[dict]:
+def _details(row: model.WorkerRow, now: datetime, elapsed: bool = True) -> list[dict]:
+    """The row's status words; *elapsed* off leaves the minute counts out (a digest)."""
     if row.state == model.WAITING_ON_YOU:
         out: list[dict] = [{"type": "text", "text": "Waiting on you:", "style": {"bold": True}}]
         if row.waiting_on == "approval":
@@ -314,13 +315,13 @@ def _details(row: model.WorkerRow, now: datetime) -> list[dict]:
         return out
     if row.state == model.WORKING:
         out = _step_elements(row.step or model.STEP_THINKING)
-        elapsed = _elapsed(row.turn_started_at, now)
-        if elapsed:
-            out.append({"type": "text", "text": f" · {elapsed}"})
+        took = _elapsed(row.turn_started_at, now) if elapsed else ""
+        if took:
+            out.append({"type": "text", "text": f" · {took}"})
         return out
     if row.state == model.IDLE:
-        elapsed = _elapsed(row.report_stamp, now)
-        text = f"Idle · {elapsed}" if elapsed else "Idle"
+        idle_for = _elapsed(row.report_stamp, now) if elapsed else ""
+        text = f"Idle · {idle_for}" if idle_for else "Idle"
         note = row.step or row.summary
         return [{"type": "text", "text": f"{text} · {note}" if note else text}]
     label = model.row_label(row)
@@ -471,15 +472,15 @@ _CONFIRM_TITLE = 100
 _BUTTON_TEXT = 75
 
 
-def _status_elements(row: model.WorkerRow, now: datetime) -> list[dict]:
+def _status_elements(row: model.WorkerRow, now: datetime, elapsed: bool = True) -> list[dict]:
     """``Working · Running `pytest -q` · 4m`` / ``Waiting on you: approve `git push```."""
     if row.state == model.WORKING:
-        return [{"type": "text", "text": "Working · "}, *_details(row, now)]
+        return [{"type": "text", "text": "Working · "}, *_details(row, now, elapsed)]
     if row.state in {model.WAITING_ON_YOU, model.IDLE}:
-        return _details(row, now)
+        return _details(row, now, elapsed)
     word = {model.BLOCKED: "Stuck", model.LOST: "Lost"}.get(row.state)
     if word is None:
-        return _details(row, now)
+        return _details(row, now, elapsed)
     text = f"{word} · {row.summary}" if row.summary else word
     return [{"type": "text", "text": text}]
 
@@ -556,6 +557,7 @@ def workers_view_blocks(
     tabs: Tabs | None = None,
     updated: str = "",
     now: datetime | None = None,
+    elapsed: bool = True,
 ) -> list[dict]:
     """The interactive Workers tab: the board's own rows, with Stop and Open in dashboard.
 
@@ -564,7 +566,8 @@ def workers_view_blocks(
     (state, the call in flight, elapsed); the PR -- linked to its own tab when
     the channel has one -- with its CI count; then the buttons. Stop shows only
     while the worker is working. Settled workers fold into one line each at the
-    bottom. *updated* (``HH:MM UTC``) is left out of the digest's render.
+    bottom. *updated* (``HH:MM UTC``) and, with *elapsed* off, the minute counts
+    are left out of the digest's render, so time passing alone changes nothing.
     """
     when = now or datetime.now(timezone.utc)
     header = f"Updated {updated}" if updated else "Workers"
@@ -576,7 +579,7 @@ def workers_view_blocks(
     settled = [r for r in snapshot.rows if r.settled]
     for row in open_rows[:WORKERS_TAB_ROWS]:
         lines: list[dict] = [{"type": "text", "text": row.title, "style": {"bold": True}}]
-        status = _status_elements(row, when)
+        status = _status_elements(row, when, elapsed)
         if status:
             lines += [{"type": "text", "text": "\n"}, *status]
         output = _output(row, tabs)
