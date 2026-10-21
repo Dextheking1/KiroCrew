@@ -22,7 +22,6 @@ read and grep this file without tripping the very rule under test.
 from __future__ import annotations
 
 import re
-from typing import Callable
 
 import pytest
 
@@ -90,6 +89,11 @@ _SYNTHESIZED_BODIES = [
     f'echo "$( ( : ); {_PG} -f {_HEAD}{{{_TAIL[0]}..{_TAIL[0]}}}{_TAIL[1:]})"',
     f'echo "$(case a in a) printf \'"\';; esac)"; {_PG} -f {_HEAD}{{,}}{_TAIL}',
     f'echo "$$( \'"\' )\'")" ; {_PG} -f {_NAME}',
+    # an earlier substitution's closing backtick does not pair with the next
+    # opener: only a real substitution span is folded
+    f": `id` echo ok; {_PG} -f `printf {_HEAD}`{_TAIL}",
+    f": `id` printf x; {_PG} -f `echo {_HEAD}`{_TAIL}",
+    f': "`date` echo x"; {_PG} -f "`printf {_HEAD}`{_TAIL}"',
 ]
 
 
@@ -111,6 +115,8 @@ def test_runtime_synthesized_target_is_denied(prefix: str, body: str) -> None:
         f"{_K} $({_PG} -f otherproduct)",
         f"{_K} $({_PG} -f other{{,}}product)",
         f'{_K} $({_PG} -f "$(printf other)$(printf product)")',
+        # the same shape behind an earlier substitution still names no one
+        f"{_K} $(: `id` echo ok; {_PG} -f `printf other`product)",
         # a constant substitution unrelated to the target
         f'{_K} $({_PG} -f "$(printf worker)")',
         # output words bash keeps apart are not joined
@@ -225,6 +231,32 @@ def test_references_that_add_up_past_the_cap_fail_closed_before_building_them(
     assert not calls
 
 
+def test_indirect_references_are_sized_before_building_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ``${!y}`` expands to the value of the variable ``y`` NAMES, so a doubling
+    # chain reached through one indirect hop must be refused on lengths exactly
+    # like the direct references above, before the resolver builds it.
+    calls = _record_resolver_calls(monkeypatch)
+    chain = "; ".join(["x=$x$x"] * 10)
+    refs = " ".join(["${!y}"] * 3)
+    body = f"x=$(printf {'a' * 64}); {chain}; y=x; {_PG} -f {refs}"
+    assert _argv_floor._kill_body_synthesizes_self(body)
+    assert not calls
+
+
+@pytest.mark.parametrize(("operands", "refused"), [(1, False), (6, True)])
+def test_the_resolved_size_limit_counts_indirect_references(operands: int, refused: bool) -> None:
+    # The same totals as the direct-reference rows below, reached through ``y=x``.
+    from kiro_crew.security import shell_normalizer as sn
+
+    chain = "; ".join(["x=$x$x"] * 5)
+    refs = " ".join(["${!y}."] * operands)
+    body = f"x=$(printf {'a' * 64}); {chain}; y=x; {_PG} -f {refs}"
+    words = sn._synthesis_words(body, _argv_floor._static_substitution_output, 16_384)
+    assert (words is None) is refused
+
+
 @pytest.mark.parametrize(("operands", "refused"), [(1, False), (6, True)])
 def test_the_resolved_size_limit_is_on_the_total_of_the_words(operands: int, refused: bool) -> None:
     # A 64-character value doubled five times resolves to about 2,300 characters
@@ -299,9 +331,9 @@ def test_deep_substitution_nesting_fails_closed_before_any_fold_pass(
     passes = [0]
 
     class Counting:
-        def sub(self, repl: "Callable[[re.Match[str]], str]", text: str) -> str:
+        def match(self, text: str, pos: int) -> "re.Match[str] | None":
             passes[0] += 1
-            return real.sub(repl, text)
+            return real.match(text, pos)
 
     monkeypatch.setattr(sn, "_CONST_OUTPUT_SUBST_RE", Counting())
     depth = sn._FOLD_DEPTH_CAP + 50
@@ -318,6 +350,20 @@ def test_nesting_at_the_depth_cap_still_folds() -> None:
     assert sn._fold_const_output_substitutions(body, lambda sub: sub.split()[-1]) == (
         "x" * depth + "a"
     )
+
+
+def test_nesting_past_the_quote_mask_cap_fails_closed() -> None:
+    # Past the quote-mask nesting cap the mask proves no span at all, so the fold
+    # must fail closed (return None) rather than return the body unfolded and let
+    # the assembled name slip the search.
+    from kiro_crew.security import shell_normalizer as sn
+
+    depth = sn._QUOTE_MASK_NEST_CAP + 2
+    nested = '$(printf "' * depth + _HEAD + '")' * depth
+    assert sn._fold_const_output_substitutions(nested, lambda sub: sub.split()[-1]) is None
+    cmd = f'{_K} $({_PG} -f "{nested}{_TAIL}")'
+    assert _floor(cmd), cmd
+    assert is_denied(cmd), cmd
 
 
 def test_wide_comma_group_is_capped_before_building() -> None:

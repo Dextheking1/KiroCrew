@@ -941,14 +941,14 @@ def _fold_const_output_substitutions(body: str, resolve: "Callable[[str], str]")
     (``x=$(printf a); ${x}b``).  Output that cannot be spliced as the same text
     leaves its substitution unfolded, and a substitution the shell quoted INERT
     (inside single quotes, or escaped) is never folded: it is literal text.
-    ``None`` when the substitution nesting is deeper than ``_FOLD_DEPTH_CAP``
-    -- a pathologically deep body the caller fails closed on rather than
-    searching a partially folded text bash would reduce further.
+    ``None`` when the nesting is deeper than ``_FOLD_DEPTH_CAP``, or the quote
+    mask cannot prove a span -- a pathologically deep or unparseable body the
+    caller fails closed on rather than searching a partially folded text.
     """
     ends: dict[int, int] = {}
     mask = _quote_mask(body, ends=ends)
-    if _subst_nesting_depth(ends) > _FOLD_DEPTH_CAP:
-        return None  # too deep to fold within a linear budget: fail closed
+    if _MASK_UNPROVEN in ends or _subst_nesting_depth(ends) > _FOLD_DEPTH_CAP:
+        return None  # a span the mask could not prove, or too deep: fail closed
 
     def fold(match: "re.Match[str]") -> str:
         if mask[match.start()] in ("'", "\\"):
@@ -958,13 +958,26 @@ def _fold_const_output_substitutions(body: str, resolve: "Callable[[str], str]")
             return match.group(0)
         return out
 
+    def fold_pass(text: str) -> str:
+        # Fold only a real span: a match starts at an opener the quote mask recorded
+        # and ends at that span's end, so a closing backtick never pairs with the next.
+        out: list[str] = []
+        last = 0
+        for start in sorted(ends):
+            match = None if start < last else _CONST_OUTPUT_SUBST_RE.match(text, start)
+            if match is not None and match.end() == ends[start]:
+                out += [text[last:start], fold(match)]
+                last = match.end()
+        return "".join(out) + text[last:]
+
     # A fold splices no opener back in, so each changing pass peels a level.
     for _ in range(_FOLD_DEPTH_CAP + 1):
-        folded = _CONST_OUTPUT_SUBST_RE.sub(fold, body)
+        folded = fold_pass(body)
         if folded == body:
             return body
         body = folded
-        mask = _quote_mask(body)
+        ends.clear()
+        mask = _quote_mask(body, ends=ends)
     return None  # not converged within the pass budget: fail closed
 
 
@@ -980,6 +993,7 @@ _SAFE_FOLD_LITERAL_RE = re.compile(r"[\w.:/@=+-]+")
 
 #: Substitution nesting the quote mask follows; deeper text reads as unquoted.
 _QUOTE_MASK_NEST_CAP = 64
+_MASK_UNPROVEN = -1  # ends key: mask could not prove a span; the fold fails closed
 _ASSIGN_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 _WORD_START_CHARS = " \t\n;&|()"
 #: The subset of word breaks that start a new SIMPLE COMMAND (so the next word is
@@ -1020,7 +1034,8 @@ def _quote_mask(
     *ends*, when given, records each opener's offset and its span's end; and an
     unquoted comment (:func:`_opens_comment`) is inert ``'`` text through its
     newline.  An unproven span, or nesting past ``_QUOTE_MASK_NEST_CAP``, leaves
-    the rest unquoted: the reading under which more braces expand."""
+    the rest unquoted: the reading under which more braces expand, and records
+    ``_MASK_UNPROVEN`` in *ends* so the fold can fail closed on it."""
     n = len(text)
     mask: list[str] = ["."] * n
     pos, rstate, ransi = 0, 0, False
@@ -1043,6 +1058,8 @@ def _quote_mask(
             ):
                 start, stop, send, proven = _subst_span(text, off)
                 if not proven or nest >= _QUOTE_MASK_NEST_CAP:
+                    if ends is not None:
+                        ends[_MASK_UNPROVEN] = base + off
                     for k in range(off, n):
                         mask[k] = "."
                     advanced = False
@@ -1195,6 +1212,9 @@ def _synthesis_words(body: str, resolve: "Callable[[str], str]", limit: int) -> 
         tokens = _self_command_tokens(masked)
         for word in _split_glued_operators(tokens):
             size = len(word) + sum(sizes.get(ref, 0) for ref in _VAR_REF_RE.findall(word))
+            # ``${!y}`` builds the variable ``y`` NAMES, which no length here records:
+            # each is sized as the largest tracked value, never under-counted.
+            size += len(_INDIRECT_VAR_USE_RE.findall(word)) * max(sizes.values(), default=0)
             total += size
             if total > limit:
                 return None

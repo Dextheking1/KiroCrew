@@ -474,8 +474,11 @@ def _url_payload_command(n: int) -> str:
 #: moved. The runtime-synthesis search sits in its own module, ``kill_synthesis``,
 #: behind a one-call wrapper in ``argv_floor_self``; the brace expander it is handed
 #: (with this change's cap and budget parameters) moves from ``argv_floor_ssh`` down to
-#: ``argv_floor_self``, so no owner imports one listed after it.
-_PACKAGE_LINE_BUDGET = 32_629
+#: ``argv_floor_self``, so no owner imports one listed after it. A fold pass folds
+#: only a real substitution span the quote mask recorded, so a closing backtick never
+#: pairs with the next opener, and the fold fails closed when the quote mask cannot
+#: prove a span (an unbalanced opener, or nesting past its cap).
+_PACKAGE_LINE_BUDGET = 32_647
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
