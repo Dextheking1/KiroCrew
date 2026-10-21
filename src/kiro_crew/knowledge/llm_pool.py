@@ -526,12 +526,26 @@ class AcpWorker(Worker):
         ``ensure_ready`` spawns the harness, and the result is returned so the
         post-start confirmation can require both reads to agree when no projection
         was prepared. Any other backend returns False.
+
+        The model pin follows the same split. A ``Routing.AGENT_SPEC`` harness reads
+        the spec's own ``model`` (the installer writes ``knowledge_agent_model()``
+        into it), so nothing is passed and its construction is unchanged. Every
+        other harness reads no spec of Crew's, so the same pin is handed to the
+        client, whose startup model application scopes it to this backend (a model
+        another harness serves falls back to the backend default rather than being
+        sent).
         """
+        model: str | None = None
+        if routing_for(acp_backend) is not Routing.AGENT_SPEC:
+            from kiro_crew.agent_materialization.service_agents import knowledge_agent_model
+
+            model = await asyncio.to_thread(knowledge_agent_model)
         client = AcpClient(
             agent=AGENT_NAME,
             sandbox_mode=sandbox_mode,
             acp_backend=acp_backend,
             audit_source="subagent",
+            model=model,
         )
         self._client = client
         self._effective_effort = None
