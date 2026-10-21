@@ -33,6 +33,7 @@ from kiro_crew.apps.backend_runtime.tracking import (
     _lock,
     _processes,
     _restart_attempts,
+    app_backend_lifecycle_flock,
 )
 from kiro_crew.apps.manager import _app_activation_denied, _read_installed, get_app_manifest
 from kiro_crew.platform.context import PlatformCompositionError
@@ -285,7 +286,15 @@ def _restart_exited_backend(ap: AppProcess, returncode: int | None) -> bool:
                 elif proc is None or proc.poll() is None:
                     return False
                 else:
-                    _processes.pop(app_name, None)
+                    # The dead record is swapped for a restart-owned STARTING
+                    # reservation rather than popped. Until the drain below is done,
+                    # a concurrent start sees a spawn in flight and waits on it; an
+                    # absent record would read as "free to start", and a fixed-port
+                    # start could adopt the server the drain is about to end.
+                    reservation = AppProcess(
+                        app_name=app_name, starting=True, started_at=time.time()
+                    )
+                    _processes[app_name] = reservation
                     _allocated_ports.pop(app_name, None)
                     _restart_attempts[app_name] = previous_attempts + 1
                     lifecycle_snapshot = _lifecycle_generation.get(app_name, (0, _LIFECYCLE_START))
@@ -296,27 +305,43 @@ def _restart_exited_backend(ap: AppProcess, returncode: int | None) -> bool:
                 continue
             return settlement == "return_true"
 
-        _forget_app_pid_if(app_name, ap.pid, ap.pid_start_time)
-        # The dead root's tree goes before its replacement is spawned: a launcher
-        # whose forked server outlived it would otherwise keep the app's files (and
-        # possibly its port) while a second server comes up beside it. Same drain
-        # as the stop path; a root that took its whole tree with it costs one probe.
-        if proc is not None and (
-            _drain_exited_root_tree(app_name, proc, ap.pid_start_time, ap.spawn_instance) is False
-        ):
-            logger.warning(
-                "App %s: a descendant of the exited backend root (pid %d) survived the "
-                "drain; the replacement is spawned beside it",
-                app_name,
-                proc.pid,
-            )
-        if ap.log_fh:
-            try:
-                ap.log_fh.close()
-            except OSError:
-                pass
+        try:
+            # Held across forget + drain: a waiter whose window runs out probes this
+            # flock, and a held flock tells it the reservation's owner is still
+            # working, so the reservation is not cleared mid-drain. Released before
+            # the spawn, which takes the same (non-re-entrant) flock itself.
+            with app_backend_lifecycle_flock(app_name):
+                _forget_app_pid_if(app_name, ap.pid, ap.pid_start_time)
+                # The dead root's tree goes before its replacement is spawned: a
+                # launcher whose forked server outlived it would otherwise keep the
+                # app's files (and possibly its port) while a second server comes up
+                # beside it. Same drain as the stop path; a root that took its whole
+                # tree with it costs one probe.
+                if proc is not None and (
+                    _drain_exited_root_tree(app_name, proc, ap.pid_start_time, ap.spawn_instance)
+                    is False
+                ):
+                    logger.warning(
+                        "App %s: a descendant of the exited backend root (pid %d) survived "
+                        "the drain; the replacement is spawned beside it",
+                        app_name,
+                        proc.pid,
+                    )
+                if ap.log_fh:
+                    try:
+                        ap.log_fh.close()
+                    except OSError:
+                        pass
 
-        verdict = _activation_denied(app_name, "restart")
+            verdict = _activation_denied(app_name, "restart")
+        finally:
+            # Every path past this point (denial, transient retry, spawn) expects the
+            # reservation gone: the spawn would await it, and the transient path's
+            # settle restores ``ap`` only into an empty slot. Identity-checked so a
+            # stop or a successor that replaced it is left alone.
+            with _lock:
+                if _processes.get(app_name) is reservation:
+                    _processes.pop(app_name, None)
         if verdict.denied and not verdict.transient:
             logger.warning(
                 "App %s backend not restarted: blocked by activation policy: %s",

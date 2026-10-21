@@ -599,8 +599,26 @@ class TestTheSurfaceSurvivesTheSplit:
         facade_sites = constructions(backend)
         started = [s for s in facade_sites if any(k.arg == "gateway_started" for k in s.keywords)]
         assert len(started) == 2
+        # The one exception is the restart's STARTING reservation, which holds the slot
+        # while the dead root's tree drains. It names no process and carries no
+        # provenance, so it stays outside those ratchets by construction: exactly
+        # app_name, starting=True and started_at, and nothing else.
+        placeholder_keywords = {"app_name", "starting", "started_at"}
+
+        def is_bare_reservation(site: ast.Call) -> bool:
+            if site.args or {k.arg for k in site.keywords} != placeholder_keywords:
+                return False
+            starting = next(k.value for k in site.keywords if k.arg == "starting")
+            return isinstance(starting, ast.Constant) and starting.value is True
+
         for part in PARTS:
-            assert constructions(part) == [], f"{part.__name__} constructs an AppProcess"
+            sites = constructions(part)
+            if part.__name__ == "kiro_crew.apps.backend_runtime.restart":
+                assert len(sites) == 1 and is_bare_reservation(
+                    sites[0]
+                ), f"{part.__name__} may construct only its bare STARTING reservation"
+                continue
+            assert sites == [], f"{part.__name__} constructs an AppProcess"
 
     def test_the_text_the_guards_forbid_is_in_no_backend_module(self) -> None:
         for module in (backend, *PARTS):
