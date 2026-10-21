@@ -41,7 +41,6 @@ import sys as _sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING, NamedTuple
 
-from kiro_crew.credential_patterns import AWS_KEY_ID
 from kiro_crew.security.redaction_switch import bare_secret_pass_enabled, credential_pass_bypassed
 
 from .redaction_entropy import (  # noqa: F401
@@ -505,18 +504,80 @@ def _token_name_letter(letter: str) -> tuple[str, str]:
     return complete, partial
 
 
-_TOKEN_PARAM_NAME_SPELLINGS = tuple(_token_name_letter(c) for c in "token")
-_TOKEN_PARAM_NAME_RE = "".join(c for c, _ in _TOKEN_PARAM_NAME_SPELLINGS)
-_TOKEN_PARAM_NAME_PREFIX_RE = (
-    "(?:"
-    + "|".join(
-        "".join(c for c, _ in _TOKEN_PARAM_NAME_SPELLINGS[:k]) + _TOKEN_PARAM_NAME_SPELLINGS[k][1]
-        for k in range(len(_TOKEN_PARAM_NAME_SPELLINGS))
-    )
-    + ")"
-)
+#: Parameter names whose value signs a URL. A presigned or signed link (S3 SigV4
+#: `X-Amz-Signature`, SigV2 and CloudFront `Signature`) works by itself until it
+#: expires, so it is Bearer link tier keyed on the signing part: the signature
+#: value goes, while the key ID beside it in `X-Amz-Credential` stays, because a
+#: key ID is Identifier tier.
+_SIGNATURE_PARAM_NAMES = ("X-Amz-Signature", "Signature")
+
+#: The session token a temporary-credential link carries. Secret tier.
+_SESSION_TOKEN_PARAM_NAMES = ("X-Amz-Security-Token",)
+
+#: Every parameter name pass 4 removes the value of.
+_TOKEN_PARAM_NAMES = ("token", *_SIGNATURE_PARAM_NAMES, *_SESSION_TOKEN_PARAM_NAMES)
+
+
+def _name_trie(names: tuple[str, ...]) -> dict:
+    """*names* as a letter trie, case folded the way the `(?ai:...)` wrapper folds."""
+    trie: dict = {}
+    for name in names:
+        node = trie
+        for letter in name.lower():
+            node = node.setdefault(letter, {})
+        node[""] = {}
+    return trie
+
+
+def _trie_names_re(node: dict) -> str:
+    """One regex for every complete name in *node*, sharing common prefixes."""
+    branches = [
+        "" if letter == "" else _token_name_letter(letter)[0] + _trie_names_re(child)
+        for letter, child in sorted(node.items())
+    ]
+    return branches[0] if len(branches) == 1 else "(?:" + "|".join(branches) + ")"
+
+
+def _trie_prefix_re(node: dict) -> str:
+    """One regex for every non-empty end-of-chunk prefix of a name in *node*.
+
+    A prefix is complete letters then one partial letter, as
+    `_token_name_letter` defines them. A partial letter includes its complete
+    spellings, so a whole name is a prefix too. Built on the trie, the regex
+    grows with the letters, not with their square.
+    """
+    branches = []
+    for letter, child in sorted(node.items()):
+        if letter == "":
+            continue
+        complete, partial = _token_name_letter(letter)
+        deeper = [b for b in (_trie_prefix_re(child),) if b]
+        branches.append(partial if not deeper else f"(?:{partial}|{complete}{deeper[0]})")
+    if not branches:
+        return ""
+    return branches[0] if len(branches) == 1 else "(?:" + "|".join(branches) + ")"
+
+
+_TOKEN_PARAM_NAME_RE = _trie_names_re(_name_trie(_TOKEN_PARAM_NAMES))
+_TOKEN_PARAM_NAME_PREFIX_RE = _trie_prefix_re(_name_trie(_TOKEN_PARAM_NAMES))
 _TOKEN_PARAM_RE = re.compile(
     rf"{_TOKEN_PARAM_SEP_RE}(?ai:{_TOKEN_PARAM_NAME_RE}){_TOKEN_PARAM_EQ_RE}(?!\$\{{)({_TOKEN_PARAM_VALUE_CLASS}+)"
+)
+
+
+def _param_name_re(names: tuple[str, ...]) -> re.Pattern[str]:
+    """A pass-4 match whose name is one of *names*, to name the rule of a match."""
+    return re.compile(
+        rf"{_TOKEN_PARAM_SEP_RE}(?ai:{_trie_names_re(_name_trie(names))})"
+        rf"{_TOKEN_PARAM_EQ_RE}{_TOKEN_PARAM_VALUE_CLASS}+"
+    )
+
+
+#: Each non-``token`` pass-4 name with its rule id, tried at a `_TOKEN_PARAM_RE`
+#: match's own span. A match none of them names is ``token_parameter``.
+_TOKEN_PARAM_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_param_name_re(_SIGNATURE_PARAM_NAMES), "request_signature"),
+    (_param_name_re(_SESSION_TOKEN_PARAM_NAMES), "aws_session_token"),
 )
 
 # The in-progress form of the same anchor, for `StreamRedactor.feed`'s
@@ -831,14 +892,12 @@ _AWS_LABEL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         "aws_secret_access_key",
     ),
     (re.compile(r"(?:SessionToken|aws_session_token)[\"']?\s*[:=]\s*[\"']?"), "aws_session_token"),
-    (re.compile(r"(?:AccessKeyId|aws_access_key_id)[\"']?\s*[:=]\s*[\"']?"), "aws_access_key_id"),
 )
 
 #: Unlabelled pass-1 branches, in the alternation's order, each with the rule
 #: id a record names. The first whose pattern fully matches the redacted span
 #: wins; a span none of them matches is ``credential_pattern``.
 _PASS1_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(AWS_KEY_ID), "aws_access_key_id"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"), "private_key"),
     (re.compile(r"xox[bpas]-[\s\S]*"), "slack_token"),
     (re.compile(r"[0-9]{6,}:[A-Za-z0-9_-]{30,}"), "telegram_bot_token"),
@@ -858,6 +917,7 @@ _PASS1_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"GOCSPX-[\s\S]*"), "google_oauth_secret"),
     (re.compile(r"[a-z+]+://[^\s:/@]*:[^\s/]+@"), "url_userinfo"),
     (re.compile(r"eyJ[\s\S]*"), "jwt"),
+    (re.compile(r"[0-9a-fA-F]{64}"), "request_signature"),
 )
 
 
@@ -1163,9 +1223,17 @@ def _credential_redaction_plan(
                 if exempt_url is not None:
                     exempt_scan.accept(exempt_url)
                     continue
+        rule = next(
+            (
+                (name, "")
+                for pattern, name in _TOKEN_PARAM_RULES
+                if pattern.fullmatch(text, m.start(), m.end())
+            ),
+            ("token_parameter", ""),
+        )
         for start, end in gaps:
             pass4.append((start, end, _REDACTED_CREDENTIAL_TAG))
-            rules[start] = ("token_parameter", "")
+            rules[start] = rule
         warnings.append(f"Redacted token parameter value ({value_end - value_start} chars)")
 
     return sorted(taken + pass4), warnings, rules

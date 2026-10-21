@@ -619,14 +619,14 @@ def _credential_bearing_lines() -> list[int]:
     - ``security.get_credential_patterns()`` — the core accessor, which exists specifically so
       a downstream scan cannot be silently turned into a no-op by a rename, and which means a
       pattern added for any other egress site starts protecting this one too. It carries the
-      AKIA/ASIA shapes.
+      vendor-prefix and labelled AWS secret shapes.
     - ``secrets.redact_tokens`` — this app's own detector, which knows the PROVIDER credential
       shapes the core has no reason to: a `Bearer` header, a prefixed Datadog application key
       (`ddapp_…`), a PagerDuty token.
 
     Review found the omission and was right; measured before fixing, the gap runs in BOTH
     directions — the core patterns miss `ddapp_…` while `redact_tokens` misses
-    `AKIAIOSFODNN7EXAMPLE`. Either detector alone therefore lets a real credential through, so
+    shapes only the core knows. Either detector alone therefore lets a real credential through, so
     a line is credential-bearing if EITHER flags it. A legacy row (written by an older build,
     or by some path other than `POST /ledger`) holding a provider token would otherwise have
     been committed to the team's shared remote.

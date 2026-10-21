@@ -29,30 +29,24 @@ bootstrap path. Exporting plain strings keeps this module's import cost at zero
 and makes it impossible for a future edit here to drag a dependency into that
 path. ``test_credential_patterns.py`` pins the import-free shape.
 
-The two AWS spellings deliberately DIVERGE
-------------------------------------------
-The redaction floor matches two prefixes the scrubber does not. Over-matching is
-the fail-closed direction for redaction: a false positive costs one masked log
-line, while a miss writes a live key to disk. The scrubber's narrower spelling is
-load-bearing in the other direction -- it gates request-blocking decisions and a
-cheap literal pre-filter whose anchors must stay a superset of every branch (see
-``_CREDENTIAL_PATTERNS`` in ``security.py``), so widening it is a security
-behaviour change and not a refactor.
+The two AWS spellings are DISJOINT
+----------------------------------
+``AWS_KEY_ID`` (``AKIA`` / ``ASIA``) is an Identifier: it names a key and cannot
+sign a request, so no redactor removes it and no gate blocks on it. It stays here
+as a structural anchor, because the presigned-URL validators recognise a valid
+``X-Amz-Credential`` by it.
 
-That asymmetry is preserved and made explicit here: ``AWS_KEY_ID_REDACTION`` is
-BUILT from the same prefix and body fragments as ``AWS_KEY_ID`` plus named extra
-prefixes. The superset relation now holds by construction, so no test has to
-compare two hand-written strings to discover whether it still does.
+``AWS_KEY_ID_REDACTION`` is what the log floor still removes: the ``ABIA`` and
+``ACCA`` ids, whose tier is not yet confirmed, so they keep the fail-closed
+default. Both are built from the same body fragment.
 """
 
-#: AWS access key-ID prefixes both consumers match: long-term (``AKIA``) and
-#: temporary/STS (``ASIA``) ids.
+#: AWS access key-ID prefixes: long-term (``AKIA``) and temporary/STS (``ASIA``)
+#: ids. Identifier tier: never redacted.
 AWS_KEY_ID_PREFIXES = "AKIA|ASIA"
 
-#: Prefixes matched by the REDACTION floor only -- ``ABIA`` (bearer tokens) and
-#: ``ACCA`` (context-specific credentials). Kept out of ``AWS_KEY_ID`` because
-#: adding them to the scrubber widens what a security surface blocks and needs
-#: matching pre-filter anchors; see the module docstring.
+#: Prefixes the log floor still redacts -- ``ABIA`` (bearer tokens) and ``ACCA``
+#: (context-specific credentials) -- until their tier is confirmed.
 AWS_KEY_ID_REDACTION_ONLY_PREFIXES = "ABIA|ACCA"
 
 #: The id body: exactly 16 uppercase alphanumerics after the 4-letter prefix.
@@ -60,19 +54,17 @@ AWS_KEY_ID_REDACTION_ONLY_PREFIXES = "ABIA|ACCA"
 #: half of a leaked AWS credential pair.
 AWS_KEY_ID_BODY = "[A-Z0-9]{16}"
 
-#: AWS access key ID as the credential scrubber matches it.
+#: AWS access key ID (``AKIA`` / ``ASIA``): a structural anchor, never a rule.
 AWS_KEY_ID = f"(?:{AWS_KEY_ID_PREFIXES}){AWS_KEY_ID_BODY}"
 
-#: AWS access key ID as the log-redaction floor matches it: a strict superset of
-#: :data:`AWS_KEY_ID`, by construction.
+#: The AWS key ids the log floor still redacts (``ABIA`` / ``ACCA``). Disjoint
+#: from :data:`AWS_KEY_ID` by construction.
 #:
-#: No word-boundary assertions here or in :data:`AWS_KEY_ID`: a key rendered
-#: adjacent to word characters (``aws_AKIA...``, ``key=AKIA...x``) has no ``\b``
-#: between ``_`` and ``A`` and would slip past a bounded pattern. Over-matching
-#: inside a longer token is the fail-closed direction for a redaction floor.
-AWS_KEY_ID_REDACTION = (
-    f"(?:{AWS_KEY_ID_PREFIXES}|{AWS_KEY_ID_REDACTION_ONLY_PREFIXES}){AWS_KEY_ID_BODY}"
-)
+#: No word-boundary assertions: an id rendered adjacent to word characters
+#: (``aws_ABIA...``) has no ``\b`` between ``_`` and ``A`` and would slip past a
+#: bounded pattern. Over-matching inside a longer token is the fail-closed
+#: direction for a redaction floor.
+AWS_KEY_ID_REDACTION = f"(?:{AWS_KEY_ID_REDACTION_ONLY_PREFIXES}){AWS_KEY_ID_BODY}"
 
 #: Multi-segment JWT: an ``eyJ`` header plus 2-4 further dot-separated base64url
 #: segments, covering 3-segment JWS AND 4-5-segment JWE (``dir``/ECDH-ES).
@@ -86,6 +78,37 @@ AWS_KEY_ID_REDACTION = (
 #: distinct pattern for a distinct job, not another spelling of this one, and it
 #: stays where it is used.
 JWT_MULTI_SEGMENT = r"eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,4}"
+
+#: The values that make a presigned or signed link work: a SigV4/SigV2 request
+#: signature and the session token a temporary-credential link carries. Bearer
+#: link tier -- the value is removed, the key ID beside it (Identifier tier) is
+#: not. Keyed on the signing label case-insensitively (HTTP/2 lowercases header
+#: names), tolerating a ``=``/``:`` separator or its ``%3D`` percent form, and a
+#: value up to a URL or structural delimiter. The longer ``X-Amz-`` names come
+#: first so the whole label is consumed rather than the bare ``Signature`` tail.
+#: Used by the log floor, the deploy-scan floor and the frontend mirrors, which
+#: never run the core redaction passes; the core pass keys the same values on its
+#: own pass-4 names and a SigV4 header branch.
+URL_SIGNING_VALUE = (
+    r"(?:"
+    # The AWS-specific signing parameters. Their hyphenated names do not occur in
+    # ordinary prose, so a value after them is matched in any position (URL query,
+    # JSON, header), tolerating a quote and whitespace around the separator.
+    r"""(?i:X-Amz-Signature|X-Amz-Security-Token)["']?\s*[:=]\s*["']?[^\s"'&;#<>)\]}]+"""
+    # A bare ``Signature`` is a common English word and a frequent CSS/JS/HTML
+    # identifier (``.signature:hover``, ``const signature =``, ``<p>Signature:
+    # Jane</p>``), so it is matched ONLY in a URL query position -- right after a
+    # ``?`` / ``&`` or their HTML/percent encodings, with no spaces, as a real
+    # query parameter is written.
+    r"""|(?:[?&]|&amp;|%26)(?i:Signature)(?:=|%3[Dd])[^\s"'&;#<>)\]}]+"""
+    # The SigV4 / SigV4A request signature as an ``Authorization`` header writes
+    # it: a hex value right after ``Signature=``. SigV4 is exactly 64 hex; SigV4A
+    # is a longer DER-encoded ECDSA signature, so the run is open-ended above the
+    # 64-hex floor and bounded by the non-hex look-ahead. Prose ``signature =
+    # sign(body)`` never produces a 64-hex run, so this cannot fire on it.
+    r"""|(?i:Signature)(?:=|%3[Dd])[0-9a-fA-F]{64,}(?![0-9A-Za-z])"""
+    r")"
+)
 
 
 #: Vendor and forge API-token spellings for the standalone builder's own scan and
@@ -140,13 +163,16 @@ VENDOR_TOKEN_PATTERNS = (
 # * ``secret``      -- authenticates or signs (secret keys, session tokens,
 #                      private keys, vendor API tokens, URI passwords, JWTs).
 # * ``bearer_link`` -- a URL that grants access by itself until it expires
-#                      (``?token=`` links, suspicious outbound URLs).
+#                      (``?token=`` links, presigned and signed links keyed on
+#                      their signature, suspicious outbound URLs).
 # * ``identifier``  -- names or describes and cannot authenticate (key IDs,
 #                      account IDs, ARNs, request IDs, digests).
 #
-# The tier is METADATA today: no redactor reads it, so what gets redacted is
-# unchanged. An ``identifier`` rule is still redacted until its behaviour is
-# changed deliberately, in its own reviewed change.
+# An identifier is never redacted and never blocks a request, so no redaction
+# rule carries that tier: the AWS access key ID (``AKIA`` / ``ASIA``) has no rule.
+# ``AWS_KEY_ID`` above stays as a structural anchor for the presigned-URL
+# validators. ``ABIA`` / ``ACCA`` ids stay redacted in the log floor until their
+# tier is confirmed.
 
 TIER_SECRET = "secret"
 TIER_BEARER_LINK = "bearer_link"
@@ -160,7 +186,6 @@ TIERS = (TIER_SECRET, TIER_BEARER_LINK, TIER_IDENTIFIER)
 #: so a new rule cannot ship without a tier.
 RULE_TIERS = {
     # Core redactor, pass 1 (fixed patterns) and its labelled AWS forms.
-    "aws_access_key_id": TIER_IDENTIFIER,
     "aws_secret_access_key": TIER_SECRET,
     "aws_session_token": TIER_SECRET,
     "private_key": TIER_SECRET,
@@ -185,6 +210,7 @@ RULE_TIERS = {
     "encoded_credential": TIER_SECRET,
     "bare_aws_secret": TIER_SECRET,
     "token_parameter": TIER_BEARER_LINK,
+    "request_signature": TIER_BEARER_LINK,
     # Outbound-URL pass: each rule removes or blocks a whole URL.
     "exfil_decode_saturated": TIER_BEARER_LINK,
     "exfil_encoded_credential": TIER_BEARER_LINK,

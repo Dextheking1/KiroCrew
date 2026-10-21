@@ -64,7 +64,7 @@ class TestSecretRedactionFilter:
     def test_empty_patterns_builtin_coverage(self) -> None:
         """With no secret patterns, the built-in pattern set is applied.
 
-        Bearer tokens, AWS access key IDs, and standalone JWTs are redacted;
+        Bearer tokens, unconfirmed AWS key ids, and standalone JWTs are redacted;
         other opaque strings pass through (redaction is pattern-based).
         """
         filt = SecretRedactionFilter([])
@@ -75,22 +75,23 @@ class TestSecretRedactionFilter:
         # Bearer token is always redacted
         assert "eyJhbGciOiJSUzI1NiJ9" not in result
 
-    def test_aws_key_id_redacted(self) -> None:
-        """An AWS access key ID is redacted anywhere in the text."""
+    def test_aws_access_key_id_stays_visible(self) -> None:
+        """An ``AKIA`` / ``ASIA`` access key ID is Identifier tier: a log keeps it."""
         filt = SecretRedactionFilter([])
-        result = filt.redact("creds: AKIAIOSFODNN7EXAMPLE for deploy")
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
-        assert "[REDACTED]" in result
+        msg = "creds: AKIA" "IOSFODNN7EXAMPLE and ASIA" "IOSFODNN7EXAMPLE for deploy"
+        assert filt.redact(msg) == msg
 
-    def test_aws_key_id_redacted_when_word_adjacent(self) -> None:
-        """A key abutting word characters (``aws_AKIA…``) is still redacted.
+    def test_unconfirmed_key_id_redacted_when_word_adjacent(self) -> None:
+        """An ``ABIA`` / ``ACCA`` id abutting word characters is still redacted.
 
         ``\\b`` never fires between ``_`` and ``A``, so boundary-anchored
-        patterns miss keys embedded in identifiers or rendered templates.
+        patterns miss ids embedded in identifiers or rendered templates.
         """
         filt = SecretRedactionFilter([])
-        result = filt.redact("aws_AKIAIOSFODNN7EXAMPLE and key=AKIAIOSFODNN7EXAMPLEsuffix")
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        body = "IOSFODNN7EXAMPLE"
+        result = filt.redact(f"aws_ABIA{body} and key=ACCA{body}suffix")
+        assert f"ABIA{body}" not in result and f"ACCA{body}" not in result
+        assert "[REDACTED]" in result
 
     def test_bare_jwt_redacted_outside_bearer_scheme(self) -> None:
         """A standalone JWT (no ``Bearer `` prefix) is redacted."""
@@ -330,11 +331,11 @@ class TestInstallLogRedaction:
         # args must be destroyed so no handler can export the credential.
         assert record.args is None
 
-    def test_lossy_format_aws_credential_in_args_is_destroyed(self) -> None:
-        """An AWS key ID past a ``%.100s`` truncation point cannot survive in args.
+    def test_lossy_format_token_in_args_is_destroyed(self) -> None:
+        """A JWT past a ``%.100s`` truncation point cannot survive in args.
 
         The full-arg scan covers every built-in pattern — the rendered prefix
-        scans clean, but the arg's own string form carries the key ID, so the
+        scans clean, but the arg's own string form carries the token, so the
         record is materialized and cleared.
         """
         install_log_redaction([])
@@ -345,7 +346,7 @@ class TestInstallLogRedaction:
             "",
             0,
             "acp output: %.100s",
-            (long_prefix + " AKIAIOSFODNN7EXAMPLE",),
+            (long_prefix + " eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.sig",),
             None,
         )
         assert record.args is None

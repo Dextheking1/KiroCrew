@@ -15,21 +15,24 @@ import logging
 import re
 from dataclasses import dataclass
 
-from kiro_crew.security.redaction import _credential_matches
+from kiro_crew.credential_patterns import AWS_KEY_ID, URL_SIGNING_VALUE
+from kiro_crew.security.redaction import _credential_matches, redact_credentials_with_records
 
 logger = logging.getLogger(__name__)
 
 # Deploy-specific patterns that MUST be covered even if the canonical set evolves.
-# These are a SUPERSET of the canonical set — covers base64-encoded AKIA keys,
-# bare 40-char AWS secret access keys, PEM private key headers, GitHub PATs, and
-# vendor API keys (OpenAI/Stripe). The scan module's pattern set must always
+# These are a SUPERSET of the canonical set — covers bare 40-char AWS secret
+# access keys, PEM private key headers, GitHub PATs, and vendor API keys
+# (OpenAI/Stripe). The scan module's pattern set must always
 # detect everything that redact_credentials can detect, plus deploy-specific extras.
 _DEPLOY_EXTRA = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),             # PEM private key header
     re.compile(r"ghp_[A-Za-z0-9]{36}"),                           # GitHub PAT
     re.compile(r"sk-[A-Za-z0-9]{20,}"),                           # OpenAI/Stripe keys
-    # Base64-encoded AKIA key: the base64 of "AKIA..." starts with QUtJ
-    re.compile(r"QUtJ[A-Za-z0-9+/]{12,}={0,2}"),                 # base64-encoded AKIA
+    # A presigned/signed-link signing value. The key ID is an identifier and ships
+    # as a warning, but the signature and session token make the link WORK, so
+    # publishing one is a hard credential finding.
+    re.compile(URL_SIGNING_VALUE),
 ]
 
 # Bare 40-char base64 match (potential AWS secret access key). Handled separately
@@ -46,11 +49,14 @@ _INTERNAL_HOST_RE = re.compile(r"\b[\w.-]+\.(?:amazon\.com|aws\.dev|a2z\.com|ama
                                re.IGNORECASE)
 _ARN_RE = re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:\d{0,12}:[^\s\"'<>]+")
 _ACCOUNT_ID_RE = re.compile(r"(?<!\d)\d{12}(?!\d)")
+# An AWS access key ID is Identifier tier, like an account id: worth a warning
+# before content goes world-readable, never a hard block.
+_AWS_KEY_ID_RE = re.compile(AWS_KEY_ID)
 
 
 @dataclass
 class Finding:
-    kind: str          # "credential" | "internal-host" | "aws-arn" | "aws-account-id"
+    kind: str          # "credential" | "internal-host" | "aws-arn" | "aws-account-id" | "aws-key-id"
     snippet: str       # short matched text (truncated)
     line: int          # 1-based line number
     severity: str = ""  # "credential" (hard-block) | "info" (overridable)
@@ -112,6 +118,7 @@ def scan_content(text: str) -> list[Finding]:
         return findings
 
     line_offsets = _build_line_index(text)
+    credential_spans: list[tuple[int, int]] = []
 
     def _capped() -> bool:
         return len(findings) >= _MAX_FINDINGS
@@ -120,6 +127,7 @@ def scan_content(text: str) -> list[Finding]:
     for m in _credential_matches(text):
         if _capped():
             break
+        credential_spans.append((m.start(), m.end()))
         findings.append(Finding("credential", _mask_credential(m.group(0)),
                                 _line_of_fast(line_offsets, m.start()), severity="credential"))
 
@@ -129,10 +137,37 @@ def scan_content(text: str) -> list[Finding]:
             for m in pat.finditer(text):
                 if _capped():
                     break
+                credential_spans.append((m.start(), m.end()))
                 findings.append(Finding("credential", _mask_credential(m.group(0)),
                                         _line_of_fast(line_offsets, m.start()), severity="credential"))
             if _capped():
                 break
+
+    # A signing-parameter name can be percent/entity-encoded (`%53ignature=`) to
+    # slip past the literal spellings above. The core redactor's pass 4 folds
+    # every encoding of the name, so reuse its records to flag any signing value
+    # or session token not already covered -- publishing a working signed link is
+    # a hard credential finding, so the key ID beside it does not soften it.
+    if not _capped():
+        _, _, records = redact_credentials_with_records(text)
+        cursor = 0
+        for rec in records:
+            if _capped():
+                break
+            if rec.rule not in ("request_signature", "aws_session_token"):
+                continue
+            pos = text.find(rec.value, cursor)
+            if pos < 0:
+                pos = text.find(rec.value)
+            if pos < 0:
+                continue
+            start, end = pos, pos + len(rec.value)
+            cursor = end
+            if any(s < end and start < e for s, e in credential_spans):
+                continue
+            credential_spans.append((start, end))
+            findings.append(Finding("credential", _mask_credential(rec.value),
+                                    _line_of_fast(line_offsets, pos), severity="credential"))
 
     # Bare 40-char base64 match — downgraded to "info" unless the same line
     # contains an AWS secret context indicator (e.g. aws_secret_access_key=...).
@@ -177,6 +212,13 @@ def scan_content(text: str) -> list[Finding]:
             ln = _line_of_fast(line_offsets, m.start())
             if ln not in arn_lines:
                 findings.append(Finding("aws-account-id", _snip(m.group(0)), ln, severity="info"))
+
+    if not _capped():
+        for m in _AWS_KEY_ID_RE.finditer(text):
+            if _capped():
+                break
+            findings.append(Finding("aws-key-id", _snip(m.group(0)),
+                                    _line_of_fast(line_offsets, m.start()), severity="info"))
 
     truncated = _capped()
     findings.sort(key=lambda f: (f.line, f.kind))

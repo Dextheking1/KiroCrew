@@ -3,11 +3,24 @@
 import { i18nT } from '../i18n/t'
 
 // ── Credential patterns (matches redact_credentials in security.py) ──
+// No AWS access key ID (`AKIA` / `ASIA`) pattern, bare or labelled: it is
+// Identifier tier and stays visible, as in the backend. But a presigned/signed
+// link's signing values (the SigV4/SigV2 signature and the session token) make
+// the link WORK on their own, so those are removed -- mirrors the backend's
+// `URL_SIGNING_VALUE`.
 const CRED_PATTERNS: RegExp[] = [
-  /(?:AKIA|ASIA)[A-Z0-9]{16}/g,
   /(?:SecretAccessKey|aws_secret_access_key)\s*[:=]\s*\S+/gi,
   /(?:SessionToken|aws_session_token)\s*[:=]\s*\S+/gi,
-  /(?:AccessKeyId|aws_access_key_id)\s*[:=]\s*\S+/gi,
+  // Signing values in three branches, mirroring the backend's `URL_SIGNING_VALUE`.
+  // The AWS-specific names (`X-Amz-Signature`, `X-Amz-Security-Token`) do not occur
+  // in prose, so their value is taken in any position. A bare `Signature` is an
+  // ordinary English word and a common identifier (`signature: bytes`,
+  // `signature = sign(body)`), so it is taken only as a URL query parameter — right
+  // after `?`/`&` or their encodings — or as a 64-hex SigV4 value, which prose does
+  // not produce. This keeps displayed script source and diagnostics intact.
+  /(?:X-Amz-Signature|X-Amz-Security-Token)["']?\s*[:=]\s*["']?[^\s"'&;#<>)\]}]+/gi,
+  /(?:[?&]|&amp;|%26)Signature(?:=|%3[Dd])[^\s"'&;#<>)\]}]+/gi,
+  /Signature(?:=|%3[Dd])[0-9a-fA-F]{64,}(?![0-9A-Za-z])/gi,
   /BEGIN\s(?:RSA|DSA|EC|OPENSSH)\sPRIVATE\sKEY/g,
   /xox[bpas]-[0-9a-zA-Z-]{10,}/g,
   // JWS (3 segments) and compact JWE (5 segments). Post-header segments use `*`,
@@ -164,8 +177,7 @@ const EXFIL_PERCENT_RE = /%[0-9A-Fa-f]{2}(?:%[0-9A-Fa-f]{2}){20,}/i
 // Hard credential markers. Mirrors the backend's _HARD_CREDENTIAL_RE.
 const EXFIL_CREDENTIAL_RE = new RegExp(
   '(?:' +
-    '(?:AKIA|ASIA)[A-Z0-9]{16}' +                    // AWS access key ID
-    '|(?:ssh-rsa|ssh-ed25519)[\\s+%]' +               // SSH public key
+    '(?:ssh-rsa|ssh-ed25519)[\\s+%]' +                // SSH public key
     '|BEGIN[\\s+%](?:RSA|DSA|EC|OPENSSH)[\\s+%]PRIVATE[\\s+%]KEY' + // private key header
     '|xox[bpas]-[0-9a-zA-Z-]+' +                     // Slack token
   ')',

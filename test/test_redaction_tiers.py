@@ -1,7 +1,7 @@
 """Every redaction rule carries exactly one tier from ``credential_patterns``.
 
-The tier is metadata: these tests pin that the table is complete and well formed,
-and that tagging a rule changes nothing about what is redacted.
+These tests pin that the table is complete and well formed. What each tier does
+to a value is pinned in ``test_redaction_key_id_identifier.py``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from kiro_crew import credential_patterns as cp
-from kiro_crew import security
 from kiro_crew.security import redaction
 
 SECURITY_DIR = Path(redaction.__file__).resolve().parent
@@ -81,7 +80,8 @@ def test_rule_tier_refuses_an_unknown_rule() -> None:
 @pytest.mark.parametrize(
     ("text", "rule", "tier"),
     [
-        ("id AKIAIOSFODNN7EXAMPLE end", "aws_access_key_id", cp.TIER_IDENTIFIER),
+        ("tok glpat-IOSFODNN7EXAMPLE end", "gitlab_token", cp.TIER_SECRET),
+        ("https://h.example/o?Signature=abcdef0123", "request_signature", cp.TIER_BEARER_LINK),
         (
             "aws_secret_access_key=not-a-real-secret-value",
             "aws_secret_access_key",
@@ -95,8 +95,6 @@ def test_recorded_rules_have_the_expected_tier(text: str, rule: str, tier: str) 
     assert [(r.rule, cp.rule_tier(r.rule)) for r in records] == [(rule, tier)]
 
 
-def test_identifier_tier_is_still_redacted() -> None:
-    """Tagging a key ID as an identifier does not change what is redacted yet."""
-    assert cp.rule_tier("aws_access_key_id") == cp.TIER_IDENTIFIER
-    cleaned, _warnings = security.redact_credentials("id AKIAIOSFODNN7EXAMPLE end")
-    assert cleaned == "id [REDACTED: credential] end"
+def test_no_rule_carries_the_identifier_tier() -> None:
+    """An identifier is never redacted, so no redaction rule names one."""
+    assert cp.TIER_IDENTIFIER not in cp.RULE_TIERS.values()

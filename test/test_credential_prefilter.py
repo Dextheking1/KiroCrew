@@ -174,29 +174,28 @@ _LINK_PAYLOAD = "e" * 100  # clears the {96,} floor on the 2-segment link token
 _LINK_SIG = "S" * 43  # token_auth._sign is always exactly 43 base64url chars
 
 BRANCH_SAMPLES: tuple[str, ...] = (
-    "AKIAIOSFODNN7EXAMPLE",  # 0  AWS access key ID
-    f"aws_secret_access_key={AWS_SECRET}",  # 1
-    "aws_session_token=FwoGZXIvYXdzEBYaDNotARealSessionToken",  # 2
-    "AccessKeyId: notarealaccesskeyvalue123",  # 3
-    "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34\n-----END RSA PRIVATE KEY-----",  # 4
-    "xoxb-1234567890-abcdefghijklmnop",  # 5  Slack
-    f"123456789:{_A35}",  # 6  Telegram bot token
-    "M" + "a" * 24 + ".abc123." + "b" * 27,  # 7  Discord bot token
-    "ghp_" + "a" * 36,  # 8  GitHub PAT
-    "github_pat_" + "a" * 40,  # 9
-    "glpat-" + "a" * 20,  # 10
-    "sk_live_" + "a" * 24,  # 11  Stripe
-    "SG.abcdefghijklmnop.abcdefghijklmnop",  # 12  SendGrid
-    "sk-proj-" + "a" * 20,  # 13  OpenAI
-    "sk-ant-" + "a" * 20,  # 14  Anthropic
-    "npm_" + "a" * 30,  # 15
-    "pypi-" + "a" * 20,  # 16
-    "dop_v1_" + "a" * 45,  # 17  DigitalOcean
-    "GOCSPX-" + "a" * 25,  # 18  Google OAuth client secret
-    "postgres://dbuser:s3cr3tpw@db.example.com:5432/app",  # 19  URI userinfo
-    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop",  # 20  JWS
-    f" eyJ{_LINK_PAYLOAD}.{_LINK_SIG}",  # 21  2-segment dashboard link token
-    "Authorization: Bearer abc.def.ghijklmnop",  # 22  HTTP/JSON bearer
+    f"aws_secret_access_key={AWS_SECRET}",  # 0
+    "aws_session_token=FwoGZXIvYXdzEBYaDNotARealSessionToken",  # 1
+    "-----BEGIN RSA PRIVATE" " KEY-----\nMIIBOgIBAAJBAKj34\n-----END RSA PRIVATE" " KEY-----",  # 2
+    "xoxb-1234567890-abcdefghijklmnop",  # 3  Slack
+    f"123456789:{_A35}",  # 4  Telegram bot token
+    "M" + "a" * 24 + ".abc123." + "b" * 27,  # 5  Discord bot token
+    "ghp_" + "a" * 36,  # 6  GitHub PAT
+    "github_pat_" + "a" * 40,  # 7
+    "glpat-" + "a" * 20,  # 8
+    "sk_live_" + "a" * 24,  # 9  Stripe
+    "SG.abcdefghijklmnop.abcdefghijklmnop",  # 10  SendGrid
+    "sk-proj-" + "a" * 20,  # 11  OpenAI
+    "sk-ant-" + "a" * 20,  # 12  Anthropic
+    "npm_" + "a" * 30,  # 13
+    "pypi-" + "a" * 20,  # 14
+    "dop_v1_" + "a" * 45,  # 15  DigitalOcean
+    "GOCSPX-" + "a" * 25,  # 16  Google OAuth client secret
+    "postgres://dbuser:s3cr3tpw@db.example.com:5432/app",  # 17  URI userinfo
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop",  # 18  JWS
+    f" eyJ{_LINK_PAYLOAD}.{_LINK_SIG}",  # 19  2-segment dashboard link token
+    "Authorization: Bearer abc.def.ghijklmnop",  # 20  HTTP/JSON bearer
+    "Signature=" + "0123456789abcdef" * 4,  # 21  SigV4 request signature
 )
 
 # ── Unicode case-folding bypass shapes ──
@@ -204,7 +203,7 @@ BRANCH_SAMPLES: tuple[str, ...] = (
 # `str.lower()` and `re.IGNORECASE` are DIFFERENT case-folding implementations.
 # `re` folds via `sre_compile._equivalences`, which treats U+0131 (dotless i) and
 # U+0130 (I with dot above) as equivalent to `i`/`I`; `str.lower()` leaves U+0131
-# alone and expands U+0130 to two code points. Branch 22 is `(?i:Authorization)`,
+# alone and expands U+0130 to two code points. Branch 20 is `(?i:Authorization)`,
 # so it MATCHES these shapes while a `.lower()`-based anchor MISSES them -- the
 # gate returns False, pass 1 is skipped, and the bearer token is persisted
 # verbatim. A `.lower()` anchor fails these.
@@ -905,7 +904,7 @@ def test_differential_test_detects_a_dropped_pattern_branch(
     """Break redaction by deleting a branch; the oracle comparison must notice."""
     import kiro_crew.security as security
 
-    crippled = _rebuild([b for i, b in enumerate(BRANCHES) if i != 8])  # drop gh[opsur]_
+    crippled = _rebuild([b for i, b in enumerate(BRANCHES) if i != 6])  # drop gh[opsur]_
     monkeypatch.setattr(security, "_CREDENTIAL_PATTERNS", crippled)
 
     sample = "ghp_" + "a" * 36
@@ -1032,7 +1031,7 @@ def test_widening_a_branch_cannot_outgrow_its_anchor() -> None:
     """Per-branch superset property under mutation.
 
     This is the guard the branch-count assertion cannot provide. It fails on the
-    pre-fix implementation via branch 22 (`Authorization: Bearer`), whose
+    pre-fix implementation via branch 20 (`Authorization: Bearer`), whose
     `(?i:…)` matcher accepted homoglyph spellings that the `str.lower()` anchor
     rejected.
     """
@@ -1063,7 +1062,7 @@ def test_case_insensitive_branches_must_be_anchored_by_the_same_engine() -> None
     approximated.
     """
     case_insensitive = [i for i, branch in enumerate(BRANCHES) if "(?i" in branch]
-    assert case_insensitive == [22], (
+    assert case_insensitive == [20], (
         f"case-insensitive branches changed to {case_insensitive}. Every one needs a "
         f"regex anchor using the same engine -- see "
         f"_CREDENTIAL_PREFILTER_AUTHORIZATION_RE and the bypass it fixed."
@@ -1190,8 +1189,13 @@ def _generate_from_sequence(sequence: object) -> list[str]:
                 variants.extend(_generate_from_sequence(alternative))
             variants = variants[:_MAX_GENERATED_VARIANTS]
             out = [s + v for s in out for v in variants][:_MAX_GENERATED_VARIANTS]
-        # Anchors and look-arounds consume nothing, so they contribute no text. A
-        # leading space is prepended by the caller to satisfy left look-behinds.
+        elif name == "assert" and value[0] < 0:
+            # A positive look-behind needs its text BEFORE the match, so it is
+            # written out: `(?<=Signature=)` contributes `Signature=`.
+            variants = _generate_from_sequence(value[1])
+            out = [s + v for s in out for v in variants][:_MAX_GENERATED_VARIANTS]
+        # Other anchors and look-arounds consume nothing, so they contribute no text.
+        # A leading space is prepended by the caller to satisfy left look-behinds.
     return out[:_MAX_GENERATED_VARIANTS]
 
 
@@ -1211,7 +1215,7 @@ def test_a_widened_branch_cannot_outgrow_its_anchor() -> None:
     not), while this one enumerates the branch's alternatives (covering new
     alternatives, which perturbation does not).
 
-    Verified to catch the class it exists for: widening branch 13 to
+    Verified to catch the class it exists for: widening branch 11 to
     `sk-(?:proj|svcacct)-` yields a `sk-svcacct-` variant the anchors reject,
     which the perturbation guard's 13 mutations all miss.
     """

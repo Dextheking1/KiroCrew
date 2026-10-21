@@ -179,6 +179,29 @@ def test_pass1_is_linear_on_credential_dense_text() -> None:
     assert elapsed < 5.0, f"pass 1 took {elapsed:.2f}s -- per-match string rebuild is back"
 
 
+def test_log_floor_presigned_scan_cannot_restart_inside_a_run() -> None:
+    """Complexity guard for the log floor's signing-parameter scan.
+
+    The quadratic shape is the engine restarting a match at every position in a
+    long ``[A-Za-z0-9%._-]`` run and backtracking it to the end. Two structural
+    properties of the name group forbid that, and both are asserted on the
+    pattern's SHAPE rather than on wall-clock time -- a loaded CI runner can pause
+    a worker for seconds between two clock reads, so an absolute time ceiling
+    measures the scheduler, not the matcher: (1) a negative look-behind, so a
+    match cannot START inside a run; (2) a bounded ``{1,N}`` repetition, so the
+    per-position attempt is constant work. The behaviour is pinned alongside: a
+    long credential-free run is returned whole.
+    """
+    from kiro_crew.log_redaction import _PRESIGNED_PARAM_RE, SecretRedactionFilter
+
+    src = _PRESIGNED_PARAM_RE.pattern
+    m = re.match(r"\(\?<!\[A-Za-z0-9%\._-\]\)\(\[A-Za-z0-9%\._-\]\{1,(\d+)\}\)", src)
+    assert m, f"name group must be a left-anchored, bounded class; got {src!r}"
+    assert int(m.group(1)) <= 256, "name bound keeps the per-position attempt constant"
+    line = "X-Amz-Date " + "A" * 64000
+    assert SecretRedactionFilter([]).redact(line) == line
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # sensitive-path verdicts -- zero change (DENY surface)
 # ─────────────────────────────────────────────────────────────────────────────

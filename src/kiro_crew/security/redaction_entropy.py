@@ -29,6 +29,8 @@ import zlib
 from collections import Counter
 from collections.abc import Iterator
 
+from kiro_crew.credential_patterns import URL_SIGNING_VALUE
+
 from .redaction_patterns import (
     _PREFILTER_MIN_LEN,
     _contains_credential_pattern,
@@ -37,6 +39,14 @@ from .redaction_patterns import (
 
 # Base64 alphabet: at least 40 chars of [A-Za-z0-9+/] ending with optional =
 _B64_CHUNK_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+
+# A presigned/signed link's signing value. A base64-encoded SigV2 link decodes to
+# a URL whose ``&Signature=<base64>`` is NOT a pass-1 credential shape (and its
+# base64 signature is not 64 hex), so ``_contains_credential_pattern`` alone would
+# let the decoded link pass as clean. This catches the signing value on the decoded
+# text so the encoded link is redacted; the key ID beside it is Identifier tier and
+# is not restored to the redacted set.
+_URL_SIGNING_RE = re.compile(URL_SIGNING_VALUE)
 
 
 # ── Label-independent bare-secret detection ──
@@ -626,9 +636,14 @@ def _decode_b64_chunk(chunk: str) -> str:
     # exactly the size where that matters -- 48 raw bytes from a 64-char run, and
     # shorter once `errors="ignore"` drops invalid sequences, measured 12-31
     # characters -- so this straddles the crossover instead of sitting above it.
+    # A signing value is not a pass-1 shape, so the prefilter may pass a decoded
+    # signed link that ``_contains_credential_pattern`` would not claim; test it
+    # directly, and before the prefilter short-circuit, so an encoded link cannot
+    # slip through on the prefilter's False.
+    sig = _URL_SIGNING_RE.search(decoded) is not None
     if len(decoded) >= _PREFILTER_MIN_LEN and not _might_contain_credential(decoded):
-        return ""
-    return decoded if _contains_credential_pattern(decoded) else ""
+        return decoded if sig else ""
+    return decoded if (_contains_credential_pattern(decoded) or sig) else ""
 
 
 def _decode_b64_safe(text: str) -> str:
@@ -644,7 +659,7 @@ def _decode_b64_safe(text: str) -> str:
     for m in _B64_CHUNK_RE.finditer(text):
         try:
             decoded = base64.b64decode(m.group(), validate=True).decode("utf-8", errors="ignore")
-            if _contains_credential_pattern(decoded):
+            if _contains_credential_pattern(decoded) or _URL_SIGNING_RE.search(decoded):
                 return decoded
         except Exception:
             continue
