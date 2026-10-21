@@ -556,6 +556,12 @@ pushes whose red jobs included a lint job.
   cancelled, `lint-gate` is SKIPPED, not failed: the lint job is the red check and
   the heavy jobs skip behind `lint-gate` exactly as they skip behind a red
   `await-fast-gate`.
+- **A skipped lint job skips nothing else.** A job-level `if:` with no status
+  function gets GitHub's implicit `success()`, which reads the whole needs chain,
+  so the lint job skipped on a one-surface diff would skip every job behind
+  `lint-gate`. Each of them, `coverage-combine` included, therefore starts its
+  `if:` with `!cancelled() && needs.lint-gate.result == 'success'` (or each need's
+  `success`). `test_fast_gate_barrier.py` pins this.
 - **Coverage Gate names lint.** It fails closed on skipped shards, and now reads
   `backend-lint` and `frontend-lint` first: when either failed or was cancelled it
   fails with "lint did not pass ... Fix 'Backend Lint & Type Check' / 'Frontend Lint
@@ -569,7 +575,8 @@ pushes whose red jobs included a lint job.
 - **Cost.** A push whose heavy jobs would run starts them after the lint jobs
   finish: a median 8.1 minutes later (p90 18.1) for Backend Lint, per the RFC.
   The merge-queue poll budget grew with it (next section).
-- **Revert.** Remove `lint-gate` from the `needs:` lists; the job can stay.
+- **Revert.** Remove `lint-gate` from the `needs:` lists and its clause from the
+  `if:` conditions; the job can stay.
 - **A lint job red for a reason outside the diff** (a runner or network fault
   during `uv pip install`) holds every heavy job until a re-run, as a red Fast Gate
   does.

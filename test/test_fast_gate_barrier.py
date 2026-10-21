@@ -84,6 +84,7 @@ _PUSH_GROUP_EXPR = (
 #: The lint aggregate the heavy jobs wait for (RFC D2, "lint first").
 _LINT_GATE = "lint-gate"
 _BARRIER_PASSED = "needs.await-fast-gate.result == 'success'"
+_LINT_GATE_PASSED = "needs.lint-gate.result == 'success'"
 #: The two jobs the lint gate aggregates.
 _LINT_JOBS = ("backend-lint", "frontend-lint")
 #: Cheap jobs that deliberately do NOT wait for lint: lint-first saves the minutes
@@ -262,9 +263,13 @@ def _assert_push_to_main_reaches_exactly_the_macos_boot_leg(ci: dict) -> None:
             for clause in ("needs.changes.result == 'success'", _BARRIER_PASSED):
                 assert clause in guard, f"{name} can run on push without {clause!r}"
             continue
-        assert (
-            "always()" not in guard and "!cancelled()" not in guard
-        ), f"{name} overrides the skipped dependency with {guard!r} and can run on push"
+        assert "always()" not in guard, f"{name} runs on push past skipped needs: {guard!r}"
+        if "!cancelled()" in guard:
+            # `!cancelled()` drops the implicit skip, so the guard must itself
+            # require a need that the queue-on push skips.
+            assert (
+                _LINT_GATE_PASSED in guard or "needs.changes.result == 'success'" in guard
+            ), f"{name} overrides the skipped dependency with {guard!r} and can run on push"
 
     boot = jobs["e2e-boot-matrix"]
     boot_guard = str(boot["if"])
@@ -1041,19 +1046,34 @@ class TestLintRunsBeforeTheHeavyJobs:
             assert job in ci["jobs"], f"_NOT_BEHIND_LINT names a job that is gone: {job}"
             assert _LINT_GATE not in self._needs(ci, job), job
 
-    def test_the_heavy_jobs_do_not_override_the_skip(self, ci: dict) -> None:
-        # A heavy job carrying `always()` / `!cancelled()` would run on a skipped
-        # gate. Only the jobs that fail closed on skips may, and each is checked.
-        allowed = {
-            _LINT_GATE,
-            "e2e-boot-matrix",
-            "coverage-gate",
-            "frontend-coverage-merge",
-        }
-        for job, spec in ci["jobs"].items():
-            guard = str(spec.get("if", ""))
-            if "always()" in guard or "!cancelled()" in guard:
-                assert job in allowed, f"{job} can run behind a skipped lint gate: {guard!r}"
+    def test_a_skipped_lint_job_does_not_skip_the_jobs_behind_the_gate(self, ci: dict) -> None:
+        # A job-level `if:` with no status function gets GitHub's implicit
+        # `success()`, which reads the WHOLE needs chain. One lint job skips on
+        # every one-surface diff, so a job behind the gate without a status
+        # function would skip even though the gate passed. Each one therefore
+        # carries `!cancelled()` and requires each direct need to have
+        # succeeded; the gate's own `if:` already requires `changes` and
+        # `await-fast-gate`, so naming the gate covers those two.
+        # The two fail-closed reporters run on skipped shards on purpose and
+        # judge each result in their steps.
+        reporters = {"coverage-gate", "frontend-coverage-merge"}
+        behind = [
+            job for job in ci["jobs"] if job not in reporters and self._reaches(ci, job, _LINT_GATE)
+        ]
+        assert "backend-test" in behind and "coverage-combine" in behind
+        for job in behind:
+            guard = " ".join(str(ci["jobs"][job].get("if", "")).split())
+            assert "always()" not in guard, f"{job} runs behind a failed lint job: {guard!r}"
+            assert (
+                "!cancelled()" in guard
+            ), f"{job} has no status function, so a skipped lint job skips it: {guard!r}"
+            covered = {"changes", "await-fast-gate"} if _LINT_GATE_PASSED in guard else set()
+            for need in self._needs(ci, job):
+                if need in covered:
+                    continue
+                assert (
+                    f"needs.{need}.result == 'success'" in guard
+                ), f"{job} can run when {need} did not succeed: {guard!r}"
 
     def test_the_coverage_gate_names_lint_when_lint_is_why_the_shards_are_skipped(
         self, ci: dict
