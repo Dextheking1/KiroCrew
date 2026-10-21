@@ -205,11 +205,20 @@ def test_a_spec_with_its_own_mcp_server_does_not_reach_pi(agents_dir, tmp_path) 
     assert names == [MEMBER_DISPATCH_SERVER, MEMBER_PANEL_SERVER]
 
 
-def test_a_spec_with_no_tools_is_not_enforced_on_pi() -> None:
-    """``"tools": []`` would leave pi's native tools on: wider than saved."""
-    from kiro_crew.agent_sdk.backends import ACP_BACKENDS_HONOR_ZERO_TOOL_BAN
+def test_a_spec_with_no_tools_is_enforced_on_pi() -> None:
+    """``"tools": []`` now refuses pi's native tools too (``test_pi_zero_tool_ban.py``).
 
-    assert ACP_BACKEND_PI not in ACP_BACKENDS_HONOR_ZERO_TOOL_BAN
+    This was the third reason pi stays out of ``ACP_BACKENDS_MEMBER_CAPABILITIES``;
+    it no longer holds, and the other two (no consumed spec recorded, a
+    ``BROKER_ONLY`` handoff) still keep pi out, as pinned below.
+    """
+    from kiro_crew.agent_sdk.backends import (
+        ACP_BACKENDS_HONOR_ZERO_TOOL_BAN,
+        ACP_BACKENDS_MEMBER_CAPABILITIES,
+    )
+
+    assert ACP_BACKEND_PI in ACP_BACKENDS_HONOR_ZERO_TOOL_BAN
+    assert ACP_BACKEND_PI not in ACP_BACKENDS_MEMBER_CAPABILITIES
 
 
 def test_pi_records_no_consumed_spec_so_a_confirmation_could_only_refuse(
