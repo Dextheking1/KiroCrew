@@ -41,6 +41,11 @@ NOT_RULES: dict[str, str] = {
     "kiro_crew.atomic_write": "the owner-view switch writer; never reached from the battery",
     "kiro_crew._facade_mirror": "mirror facade glue: runs at import and on attribute access only",
     "kiro_crew.security.exfil_bash": "the bash egress gate; the battery never calls it",
+    "kiro_crew.security.shell_normalizer_walk": (
+        "quote/escape state machine reused by the IMDS shell-expansion gate "
+        "(_single_quoted_offsets); a lexical helper, not a redaction rule, and not "
+        "reached by the display battery"
+    ),
 }
 
 # Inputs that make every display redactor take its matching path.

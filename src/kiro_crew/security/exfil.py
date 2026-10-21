@@ -32,6 +32,7 @@ import ipaddress
 import logging
 import re
 import socket
+import string
 import sys as _sys
 import time  # noqa: F401  (a test clock installs here and the mirror carries it to exfil_oauth)
 from collections.abc import Iterator
@@ -63,6 +64,7 @@ from .redaction import (
     _text_contains_bare_secret,
     redact_credentials,
 )
+from .shell_normalizer_walk import _single_quoted_offsets
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1311,6 +1313,33 @@ def oauth_rejection_is_endpoint_exemptible(url: str) -> bool:
 # canonicalize_ip converts ALL these to dotted-quad for uniform matching.
 
 
+def _octet_literal_value(part: str) -> "int | None":
+    """Value of ONE literal dotted-quad octet in the OS resolver's bases, or None.
+
+    ``inet_aton`` and ``curl`` read a leading-zero octet as C-style OCTAL (``0251``
+    is 169, not 251) and ``0x`` as hex; ``int(part, 0)`` does not accept the bare
+    ``0NNN`` octal spelling, so it is handled first. Returns None for an empty or
+    non-numeric octet. This is the ONE octet parser -- ``canonicalize_ip`` and the
+    IMDS shell-expansion gate both call it, so a leading-zero or hex octet reads the
+    same way on every path.
+
+    EVERY conversion runs inside the try: a very long digit string trips CPython's
+    integer-string length limit with ValueError, and that must read as "not a
+    numeric octet" (None), never crash the gate -- the same fail-soft the inline
+    parser in ``canonicalize_ip`` had before this was extracted.
+    """
+    try:
+        if len(part) > 1 and part[0] == "0" and part[1:].isdigit():
+            # Octal only when every trailing digit is octal; a stray 8/9 is
+            # decimal, exactly as inet_aton reads it.
+            if all(c in "01234567" for c in part[1:]):
+                return int(part, 8)
+            return int(part)
+        return int(part, 0)  # decimal, or 0x-prefixed hex
+    except (ValueError, OverflowError):
+        return None
+
+
 def canonicalize_ip(s: str) -> str:
     """Convert an IP address in any encoding to dotted-quad (a.b.c.d).
 
@@ -1347,23 +1376,13 @@ def canonicalize_ip(s: str) -> str:
         octets: list[int] = []
         valid = True
         for part in parts:
-            try:
-                # Handle C-style octal (0NNN without 'o' prefix) which Python 3
-                # int(x, 0) doesn't recognize. Must check before int(x, 0).
-                if len(part) > 1 and part[0] == "0" and part[1:].isdigit():
-                    # Could be octal (0251) or just "00" etc.
-                    if all(c in "01234567" for c in part[1:]):
-                        val = int(part, 8)
-                    else:
-                        # Has 8 or 9 -- not valid octal, treat as decimal
-                        val = int(part)
-                else:
-                    # int() with base=0 handles: decimal, 0x hex
-                    val = int(part, 0)
-                octets.append(val)
-            except (ValueError, OverflowError):
+            # The ONE octet parser (reads octal/hex in the resolver's bases); None
+            # is an unparseable octet, so this candidate is not a dotted IP.
+            val = _octet_literal_value(part)
+            if val is None:
                 valid = False
                 break
+            octets.append(val)
 
         if valid:
             if len(octets) == 1:
@@ -1462,6 +1481,189 @@ _IMDS_IP = "169.254.169.254"
 # SSRF gate which also blocks it (CWE-918 dual-stack parity).
 _IMDS_IPV6 = "fd00:ec2::254"
 
+# ── IMDS via shell EXPANSION (CWE-185 / CWE-693) ──
+# The deny view deliberately stops BEFORE shell expansion (parameter ``${X}``,
+# arithmetic ``$((..))``, command ``$(..)``), so a dotted token that splices an
+# expansion into the FINAL octet -- ``169.254.169.25$((2+2))``,
+# ``169.254.169.2${X}54``, ``169.254.169.25$(printf 4)`` -- reaches this gate with
+# that octet UNEXPANDED, and the literal ``169.254.169.254`` the canonicalizer
+# looks for never appears. bash still produces the real bytes at run time.
+#
+# The gate is deliberately NARROW: it fires only when the first three octets are
+# LITERAL and equal ``169.254.169`` (read in the OS resolver's bases, so an octal
+# ``0251`` or hex ``0xA9`` spelling of the fixed octets compares correctly) AND the
+# last octet CONTAINS ANY shell expansion -- ``$(``, ``${``, ``$((``, a ``$VAR``
+# parameter or a backtick span. There is NO per-spelling fit test: once the
+# ``169.254.169`` prefix is literal, an expansion anywhere in the final octet means
+# the shell can form ``.254`` (in decimal, octal ``0376``, hex ``0xfe`` or any
+# zero-padded variant) at run time, so one presence check blocks every spelling at
+# once. This DELIBERATELY over-blocks an expansion-built address that happens to sit
+# elsewhere in ``169.254.169.0/24`` (``169.254.169.12$((1+2))``): no agent command
+# needs to build a ``169.254.169.x`` address out of an expansion, so the over-block
+# costs nothing real while the one check closes the whole alternate-spelling family.
+# Pinning the whole ``169.254.169`` prefix to literals is what keeps ordinary
+# commands out of the gate: a subnet gateway built from variables
+# (``${A}.${B}.${C}.254``), a random link-local assignment
+# (``169.254.$((RANDOM%254+1)).$((RANDOM%254+1))``) and a four-part version string
+# (``${MAJOR}.${MINOR}.${PATCH}.${BUILD}``) all lack the literal prefix and are left
+# alone. A purely LITERAL ``169.254.169.123`` carries no expansion and is left to the
+# canonicalizer path above. Only the UNEXPANDED token is examined and logged -- the
+# deny view's reason for stopping before expansion (host-dependent output, writing
+# the operator's real bytes into the audit trail) is sound and preserved here.
+#
+# "Contains an expansion" is a near-single-character test: the octet holds a ``$``
+# that OPENS an expansion -- one whose next character is a ``(``/``{``/``[`` group, a
+# name or a bash special parameter (see ``_EXPANSION_STARTS``) -- and is not itself
+# inside a single quote. ``$1``, ``$VAR``, ``${..}``, ``$(..)``, ``$((..))`` and
+# ``$[..]`` all count the same, because once the ``169.254.169`` prefix is literal the
+# shell can turn any of them into ``.254``. A bare ``$`` that does NOT open an
+# expansion -- a regex end-anchor (``169.254.169.253$``), a ``$`` before a quote or
+# ``/`` -- is NOT counted, so ``grep '^nameserver 169.254.169.253$'`` is left alone.
+#
+# Two forms are documented RESIDUALS, deliberately NOT counted, because counting them
+# refused common benign commands far more often than it caught an attack:
+#   * a BACKTICK command substitution (``169.254.169.25`printf 4` ``) -- a literal
+#     backtick is overwhelmingly a markdown code span around an address in a commit
+#     message, PR body or issue comment (``git commit -m "...`169.254.169.123`..."``);
+#   * an ANSI-C ``$'..'`` (``169.254.169.25$'\x34'``) -- ANSI-C only opens UNQUOTED,
+#     but a ``$`` abutting a ``'`` is far more often a regex end-anchor whose
+#     single-quoted string is closing, and inside a double-quoted wrapper
+#     (``ssh host "grep '...253$'"``) or a quoted heredoc -- which this scanner cannot
+#     see through -- treating it as ANSI-C refused ordinary DNS/NTP checks.
+# ``_ip_expansion_tokens`` stops an octet at the first qualifying ``$`` (flagging it)
+# and needs no closer/backtick span scanner: the scan is one linear pass with no
+# backtracking and no second grammar.
+# The dotted-quad octets of _IMDS_IP, as ints, for positional comparison.
+_IMDS_OCTETS = tuple(int(o) for o in _IMDS_IP.split("."))
+#: Collapsed-expansion sentinel: a NUL never appears in a real shell command.
+_EXPANSION_SENTINEL = "\x00"
+#: Characters of a dotted IP token (decimal, hex digits, ``x``, the dot); never ``$``.
+_IP_TOKEN_CHARS = frozenset("0123456789abcdefABCDEFxX.")
+
+
+#: Characters that END a shell word, so the scan of an octet carrying an expansion
+#: stops here instead of swallowing the rest of the line. Whitespace, the path
+#: separator and a quote are enough to bound the octet for the denial text; the block
+#: decision needs only that the octet HELD a ``$``/backtick, so where exactly the
+#: run ends never changes the verdict.
+_OCTET_TERMINATORS = frozenset(" \t\n\r/\"'")
+
+#: Characters that can FOLLOW a ``$`` to open a real expansion: a ``(``/``{`` group,
+#: an arithmetic ``[`` (``$[2+2]``), a name (letter/digit/underscore), or one of
+#: bash's special parameters (``$@ $* $# $? $! $- $$``). A ``$`` followed by anything
+#: else -- end of word, a ``/``, a quote -- is a regex end-anchor or a literal dollar,
+#: NOT an expansion. In particular ``'`` is NOT here: an ANSI-C ``$'...'`` only opens
+#: UNQUOTED, but a ``$`` that abuts a ``'`` is far more often a regex end-anchor whose
+#: single-quoted string is closing (``grep '^nameserver 169.254.169.253$'``), and that
+#: same shape inside a double-quoted wrapper (``ssh host "grep '...253$'"``) or a
+#: quoted heredoc -- where ``_iter_shell_chars`` cannot see the quoting -- made the
+#: gate refuse ordinary remote/`-c`/container DNS checks. So ``$'...'`` ANSI-C joins
+#: the backtick as a documented residual rather than over-block the common case.
+_EXPANSION_STARTS = frozenset("({_@*#?$!-[" + string.ascii_letters + string.digits)
+
+
+def _ip_expansion_tokens(command: str) -> "list[tuple[str, str]]":
+    """Maximal ``(original, masked)`` tokens of dotted-IP runs, each octet flagged if
+    it holds a shell expansion.
+
+    A token begins at a dotted-IP character and runs over IP characters. The MOMENT a
+    ``$`` that OPENS an expansion appears (``$1`` / ``$VAR`` / ``${..}`` / ``$(..)`` /
+    ``$((..))`` / ``$[..]``, and not inside a single quote) the current octet is
+    flagged with one sentinel in *masked*; the detection needs only that the octet
+    CONTAINS an expansion, so no bracket matching is done (one linear pass, no second
+    span grammar). A backtick and an ANSI-C ``$'..'`` are NOT treated as expansions
+    (documented residuals -- see the module note). The rest of that octet's run is then consumed
+    into *original* (the unexpanded text for the denial reason) up to a shell-word
+    terminator, WITHOUT adding more characters to *masked*, so an expansion body
+    holding a dot (``$(printf 2.54)``) cannot split the octet or leak extra octets.
+    """
+    # A ``$``/backtick inside a single quote is LITERAL (bash runs no expansion
+    # there), so it never opens an octet expansion -- this is what keeps a
+    # single-quoted regex anchor (``'...253$'``) and a quoted code span
+    # (``'see `169.254.169.123`'``) from being read as one.
+    single_quoted = _single_quoted_offsets(command)
+    tokens: list[tuple[str, str]] = []
+    n = len(command)
+    i = 0
+    while i < n:
+        if command[i] not in _IP_TOKEN_CHARS:
+            i += 1
+            continue
+        start = i
+        masked: list[str] = []
+        in_expansion = False
+        while i < n:
+            c = command[i]
+            if not in_expansion and c in _IP_TOKEN_CHARS:
+                masked.append(c)
+                i += 1
+            elif (
+                c == "$" and i not in single_quoted and command[i + 1 : i + 2] in _EXPANSION_STARTS
+            ):
+                if not in_expansion:
+                    masked.append(_EXPANSION_SENTINEL)  # octet holds an expansion
+                    in_expansion = True
+                i += 1  # the marker and the body stay OUT of masked
+            elif in_expansion and c not in _OCTET_TERMINATORS:
+                i += 1  # expansion body -> original only, never masked
+            else:
+                break
+        tokens.append((command[start:i], "".join(masked)))
+    return tokens
+
+
+def _imds_access_via_expansion(command: str) -> str | None:
+    """Refuse a ``169.254.169.<octet>`` token whose LAST octet holds a shell expansion.
+
+    See the module note above. Each candidate dotted token is split into octets, with
+    an octet that holds a ``$``/backtick flagged by one sentinel. The gate fires only
+    when:
+      * the token has four dotted octets,
+      * the first three are LITERAL and equal ``169.254.169`` (read in the OS
+        resolver's bases via ``_octet_literal_value``, so an octal ``0251`` or hex
+        ``0xA9`` spelling of the fixed octets compares correctly), and
+      * the last octet CONTAINS a ``$`` expansion (``$1``, ``$VAR``, ``${..}``,
+        ``$(..)``, ``$((..))`` or ``$[..]``) that is not single-quoted (a backtick and
+        an ANSI-C ``$'..'`` are documented residuals, not counted).
+    There is no per-spelling fit test: a literal ``169.254.169`` prefix plus any
+    expansion in the final octet is treated as IMDS, which blocks every decimal /
+    octal / hex / zero-padded spelling of ``.254`` with one check and deliberately
+    over-blocks any other expansion-built ``169.254.169.x`` address (no agent command
+    needs to build such an address from an expansion). An expansion in one of the
+    first three octets and an all-expansion version string are NOT IMDS-shaped and
+    are left alone; a purely literal token carries no sentinel and is left to the
+    canonicalizer path. Returns the denial reason -- naming the UNEXPANDED token,
+    never any expanded bytes -- or None.
+
+    Scope: the four-part dotted form ``169.254.169.<octet>`` with an expansion in the
+    final octet, per GHSA-x2m8-5ff9-f479. The 2-/3-part inet_aton short forms are
+    outside this check.
+    """
+    if "$" not in command:
+        return None
+    for original, masked in _ip_expansion_tokens(command):
+        if _EXPANSION_SENTINEL not in masked:
+            continue  # a pure literal IP -- the canonicalizer path above owns it
+        octets = masked.split(".")
+        if len(octets) != 4:
+            continue
+        *prefix_octets, last = octets
+        # The expansion must sit in the LAST octet, and the first three must be
+        # literal: that pins the whole 169.254.169 prefix and keeps ordinary
+        # variable-built addresses (version strings, subnet gateways, link-local
+        # assignments) out of the gate.
+        if any(_EXPANSION_SENTINEL in part for part in prefix_octets):
+            continue
+        if _EXPANSION_SENTINEL not in last:
+            continue
+        if [_octet_literal_value(part) for part in prefix_octets] != list(_IMDS_OCTETS[:3]):
+            continue
+        return (
+            f"Blocked: command accesses IMDS endpoint "
+            f"(169.254.169.254 via shell expansion '{original}')"
+        )
+    return None
+
 
 def _check_imds_access(command: str, *, enabled_ids: "frozenset[str] | None" = None) -> str | None:
     """Detect attempts to access the IMDS endpoint via any encoding.
@@ -1476,10 +1678,12 @@ def _check_imds_access(command: str, *, enabled_ids: "frozenset[str] | None" = N
     """
     if enabled_ids is not None and "credential-exfil-imds-any" not in enabled_ids:
         return None
-    # Quick reject: no IP-like candidate in command
+    # Quick reject: no literal IP candidate. A token whose octets are ALL shell
+    # expansions (``$A.$B.$C.254``) still has no literal candidate, so the
+    # expansion check runs even on this path rather than short-circuiting None.
     candidates = _IP_CANDIDATE_RE.findall(command)
     if not candidates:
-        return None
+        return _imds_access_via_expansion(command)
 
     try:
         imds_v6: ipaddress.IPv6Address | None = ipaddress.ip_address(_IMDS_IPV6)  # type: ignore[assignment]
@@ -1506,7 +1710,8 @@ def _check_imds_access(command: str, *, enabled_ids: "frozenset[str] | None" = N
                     )
             except ValueError:
                 pass
-    return None
+    # No literal encoding matched; a per-octet shell-expansion spelling still can.
+    return _imds_access_via_expansion(command)
 
 
 # This module is the import path of every name the egress layer offers. The URL classifier,

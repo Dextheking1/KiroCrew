@@ -1014,6 +1014,37 @@ def _cut_at_operator(token: str) -> str:
     return "".join(out)
 
 
+def _single_quoted_offsets(text: str) -> "frozenset[int]":
+    """Offsets of *text* that sit INSIDE a CLOSED single quote -- a plain ``'..'`` or
+    an ANSI-C ``$'..'`` -- where bash reads ``$`` as LITERAL, not as an expansion.
+    Reads the one quote/escape state machine (:func:`_iter_shell_chars`); its state
+    ``1`` is single-quoted. The IMDS and ``/dev/tcp`` shell-expansion gates consult
+    this so a ``$`` inside a single-quoted regex (``'^nameserver 169.254.169.253$'``)
+    is not mistaken for a run-time expansion.
+
+    Only a CLOSED single-quote run is masked. A real single-quoted string always
+    closes, so an UNTERMINATED single quote is not a quote the caller should trust --
+    it is an apostrophe in a ``#`` comment or a heredoc body that this machine cannot
+    see as such, and masking it to end-of-text would hide a genuine ``$`` after it
+    (``# it's fine`` then ``curl http://169.254.169.25$((2+2))``). So offsets are held
+    PENDING while the run is open and committed only when it closes; a run still open
+    at end-of-text masks nothing.
+    """
+    inside: set[int] = set()
+    pending: list[int] = []
+    prev_state = 0
+    for step in _iter_shell_chars(text):
+        if step.state == 1:
+            pending.extend(range(step.offset, step.offset + len(step.text)))
+        else:
+            if prev_state == 1:  # this step closed the single-quote run -> commit it
+                inside.update(pending)
+                pending.clear()
+        prev_state = step.state
+    # pending left over == an unterminated single quote -> masks nothing
+    return frozenset(inside)
+
+
 class _ShellWalk(NamedTuple):
     """What one pass of the shell's quote/escape state machine observed."""
 

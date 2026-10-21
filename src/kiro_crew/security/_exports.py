@@ -489,6 +489,7 @@ EXPORTED_NAMES: tuple[str, ...] = (
     "_shell_payload_walk",
     "_shell_quote_walk",
     "_shell_tokens",
+    "_single_quoted_offsets",
     "_slack_manifest_payload_re",
     "_slack_manifest_re_slot",
     "_split_deny_frags",

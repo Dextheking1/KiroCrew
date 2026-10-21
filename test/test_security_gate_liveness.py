@@ -463,7 +463,36 @@ def _url_payload_command(n: int) -> str:
 #: exemption. No pass widened, no threshold moved, and the exfil URL scan is unchanged.
 #: Six more for its ``keep_sri_digests=False`` switch: a streamed segment whose delta
 #: boundary split an SRI value saves main's verdict on the digest, not the notice.
-_PACKAGE_LINE_BUDGET = 32_188
+#:
+#: Raised again, from 32,188, for the shell-expansion bypass gate (GHSA-x2m8-5ff9-f479).
+#: The always-on deny view stops BEFORE shell expansion, so a sensitive endpoint the
+#: shell forms only at run time (``169.254.169.25$((2+2))``, ``/dev/tc$(printf p)/…``)
+#: never appears in the matched text. ``_imds_access_via_expansion`` in ``exfil.py``
+#: refuses a 4-octet token whose first three octets are the LITERAL ``169.254.169``
+#: prefix (read in the resolver's bases via the shared ``_octet_literal_value``, so an
+#: octal/hex spelling compares correctly) AND whose LAST octet contains ANY ``$`` or
+#: backtick -- a single presence check (no bracket matching, one linear pass) that
+#: blocks every decimal/octal/hex/zero-padded spelling of ``.254`` at once and
+#: deliberately over-blocks any other expansion-built ``169.254.169.x`` address. The
+#: ``/dev/tcp via shell expansion`` row in ``exfil_bash.py`` refuses a word-start
+#: ``/dev/`` (an opening quote counts) whose literal prefix of ``tcp``/``udp`` is
+#: followed by a ``$``/backtick. Variable-built prefixes (``${A}.${B}.${C}.254``),
+#: link-local assignments, version strings, literal non-``.254`` addresses and
+#: wholly-expansion devices (``/dev/${TTY}``) are left alone. A ``$`` counts only
+#: when it OPENS an expansion (``_EXPANSION_STARTS``: next char is ``(``/``{``/``[``,
+#: a name, a special parameter or an ANSI-C ``'``), AND it is not itself inside a
+#: single quote -- the gates read the one quote-state machine via
+#: ``_single_quoted_offsets``, so a ``$`` in a single-quoted regex anchor
+#: (``'169.254.169.253$'``) stays literal. A BACKTICK is NOT counted (a documented
+#: residual): a literal backtick is almost always a markdown code span around an
+#: address in a commit/PR/issue body, which must not be refused. An ANSI-C ``$'..'``
+#: is the same kind of residual (ANSI-C only opens unquoted, but a ``$`` abutting a
+#: ``'`` is usually a closing regex end-anchor, refused inside ``ssh "..."``/heredoc
+#: wrappers), so ``'`` is not an expansion-start either. No existing exfil pattern,
+#: threshold or pass moved. ``_single_quoted_offsets`` masks only CLOSED single-quote
+#: runs, so an apostrophe in a ``#`` comment or heredoc body (an unterminated quote
+#: the state machine cannot see as such) does not hide a later ``$`` from the gate.
+_PACKAGE_LINE_BUDGET = 32_485
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
