@@ -476,7 +476,12 @@ async def _publish_plan_canvas(call: Call, args: dict[str, Any]) -> str:
             )
             await surface_update(channel, plan_view_id=view_id)
             view_note = " It is the Plan tab; people can comment, only you edit it."
-            if removed:
+            if removed and views.is_pr_tab({"key": removed, "type": views.PR_VIEW_TYPE}):
+                view_note += (
+                    f" To make room, the pull request tab {removed!r} was removed; it comes "
+                    "back when a tab frees up."
+                )
+            elif removed:
                 view_note += f" To make room, your older view {removed!r} was removed."
         except CodeChannelApiError as exc:
             logger.info("code channel %s: plan tab not attached: %s", channel, exc.code)
