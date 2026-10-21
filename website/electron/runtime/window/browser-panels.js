@@ -92,6 +92,9 @@ function attachBrowserPanels(win, view, {
           view.webContents.focus();
         }
       },
+      // One line per hand-back, naming the view that held focus and the
+      // trigger, so a recurrence of the deaf-composer symptom is decisive.
+      log: (message) => console.warn(message),
       addView: (child) => win.contentView.addChildView(child),
       removeView: (child) => win.contentView.removeChildView(child),
       // Chrome the embedded page needs but the module must not import Electron

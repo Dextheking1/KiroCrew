@@ -810,7 +810,11 @@ hiding the focused view does not move it. So when the native browser view leaves
 screen while it holds focus (an overlay, an inactive tab, a collapsed panel, close), the
 manager in `website/electron/browser-view.js` hands focus back to the dashboard view
 (`focusHost`), and on window focus `reclaimFocus` does the same for a hidden view that
-still holds it. Without this every dashboard text input would look alive and receive no
+still holds it. A view that takes focus while it is already hidden (its own `focus`
+event, or a finished load while it reports focus) is handed back the same way, since no
+hide follows to trigger it; a visible view keeps its focus. Each hand-back logs one
+main-process line naming the view that held focus and the trigger, never the page URL
+or title. Without this every dashboard text input would look alive and receive no
 keystrokes.
 
 #### Address bar launcher
