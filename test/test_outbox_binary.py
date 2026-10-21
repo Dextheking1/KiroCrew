@@ -195,7 +195,7 @@ class TestOutboxNotifyBinary:
     async def test_text_with_secrets_rejected(self, outbox, mock_sel):
         """Text file with AWS key is rejected."""
         txt = outbox / "secrets.txt"
-        txt.write_text("key=AKIAIOSFODNN7EXAMPLE")
+        txt.write_text("key=glpat-IOSFODNN7EXAMPLE")
         async with TestClient(TestServer(_make_app())) as client:
             resp = await client.post(
                 "/api/outbox/notify",
@@ -642,7 +642,7 @@ class TestContainerSymbolTablesAreNotCredentials:
         "secret",
         [
             _telegram_shaped_token("110201543"),
-            "AKIA" + "IOSFODNN7EXAMPLE",
+            "glpat-" + "IOSFODNN7EXAMPLE",
             "gh" + "p_" + hashlib.sha256(b"kc-gate").hexdigest()[:36],
         ],
         ids=["bot-token", "access-key-id", "forge-token"],
@@ -705,7 +705,7 @@ class TestContainerSymbolTablesAreNotCredentials:
             f"\x80{token}{table}\x80",
             f"\x80{table}\x00{token}\x80",
             "\x80" + "123456789:ABCDEFabcdefGHIJKLmnopqrSTUVWX" + "\x80",
-            f"\x80AKIAIOSFODNN7EXAMPLE{table}\x80",
+            f"\x80glpat-IOSFODNN7EXAMPLE{table}\x80",
         ):
             removed = Counter(probe) - Counter(mask_baseline_symbol_tables(probe))
             assert set(removed) <= set(table), (probe, removed)

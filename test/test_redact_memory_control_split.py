@@ -21,7 +21,7 @@ from kiro_crew.dashboard.handlers._shared import _UNSCANNABLE_JSON, _redact_memo
 from kiro_crew.terminal_safe import normalize_for_scanning
 
 #: A documentation-only AWS key id, matched by the plaintext credential pass.
-CREDENTIAL = "AKIAIOSFODNN7EXAMPLE"
+CREDENTIAL = "glpat-IOSFODNN7EXAMPLE"
 
 #: Every character the scrubber removes: the C0 and C1 controls other than the three
 #: kept as content, plus the Unicode format characters. The output is checked against
@@ -107,9 +107,9 @@ REJOINING_SEPARATORS = CONTROL_ONLY_SEPARATORS + INVISIBLE_SEPARATORS
 
 
 def _split_credential(separator: bytes | str) -> str:
-    """Return ``CREDENTIAL`` with ``separator`` spliced in after its ``AKIA`` prefix."""
+    """Return ``CREDENTIAL`` with ``separator`` spliced in inside its ``glpat-`` prefix."""
     text = separator.decode("latin-1") if isinstance(separator, bytes) else separator
-    prefix, suffix = CREDENTIAL[:4], CREDENTIAL[4:]
+    prefix, suffix = CREDENTIAL[:3], CREDENTIAL[3:]
     return f"{prefix}{text}{suffix}"
 
 
@@ -276,7 +276,7 @@ def test_a_format_char_between_controls_does_not_survive() -> None:
     Removing the controls first is what makes the flank judgement read the credential's
     own characters rather than the controls that were about to be removed.
     """
-    redacted = _redact_memory_field("never commit AKIA\x9b\u200d\x9cIOSFODNN7EXAMPLE")
+    redacted = _redact_memory_field("never commit glpat-\x9b\u200d\x9cIOSFODNN7EXAMPLE")
 
     assert "[REDACTED" in redacted
     assert CREDENTIAL not in redacted

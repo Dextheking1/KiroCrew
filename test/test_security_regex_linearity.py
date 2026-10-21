@@ -39,7 +39,7 @@ from kiro_crew.security import is_sensitive_path, redact_credentials
 # pre-change loop implementation. Secret-shaped fixtures are written as adjacent
 # literals so no single source line is a complete provider token (matches the
 # convention in test_security.py, which keeps secret scanners quiet).
-_AKIA = "AKIAIOSFODNN7EXAMPLE"
+_SLACK20 = "xoxb-" "IOSFODNN7EXAMPL"  # 20 chars
 _GHP = "ghp_" "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef12"
 _ANT = "sk-ant-api03-" "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"
 _GLPAT = "glpat-" "xxxx1234xxxx5678xxxx"
@@ -48,7 +48,7 @@ _TAG = "[REDACTED: credential]"
 
 REDACTION_GOLDEN: list[tuple[str, str, list[str]]] = [
     (
-        f"Found key {_AKIA} in output",
+        f"Found key {_SLACK20} in output",
         f"Found key {_TAG} in output",
         ["Redacted credential pattern (20 chars)"],
     ),
@@ -56,7 +56,7 @@ REDACTION_GOLDEN: list[tuple[str, str, list[str]]] = [
     # This is the case the old `str.replace(matched, tag, 1)` shape depended on
     # positional luck for -- sub() splices each matched span in place.
     (
-        f"a {_AKIA} b {_AKIA} c",
+        f"a {_SLACK20} b {_SLACK20} c",
         f"a {_TAG} b {_TAG} c",
         [
             "Redacted credential pattern (20 chars)",
@@ -66,7 +66,7 @@ REDACTION_GOLDEN: list[tuple[str, str, list[str]]] = [
     # Three DIFFERENT credentials -- pins warning ORDER (20, 38, 26 chars),
     # which is the ordering guarantee sub() has to preserve.
     (
-        f"first {_AKIA} then {_GHP} and {_XOXB} tail",
+        f"first {_SLACK20} then {_GHP} and {_XOXB} tail",
         f"first {_TAG} then {_TAG} and {_TAG} tail",
         [
             "Redacted credential pattern (20 chars)",
@@ -143,11 +143,11 @@ def test_pass1_warning_order_tracks_match_order_not_length() -> None:
     A replacement callback that batched or reordered its appends would still
     produce identical TEXT, so this asserts the ordering separately.
     """
-    text = f"{_ANT} {_AKIA} {_GHP}"
+    text = f"{_ANT} {_SLACK20} {_GHP}"
     _, warnings = redact_credentials(text)
     assert warnings == [
         f"Redacted credential pattern ({len(_ANT)} chars)",
-        f"Redacted credential pattern ({len(_AKIA)} chars)",
+        f"Redacted credential pattern ({len(_SLACK20)} chars)",
         f"Redacted credential pattern ({len(_GHP)} chars)",
     ]
 
@@ -170,12 +170,12 @@ def test_pass1_is_linear_on_credential_dense_text() -> None:
     sub-second as one ``sub()`` pass; the generous ceiling keeps this off slow
     CI's flake list while still failing hard if the per-match rebuild returns.
     """
-    dense = f"{_AKIA} " * 4000
+    dense = f"{_SLACK20} " * 4000
     started = time.perf_counter()
     result, warnings = redact_credentials(dense)
     elapsed = time.perf_counter() - started
     assert len(warnings) == 4000
-    assert _AKIA not in result
+    assert _SLACK20 not in result
     assert elapsed < 5.0, f"pass 1 took {elapsed:.2f}s -- per-match string rebuild is back"
 
 

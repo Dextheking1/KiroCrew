@@ -39,7 +39,7 @@ from kiro_crew.dashboard.chat_persistence import (
 # Shapes verified against the live detector rather than assumed: each of these
 # is redacted by ``redact_credentials``. Kept in one place so a detector change
 # surfaces as one failure.
-AWS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+AWS_KEY_ID = "glpat-IOSFODNN7EXAMPLE"
 AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 BEARER = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghij.klmnopqrst"
 TOKEN = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"

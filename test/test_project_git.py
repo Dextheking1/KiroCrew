@@ -507,7 +507,7 @@ class TestBranchRedaction:
         assert files_mod._redact_project_path(path) == redact(path)
 
     def test_macos_temp_root_still_redacts_a_secret_in_the_suffix(self, as_darwin):
-        key = "AKIAIOSFODNN7EXAMPLE"
+        key = "glpat-IOSFODNN7EXAMPLE"
         path = (
             "/private/var/folders/6r/54rts88h7yebke7n6clhoq9d0roaen/T/"
             f"project/{key}"
@@ -784,7 +784,7 @@ class TestMacosPrefixBoundary:
     @pytest.mark.parametrize(
         "value",
         [
-            "AKIAIOSFODNN7EXAMPLE",
+            "glpat-IOSFODNN7EXAMPLE",
             "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
             "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8",
         ],

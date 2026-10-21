@@ -165,7 +165,7 @@ class TestTheFullAddressIsKeptSoItCanBeOpened:
         assert records[0]["url"] == url
 
     def test_a_link_carrying_a_credential_is_withheld(self) -> None:
-        url = f"https://{_DOMAIN}/dump/AKIAIOSFODNN7EXAMPLE"
+        url = f"https://{_DOMAIN}/dump/glpat-IOSFODNN7EXAMPLE"
 
         _, warnings, records = redact_exfiltration_urls_with_records(f"see {url}")
 
@@ -173,7 +173,7 @@ class TestTheFullAddressIsKeptSoItCanBeOpened:
         assert records[0]["query_chars"] == 0
         assert records[0]["url"] is None
         assert records[0]["url_withheld"] == "credential"
-        assert "AKIAIOSFODNN7EXAMPLE" not in json.dumps(records)
+        assert "glpat-IOSFODNN7EXAMPLE" not in json.dumps(records)
 
     def test_a_partially_encoded_credential_is_withheld(self) -> None:
         # Unchanged by the remover as literal text; a browser decodes %5F back
@@ -252,7 +252,7 @@ class TestTheFullAddressIsKeptSoItCanBeOpened:
             "rule": "exfil_query_length",
             "path": None,
             "query_chars": 0,
-            "url": f"https://{_DOMAIN}/dump/AKIAIOSFODNN7EXAMPLE",
+            "url": f"https://{_DOMAIN}/dump/glpat-IOSFODNN7EXAMPLE",
             "url_withheld": None,
         }
         assert revalidate_blocked_link(forged) is None
@@ -260,7 +260,7 @@ class TestTheFullAddressIsKeptSoItCanBeOpened:
 
 class TestQueryIsCounted:
     def test_query_chars_zero_when_absent(self) -> None:
-        url = f"https://{_DOMAIN}/dump/AKIAIOSFODNN7EXAMPLE"
+        url = f"https://{_DOMAIN}/dump/glpat-IOSFODNN7EXAMPLE"
 
         _, warnings, records = redact_exfiltration_urls_with_records(f"see {url}")
 
@@ -1072,7 +1072,7 @@ class TestMetaCarveOut:
                 {
                     "domain": _DOMAIN,
                     "rule": "exfil_query_length",
-                    "path": "/dump/AKIAIOSFODNN7EXAMPLE",
+                    "path": "/dump/glpat-IOSFODNN7EXAMPLE",
                     "query_chars": 0,
                     "url": None,
                     "url_withheld": "length",
@@ -1107,7 +1107,7 @@ class TestMetaCarveOut:
         record = {
             "domain": _DOMAIN,
             "rule": "exfil_query_length",
-            "path": "/dump/AKIAIOSFODNN7EXAMPLE",
+            "path": "/dump/glpat-IOSFODNN7EXAMPLE",
             "query_chars": 0,
             "url": None,
             "url_withheld": "length",
@@ -1214,7 +1214,7 @@ class TestAVariantsRecordsAreCheckedOnServe:
             "rule": "exfil_query_length",
             "path": None,
             "query_chars": 0,
-            "url": f"https://{_DOMAIN}/dump/AKIAIOSFODNN7EXAMPLE",
+            "url": f"https://{_DOMAIN}/dump/glpat-IOSFODNN7EXAMPLE",
             "url_withheld": None,
         }
         msgs = [
@@ -1229,7 +1229,7 @@ class TestAVariantsRecordsAreCheckedOnServe:
         out = _prepare_messages(msgs, False, live_child="")
 
         assert "blocked_links" not in out[0]["variants"][0]
-        assert "AKIAIOSFODNN7EXAMPLE" not in json.dumps(out)
+        assert "glpat-IOSFODNN7EXAMPLE" not in json.dumps(out)
 
     def test_a_valid_variant_record_survives_emit(self) -> None:
         url = f"https://{_DOMAIN}/p?q={_LONG_QUERY_TAIL}"

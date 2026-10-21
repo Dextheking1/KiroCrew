@@ -61,7 +61,7 @@ class TestDefaultContext:
 
     def test_default_credential_redaction_delegates(self, cfg: KiroCrewConfig) -> None:
         ctx = build_default_context(cfg)
-        text = "key AKIAIOSFODNN7EXAMPLE here"
+        text = "key glpat-IOSFODNN7EXAMPLE here"
         assert ctx.credentials.redact(text) == security.redact(text)
 
 
@@ -317,7 +317,7 @@ class TestRedactLogViaContext:
 
     #: Matched by the baseline's own credential patterns, so it proves the
     #: companion pass is applied ON TOP of the baseline rather than instead.
-    BASELINE_SHAPE = "AKIAIOSFODNN7EXAMPLE"
+    BASELINE_SHAPE = "glpat-IOSFODNN7EXAMPLE"
 
     @staticmethod
     def _install(policy, cfg: KiroCrewConfig):

@@ -143,7 +143,7 @@ def test_key_beside_a_diagram_link_is_redacted_and_the_link_kept() -> None:
     [
         f"@startuml\nAlice -> Bob: {KEY}\n@enduml",
         f"@startuml\nnote over Bob: aws_secret_access_key={SEGMENT_KEY}\n@enduml",
-        "@startuml\nAlice -> Bob: AKIA" + "IOSFODNN7EXAMPLE" + "\n@enduml",
+        "@startuml\nAlice -> Bob: glpat-" + "IOSFODNN7EXAMPLE" + "\n@enduml",
         # Shapes only the decode-and-scan and the URL-parameter passes see.
         "@startuml\nnote: "
         + base64.b64encode(f"aws_secret_access_key={SEGMENT_KEY}".encode()).decode()
