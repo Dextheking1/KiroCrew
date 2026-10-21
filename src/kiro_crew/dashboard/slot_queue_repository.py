@@ -788,6 +788,10 @@ class SlotQueueRepository:
             else:
                 item["content"] = prune_attachment_meta(item.get("meta"), content, previous)
             prune_quote_meta(item.get("meta"), item["content"])
+            if item["content"] != previous and isinstance(item.get("meta"), dict):
+                # A code channel's Slack sender names whose words these are;
+                # replacement text is the editor's, so the name goes.
+                item["meta"].pop("slack_sender", None)
             if directive_user_origin:
                 item["_directive_user_origin"] = True
             else:
