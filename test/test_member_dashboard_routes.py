@@ -766,7 +766,7 @@ def test_a_credential_in_a_page_is_redacted_before_it_reaches_the_reader():
     # ASSEMBLED at runtime for the reason the fold-value case above gives: a
     # credential-shaped literal in the diff is a finding against the PR whatever the
     # code around it is for. Do not join these back up.
-    token = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+    token = "glpat-" + "IOSFODNN7" + "EXAMPLE"
     page = f'<p>key {token}</p><b data-dashboard-field="credits"></b>'
     assert token not in routes._template_text_safe(page), "a page kept its credential"
     assert "credits" in routes._template_text_safe(page), "the redaction ate the bindings"
@@ -837,7 +837,7 @@ def test_a_credential_written_into_a_script_or_stylesheet_is_still_masked():
     dashes = "-" * 5
     kind = "RSA PRIVATE KEY"
     secrets = [
-        "AKIA" + "IOSFODNN7" + "EXAMPLE",
+        "glpat-" + "IOSFODNN7" + "EXAMPLE",
         "ghp" + "_" + "ZXAMPLEzxampleZXAMPLEzxampleZXAMPLE12",
         f"{dashes}BEGIN {kind}{dashes}\nMIIEowIBAAKCAQEA3Zx8kUoTBqQw0hXvPj9mKpLq2yTnVr7\n"
         f"{dashes}END {kind}{dashes}",
@@ -867,7 +867,7 @@ def test_a_key_id_glued_to_a_partial_key_is_masked_as_one_run_beside_a_style(kee
 
 def test_a_script_holding_a_masked_credential_still_keeps_its_literal():
     """The page changes under the scrub here, so the result is read again before it is served."""
-    key_id = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+    key_id = "glpat-" + "IOSFODNN7" + "EXAMPLE"
     page = f"<script>var A = '{_PALETTE}'; var k = '{key_id}';</script><p>{_bare_key()}</p>"
     out = routes._template_text_safe(page)
     assert f"var A = '{_PALETTE}';" in out
@@ -1061,7 +1061,7 @@ def test_past_the_bound_a_scripts_text_gets_every_pass_not_fewer():
     from kiro_crew import dashboard_frame
 
     bound = dashboard_frame.MAX_CODE_PIECES
-    key_id = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+    key_id = "glpat-" + "IOSFODNN7" + "EXAMPLE"
     first = f"<script>var FIRST = '{_PALETTE}';</script>"
     spent = "<script></script><script>var a = 1;</script>" * (bound - 1)
     past = "<script>var a = 1;</script>" * 4
@@ -1079,7 +1079,7 @@ def test_past_the_bound_a_scripts_text_gets_every_pass_not_fewer():
 
 
 def test_a_page_with_no_script_or_stylesheet_is_scrubbed_as_it_always_was():
-    token = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+    token = "glpat-" + "IOSFODNN7" + "EXAMPLE"
     page = f'<p>key {token} and {_bare_key()}</p><b data-dashboard-field="credits"></b>'
     assert routes._template_text_safe(page) == redact_via_context(page) != page
 
@@ -1096,7 +1096,7 @@ def test_a_credential_in_a_manifest_string_is_redacted():
     ``^[a-z][a-z0-9_]{0,63}$``, a grammar no credential survives, and rewriting a key
     would break the page's own bindings.
     """
-    token = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+    token = "glpat-" + "IOSFODNN7" + "EXAMPLE"
     scrubbed = routes._manifest_text_safe(
         {"title": f"board {token}", "fields": {"credits": {"type": "number"}}}
     )
@@ -1106,7 +1106,7 @@ def test_a_credential_in_a_manifest_string_is_redacted():
 
 def test_the_raw_body_is_scrubbed_beside_the_composed_page():
     """Scrubbing only the rendered half leaves the same credential one key away."""
-    token = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+    token = "glpat-" + "IOSFODNN7" + "EXAMPLE"
     body = routes._safe_body(
         {
             "html": f"<p>{token}</p>",

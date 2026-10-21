@@ -245,11 +245,11 @@ class TestMeetingLifecycleRoutes:
             await client.post(f"{BASE}/meetings/standup/init", json={})
             await client.post(
                 f"{BASE}/meetings/standup/start",
-                json={"title": "Rotate AKIAIOSFODNN7EXAMPLE"},
+                json={"title": "Rotate glpat-IOSFODNN7EXAMPLE"},
             )
         meta = store.read_meeting_meta("standup", root)
         assert meta is not None
-        assert "AKIAIOSFODNN7EXAMPLE" not in meta["title"]
+        assert "glpat-IOSFODNN7EXAMPLE" not in meta["title"]
 
     @pytest.mark.asyncio
     async def test_status_transitions(self, app, fake_sessions):
@@ -568,12 +568,12 @@ class TestMeetingLifecycleRoutes:
             store.write_agent_output(
                 "standup",
                 {"id": "note-taker", "widget_type": "markdown"},
-                "# Notes\n\nkey AKIAIOSFODNN7EXAMPLE here",
+                "# Notes\n\nkey glpat-IOSFODNN7EXAMPLE here",
                 root,
             )
             resp = await client.get(f"{BASE}/meetings/standup/outputs")
             body = await resp.json()
-            assert "AKIAIOSFODNN7EXAMPLE" not in body["outputs"]["note-taker"]
+            assert "glpat-IOSFODNN7EXAMPLE" not in body["outputs"]["note-taker"]
             assert "# Notes" in body["outputs"]["note-taker"]
             assert body["tasks"] == []
 
@@ -586,7 +586,7 @@ class TestMeetingLifecycleRoutes:
         crossed to the dashboard unchanged. Asserted per field rather than on the
         whole blob, so a future field added without a `redact()` fails here.
         """
-        marker = "AKIAIOSFODNN7EXAMPLE"
+        marker = "glpat-IOSFODNN7EXAMPLE"
         store.write_tasks(
             "standup",
             [

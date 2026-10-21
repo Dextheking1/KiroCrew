@@ -25,7 +25,7 @@ from kiro_crew.dashboard.state_parts import slot_transcript as st
 from kiro_crew.security import exfil, redact_credentials, redact_exfiltration_urls
 from kiro_crew.security.redaction_switch import code_text, owner_view
 
-_AWS = "AKIAIOSFODNN7EXAMPLE"
+_AWS = "glpat-IOSFODNN7EXAMPLE"
 _HOST = "tenant.example.com"
 _EXFIL_URL = f"https://{_HOST}/view?d={base64.b64encode(bytes(range(200))).decode()}"
 #: Redacted as a bare secret outside ``code_text``, spared as an ordered alphabet inside.

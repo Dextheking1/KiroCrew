@@ -42,7 +42,7 @@ def _stream(text: str, chunk: int) -> str:
         'aws_session_token = "{v}"\nnext',
         '{{"SessionToken": "{v}"}}\nnext',
         "SecretAccessKey: {v}\nnext",
-        "AccessKeyId={v} next",
+        "SecretAccessKey={v} next",
     ],
 )
 @pytest.mark.parametrize("length", [600, 3000, 5000])
@@ -138,7 +138,7 @@ def test_a_repeated_label_run_takes_few_anchored_matches(
 @pytest.mark.parametrize("seed", range(40))
 def test_the_linear_anchor_finds_what_the_regex_search_finds(seed: int) -> None:
     rng = random.Random(seed)
-    parts = ["SessionToken", "aws_session_token", "AccessKeyId", ":", "=", " ", '"', "'"]
+    parts = ["SessionToken", "aws_session_token", "SecretAccessKey", ":", "=", " ", '"', "'"]
     parts += [",", "}", "x", "ab-", "\n", "?token=", "&"]
     for _ in range(200):
         buf = "".join(rng.choice(parts) for _ in range(rng.randint(0, 14)))
@@ -156,7 +156,9 @@ def test_a_key_mentioned_in_prose_is_released() -> None:
     "label",
     ["aws_session_token=", "Authorization: Bearer "],
 )
-@pytest.mark.parametrize("tail_key", ["AccessKeyId", "SecretAccessKey", "aws_session_token"])
+@pytest.mark.parametrize(
+    "tail_key", ["aws_secret_access_key", "SecretAccessKey", "aws_session_token"]
+)
 @pytest.mark.parametrize("chunk", [None, 1, 7])
 def test_a_key_name_ending_another_credentials_value_does_not_split_it(
     label: str, tail_key: str, chunk: int | None
@@ -175,7 +177,7 @@ def test_a_key_name_ending_another_credentials_value_does_not_split_it(
     assert tail_key not in out
 
 
-@pytest.mark.parametrize("tail_key", ["AccessKeyId", "SessionToken", "SecretAccessKey"])
+@pytest.mark.parametrize("tail_key", ["aws_session_token", "SessionToken", "SecretAccessKey"])
 @pytest.mark.parametrize("chunk", [None, 1, 7])
 def test_a_bare_secret_ending_in_a_key_name_is_not_split(tail_key: str, chunk: int | None) -> None:
     """A 40-character run whose last bytes spell a key name is judged only by the
@@ -195,7 +197,7 @@ def test_a_key_name_ending_a_long_value_leaves_no_label_open() -> None:
     """A key name at the end of a credential value past the ceiling is part of that
     value. Releasing it must not remember an open label, or the next word after a
     colon would be dropped as if it were a value."""
-    head = "SessionToken=" + "a-" * 2300 + "AccessKeyId "
+    head = "SessionToken=" + "a-" * 2300 + "SecretAccessKey "
     redactor = StreamRedactor()
     out = redactor.feed(head) + redactor.feed(": visible text") + redactor.flush()
     assert out == redact(head + ": visible text")
@@ -220,8 +222,8 @@ def test_a_url_carrying_an_encoded_key_before_a_key_name_is_not_split(query: str
     """A key name can end a URL whose query carries an encoded access key. When
     the URL arrives in one piece, the AWS cut must not split it: the whole URL
     reaches one batch call, so the stream hides what the batch hides."""
-    encoded = "".join(f"%{ord(c):02X}" for c in "AKIAIOSFODNN7EXAMPLE")
-    head = "https://example.test/" + query + encoded + "AccessKeyId "
+    encoded = "".join(f"%{ord(c):02X}" for c in "glpat-IOSFODNN7EXAMPLE")
+    head = "https://example.test/" + query + encoded + "SecretAccessKey "
     redactor = StreamRedactor()
     out = redactor.feed(head) + redactor.feed("done") + redactor.flush()
     assert out == redact(head + "done")
@@ -232,7 +234,7 @@ def test_an_aws_label_inside_a_long_bearer_value_drops_nothing_after_it() -> Non
     """A key name with a separator inside a Bearer value is part of that value. Past
     the ceiling the drop must end where the Bearer value ends, as the batch pass
     does, not run on through the AWS value class into the text after it."""
-    head = "Authorization: Bearer " + "a-" * 2300 + "AccessKeyId="
+    head = "Authorization: Bearer " + "a-" * 2300 + "SecretAccessKey="
     redactor = StreamRedactor()
     out = redactor.feed(head) + redactor.feed(":BENIGN_SUFFIX done") + redactor.flush()
     assert out == redact(head + ":BENIGN_SUFFIX done")
@@ -277,9 +279,9 @@ def test_minified_json_past_the_ceiling_fails_closed_from_the_held_run() -> None
 @pytest.mark.parametrize(
     "chunks",
     [
-        ["eyJ" + "a-" * 2300 + "AccessKeyId", " ", '" : visible text'],
-        ["eyJ" + "a-" * 2300 + "AccessKeyId ", '" : visible text'],
-        ["eyJ" + "a-" * 2300 + "AccessKeyId", " ", " ", '" : visible text'],
+        ["eyJ" + "a-" * 2300 + "SecretAccessKey", " ", '" : visible text'],
+        ["eyJ" + "a-" * 2300 + "SecretAccessKey ", '" : visible text'],
+        ["eyJ" + "a-" * 2300 + "SecretAccessKey", " ", " ", '" : visible text'],
     ],
     ids=["padding-in-own-chunk", "padding-at-arm", "padding-over-two-chunks"],
 )
@@ -303,8 +305,8 @@ def test_a_url_longer_than_the_ceiling_is_not_split_before_a_key_name(pad: str) 
     not be cut inside by the AWS cut: its tail would stream a percent-encoded key
     with no scheme left for the batch URL check to flag. Held whole, it streams
     as the batch pass writes it."""
-    encoded = "".join(f"%{ord(c):02X}" for c in "AKIA" + "IOSFODNN7EXAMPLE")
-    head = "https://example.test/?data=" + pad + encoded + "AccessKeyId "
+    encoded = "".join(f"%{ord(c):02X}" for c in "glpat-" + "IOSFODNN7EXAMPLE")
+    head = "https://example.test/?data=" + pad + encoded + "SecretAccessKey "
     redactor = StreamRedactor()
     out = redactor.feed(head) + redactor.feed("done") + redactor.flush()
     assert out == redact(head + "done")
@@ -337,10 +339,10 @@ def test_a_long_whitespace_free_run_before_an_aws_pair_fails_closed(text: str) -
 def test_a_bare_secret_ending_in_a_key_name_before_a_long_value_never_streams(
     chunk: int,
 ) -> None:
-    """A 40-character run ending in `AccessKeyId`, then `=` and a value past the
+    """A 40-character run ending in `SecretAccessKey`, then `=` and a value past the
     ceiling: the AWS cut stays at the run's start, so no prefix of the run reaches
     the output before the fail-closed tag."""
-    secret = "Zx9Qw3Er7Ty1Ui5Op2As8Df4Gh6Jk0Lm"[:29] + "AccessKeyId"
+    secret = "Zx9Qw3Er7Ty1Ui5Op2As8Df4Gh6Jk0Lm"[:25] + "SecretAccessKey"
     out = _stream(secret + "=" + "v0-" * 1534, chunk)
     assert secret[:12] not in out
     assert "v0-v0-v0-v0-" not in out
@@ -376,7 +378,7 @@ def test_a_label_glued_to_a_dropped_value_keeps_its_own_value_hidden(
 @pytest.mark.parametrize(
     "deltas",
     [
-        ["Authorization: Bearer " + "v0-" * 1400, "AccessKeyId", "v1-" * 400 + " done"],
+        ["Authorization: Bearer " + "v0-" * 1400, "SecretAccessKey", "v1-" * 400 + " done"],
         ["Authorization: Bearer " + "v0-" * 1400, "XYZSessionToken", "v1-" * 400 + " done"],
         ["eyJ" + "a" * 4200 + "authorization", "v1v1" * 300 + " done"],
         ["x ?token=" + "v0-" * 1400 + "%22SessionToken", "v1-" * 400 + " done"],
@@ -384,7 +386,7 @@ def test_a_label_glued_to_a_dropped_value_keeps_its_own_value_hidden(
             "SessionToken=" + "v0-" * 20 + "?token=" + "v2-" * 1400 + "SecretAccessKey=abc",
             "," + "v1-" * 400 + " done",
         ],
-        ["aws_secret_access_key=" + "v0-" * 1400, "AccessKeyId", "v1-" * 400 + " done"],
+        ["aws_secret_access_key=" + "v0-" * 1400, "SecretAccessKey", "v1-" * 400 + " done"],
     ],
     ids=["bearer-aws-name", "bearer-glued-name", "jwt", "token-param", "nested-token", "aws"],
 )
@@ -436,7 +438,7 @@ def test_a_label_at_the_end_of_a_buffer_that_fails_closed_keeps_its_value_hidden
     assert out.endswith(" done")
 
 
-@pytest.mark.parametrize("key", ["AccessKeyId", "SessionToken"])
+@pytest.mark.parametrize("key", ["SecretAccessKey", "SessionToken"])
 @pytest.mark.parametrize("tail", ["=", ': "v0', "=v0-v0"])
 def test_a_bare_run_glued_before_a_batch_match_is_not_split(key: str, tail: str) -> None:
     """A batch match can start mid-token. When the AWS cut moves back to such a

@@ -399,7 +399,7 @@ class TestOutboundSecurity:
         assert module.local_destination("file:////attacker/share/a.png") is None
 
     def test_credential_in_raster_metadata_is_rejected(self, tmp_path: Path) -> None:
-        p = _png(tmp_path, body=_PNG + b"tEXtComment\0AKIAIOSFODNN7EXAMPLE")
+        p = _png(tmp_path, body=_PNG + b"tEXtComment\0glpat-IOSFODNN7EXAMPLE")
         text = f"![x]({p})"
 
         result = extract_local_refs(text)
@@ -1284,8 +1284,8 @@ class TestRealLocalJunctionAncestor:
 
 
 def _synth_aws_key() -> str:
-    """An AWS-access-key-SHAPED token: fixed public prefix plus synthetic body."""
-    prefix = "A" + "KIA"
+    """A GitLab-token-SHAPED value: fixed public prefix plus synthetic body."""
+    prefix = "gl" + "pat-"
     return prefix + hashlib.sha256(b"kc-outbound-wide").hexdigest().upper()[:16]
 
 
