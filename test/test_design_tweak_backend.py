@@ -1407,7 +1407,7 @@ class TestStaticCredentialBackstop:
 
     def test_labelled_credential_in_ordinary_file_is_refused(self, tmp_path):
         status, _, _ = self._serve(
-            tmp_path, "config.js", b"export const KEY = 'AKIA" + b"A" * 16 + b"';\n"
+            tmp_path, "config.js", b"export const KEY = 'glpat-" + b"A" * 16 + b"';\n"
         )
         assert status == 403
 
