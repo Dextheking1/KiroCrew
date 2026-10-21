@@ -15,16 +15,21 @@ nothing here spawns a process or binds a port.
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import pytest
 from apps_backend_coverage_helpers import _isolated_module_state  # noqa: F401
 from apps_backend_coverage_helpers import _fake_proc, _manifest
 
 import kiro_crew.apps.backend as bmod
+import kiro_crew.apps.backend_runtime.restart as rmod
+from kiro_crew import platform_compat
 from kiro_crew.apps.backend import AppProcess
+from kiro_crew.config.loader import config_dir
 
 _APP = "app"
 _WAIT = 5.0
@@ -114,13 +119,53 @@ def _run(target: Callable[[], Any]) -> tuple[threading.Thread, list[Any]]:
     return thread, out
 
 
+def _flock_is_free() -> bool:
+    """Probe the app's lifecycle flock from a separate descriptor, as a waiter does."""
+    lock_dir = config_dir() / "app_backend_locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_dir / f"{_APP}.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        return bool(platform_compat.try_acquire_lock(fd, exclusive=True))
+    finally:
+        os.close(fd)
+
+
+class _AwaitSignal(logging.Handler):
+    """Sets ``reached`` once a start logs that it is awaiting an in-flight spawn."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.reached = threading.Event()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if "awaiting the in-flight spawn" in record.getMessage():
+            self.reached.set()
+
+
+@pytest.fixture()
+def await_signal() -> Iterator[_AwaitSignal]:
+    handler = _AwaitSignal()
+    logger = logging.getLogger(bmod._FACADE)
+    previous = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        yield handler
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+
+
 @pytest.mark.parametrize(
     "starter",
     ["start_app_backend", "_start_app_backend"],
     ids=["public-start", "internal-start"],
 )
 def test_a_start_during_the_drain_waits_instead_of_adopting(
-    restart_env: AppProcess, monkeypatch: pytest.MonkeyPatch, starter: str
+    restart_env: AppProcess,
+    monkeypatch: pytest.MonkeyPatch,
+    await_signal: _AwaitSignal,
+    starter: str,
 ) -> None:
     drain = _HeldDrain()
     body = _Body(drain)
@@ -128,26 +173,127 @@ def test_a_start_during_the_drain_waits_instead_of_adopting(
     monkeypatch.setattr(bmod, "_start_app_backend_body", body)
 
     restart, restart_out = _run(lambda: bmod._restart_exited_backend(restart_env, 1))
-    assert drain.entered.wait(_WAIT)
-    with bmod._lock:
-        held = bmod._processes.get(_APP)
-    assert held is not None and held.starting is True, "the slot must stay reserved"
+    start: threading.Thread | None = None
+    try:
+        assert drain.entered.wait(_WAIT)
+        with bmod._lock:
+            held = bmod._processes.get(_APP)
+        assert held is not None and held.starting is True, "the slot must stay reserved"
 
-    start, start_out = _run(lambda: getattr(bmod, starter)(_APP))
-    assert not body.adopted.wait(1.0), "a start during the drain adopted the draining server"
-    with bmod._lock:
-        assert bmod._processes.get(_APP) is held
-
-    drain.release.set()
-    restart.join(_WAIT)
-    start.join(_WAIT + 25.0)
-    assert not restart.is_alive() and not start.is_alive()
+        start, start_out = _run(lambda: getattr(bmod, starter)(_APP))
+        # Positive evidence of the overlap: the start is waiting on the reservation
+        # while the drain is still held open.
+        assert await_signal.reached.wait(_WAIT), "the start did not wait on the reservation"
+        assert not body.adopted.is_set(), "a start during the drain adopted the draining server"
+        with bmod._lock:
+            assert bmod._processes.get(_APP) is held
+    finally:
+        drain.release.set()
+        restart.join(_WAIT)
+        if start is not None:
+            start.join(_WAIT + 25.0)
+    assert not restart.is_alive() and start is not None and not start.is_alive()
     assert restart_out == [True]
     assert not body.adopted.is_set()
     assert len(body.spawned) == 1
     replacement = body.spawned[0]
     assert bmod._processes[_APP] is replacement
     assert start_out in ([None], [replacement])
+
+
+def test_the_reservation_is_published_with_the_flock_already_held(
+    restart_env: AppProcess, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No gap between the reservation and the flock for a stop+start to slip into."""
+    seen: list[tuple[bool, bool]] = []
+
+    def _enabled(_name: str) -> bool:
+        with bmod._lock:
+            current = bmod._processes.get(_APP)
+        seen.append((current is restart_env, _flock_is_free()))
+        return True
+
+    monkeypatch.setattr(bmod, "_app_enabled_state", _enabled)
+    monkeypatch.setattr(bmod, "_drain_exited_root_tree", lambda *_a: True)
+    monkeypatch.setattr(
+        bmod, "_activation_denied", lambda _n, _a: bmod.ActivationVerdict(denied="policy")
+    )
+    assert bmod._restart_exited_backend(restart_env, 1) is False
+    # The pre-wait check runs without the flock; the post-wait check that swaps in
+    # the reservation runs with it held.
+    assert seen[0] == (True, True)
+    assert seen[1] == (True, False)
+
+
+def test_a_stop_then_start_during_the_drain_cannot_adopt_the_draining_server(
+    restart_env: AppProcess, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[threading.Thread] = []
+
+    def _during() -> None:
+        assert bmod.stop_app_backend(_APP) is True
+        thread, _out = _run(lambda: bmod.start_app_backend(_APP))
+        started.append(thread)
+        # The start's spawn needs the flock the drain holds, so it cannot run (and
+        # cannot probe and adopt) until the drain is over. Positive evidence that it
+        # got that far: its own STARTING placeholder is the record.
+        deadline = threading.Event()
+        for _ in range(int(_WAIT / 0.01)):
+            with bmod._lock:
+                current = bmod._processes.get(_APP)
+            if current is not None and current.starting:
+                break
+            deadline.wait(0.01)  # flake-ok: bounded poll for a positive condition
+        assert current is not None and current.starting, "the start never reserved"
+        thread.join(0.5)  # flake-ok: must stay blocked on the held flock; can only pass falsely
+        assert thread.is_alive()
+        assert not body.adopted.is_set()
+        drain.release.set()
+
+    drain = _HeldDrain(during=_during)
+    body = _Body(drain)
+    monkeypatch.setattr(bmod, "_drain_exited_root_tree", drain)
+    monkeypatch.setattr(bmod, "_start_app_backend_body", body)
+    try:
+        assert bmod._restart_exited_backend(restart_env, 1) is True
+    finally:
+        drain.release.set()
+        for thread in started:
+            thread.join(_WAIT + 25.0)
+    assert not body.adopted.is_set()
+    assert len(body.spawned) == 1
+    assert bmod._processes[_APP] is body.spawned[0]
+
+
+def test_a_lifecycle_lock_failure_is_retried_on_the_cadence(
+    restart_env: AppProcess, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(
+        bmod,
+        "shutdown_event",
+        SimpleNamespace(is_set=lambda: False, wait=lambda d: delays.append(d) or False),
+    )
+    real = rmod.app_backend_lifecycle_flock
+    calls: list[int] = []
+
+    def _flaky(name: str) -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("lock directory unavailable")
+        return real(name)
+
+    monkeypatch.setattr(rmod, "app_backend_lifecycle_flock", _flaky)
+    drain = _HeldDrain()
+    drain.release.set()
+    body = _Body(drain)
+    monkeypatch.setattr(bmod, "_drain_exited_root_tree", drain)
+    monkeypatch.setattr(bmod, "_start_app_backend_body", body)
+
+    assert bmod._restart_exited_backend(restart_env, 1) is True
+    assert delays == [0.0, 1.0]
+    assert bmod._restart_attempts[_APP] == 2
+    assert len(body.spawned) == 1 and bmod._processes[_APP] is body.spawned[0]
 
 
 def test_a_waiter_that_outlasts_its_window_leaves_the_reservation_in_place(

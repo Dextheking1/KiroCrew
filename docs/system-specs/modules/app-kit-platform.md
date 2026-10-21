@@ -3325,18 +3325,21 @@ are `_health_check_loop` (bounded startup poll) and `_watch_backend_health`
   replacement and supersedes the stale stop. The dead record is not simply removed: it
   is swapped for a restart-owned STARTING reservation (port 0, no process) that stays
   in place across the PID-file forget, the dead root's tree drain and the activation
-  re-vet, and is removed (identity-checked, and in a `finally`) just before the
-  replacement spawn or the denial return. The app's lifecycle flock is held across the
-  forget and the drain and released before the spawn, which takes it itself. A
+  re-vet, and is removed (identity-checked, in a `finally`) just before the
+  replacement spawn or the denial return. The app's lifecycle flock is taken before
+  the re-check that publishes the reservation, in the spawn path's lock order, and
+  held through the re-vet; it is released before the spawn, which takes it itself. A
   concurrent start during that span therefore waits on the reservation like any
-  in-flight spawn, instead of reading an absent record as free and, on a fixed port,
-  adopting the forked server the drain is about to end; a waiter whose window runs out
-  finds the flock held and leaves the reservation alone. A stop during the drain
-  removes the reservation and records STOP as usual. PID-file cleanup is likewise conditional on
-  the exited process's exact `(pid, start_time)` identity, so it cannot erase a successor
-  recorded under the same app name. A failed spawn and a spawn that raises follow the
-  same restore/backoff path. An exit during the startup health gate continues the same
-  retry budget rather than stranding the enabled app.
+  in-flight spawn instead of reading an absent record as free and, on a fixed port,
+  adopting the forked server the drain is about to end; a start that follows a stop
+  in that span cannot spawn until the flock is released, and a waiter whose window
+  runs out finds the flock held and leaves the reservation alone. A stop during the
+  drain removes the reservation and records STOP as usual. Failing to take the flock
+  counts as a failed attempt and is retried on the same cadence. PID-file cleanup is
+  likewise conditional on the exited process's exact `(pid, start_time)` identity, so
+  it cannot erase a successor recorded under the same app name. A failed spawn and a
+  spawn that raises follow the same restore/backoff path. An exit during the startup
+  health gate continues the same retry budget rather than stranding the enabled app.
 - **An HTTP failure from a live process is not decisive.** A backend can be
   briefly busy, so demotion needs `_HEALTH_WATCH_FAILURES` consecutive misses;
   demoting on a single miss would let one slow response take a working app

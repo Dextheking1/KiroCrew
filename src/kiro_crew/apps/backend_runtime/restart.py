@@ -10,6 +10,7 @@ while the app stays positively enabled.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -273,44 +274,63 @@ def _restart_exited_backend(ap: AppProcess, returncode: int | None) -> bool:
         if shutdown_event.wait(delay):
             return False
 
-        # Re-check after waiting. ``stop_app_backend`` takes the same serialization
-        # before popping, so a deliberate stop cannot race this removal into a respawn.
-        post_wait_identity_moved = False
-        with _health_reconcile_lock:
-            if shutdown_event.is_set() or _app_enabled_state(app_name) is not True:
-                return False
-            with _lock:
-                proc = ap.proc
-                if _processes.get(app_name) is not ap:
-                    post_wait_identity_moved = True
-                elif proc is None or proc.poll() is None:
-                    return False
-                else:
-                    # The dead record is swapped for a restart-owned STARTING
-                    # reservation rather than popped. Until the drain below is done,
-                    # a concurrent start sees a spawn in flight and waits on it; an
-                    # absent record would read as "free to start", and a fixed-port
-                    # start could adopt the server the drain is about to end.
-                    reservation = AppProcess(
-                        app_name=app_name, starting=True, started_at=time.time()
-                    )
-                    _processes[app_name] = reservation
-                    _allocated_ports.pop(app_name, None)
-                    _restart_attempts[app_name] = previous_attempts + 1
-                    lifecycle_snapshot = _lifecycle_generation.get(app_name, (0, _LIFECYCLE_START))
-
-        if post_wait_identity_moved:
-            settlement = _settle_superseding_start(app_name, ap, None)
-            if settlement == "continue":
-                continue
-            return settlement == "return_true"
-
+        # The app's lifecycle flock is taken BEFORE the re-check, in the spawn path's
+        # order (flock, then ``_health_reconcile_lock``, then ``_lock``), and held until
+        # just before the replacement spawn, which takes it itself (it is not
+        # re-entrant). Taking it only after the reservation below was published would
+        # leave a gap in which a stop could remove the reservation and a start take the
+        # flock first and adopt the server the drain is about to end. While it is held,
+        # a start's spawn waits for it, and a waiter whose window runs out probes it,
+        # finds the owner still working and leaves the reservation alone.
+        flock = contextlib.ExitStack()
         try:
-            # Held across forget + drain: a waiter whose window runs out probes this
-            # flock, and a held flock tells it the reservation's owner is still
-            # working, so the reservation is not cleared mid-drain. Released before
-            # the spawn, which takes the same (non-re-entrant) flock itself.
-            with app_backend_lifecycle_flock(app_name):
+            flock.enter_context(app_backend_lifecycle_flock(app_name))
+        except Exception as exc:  # noqa: BLE001 — retried on the cadence, like a failed spawn
+            flock.close()
+            logger.warning(
+                "App %s backend restart attempt %d could not take the lifecycle lock: %s",
+                app_name,
+                attempt_number,
+                exc,
+            )
+            with _lock:
+                if _processes.get(app_name) is ap:
+                    _restart_attempts[app_name] = previous_attempts + 1
+            continue
+
+        reservation: AppProcess | None = None
+        post_wait_identity_moved = False
+        try:
+            # Re-check after waiting. ``stop_app_backend`` takes the same serialization
+            # before popping, so a deliberate stop cannot race this removal into a
+            # respawn.
+            with _health_reconcile_lock:
+                if shutdown_event.is_set() or _app_enabled_state(app_name) is not True:
+                    return False
+                with _lock:
+                    proc = ap.proc
+                    if _processes.get(app_name) is not ap:
+                        post_wait_identity_moved = True
+                    elif proc is None or proc.poll() is None:
+                        return False
+                    else:
+                        # The dead record is swapped for a restart-owned STARTING
+                        # reservation rather than popped. Until the drain below is
+                        # done, a concurrent start sees a spawn in flight and waits on
+                        # it; an absent record would read as "free to start", and a
+                        # fixed-port start could adopt the server the drain is about
+                        # to end.
+                        reservation = AppProcess(
+                            app_name=app_name, starting=True, started_at=time.time()
+                        )
+                        _processes[app_name] = reservation
+                        _allocated_ports.pop(app_name, None)
+                        _restart_attempts[app_name] = previous_attempts + 1
+                        lifecycle_snapshot = _lifecycle_generation.get(
+                            app_name, (0, _LIFECYCLE_START)
+                        )
+
+            if not post_wait_identity_moved:
                 _forget_app_pid_if(app_name, ap.pid, ap.pid_start_time)
                 # The dead root's tree goes before its replacement is spawned: a
                 # launcher whose forked server outlived it would otherwise keep the
@@ -333,15 +353,25 @@ def _restart_exited_backend(ap: AppProcess, returncode: int | None) -> bool:
                     except OSError:
                         pass
 
-            verdict = _activation_denied(app_name, "restart")
+                verdict = _activation_denied(app_name, "restart")
         finally:
             # Every path past this point (denial, transient retry, spawn) expects the
             # reservation gone: the spawn would await it, and the transient path's
             # settle restores ``ap`` only into an empty slot. Identity-checked so a
-            # stop or a successor that replaced it is left alone.
-            with _lock:
-                if _processes.get(app_name) is reservation:
-                    _processes.pop(app_name, None)
+            # stop or a successor that replaced it is left alone; removed before the
+            # flock is released.
+            if reservation is not None:
+                with _lock:
+                    if _processes.get(app_name) is reservation:
+                        _processes.pop(app_name, None)
+            flock.close()
+
+        if post_wait_identity_moved:
+            settlement = _settle_superseding_start(app_name, ap, None)
+            if settlement == "continue":
+                continue
+            return settlement == "return_true"
+
         if verdict.denied and not verdict.transient:
             logger.warning(
                 "App %s backend not restarted: blocked by activation policy: %s",
