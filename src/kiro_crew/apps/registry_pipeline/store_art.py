@@ -41,6 +41,7 @@ What the prewarm does NOT do, each of which is why the trust argument holds:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -1113,7 +1114,20 @@ async def _fetch_owner_tier_store_assets(entry: dict[str, Any], registry_name: s
 
     tmp_root: str | None = None
     try:
-        tmp_root = await asyncio.to_thread(tempfile.mkdtemp, prefix="kirocrew-store-art-")
+        # The scratch dir is made off the loop, so a cancel can land while that
+        # thread is still creating it -- before ``tmp_root`` is bound, which would
+        # leave the ``finally`` nothing to remove. Shield the hop and, on a cancel,
+        # wait for the thread's path so the ``finally`` still removes the dir.
+        mkdtemp_task = asyncio.ensure_future(
+            asyncio.to_thread(tempfile.mkdtemp, prefix="kirocrew-store-art-")
+        )
+        try:
+            tmp_root = await asyncio.shield(mkdtemp_task)
+        except asyncio.CancelledError:
+            # A failed mkdtemp made no dir; the cancel is what propagates either way.
+            with contextlib.suppress(Exception):
+                tmp_root = await asyncio.shield(mkdtemp_task)
+            raise
         # Owner posture: the same pair the install path grants after
         # ``_owner_tier_confirmed`` -- owner credentials plus the context sandbox
         # mode -- and the same audit record, under this path's own operation name

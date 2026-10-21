@@ -214,6 +214,62 @@ class TestCopyCancellation:
         hop.check()
         assert removal_saw_worker_returned == [True], removal_saw_worker_returned
 
+    @pytest.mark.asyncio
+    async def test_a_cancel_during_the_scratch_mkdtemp_still_removes_the_dir(self, monkeypatch):
+        """A cancel that lands while the scratch dir is still being made off the loop
+        (a slow runner, where the budget fires during that thread hop) must not leave
+        the dir behind: the thread finishes making it after the cancel, and the
+        cleanup still removes it.
+
+        The cancel is sent once the mkdtemp thread is OBSERVED running, and the
+        thread makes the dir only after the cancel was sent, so the ordering is
+        fixed rather than raced against a short budget."""
+        import asyncio
+        import os
+        import tempfile
+
+        from kiro_crew.apps.registry_pipeline import store_art
+
+        reg = _pin_registry(monkeypatch, _TRUST_OWNER)
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        made: list[str] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def _held_mkdtemp(*args, **kwargs):
+            if kwargs.get("prefix") != "kirocrew-store-art-":
+                return real_mkdtemp(*args, **kwargs)
+            try:
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(timeout=_BARRIER_CEILING_SECS), "never released"
+                path = real_mkdtemp(*args, **kwargs)
+                made.append(path)
+                return path
+            finally:
+                finished.set()
+
+        _fake_fetch(monkeypatch, ART, dict(MANIFEST, screenshots=["ui/shot-1.png"]))
+        monkeypatch.setattr(store_art.tempfile, "mkdtemp", _held_mkdtemp)
+        # A batch budget that never fires: the only cancellation is the one below.
+        monkeypatch.setattr(reg_mod, "_PREWARM_BATCH_BUDGET", 3600.0)
+
+        task = asyncio.ensure_future(_prewarm_owner_tier_store_assets(reg, [_entry()]))
+        try:
+            await _await_barrier(entered, "the mkdtemp thread", lambda: f"done={task.done()}")
+        finally:
+            task.cancel()
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await _settled(task, "the cancelled prewarm")
+        # The thread outlives an unshielded await; wait for it before judging.
+        assert await asyncio.to_thread(finished.wait, _BARRIER_CEILING_SECS)
+
+        assert made, "the mkdtemp thread never made the scratch dir"
+        leaked = [p for p in made if os.path.exists(p)]
+        assert not leaked, f"a cancel during mkdtemp leaked the scratch dir: {leaked}"
+
 
 # ---------------------------------------------------------------------------
 # The two call sites
