@@ -24,12 +24,13 @@ interface MessageReactionBarProps {
  *
  * The four emoji render inline as direct toggle buttons so a reaction is a
  * SINGLE click — the frozen requirement of the issue (#22482). This exceeds the
- * `max-two-buttons-per-row` default; the product owner granted an explicit
- * override on the PR citing that single-click requirement. The set is fixed and
- * tiny (four known toggles, never growing), so it reads as one compact control
- * rather than an open-ended action row, and it sits on its OWN row under the
- * bubble — never folded into the existing action strip — so it never pushes
- * those icons to wrap.
+ * `max-two-buttons-per-row` default; that exception is recorded as a decision
+ * in docs/decisions/2026-10-22-message-reactions-are-a-fixed-four-emoji-one-click-row.md,
+ * because a dropdown (open, then select) would be two clicks and break the
+ * single-click spec. The set is fixed and tiny (four known toggles, never
+ * growing), so it reads as one compact control rather than an open-ended action
+ * row, and it sits on its OWN row under the bubble — never folded into the
+ * existing action strip — so it never pushes those icons to wrap.
  *
  * A placed emoji stays filled past the hover window, so a reacted message reads
  * as a quick "where I left off" marker when scrolling back through a long

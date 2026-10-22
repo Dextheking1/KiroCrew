@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { isLookPreviewFrame } from '../utils/lookPreview'
 import { useQueryClient } from '@tanstack/react-query'
+import { reactionTogglePending, deferReactionInvalidation } from './useChatReactions'
 import { useAppDispatch } from '../store'
 import { sseTodoUpdate, sseMcpReportUpdate, sseSlotTitle, triggerRefresh, fetchSlots, remoteSlotRead, sseSubagentStatus, sseSubagentText, type SubagentDetail } from '../store/dashboardSlice'
 import { addNotification, ackNotificationByTs, unackNotificationByTs, clearAllNotifications } from '../store/notificationsSlice'
@@ -324,7 +325,17 @@ export function useWebSocket() {
             // — no reaction content crosses the WebSocket.
             const slotKey = (data as { slot_key?: string }).slot_key
             if (slotKey) {
-              queryClient.invalidateQueries({ queryKey: ['chat-reactions', slotKey] })
+              // Hold the refetch if a local toggle is still in flight for this
+              // slot: refetching now would drop that toggle's optimistic entry
+              // and a queued off-toggle would then read the identity as absent
+              // and POST instead of DELETE (the hook's per-slot ledger). The
+              // deferred refresh is flushed when the last local toggle settles,
+              // so the other tab's change still lands.
+              if (reactionTogglePending(slotKey)) {
+                deferReactionInvalidation(slotKey)
+              } else {
+                queryClient.invalidateQueries({ queryKey: ['chat-reactions', slotKey] })
+              }
             }
             break
           }

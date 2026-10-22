@@ -1,9 +1,70 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { reactionsApi, type ChatReaction, type ReactMessageBody } from '../api/reactions'
 import { secureRandomId } from '../utils/secureId'
 
 const reactionQueryKey = (slotKey: string | undefined) => ['chat-reactions', slotKey] as const
+
+// How many reaction toggles are mid-flight per slot, shared across every
+// consumer in this tab (the hook AND the WebSocket frame router). A toggle
+// holds an optimistic entry in the ['chat-reactions', slot] cache until its
+// request settles; refetching that cache while the entry is pending drops it,
+// and a queued off-toggle then reads the identity as absent and sends POST
+// instead of DELETE — persisting the reaction the user ended OFF. The hook's
+// own settled refetch already waits for this to drain (see `settleWhenIdle`);
+// this module-level ledger extends the same guard to the `reactions_changed`
+// WebSocket invalidation, which lives in another module and would otherwise
+// bypass it entirely. Keyed by slot_key so a toggle on one slot never defers
+// another slot's refresh.
+const pendingToggles = new Map<string, number>()
+// Deferred `reactions_changed` invalidations: a slot whose refetch arrived
+// while a toggle was still pending. Drained once that slot hits zero pending,
+// so the other tab's change still lands — just after local intent commits.
+const deferredInvalidations = new Set<string>()
+
+function beginToggle(slotKey: string): void {
+  pendingToggles.set(slotKey, (pendingToggles.get(slotKey) ?? 0) + 1)
+}
+
+function endToggle(slotKey: string, qc: QueryClient): void {
+  const next = Math.max(0, (pendingToggles.get(slotKey) ?? 0) - 1)
+  if (next === 0) {
+    pendingToggles.delete(slotKey)
+    // Nothing is pending for this slot now: flush a WS refresh that we held
+    // back so a concurrent-tab change still reaches this view.
+    if (deferredInvalidations.delete(slotKey)) {
+      qc.invalidateQueries({ queryKey: reactionQueryKey(slotKey) })
+    }
+  } else {
+    pendingToggles.set(slotKey, next)
+  }
+}
+
+/** True when a reaction toggle is still in flight for `slotKey`. The
+ *  `reactions_changed` frame handler checks this so a cross-tab refetch never
+ *  stomps an optimistic entry that a queued off-toggle still needs to read. */
+export function reactionTogglePending(slotKey: string): boolean {
+  return (pendingToggles.get(slotKey) ?? 0) > 0
+}
+
+/** Record that a `reactions_changed` refresh for `slotKey` was held back
+ *  because a toggle was in flight; it is flushed when the last toggle settles. */
+export function deferReactionInvalidation(slotKey: string): void {
+  deferredInvalidations.add(slotKey)
+}
+
+/** Test seam: drop all cross-consumer toggle state between cases. */
+export function __resetReactionToggleLedgerForTests(): void {
+  pendingToggles.clear()
+  deferredInvalidations.clear()
+}
+
+/** Test seam: pin a slot's pending-toggle count so a WS-frame test can drive
+ *  the deferral branch without standing up real mutations. */
+export function __setReactionTogglePendingForTests(slotKey: string, count: number): void {
+  if (count <= 0) pendingToggles.delete(slotKey)
+  else pendingToggles.set(slotKey, count)
+}
 
 /** A failed reaction, scoped to the message it happened on so only that row's
  *  bar shows the notice rather than every bar on the page. */
@@ -55,12 +116,16 @@ export function useChatReactions(slotKey: string | undefined) {
   const settleWhenIdle = useCallback(() => {
     inFlight.current = Math.max(0, inFlight.current - 1)
     if (inFlight.current === 0) qc.invalidateQueries({ queryKey })
-  }, [qc, queryKey])
+    // Release this toggle from the cross-consumer ledger too, flushing any
+    // `reactions_changed` refresh that was held back while it was pending.
+    if (slotKey) endToggle(slotKey, qc)
+  }, [qc, queryKey, slotKey])
 
   const { mutateAsync: addReactionAsync } = useMutation({
     mutationFn: (body: ReactMessageBody) => reactionsApi.create(body),
     onMutate: async (body: ReactMessageBody) => {
       inFlight.current += 1
+      beginToggle(body.slot_key)
       await qc.cancelQueries({ queryKey })
       const optimisticId = `temp-${secureRandomId()}`
       const optimistic: ChatReaction = {
@@ -89,9 +154,20 @@ export function useChatReactions(slotKey: string | undefined) {
     },
     onSuccess: (real, _body, ctx) => {
       if (!ctx) return
-      qc.setQueryData<ChatReaction[]>(queryKey, old =>
-        (old ?? []).map(r => r.id === ctx.optimisticId ? real : r),
-      )
+      // Replace the optimistic row with the server record. If the optimistic
+      // row is GONE — a concurrent refetch (e.g. a `reactions_changed` frame
+      // from another identity's save) dropped it before this resolved — append
+      // `real` instead of silently losing it, so a queued off-toggle still
+      // reads the reaction as present and sends DELETE rather than POST. The
+      // ledger guard above normally prevents the drop; this makes the create
+      // self-healing even if an invalidation slips through.
+      qc.setQueryData<ChatReaction[]>(queryKey, old => {
+        const list = old ?? []
+        if (list.some(r => r.id === ctx.optimisticId)) {
+          return list.map(r => r.id === ctx.optimisticId ? real : r)
+        }
+        return list.some(r => r.id === real.id) ? list : [...list, real]
+      })
     },
     onSettled: settleWhenIdle,
   })
@@ -101,6 +177,7 @@ export function useChatReactions(slotKey: string | undefined) {
       reactionsApi.remove(slotKey!, mid, emoji),
     onMutate: async ({ mid, emoji }: { mid: string; emoji: string }) => {
       inFlight.current += 1
+      if (slotKey) beginToggle(slotKey)
       await qc.cancelQueries({ queryKey })
       // Snapshot just the removed records so a failed delete restores exactly
       // them by id, without touching other identities' pending entries.

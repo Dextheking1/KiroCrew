@@ -17,6 +17,11 @@ import { Provider } from 'react-redux'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createTestStore } from './helpers'
 import { useWebSocket } from '../hooks/useWebSocket'
+import {
+  reactionTogglePending,
+  __resetReactionToggleLedgerForTests,
+  __setReactionTogglePendingForTests,
+} from '../hooks/useChatReactions'
 
 vi.mock('../api/client', () => ({
   api: {
@@ -60,6 +65,7 @@ describe('useWebSocket reactions_changed frame', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     WS_INSTANCES.length = 0
+    __resetReactionToggleLedgerForTests()
     testStore = createTestStore()
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     vi.stubGlobal('WebSocket', MockWebSocket)
@@ -118,5 +124,47 @@ describe('useWebSocket reactions_changed frame', () => {
     const keys = spy.mock.calls.map(c => JSON.stringify(c[0]?.queryKey))
     expect(keys).toContain(JSON.stringify(['chat-reactions', 'dashboard:chat-1']))
     expect(keys).not.toContain(JSON.stringify(['chat-reactions', 'dashboard:chat-2']))
+  })
+
+  it('DEFERS invalidation while a local toggle is in flight for that slot', () => {
+    // The race the AI review flagged: a `reactions_changed` broadcast (from
+    // reacting on message A) must not refetch and drop message B's pending
+    // optimistic entry, or B's queued off-toggle reads B as absent and POSTs
+    // instead of DELETEs. With a toggle pending for the slot, the frame holds
+    // the refetch back rather than firing it.
+    __setReactionTogglePendingForTests('dashboard:chat-42', 1)
+    expect(reactionTogglePending('dashboard:chat-42')).toBe(true)
+
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    renderHook(() => useWebSocket(), { wrapper })
+    const ws = WS_INSTANCES[0]
+    act(() => { ws.simulateOpen() })
+    spy.mockClear()
+
+    act(() => {
+      ws.simulateMessage({ type: 'reactions_changed', data: { slot_key: 'dashboard:chat-42' } })
+    })
+
+    const keys = spy.mock.calls.map(c => JSON.stringify(c[0]?.queryKey))
+    expect(keys).not.toContain(JSON.stringify(['chat-reactions', 'dashboard:chat-42']))
+  })
+
+  it('still invalidates a DIFFERENT slot while one slot has a toggle in flight', () => {
+    // The deferral is per-slot: a toggle pending on chat-42 must not hold back
+    // a cross-tab change on chat-7.
+    __setReactionTogglePendingForTests('dashboard:chat-42', 1)
+
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    renderHook(() => useWebSocket(), { wrapper })
+    const ws = WS_INSTANCES[0]
+    act(() => { ws.simulateOpen() })
+    spy.mockClear()
+
+    act(() => {
+      ws.simulateMessage({ type: 'reactions_changed', data: { slot_key: 'dashboard:chat-7' } })
+    })
+
+    const keys = spy.mock.calls.map(c => JSON.stringify(c[0]?.queryKey))
+    expect(keys).toContain(JSON.stringify(['chat-reactions', 'dashboard:chat-7']))
   })
 })
