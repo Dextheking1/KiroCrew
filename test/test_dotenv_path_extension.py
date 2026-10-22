@@ -130,6 +130,42 @@ class TestOnlyAbsoluteDirectoriesPass:
         assert added == [os.path.expanduser("~/bin")]
         assert os.path.isabs(added[0])
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="pwd is POSIX-only; ~name hits the SAM DB on Windows"
+    )
+    def test_a_tilde_account_entry_is_dropped_without_an_account_lookup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``~otheruser`` entry must never reach an account-database lookup.
+
+        :func:`os.path.expanduser` resolves ``~name`` by calling
+        ``pwd.getpwnam`` (POSIX) / the SAM database (Windows), a synchronous
+        directory-service call. This validator runs on the gateway event loop
+        (the ``.env`` PATH hot-reload applier reaches it from ``_cycle``), so a
+        slow LDAP/SSSD/AD lookup would stall chat processing and the liveness
+        heartbeat. The entry is dropped by the absolute-path gate -- the same as
+        any non-absolute entry -- and no name lookup is attempted.
+        """
+        import pwd  # POSIX-only; this guard matches the module's platform gate
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+
+        def _fail(_name: str) -> object:  # pragma: no cover - must never run
+            raise AssertionError("pwd.getpwnam was called on the event loop path")
+
+        monkeypatch.setattr(pwd, "getpwnam", _fail)
+        base = _dirs(tmp_path, "sys")[0]
+        good = _dirs(tmp_path, "good")[0]
+        _setup(monkeypatch, tmp_path, [f"PATH=~someaccount/bin{SEP}{good}"], base)
+        with caplog.at_level(logging.WARNING, logger="kiro_crew.env"):
+            _load()
+        assert [entry for entry in _path() if entry != base] == [good]
+        dropped = [r.getMessage() for r in caplog.records if ".env PATH" in r.getMessage()]
+        assert any("~someaccount/bin" in m for m in dropped)
+
 
 class TestPathIsASupportedKey:
     def test_a_path_line_draws_no_unknown_key_warning_but_a_plain_unknown_key_still_does(

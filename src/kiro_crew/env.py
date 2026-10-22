@@ -152,15 +152,73 @@ def _warn_rejected_bin_dir(raw: object, source: str) -> None:
     )
 
 
+def _expanduser_no_account_lookup(raw: str) -> str:
+    """Expand a leading ``~``/``~/`` against the current user WITHOUT a name lookup.
+
+    :func:`os.path.expanduser` resolves a ``~otheruser`` prefix by calling
+    ``pwd.getpwnam`` (POSIX) / the SAM database (Windows), a synchronous
+    directory-service call. On a host backed by LDAP/SSSD/AD a slow or
+    uncached lookup blocks for as long as the service takes to answer -- and
+    every consumer of this validator (the ``.env`` ``PATH`` hot-reload applier,
+    the MCP probe's ``mcp.extra_path_dirs`` read, the agent-config resolver)
+    reaches it ON THE EVENT LOOP, so that call would freeze chat processing and
+    the liveness heartbeat until it returns. ``~otheruser`` bin dirs are not a
+    form this seam has ever needed to support; an operator who means a specific
+    account can always write the absolute path.
+
+    So only the current user's home is expanded, and only from ``$HOME`` (or the
+    Windows profile vars) -- the values a process already holds in its own
+    environment, read without touching any account database. A leading
+    ``~otheruser`` is left verbatim: it is not absolute, so the
+    :func:`_validated_bin_dir` gate drops it with the same warning a relative or
+    unexpanded entry draws. ``os.path.expanduser`` with ``$HOME`` set takes this
+    same no-lookup branch for ``~``/``~/``, so this matches its result for every
+    form the gate would accept, with no call that can block.
+    """
+    if not raw.startswith("~"):
+        return raw
+    # Only a bare ``~`` or a ``~/...`` / ``~\\...`` prefix names the CURRENT
+    # user; a ``~name`` prefix names another account and must NOT be resolved
+    # here (that is the blocking getpwnam/SAM path). Leave the latter verbatim.
+    rest = raw[1:]
+    if rest and rest[0] not in ("/", os.sep):
+        return raw
+    home = (
+        os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or (
+            os.environ.get("HOMEDRIVE", "") + os.environ.get("HOMEPATH", "")
+            if os.environ.get("HOMEPATH")
+            else ""
+        )
+    )
+    if not home:
+        # No home in the environment: without a name lookup there is nothing to
+        # expand to, so leave it verbatim and let the absolute-path gate drop it
+        # rather than silently resolving via an account database.
+        return raw
+    return home + rest
+
+
 def _validated_bin_dirs(values: object, source: str) -> list[str]:
     """Validate an operator-supplied LIST of bin directories, dropping bad ones.
 
-    ``~`` is expanded first (a config file is where a human writes
-    ``~/.pixi/bin``), then each entry passes the same
+    A leading ``~``/``~/`` is expanded first against the CURRENT user's home
+    (:func:`_expanduser_no_account_lookup`, a config file is where a human
+    writes ``~/.pixi/bin``), then each entry passes the same
     :func:`_validated_bin_dir` gate as this module's own well-known dirs — one
     absolute directory, no path separator, no NUL. A rejected entry is dropped
     rather than failing the whole list: one typo must not cost an operator every
     other directory they declared, nor abort PATH construction for every spawn.
+
+    The expansion deliberately does NOT resolve a ``~otheruser`` prefix: that
+    form makes :func:`os.path.expanduser` call ``pwd.getpwnam`` synchronously,
+    and this validator runs on the event loop (the ``.env`` PATH hot-reload
+    applier, the MCP probe, the agent-config resolver all reach it there), where
+    a slow directory-service lookup would stall the gateway. A ``~otheruser``
+    entry is left unexpanded and then dropped by the absolute-path gate, the
+    same as any other non-absolute entry; an operator who means one account
+    writes its absolute path.
 
     *values* is typed ``object`` because both sources are hand-editable and can
     legally parse as something other than a list of strings.
@@ -171,7 +229,9 @@ def _validated_bin_dirs(values: object, source: str) -> list[str]:
         return []
     out: list[str] = []
     for raw in values:
-        entry = _validated_bin_dir(os.path.expanduser(raw)) if isinstance(raw, str) else None
+        entry = (
+            _validated_bin_dir(_expanduser_no_account_lookup(raw)) if isinstance(raw, str) else None
+        )
         if entry is None:
             _warn_rejected_bin_dir(raw, source)
             continue
@@ -248,8 +308,9 @@ def extend_process_path(value: str) -> None:
     always has a ``PATH``, so this key cannot be applied the way every other one
     is. The line is read as directories to ADD, never as a replacement: each entry
     goes through the absolute-directory gate the other operator lists use
-    (:func:`_validated_bin_dirs`, so ``~`` expands and a relative or unexpanded
-    entry such as ``$HOME/bin`` is dropped with a warning), and lands behind the
+    (:func:`_validated_bin_dirs`, so a leading ``~``/``~/`` expands to the
+    current user's home and a relative or unexpanded entry such as ``$HOME/bin``
+    or a ``~otheruser`` prefix is dropped with a warning), and lands behind the
     ``PATH`` the process already has, so it can add a launcher but never shadow a
     system tool. The existing string is kept byte for byte and an entry it
     already holds is skipped, so the repeated loads of the file do not grow it.
