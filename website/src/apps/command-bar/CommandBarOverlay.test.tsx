@@ -179,6 +179,27 @@ describe('CommandBarOverlay rows', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/Enter/)
   })
 
+  it('starts from the type-ahead the host caught, and Enter acts on it', async () => {
+    // Keys typed while the chunk loaded arrive as `initialQuery`. Without them the
+    // first render is the idle root, and Enter opens the newest Recent session.
+    resolvingDispatch()
+    const onClose = vi.fn()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <CommandBarOverlay open onClose={onClose} initialQuery="New session" />
+      </QueryClientProvider>,
+    )
+    const input = screen.getByRole('combobox') as HTMLInputElement
+    expect(input.value).toBe('New session')
+    // The caret sits after the caught text, so the next key extends it.
+    expect(input.selectionStart).toBe('New session'.length)
+    expect(screen.getAllByRole('option')[0].textContent).toContain('New Session')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(dispatch).toHaveBeenCalledWith({ type: 'createSlot', arg: undefined })
+  })
+
   it('navigates to the new session so a success is visible off the chat page', async () => {
     // Created from Settings or Task Runner without this, the session lands off-screen
     // and the success reads as a failure -- the user runs it again into a duplicate.
@@ -847,10 +868,14 @@ describe('CommandBarOverlay rows', () => {
     const input = screen.getByRole('combobox')
     const footer = () =>
       (document.querySelector('[role="dialog"]') as HTMLElement).textContent ?? ''
+    let px = 0
     const selectRow = (title: string) => {
       const target = screen.getAllByRole('option').findIndex(o => o.textContent?.includes(title))
       expect(target).toBeGreaterThanOrEqual(0)
-      fireEvent.mouseEnter(screen.getAllByRole('option')[target])
+      // Hover selects on real pointer motion, so the pointer has to move across the row.
+      const row = screen.getAllByRole('option')[target]
+      fireEvent.mouseMove(row, { clientX: ++px, clientY: px })
+      fireEvent.mouseMove(row, { clientX: ++px, clientY: px })
     }
     selectRow('New Session')
     expect(footer()).toContain('Run')
@@ -858,6 +883,55 @@ describe('CommandBarOverlay rows', () => {
     selectRow('Search Sessions')
     expect(footer()).toContain('Open View')
     expect(input.getAttribute('aria-activedescendant')).toBeTruthy()
+  })
+
+  it('keeps the selection when rows re-render under a pointer that has not moved', () => {
+    // Re-ranking moves rows under a resting pointer, and the browser answers with
+    // mouseover, mouseenter and a mousemove at the same coordinates. None of that is
+    // the reader pointing at a row, so Enter must still act on the top match.
+    mount()
+    const input = screen.getByRole('combobox')
+    const active = () => input.getAttribute('aria-activedescendant')
+    const restOn = (row: HTMLElement) => {
+      fireEvent.mouseOver(row, { clientX: 700, clientY: 260 })
+      fireEvent.mouseEnter(row, { clientX: 700, clientY: 260 })
+      fireEvent.mouseMove(row, { clientX: 700, clientY: 260 })
+    }
+    restOn(screen.getAllByRole('option')[2])
+    fireEvent.change(input, { target: { value: 'new sess' } })
+    restOn(screen.getAllByRole('option')[1])
+    fireEvent.change(input, { target: { value: 'new session' } })
+    restOn(screen.getAllByRole('option')[1])
+    expect(active()).toBe('command-bar-row-0')
+    // Real motion across a row still selects it, which is what hover is for.
+    fireEvent.mouseMove(screen.getAllByRole('option')[1], { clientX: 704, clientY: 262 })
+    expect(active()).toBe('command-bar-row-1')
+  })
+
+  it.each([
+    ['a group header', () => screen.getAllByRole('option')[0].previousElementSibling as HTMLElement],
+    ['the backdrop', () => document.querySelector('[role="presentation"]') as HTMLElement],
+  ])('keeps the selection when the pointer stops on %s and the list re-ranks', (_, restTarget) => {
+    // The pointer crosses rows, then comes to rest somewhere that is not a row. The
+    // re-ranked list then puts a row under it, and the browser fires a mousemove there
+    // at the resting coordinates. Compared against the last ROW position, that would
+    // read as motion and select the row, so Enter would act on it instead of the top match.
+    mount()
+    const input = screen.getByRole('combobox')
+    const active = () => input.getAttribute('aria-activedescendant')
+    const rest = restTarget()
+    expect(rest).toBeTruthy()
+    fireEvent.mouseMove(screen.getAllByRole('option')[2], { clientX: 600, clientY: 300 })
+    fireEvent.mouseMove(screen.getAllByRole('option')[2], { clientX: 602, clientY: 302 })
+    expect(active()).toBe('command-bar-row-2')
+    fireEvent.mouseMove(rest, { clientX: 650, clientY: 340 })
+    fireEvent.change(input, { target: { value: 'new session' } })
+    expect(active()).toBe('command-bar-row-0')
+    const rows = screen.getAllByRole('option')
+    fireEvent.mouseOver(rows[1], { clientX: 650, clientY: 340 })
+    fireEvent.mouseEnter(rows[1], { clientX: 650, clientY: 340 })
+    fireEvent.mouseMove(rows[1], { clientX: 650, clientY: 340 })
+    expect(active()).toBe('command-bar-row-0')
   })
 
   it('shows the hidden alias that matched so no listed row is unexplained', () => {

@@ -31,6 +31,11 @@ test/test_agent.py::TestResolveKirocrewBin::test_accepts_wrapper_bin_from_walk
 test/test_agent.py::TestResolveKirocrewBin::test_finds_bin_in_parent_hierarchy
 test/test_agent.py::TestResolveKirocrewBin::test_prefers_venv_bin_over_project_bin
 test/test_agent.py::TestResolveKirocrewBin::test_venv_install_falls_through_to_step1
+# Drives a real AcpRuntime.spawn through the shared TestRuntimeProjectedLaunchDocuments
+# harness, which simulates only asyncio's subprocess; Windows spawns through the
+# cleanup-owned child (pin/identity) the harness cannot fake. The decision it pins is
+# platform-independent and runs on the POSIX matrix.
+test/test_app_agent_launch_copy.py::TestTheCopyRunsTheLaunchSteeringDecision::test_the_decision_runs_on_the_copys_view
 test/test_app_backend.py::TestShellDispatch::test_explicit_backend_type_exec_routes_to_shell_branch
 test/test_app_backend.py::TestShellDispatch::test_non_executable_bash_entry_honors_shebang
 test/test_app_backend.py::TestShellDispatch::test_non_executable_sh_entry_falls_back_to_bin_sh
@@ -118,7 +123,6 @@ test/test_prompts.py::TestExpandPromptMention::test_unreadable_file
 test/test_refresh_tokens.py::test_tr_u_17_persistence_file_mode_0600
 test/test_review_fixes.py::TestEnvPermissions::test_env_permissions_enforced
 test/test_review_fixes.py::TestLoaderChmodWarning::test_chmod_enforced_on_open_permissions
-test/test_sandbox_backend_cache.py::test_probe_child_killed_by_signal_is_transient
 test/test_sandbox_launcher_sweep.py::TestNamespaceArgvPlacement::test_launcher_has_pid_in_name
 test/test_sandbox_launcher_sweep.py::TestNamespaceArgvPlacement::test_launcher_in_run_dir
 test/test_sandbox_launcher_sweep.py::TestNamespaceArgvPlacement::test_launcher_is_executable
@@ -131,7 +135,7 @@ test/test_service_environment.py::TestServiceEnvironment::test_propagates_kiro_b
 test/test_service_environment.py::TestServiceEnvironment::test_unit_escapes_percent_specifiers
 test/test_service_environment.py::TestServiceEnvironment::test_unit_includes_locale_and_kiro_bin
 test/test_service_environment.py::TestServiceEnvironment::test_unit_quotes_spaced_program_and_env
-test/test_session.py::TestResetWithPid::test_reset_with_pid_survives_shutdown_force_kills
+test/test_session_ending_verbs.py::TestResetWithPid::test_reset_with_pid_survives_shutdown_force_kills
 test/test_session_pid_sig.py::TestNoNofollowPlatform::test_lstat_open_swap_refused
 test/test_session_pid_sig.py::TestNoNofollowPlatform::test_regular_file_still_reads
 test/test_session_pid_sig.py::TestNoNofollowPlatform::test_symlink_present_at_lstat_refused

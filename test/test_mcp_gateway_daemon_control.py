@@ -94,7 +94,7 @@ def _daemon_on(path: Path, reply: bytes | None, *, chunked: bool = False):
                     # A stream hands back whatever is buffered, not whole frames.
                     for i in range(0, len(reply), 4):
                         conn.sendall(reply[i : i + 4])
-                        time.sleep(0.002)
+                        time.sleep(0.002)  # flake-ok: paces chunks so reads return partial frames
                 else:
                     conn.sendall(reply)
             except OSError:
@@ -397,7 +397,16 @@ class TestTheWindowsStopPathIsReachable:
     def test_the_doctor_reports_the_revision(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
     ) -> None:
-        """The in-app diagnosis an operator needs: which daemon, whose code."""
+        """The in-app diagnosis an operator needs: which daemon, whose code.
+
+        The install side is pinned to a git revision. ``code_fingerprint()`` is
+        cached per process, and on a POSIX runner with ``IS_WINDOWS`` set its
+        first call takes the mtime rule (no trusted git), which puts the two
+        sides on different rules and turns the mismatch into "another install".
+        """
+        import kiro_crew.code_fingerprint as fp_mod
+
+        monkeypatch.setattr(fp_mod, "code_fingerprint", lambda: "b4cf148542b8e6a5")
         monkeypatch.setattr(platform_compat, "IS_WINDOWS", True)
         monkeypatch.setattr(
             dc, "_ping_detailed", lambda p: ("ok", _pong(pid=9999, fingerprint="old-checkout"))

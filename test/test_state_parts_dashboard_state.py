@@ -360,6 +360,7 @@ _BASE_STATE_MEMBERS: dict[str, tuple[str, bool, bool, str]] = {
         False,
         "(self, slot_name: 'str', thread_ts: 'str', channel_id: 'str') -> 'None'",
     ),
+    "linked_session_busy": ("function", False, False, "(self, session_key: 'str') -> 'bool'"),
     "live_slot_count": ("function", False, False, "(self) -> 'int'"),
     "ensure_chat_reactions_loaded": ("function", True, False, "(self) -> 'None'"),
     "load_chat_pins": ("function", False, False, "(self) -> 'None'"),

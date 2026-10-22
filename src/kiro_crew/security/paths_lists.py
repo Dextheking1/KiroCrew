@@ -929,11 +929,15 @@ _WRITE_PROTECTED_HOME_PATHS: list[str] = [
     # NOT read that leaf, and an entry on this tier as well would make
     # ``security_posture`` publish "Reads allowed" for a path the read gate
     # refuses.
+    # app-agent-launch: the empty directory a launch copy's kiro-cli starts in
+    # (``apps.agent_launch.launch_process_cwd``); a spec written into it is the spec
+    # kiro-cli runs. Read-only in the sandbox for the same reason.
     for leaf in (
         "config.json",
         "config.local.json",
         "playwright-cli-config.json",
         "subagents",
+        "app-agent-launch",
     )
 ] + [
     # Ops Mission Control's on-call schedule. WRITE-protected, not read+write
@@ -1190,18 +1194,18 @@ _WRITE_PROTECTED_HOME_PATHS += [
     # it. So an agent that can write this file can enter ``<path>: {size, sha256}``
     # for a settings file the USER hand-wrote — the file is readable, so both values
     # are computable — and the next session adopts it: the user's project settings
-    # are overwritten with Crew's seed and unlinked on reset. As with the alias
-    # record, the damage is done by Crew's own trusted writer, and the digest check
-    # cannot defend it because the forger reads the same bytes it does.
+    # are overwritten with Crew's seed and unlinked on reset. The digest check cannot
+    # defend it, because the forger reads the same bytes Crew's own writer does.
     #
     # WRITE-protected, not read+write sensitive: the record holds no secret (it
     # names work dirs and digests), so the file-READ tools keep working and an
     # operator can still see why a seed was or was not adopted. There is no
-    # legitimate agent WRITE at all — ``seed_provenance.record`` writes
-    # the path directly through ``atomic_write``, which does not route through this
-    # gate.
-    f"{prefix}/settings_seeds.json"
+    # legitimate agent WRITE at all — ``seed_provenance.record`` writes through
+    # ``atomic_write``, outside this gate. Both the record's directory and its old
+    # top-level name (read by a process started before the upgrade) are protected.
+    f"{prefix}/{leaf}"
     for prefix in _CREW_HOME_PREFIXES
+    for leaf in ("seed-provenance", "settings_seeds.json")
 ]
 
 
@@ -1313,11 +1317,11 @@ _WRITE_PROTECTED_HOME_PATHS += [_KIRO_SETTINGS_MCP_JSON]
 
 #: The kiro-cli-owned entries on the write-only tier, as ONE list because they
 #: share an anchoring rule rather than only an owner: each is re-anchored under
-#: ``KIRO_HOME`` and each has its ``$HOME``-rooted form resolved, so a symlink
-#: anywhere below the home root cannot move the real file out from under the
-#: fence. BOTH halves are driven from this tuple -- the ``$HOME`` resolve loop and
-#: the ``KIRO_HOME`` re-anchoring -- so a third kiro-cli leaf joins both by landing
-#: here, and neither half can be the one somebody forgets.
+#: ``KIRO_HOME``, and like every entry each has its ``$HOME``-rooted form
+#: resolved, so a symlink anywhere below the home root cannot move the real file
+#: out from under the fence. The ``KIRO_HOME`` re-anchoring is driven from this
+#: tuple and the ``$HOME`` half from the entries themselves, so a third kiro-cli
+#: leaf joins both by landing here and in the write tier.
 _KIRO_CLI_WRITE_TIER_LEAVES: tuple[str, ...] = (
     _KIRO_AGENTS_DIR,
     _KIRO_SETTINGS_MCP_JSON,

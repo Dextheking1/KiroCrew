@@ -239,14 +239,16 @@ def test_workflow_routes_every_scope_without_changing_local_defaults(jobs):
         assert all('-m "not ipv6_required"' in command for command in commands)
         assert jobs[name]["strategy"]["matrix"]["group"] == list(range(1, 9))
     hosted = jobs["backend-test-ipv6"]
-    assert hosted["needs"] == ["changes", "await-fast-gate"]
+    assert hosted["needs"] == ["changes", "await-fast-gate", "lint-gate"]
     assert hosted["runs-on"] == "${{ matrix.os }}"
     assert hosted["strategy"] == {
         "max-parallel": 4,
         "fail-fast": False,
         "matrix": {"os": ["ubuntu-latest", "windows-latest"]},
     }
-    assert "if" not in hosted and "continue-on-error" not in hosted
+    # Not diff-gated: its only condition is the lint gate's own success.
+    assert hosted["if"] == "${{ !cancelled() && needs.lint-gate.result == 'success' }}"
+    assert "continue-on-error" not in hosted
     assert hosted["defaults"]["run"]["shell"] == "bash"
     run = _step(jobs, "backend-test-ipv6", "Run required")["run"]
     assert "-m ipv6_required" in run and "--file-shard" not in run

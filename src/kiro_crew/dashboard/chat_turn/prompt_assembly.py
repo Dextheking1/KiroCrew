@@ -24,13 +24,17 @@ if TYPE_CHECKING:
         _prompt_read_within_root,
         is_sensitive_path,
         logger,
-        redact_credentials,
-        redact_exfiltration_urls,
         safe_read_file_bytes_nolink,
         sel,
         served_provider_label,
         session_skill_globs,
         validate_file_path,
+    )
+    from kiro_crew.dashboard.chat_turn.context_cap import (
+        CONTEXT_CAP_TAIL_CHARS,
+        _context_cap_seed_head,
+        _drop_context_cap_seed,
+        _take_context_cap_seed,
     )
 
 
@@ -70,6 +74,8 @@ async def _session_replay_history(
             # durably-kept turn, because its replay only reaches the provider when
             # the stream starts.)
             state.sessions.consume_first_turn_history_owed(session_key)
+            # The reset dropped what a context-cap trim before it would have kept.
+            _drop_context_cap_seed(session_key)
             logger.info(
                 "Session replay suppressed by an explicit conversation reset: %s",
                 session_key,
@@ -81,6 +87,10 @@ async def _session_replay_history(
                 window_for_provider_client,
             )
 
+            # The cold start a conductor context-cap trim began (context_cap)
+            # replays a longer tail, behind the trim note and the ledger snapshot.
+            _trim_seed = _take_context_cap_seed(session_key)
+            _budget = {"budget_chars": CONTEXT_CAP_TAIL_CHARS} if _trim_seed else {}
             # Merge the disk transcript and a frozen live-window tail
             # before one budget pass. Exclude this request by identity,
             # whether or not the periodic flush has persisted it yet.
@@ -92,9 +102,12 @@ async def _session_replay_history(
                     pending_messages=list(slot.messages),
                     current_message=_current_replay_message,
                     model_window=window_for_provider_client(client),
+                    **_budget,
                 )
                 or ""
             )
+            if _trim_seed and compressed:
+                compressed = await _context_cap_seed_head(session_key) + compressed
             logger.info(
                 "Session replay: key=%s result=%s",
                 session_key,
@@ -330,8 +343,9 @@ def _resolve_prompt_mention(
     # line operate on exactly what the agent receives.
     content = _strip_yaml_frontmatter(content)
 
-    content, _ = redact_credentials(content)
-    content, _ = redact_exfiltration_urls(content)
+    from kiro_crew.security import redact
+
+    content = redact(content)
 
     # Inject SOP as instructions the agent must follow
     expanded = f"Execute the following instructions:\n\n{content}"
@@ -477,8 +491,9 @@ def _expand_dollar_skills(
     names: list[str] = []
     snapshots: list[dict[str, str]] = []
     for _token, name, body in resolved:
-        body, _ = redact_credentials(body)
-        body, _ = redact_exfiltration_urls(body)
+        from kiro_crew.security import redact
+
+        body = redact(body)
         blocks.append(f"[Skill: {name}]\n\n{body}")
         names.append(name)
         snapshots.append({"name": name, "body": body})

@@ -42,6 +42,8 @@ from kiro_crew.apps.manager_records import (
     app_data_dir,
     app_dir,
     get_app_manifest,
+    hold_app_record_lock,
+    holds_app_record_locks,
     refresh_app_config_keys,
 )
 from kiro_crew.apps.manager_tree import (
@@ -122,6 +124,7 @@ def app_lifecycle_lock(name: str) -> LoopBoundLock:
 # ---------------------------------------------------------------------------
 
 
+@holds_app_record_locks
 def install_app(
     source: str | Path,
     *,
@@ -209,6 +212,7 @@ def install_app(
         return AppResult(ok=False, name=name, error=f"blocked by admission policy: {denied}")
 
     # Check if already installed — reject, use update_app() or uninstall first
+    hold_app_record_lock(name)
     existing = _read_installed(name)
     if existing:
         sel().log_api_access(
@@ -447,6 +451,7 @@ def install_app(
 # ---------------------------------------------------------------------------
 
 
+@holds_app_record_locks
 def update_app(
     source: str | Path,
     *,
@@ -499,7 +504,16 @@ def update_app(
         )
         return AppResult(ok=False, name=name, error=f"blocked by admission policy: {denied}")
 
-    existing = _read_installed(name)
+    # Consent to session-approval control is captured at install/enable, but the
+    # route guard reads the LIVE manifest. Without this check a routine update
+    # that adds ``permissions.sessionApproval`` would gain control of the user's
+    # sessions with no consent moment. Read the old manifest BEFORE the tree is
+    # replaced so the old grant remains the consent boundary, and read the record
+    # against that same manifest: the replacement record lands in a new tree, so
+    # the record's pending state must not depend on a second manifest read.
+    hold_app_record_lock(name)
+    old_manifest = get_app_manifest(name)
+    existing = _read_installed(name, manifest=old_manifest)
     if not existing:
         return AppResult(ok=False, name=name, error=f"app {name!r} is not installed")
 
@@ -521,12 +535,6 @@ def update_app(
         )
 
     old_version = existing.version
-    # Consent to session-approval control is captured at install/enable, but the
-    # route guard reads the LIVE manifest. Without this check a routine update
-    # that adds ``permissions.sessionApproval`` would gain control of the user's
-    # sessions with no consent moment. Read the old manifest BEFORE the tree is
-    # replaced so the old grant remains the consent boundary.
-    old_manifest = get_app_manifest(name)
     requested_session_approval = bool(manifest.permissions.sessionApproval)
     widened_session_approval = bool(
         requested_session_approval

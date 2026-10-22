@@ -289,6 +289,10 @@ from kiro_crew.security import (  # noqa: F401
 )
 from kiro_crew.sel import sel  # noqa: F401
 from kiro_crew.session_surface import has_dashboard_surface  # noqa: F401
+from kiro_crew.skill_scope_pin import (  # noqa: F401 - read as ctx.<name>
+    pinned_session_skill_spec,
+    pinned_skill_globs,
+)
 from kiro_crew.skills import PROJECT_SKILL_BODY_CAP, SkillsLoader
 from kiro_crew.warm_task_brief_contract import is_warm_task_brief_message
 
@@ -1166,6 +1170,7 @@ def _replay_rows(
     elif exclude_last_n > 0:
         messages = messages[:-exclude_last_n]
     messages = _without_warm_task_brief_messages(messages)
+    messages = [row for row in messages if not _replay.is_context_cap_notice(row)]
     return _replay._quota_tail(
         messages, conv_max=_REPLAY_CONVERSATION_MAX_ROWS, inject_max=_REPLAY_INJECT_MAX_ROWS
     )
@@ -1213,12 +1218,14 @@ def build_session_replay(
     model_window: int | None = None,
     pending_messages: list[dict] | None = None,
     current_message: dict | None = None,
+    budget_chars: int = _REPLAY_BUDGET_CHARS,
 ) -> str | None:
     """Build session replay from KiroCrew's conversation_log.
 
-    Keeps as many recent messages as fit within _REPLAY_BUDGET_CHARS,
-    prioritizing the most recent exchanges (tail-heavy). Used when a
-    session is picked up by a different provider or after process death.
+    Keeps as many recent messages as fit within *budget_chars*
+    (``_REPLAY_BUDGET_CHARS`` unless the conductor context cap's trim asks for
+    its larger tail), prioritizing the most recent exchanges (tail-heavy). Used
+    when a session is picked up by a different provider or after process death.
 
     Same-provider resume uses native ACP session/load instead (full fidelity
     without needing this injection).
@@ -1243,7 +1250,7 @@ def build_session_replay(
     if not messages:
         return None
 
-    replay = _replay.replay_text(messages, model_window)
+    replay = _replay.replay_text(messages, model_window, budget_chars=budget_chars)
     replay, _ = redact_exfiltration_urls(replay)
     replay, _ = redact_credentials(replay)
     return replay.translate(_MULTIBYTE_TABLE)
@@ -1255,8 +1262,13 @@ def _skills_injection_plan(
     is_cc: bool,
     project_dir: str | Path | None = None,
     provider_type: str | None = None,
+    session_key: str | None = None,
 ) -> tuple[bool, list[str]]:
     """Whether to inject skills for *agent*, plus the glob restriction to apply.
+
+    A session whose skill scope is pinned to one spec file (``skill_scope_pin``: a
+    palette-opened app agent on kiro-cli) is scoped by that file, never by a name
+    lookup that could reach a checkout's same-named spec.
 
     THE single source of truth for the agent-scoping rule, shared by the
     session-start injection and the post-compaction re-injection. Mapped agents
@@ -1271,8 +1283,15 @@ def _skills_injection_plan(
     without scoping, handing a mapped agent the catalog its mapping excludes.
     """
     inherit = provider_type == PROVIDER_ACP
+    pinned = pinned_skill_globs(session_key, project_dir=project_dir, inherit_defaults=inherit)
     globs = (
-        agent_skill_globs(agent, project_dir=project_dir, inherit_defaults=inherit) if agent else []
+        pinned
+        if pinned is not None
+        else (
+            agent_skill_globs(agent, project_dir=project_dir, inherit_defaults=inherit)
+            if agent
+            else []
+        )
     )
     is_custom = bool(agent) and agent != "kirocrew"
     return (bool(globs) or not is_custom), globs

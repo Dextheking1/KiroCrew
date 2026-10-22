@@ -109,12 +109,12 @@ only the app adapter that supplies the declared-path grant and the scoped
 pins the shared hook as store-free. A pasted or dropped file on an
 ungranted host is refused in the composer with a visible notice; a drop with
 files is always default-prevented so the browser never navigates to the file.
-The send reuses chat-core's `buildOutgoingTurn`, so the wire text and
-`meta.files` match the main chat's, with `meta.sendId` alongside. It uses the
-text-only `'steer'` serialization: this surface carries no `meta.dirs`, so an
-`@rel/` folder token stays as typed instead of becoming an `[attached_dir N]`
-marker naming a path nothing travels with -- the same text a send without a
-file carries. The refusal notice names the page that accepts files by its rail
+The send reuses chat-core's `buildOutgoingTurn`, so the wire text,
+`meta.files` and `meta.pastes` match the main chat's, with `meta.sendId`
+alongside. It is a `'send'` turn with `keepFolderTokens`: this surface has no
+project root and carries no `meta.dirs`, so an `@rel/` folder token stays as
+typed instead of becoming an `[attached_dir N]` marker naming a path nothing
+travels with -- the same text a send without a file carries. The refusal notice names the page that accepts files by its rail
 label (`nav.sessions`), as text, never a link that would leave the unsaved
 draft. While an upload runs, the composer shows the files' names, refuses the
 picker (its label reads "Uploading files…") and refuses Send through the Send
@@ -127,7 +127,8 @@ the parked receipt too, so an embed remounted for the slot gets them. Proof
 that an unconfirmed send was delivered unstages the handed-back files still in
 the composer, as it takes the text back, so they are not sent twice. That
 proof is the send's own `sendId`. A host `onSend` send carries none, so its
-only proof is its text arriving as a user row after the send's anchor row;
+only proof is its text arriving as a user row after the send's anchor row,
+compared with edge whitespace trimmed since a host may strip what it stores;
 text cannot say which send landed, so that proof never touches the composer:
 the warning becomes a calm line saying the message is in the conversation and
 its text is still in the composer, or simply goes away when there is no kept
@@ -166,6 +167,36 @@ folder cut from the start, so same-named results stay apart in the narrow
 menu. Both menus are opt-in and fail closed per path: a host that declares
 only `/api/slash-commands` gets the `/` menu and an `@` that stays plain text,
 with no file search sent. Tests: `ChatEmbed.pickers.test.tsx`.
+
+Long pastes collapse through the same chat-core Paste atom the main composer
+uses, not a copy: `ChatEmbed` binds its textarea to
+`chat-core/composer/pasteEditor.ts` (`usePasteTokens`, which `ChatInput` also
+binds), keeps the blocks in `useComposerPastes` and hands them to the
+`Composer` root as `pastes`. The chip background is the shared
+`PasteHighlightLayer` mirror behind a transparent textarea, given the embed's
+own box classes through its `typo` prop, and the hover/caret preview is the
+shared `PasteHoverLayer`. A file paste goes to the attach path first; only a
+paste it leaves alone can collapse. The user's `showFullPastes` chat setting
+and the `Cmd/Ctrl+Shift+V` raw chord are honoured as in the main chat. On send
+each live token expands on the wire and its block rides `meta.pastes` (and the
+paste side table, `storeSentPastes`), and the optimistic row carries the same
+blocks so it draws the chip. Recovery hands the blocks back with the text
+(`restorePastes` on the parked receipt), carried through
+`useComposerPastes().carry` so a block whose number the composer already uses
+is renumbered. Undo/redo is the main composer's own snapshot history,
+`chat-core/composer/undoHistory.ts` (`useUndoHistory`, which `ChatInput` also
+mounts): each snapshot carries the blocks, so Cmd/Ctrl+Z after a chip is
+deleted restores its content with its token, and the send never carries a
+token without its block. Every user change to the draft (typing, a chip
+delete or expand, a picker insert) goes through `setDraftFromUser`, which
+marks it as the user's own, so the history records even the first edit after
+a slot switch instead of reseeding at it as if the parent had restored that
+slot's draft. `ChatEmbed.longPaste.test.tsx` covers collapse, the
+wire shape, the optimistic row, the refused-send hand-back, atomic delete,
+undo after a delete (also as the first edit after a slot switch) and the
+setting; the import-graph test pins
+`pasteEditor.ts`, `undoHistory.ts`, `composerPastes.ts` and both layers as
+store-free.
 
 The host owns session attribution. Chat hosts bind their session; routed app
 pages bind the established `dashboard:ui` page identity. A provided host key
@@ -907,6 +938,70 @@ capabilities), with `apps.manager.app_agent_backend_refusal` as the message and 
 `app_agent_refused` row kind. The bare-name check `app_command_agent_refusal` runs
 only on an allowed backend.
 
+On Kiro the turn does not hand kiro-cli the bare name, which kiro-cli resolves
+project-first. `apps.agent_launch.publish_app_agent_launch` copies the app's registered
+`<app>--<agent>.json`, read by its path, to
+`~/.kiro/agents/kirocrew-app-launch-<app tag>-<agent tag>.json` with `name` set to that
+reserved name. The name is wire-only, like KAS's `kas_wire_agent_id`: the session is
+allocated with `app_launch_agent`, and the Kiro runtime (`AcpRuntime(launch_agent=…)`)
+hands it to kiro-cli on `--agent` and in `session/set_mode`, while the session's agent
+stays the bare name every gate, task profile, audit row, hook and usage row reads; mode
+names kiro-cli reports back are mapped to it (`crew_agent_name`). Both tags are plain
+hashes of public names.
+
+**The launch directory.** kiro-cli takes project agents from its *process* working
+directory, not the ACP session's. It runs tools, `file://` resources, `AGENTS.md` and
+`agentSpawn` hooks in the session's, and starts the MCP servers it launches itself in
+the process's (all measured on kiro-cli 2.33.0). So the kiro-cli process that runs a
+launch copy starts in `<data home>/app-agent-launch/cwd`
+(`apps.agent_launch.launch_process_cwd`), while `session/new` and `session/load` still
+name the checkout. No checkout's `.kiro/agents` is read for the name, however late a
+writer acts.
+
+| | |
+|---|---|
+| Owner | the gateway, the directory's only writer |
+| Created | owner-only on the first launch-copy spawn; precreated empty before every sandbox spawn (`sandbox._CREW_PRECREATE_READONLY_DIR_LEAVES`, nofollow) |
+| Sealed | Linux: read-only in every mode (`sandbox._CREW_READONLY_LEAVES`). Crew's launcher is created in the workspace and enters the directory by name after its seals (plan `exec_cwd`, `sandbox_launcher_program.enter_exec_cwd`), failing closed unless it reads back read-only and empty: a process created inside it would keep the writable mount under the seal. macOS and Windows: kiro-cli runs under its own sandbox or none, so the directory is as protected as `~/.kiro/agents` itself there. |
+| Fenced | write-fenced from the file tools on every platform (`security._WRITE_PROTECTED_HOME_PATHS`) |
+| Checked | at every spawn: a link or a file at either name, or a directory that is not empty, refuses the turn (`unverifiable`) |
+| Cleaned | never: it stays empty, so there is nothing to remove |
+
+kiro-cli reports a tool call's relative `diff` and `locations` paths, in `session/update`
+and in permission requests, against its process directory, so the runtime maps any path
+under the launch directory (either spelling of a linked home) to the session's cwd before
+a frame is routed (`AcpRuntime._map_launch_cwd_paths`,
+`apps.agent_launch.map_process_cwd_paths`). Crew's own session-start reads judge the copy
+as read by its path at spawn (`apps.agent_launch.read_launch_copy`), never by name: the
+control-plane elements take it as their `spec_override` with or without a skill
+projection, and the unresolved-ref snapshot is that copy. The pooled MCP stubs are looked
+up under the registered spec's file stem `<app>--<agent>`, the name the gateway overlay
+keeps (`AcpRuntime._pool_lookup`), at user level. An app agent's own MCP servers that
+kiro-cli starts begin in the empty launch directory, so one that relies on a relative
+path or its starting directory no longer finds the checkout there. Agent-by-path in
+kiro-cli (#22783) would retire the launch directory; until then it is the interim.
+
+The copy is the registered spec's native skill
+view, the one every Kiro launch runs (`acp.skill_projection.project_agent_view`):
+`skill://` resources are dropped and the agent's skills come through `kirocrew-core`'s
+`skill_search`; a spec that view refuses (its `kirocrew-core` or `skill_search`
+restricted) refuses the turn (`no_skill_view`). Past that only `name` and `description`
+change, so grants and trust are the app's own. The session's skill scope is pinned to
+the registered file (`skill_scope_pin`, set on each turn's admission and cleared on every
+other turn of the key), so `skill_search`, dollar skills and the injected skill directory
+read that file by its path and a checkout's same-named spec never sets the scope. The
+spawn holds the copy as its prepared view and makes the same launch-steering decision
+(`inherits_default_resources`) every Kiro launch makes. An app agent may not take the
+`kirocrew-app-launch-*` prefix; a checkout spec of a copy's name is not refused, because
+kiro-cli never reads it for the copy. A foreign file at the path, a second user-level spec declaring the name,
+or an unregistered agent refuses the turn. A warm-pool process is never claimed for it
+(`bypass_app_launch`). After the claim, a Kiro provider that did not ask kiro-cli for
+exactly that copy is refused and reset. Rosters (`list_agents`,
+`is_internal_agent_spec`) leave the copies out, and the copy spawns under its own
+reserved name, never through a view built by a name lookup; `_deregister_agents` and an update that drops the agent
+remove an app's copies. KAS keeps the bare
+name: Crew reads the spec it sends. The bare-name check still runs on both.
+
 A `contributes.commands[].agent` that no checked agent path declares is an install
 error. When an agent path was unchecked, that miss is reported as unchecked too, so
 builtin discovery keeps the app listed. An app root the screen refuses links no
@@ -1533,8 +1628,8 @@ decision as both `KEEP_DATA` and `PURGE_DATA` in its environment.
 update correctness depends on it is broken, and the fix is an idempotent
 `onInstall` (a registry update re-runs it), not a new call site added quietly.
 
-Writers: `apps/routes.py::handle_uninstall_app`, `_deregister_crons_with_retry`,
-`_run_lifecycle_script`; `apps/manager_uninstall.py::uninstall_app`.
+Writers: `apps/routes.py::handle_uninstall_app`, `_run_lifecycle_script`,
+`apps/routes_uninstall.py::_deregister_crons_with_retry`; `apps/manager_uninstall.py::uninstall_app`.
 
 ## 11. Dependencies are reference-counted, and only sole ownership is removable
 
@@ -1582,7 +1677,7 @@ are reported in separate lists precisely so "absent" stays distinguishable from
 "broken".
 
 Writers: `apps/dependency_ledger.py`, `apps/dependencies.py`;
-`apps/routes.py::handle_uninstall_preview`.
+`apps/routes_uninstall.py::handle_uninstall_preview`.
 
 ### 11.1 Python runtime dependency installation is serialized
 
@@ -1692,7 +1787,7 @@ with it), so it is a trust-scale indicator, not a live metric. Absence means
 
 Writers: `apps/manager_builtins.py` (`_BUILTIN_APPS`, `_DEFAULT_ON_BUILTINS`,
 `_DEFAULT_ON_BACKFILL`, `register_builtin_apps`, `backfill_default_on_builtins`),
-`agent.py::run_first_run_setup`, `apps/discovery.py::discover_builtin_apps`,
+`agent_parts/kirocrew_launcher.py::run_first_run_setup`, `apps/discovery.py::discover_builtin_apps`,
 `apps/registry_pipeline/catalog.py::_apply_trust_fields`;
 consumers: `website/src/pages/apps/useAppsData.ts` (`pickFeatured`),
 `website/src/components/appstore/types.ts` (`isVerified`, `sourceLabel`).
@@ -1880,6 +1975,40 @@ is written disabled, SEL caller `app_register`). App updates retain the prior
 tree until the replacement and its metadata are durable, so a failed update
 restores the old manifest and enabled state together. A replacement manifest
 that removes the flag clears any lingering `sessionApprovalConsentPending` bit.
+
+A record with no `sessionApprovalConsentPending` key is consent-pending. Every
+record this host writes carries the key, so one without it comes from a host
+that ignored `permissions.sessionApproval` and never had a consent moment.
+`_read_installed` reads such a record as pending when the live manifest
+declares the grant, so `app_can_manage_session_approvals` refuses it; that
+check decides from one manifest read and one record read, and also refuses a
+record it cannot read. `_write_installed` judges the record on disk, not the
+caller's copy: it never turns one that is key-less or already pending into
+"no consent needed" unless the write is `enable_app`'s consent write or the
+live manifest is readable and does not declare the grant, so no save path (a
+disable, an unreadable manifest, an early update, a stale copy written back by
+a rollback) records a consent that was not given. After `KIROCREW_READY`, `apps/session_consent.reconcile_after_ready`
+(a tracked background task started from `service_boot.run`) handles each such
+record, and any record that reads both enabled and pending, under
+`app_lifecycle_lock`: it re-checks the record, runs the disable route's bounded
+startup-hook preflight (a hook still running defers the app to the next
+start), runs `teardown_app_runtime` for an enabled app, then writes it disabled
+and pending and audits `session_approval_widened` with SEL caller `app_boot`.
+It rebuilds the agent spec once when it disabled anything. Nothing waits for
+it, because the read-side refusal already holds; the owner re-enables through
+the same consent step.
+
+Writers of one app's `installed.json` never overlap. Each one (install, update,
+external registration, enable, disable, dev mode, provenance, the builtin sync
+and the consent reconcile) is decorated `@holds_app_record_locks` and calls
+`hold_app_record_lock(name)` before it first reads the record, so the lock
+spans its read, its checks and its replace; `_write_installed` also takes it.
+`app_record_lock` is a cross-process `platform_compat.file_lock` on a sidecar,
+`<data home>/app-record-locks/<name>.lock`, never on `installed.json` (replaced
+via `os.replace`) nor inside the app tree (moved aside by an update). It is
+reentrant within one thread, bounded, and fails closed: a lock that cannot be
+taken raises, so no writer runs unserialized. On the event-loop thread the
+acquire is single-shot, as `file_lock` is everywhere.
 
 `permissions.api` and `permissions.events` are read live as well, and an update
 that adds any entry to either is held back rather than disabled. Each app stores
@@ -2408,7 +2537,7 @@ Writers: `apps/official_catalog.py` (`list_catalog_rows`, `inventory`,
 (`list_catalog_apps`, `_resolve_registry_row`, `_append_external_registry_apps`,
 `_detect_installed_probe`), `apps/registry_pipeline/checkout.py` (`_git_fetch_commit`),
 `dashboard/handlers/security_trusted_apps.py` (`api_trusted_app_grant`),
-`apps/routes.py` (`handle_registry`, `handle_list_apps`, `handle_get_app`), and
+`apps/routes_registry.py` (`handle_registry`), `apps/routes_listing.py` (`handle_list_apps`, `handle_get_app`), and
 `website/src/components/appstore/TrustAppModal.tsx`.
 
 ## 15. A registry's credential posture follows its index's change control
@@ -2739,7 +2868,7 @@ A NON-empty document is held to the schema: only a version-1 document whose
 `owner_trusted` is a list parses; an unknown `version`, a dict-shaped
 `owner_trusted`, or any other shape is refused. The read/write core lives in
 `apps/registry_trust.py`, a leaf both `dashboard/handlers/security_trusted_registries.py` and
-`apps/routes.py` import (the security handlers top-level import `apps.routes`, so the
+`apps/routes_registry.py` import (the security handlers top-level import `apps.routes`, so the
 writer cannot live there without a cycle). Properties that carry the design:
 
 - **Keyed by REPOSITORY, never by name.** `_granted_owner_repos` returns a
@@ -2875,7 +3004,7 @@ Writers: `apps/registry_pipeline/sources.py` (`_effective_registries`,
 (`_owner_tier_confirmed`), `apps/registry_pipeline/subprocess_env.py`
 (`anonymous_git_env`), `platform/interfaces_structural.py`
 (`AppsLoader.default_registries`), `config/loader.py`
-(`ExternalRegistryConfig.trust`), `apps/routes.py` (`handle_registries`).
+(`ExternalRegistryConfig.trust`), `apps/routes_registry.py` (`handle_registries`).
 
 ## 16. Store guidance and product screenshots are manifest-owned
 
@@ -3468,7 +3597,7 @@ state that is no longer on disk, so nothing retries. **The scrub also re-materia
 the tracking record, and that pop is what ends the watch's authority to reconcile MCP for
 the app — so it has to happen BEFORE `deregister_app`. Scrubbing first leaves a window in
 which a backend that recovers re-registers the OLD manifest's servers, and entries the
-update removed survive it. Uninstall, the disable rollback and the two update paths in `apps/routes.py` all
+update removed survive it. Uninstall, the disable rollback and the two update paths in `kiro_crew.apps.routes` all
 order it this way, and
 `test_update_stops_the_backend_before_deregistering_resources` pins it.
 
@@ -3481,7 +3610,7 @@ Writers: `apps/backend_runtime/supervision.py` (`_health_check_loop`,
 `_watch_backend_health`, `_supervise_backend_health`, `_start_health_supervisor`,
 `_start_adopted_health_watch`), `apps/backend_runtime/registration.py` (`_demote`,
 `_promote`), `apps/backend_runtime/tracking.py` (`AppProcess.is_running`),
-`apps/routes.py` (`handle_list_apps`).
+`apps/routes_listing.py` (`handle_list_apps`).
 
 ## 18. An app UI is a dynamically imported ESM module, not an iframe
 
@@ -3513,7 +3642,7 @@ the response CSP. §13 covers their token scoping;
 `src/kiro_crew/docs/mcp-apps.md` covers the iframe contract itself.
 
 Writers: `website/src/components/AppHost.tsx`, `apps/manifest_sections.py` (the
-manifest `entry` field), `apps/routes.py` (static UI serving),
+manifest `entry` field), `apps/routes_static.py` (static UI serving),
 `dashboard/server.py` (the CSP allowances the CDN import map needs).
 
 ## 19. Spec Builder's backend is composed by lifecycle owner
@@ -3851,7 +3980,7 @@ the HMAC binds the encoded claim, the method, the raw target, the body digest an
 the issue time. The wire format and the verifier's steps are in
 [api-reference](../../app-kit/api-reference.md#signed-principal-claim).
 
-`apps/routes.py::_proxy_principal` reads the kind only from marks that
+`apps/routes_proxy.py::_proxy_principal` reads the kind only from marks that
 `token_auth_middleware` set, never from a request header, and the first match wins:
 
 1. `agent-tool` when `internal_auth` is true. MCP tools, agents, subagents and
@@ -3884,7 +4013,7 @@ that stays the backend's own check.
 The flag is part of the manifest's `backend` dict, so an admission signature
 covers it. Only the JSON boolean `true` turns it on.
 
-Writers: `apps/routes.py`, `apps/proxy_auth.py`, `apps/manifest_sections.py`. Tests:
+Writers: `apps/routes_proxy.py`, `apps/proxy_auth.py`, `apps/manifest_sections.py`. Tests:
 `test/test_app_proxy_auth.py`, `test/test_app_manifest.py`,
 `test/test_gateway_appkit_endpoints_signed_proxy.py`.
 
@@ -3897,7 +4026,7 @@ manifest can use. An entry with no row is passed through unchanged, so `"Windows
 for the platform the author named. A client-install app then has its `onEnable` script
 skipped (`unsupported_platform`) and a registry install turned into local-install
 instructions; the detail page prints the token as typed, so nothing marks it wrong.
-`installMode` has the same shape: `apps/routes.py::_client_install_manifest` and the
+`installMode` has the same shape: `apps/routes_enable.py::_client_install_manifest` and the
 registry install gate in `apps/registry_pipeline/install.py` both test `== "client"`, so
 `"Client"` installs as a server app with nothing to say why.
 
@@ -4053,6 +4182,58 @@ that read the bridges' source as one module (`test_app_mcp_scoping.py`,
 Writers: `apps/bridges.py`, `apps/bridges_sources.py`, `apps/bridges_mcp_config.py`,
 `apps/bridges_agents.py`, `apps/bridges_skills.py`, `apps/bridges_crons.py`,
 `apps/bridges_mcp.py`, `apps/bridges_register.py`.
+
+## 29. The app management routes are composed by endpoint family
+
+The app management REST routes (`apps/routes.py`) are one import path over sibling owner
+modules. Their behaviour is specified in the sections above that name them. This section
+records which module owns which part, so a change lands in its owner.
+
+| Module under `src/kiro_crew/apps/` | Owns |
+|---|---|
+| `routes.py` | The facade: the only import path and patch surface, installing `kiro_crew._facade_mirror` over the owners below. It also keeps the handlers whose blocking file-system calls the sync-io `fs` baseline counts against this path (`handle_install_app`, `_run_uninstall`, `handle_app_config`, `_fetch_git_blob`, `handle_blob_proxy`), the units that call them (`handle_uninstall_app`, `handle_migrate_cleanup`), the installed-art route that shares the blob proxy's extension screen (`handle_app_art_file`), and the route table (`register_app_routes`) |
+| `routes_lifecycle.py` | The steps the install, update, uninstall, enable and disable handlers share: `_check_min_version`, the dual-pass warning redactor `_redact_warning`, `_register_app_off_loop` / `_deregister_app_off_loop`, `_start_backend_after_install`, `_stop_backend_and_observe`, `_app_may_run_after_install`, `_restore_app_after_failed_update`, `_suspend_app_for_session_approval_reconsent`, `_refuse_while_startup_hook_runs` and `_unregister_notification_channels` |
+| `routes_proxy.py` | The reverse proxy from an app's dashboard UI to its own backend (`handle_app_api_proxy`): `_resolve_app_backend_url`, the per-app secret cache it signs with (`_get_app_secret`, `invalidate_app_secret_cache`), the principal claim (`_proxy_principal`), the headers it strips and the event-stream relay |
+| `routes_static.py` | An installed app's UI bundle (`handle_app_ui_file`, `_open_ui_file` and the stream bounds), the content types the UI and art routes answer with, and `handle_app_dev_mode` |
+| `routes_art.py` | Reading an app's manifest-declared art (`_declared_art_paths`, `_read_declared_art`), and what the blob proxy shares with the registry routes: the repository and ref validators (`_is_safe_repo_identifier`, `_SAFE_REF_RE`), the fetch timeout and concurrency bound, and the blob-cache touch |
+| `routes_listing.py` | `handle_list_apps`, `handle_get_app` and `handle_get_manifest` with the trust repository each app is stamped with, and `handle_publish_providers` over `collect_publish_providers` |
+| `routes_install.py` | `handle_update_app` with the cron resync an update drives, and `handle_register_external` |
+| `routes_uninstall.py` | `handle_uninstall_preview`, and the bounded cron deregistration retry an uninstall uses (`_deregister_crons_with_retry`) |
+| `routes_enable.py` | `handle_enable_app`, `handle_disable_app` and `handle_open_app`: the built-in service sync (`_BUILTIN_SERVICE_APPS`, `_sync_builtin_config`, `_notify_builtin_service`), the client-install platform check (`_client_install_manifest`) and the desktop environment an `openCommand` launcher keeps |
+| `routes_registry.py` | Browsing, refreshing and installing from the app registry (`handle_registry`, `handle_registry_refresh`, `handle_registry_install`, `handle_registry_install_stream`) and the registry list in `config.json` (`handle_registries`, `handle_registries_refresh`, `_write_registries_config`) |
+
+The handlers `routes.py` keeps are pinned there by the sync-io `fs` gate, which counts a
+moved blocking call as an added one (`.github/sync-io-in-async-fs-baseline.txt`), so they
+move to owners only once that gate reads a move as a move. Imports only point down, in the
+facade's `_OWNERS` order: lifecycle, proxy, static, art, listing, install, uninstall,
+enable, registry. No owner imports the facade; the facade imports the owner names its own
+handlers call, and every import that ran inside a handler still runs there, so a gateway
+boot loads what it loaded before.
+
+Every patch seam stays on the facade. It installs `kiro_crew._facade_mirror`, so a write
+to `routes.<name>` reaches every owner that binds the name, and the facade's own handlers
+read it from the facade's namespace; a read is served by the defining owner. Each shared
+table stays one object in one owner: `_BUILTIN_SERVICE_APPS` in `routes_enable.py`,
+`_app_secret_cache` in `routes_proxy.py`, the UI stream semaphore in `routes_static.py`
+and the blob fetch semaphore in `routes_art.py`. Every owner logs as
+`kiro_crew.apps.routes`, the logger name `caplog` assertions key on.
+`test/test_routes_facade.py` pins the owner set, every name the one-module file bound
+resolving through the facade to its owner's object, the kept handlers, every import the
+facade binds being accounted for, the logger, the type-checking groups and that nothing
+outside the family imports an owner; `test/test_facade_mirror_guards.py` holds the facade
+to the mirror contract. The tests that read a pinned construct by path read the module
+that holds it, and the ones that scan the whole module (`test_builtin_app_lifecycle.py`,
+`test_apps_instances_loop_offload.py`, `test_conditional_get.py`, and the duplicate-set
+half of `test_app_art_route.py`) read the facade joined with its owners. Besides
+`routes.py`, which the "App lifecycle output" redaction sink row names, only the four
+owners `NON_EGRESS_REDACTION_MODULES` lists as that sink's partitions
+(`routes_enable.py`, `routes_lifecycle.py`, `routes_listing.py`, `routes_registry.py`)
+call a redactor, so a new call belongs in one of those or needs its own row there.
+
+Writers: `apps/routes.py`, `apps/routes_lifecycle.py`, `apps/routes_proxy.py`,
+`apps/routes_static.py`, `apps/routes_art.py`, `apps/routes_listing.py`,
+`apps/routes_install.py`, `apps/routes_uninstall.py`, `apps/routes_enable.py`,
+`apps/routes_registry.py`.
 
 ## Windows stale-backend cleanup capacity
 

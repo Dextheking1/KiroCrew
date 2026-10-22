@@ -418,6 +418,12 @@ _RELOCATED_CREW_HIDDEN_LEAVES: tuple[str, ...] = (".vault",)
 #: never writable by it. See the READONLY note above for why hiding a ceiling
 #: inverts its effect; named memory stores need write integrity, not secrecy.
 _CREW_READONLY_LEAVES: tuple[str, ...] = (
+    # The empty directory kiro-cli starts in when it runs an app agent's launch copy
+    # (``apps.agent_launch.launch_process_cwd``). kiro-cli reads project agents from
+    # its process directory, so a sandboxed writer that could create
+    # ``.kiro/agents/<launch name>.json`` here would choose the spec kiro-cli runs.
+    # Read-only rather than hidden: kiro-cli itself must enter and list it.
+    "app-agent-launch",
     # Gateway-owned run records restore app authorization on cold continuation.
     # Keep results readable, but agent code must not rewrite its app owner.
     # The second root holds the same authority for retained V1 runs only.
@@ -630,6 +636,16 @@ _CREW_READONLY_LEAVES: tuple[str, ...] = (
     # Paired with the same leaf on ``security``'s write floors -- the deny rules
     # fence how a command SPELLS this path, and the kernel denial is what still
     # holds when a spelling is built at runtime (``$(printf ...)``).
+    #
+    # The record lives INSIDE the ``seed-provenance`` directory, and the directory is
+    # what is sealed, because the writer publishes every save through ``atomic_write``
+    # (a new inode) and does so on every claude-agent-acp seed and release. A sealed
+    # FILE whose inode changes after the pre-spawn pass recorded it is refused by the
+    # launcher's pin, so sealing the file made an unrelated spawn fail whenever a seed
+    # write landed in that window. The rename leaves the directory's inode alone.
+    # The old top-level name stays sealed too: a Crew process started before the
+    # upgrade still reads and writes it, so it must stay unforgeable for that process.
+    "seed-provenance",
     "settings_seeds.json",
     # The crew webview template directory. A ceiling in exactly the sense above:
     # the whole value of splitting a panel into human-authored TEMPLATE and
@@ -902,6 +918,9 @@ _CREW_CHILD_WITHHELD_LEAVES: tuple[str, ...] = (
 #: stayed masked and broke a boot, which someone notices. Under a complement it would
 #: be exposed, which nobody notices.
 _CREW_CHILD_READABLE_LEAVES: tuple[str, ...] = (
+    # The empty directory a launch copy's kiro-cli starts in. It holds nothing, so a
+    # foreign child that reads it learns nothing.
+    "app-agent-launch",
     # The browser launcher an agent browser command must read and execute. The only
     # entry here the read gate also fences, so the only one whose exclusion changes
     # what an enforced child can open; the rest are already outside the mask.
@@ -912,6 +931,7 @@ _CREW_CHILD_READABLE_LEAVES: tuple[str, ...] = (
     # Authorization and lineage records an in-sandbox reader resolves. Read-only
     # sealed for the same reason: a forged entry decides a later grant.
     "apps/.dev-grants.json",
+    "seed-provenance",
     "settings_seeds.json",
     "agent_model_state.json",
     "agent_model_state.json.lock",

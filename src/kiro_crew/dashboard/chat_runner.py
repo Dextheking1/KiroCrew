@@ -182,11 +182,14 @@ from kiro_crew.dashboard.chat_turn.acp_recovery import (  # noqa: F401
 from kiro_crew.dashboard.chat_turn.app_agent_binding import (
     _app_agent_host_allowed,
     _app_agent_start_dirs,
-    _app_agent_turn_host_allowed,
+    _app_agent_turn_backend,
+    _provider_backend,
     _recover_app_agent_binding,
     _retire_app_agent_session,
+    _runs_app_agent_launch,
     app_agent_binding_applies,
 )
+from kiro_crew.dashboard.chat_turn.context_cap import _spend_context_cap_seed
 from kiro_crew.dashboard.chat_turn.crew_log_attribution import (
     PENDING_CHANNEL_ATTR,
     _crew_log_class,
@@ -1621,6 +1624,14 @@ async def _run_chat(
     _this_turn_is_clear = turn._this_turn_is_clear
     first_word = turn.first_word
     is_slash = turn.is_slash
+    # Where the most recent compaction started inside `assistant_text`. A
+    # synthesized terminal arrives only at turn end, so the accumulator still
+    # holds any unfinished pre-compaction fragment, and the continuation gate
+    # judges only the text after this offset. A segment cut empties the
+    # accumulator and the next segment is wholly post-compaction, so the first
+    # chunk appended to an empty accumulator zeroes the offset: no cut site has
+    # to clear it, and a cut with no text after it leaves nothing to judge.
+    _compaction_text_offset = 0
     try:
         _flow = await _turn_admit(turn)
         if _flow is _Flow.END:
@@ -2282,6 +2293,8 @@ async def _run_chat(
                 if event.message_id:
                     slot.segment_message_id = event.message_id
                 _accumulate_segment_raw(slot, event.text, safe_chunk, _removed)
+                if not turn.assistant_text:
+                    _compaction_text_offset = 0
                 turn.assistant_text += safe_chunk
                 if event.control_notice:
                     # A backend control notice that arrived as assistant text
@@ -2420,6 +2433,7 @@ async def _run_chat(
                     # AcpClient synthesizes one at turn end.
                     _compaction_started = True
                     turn._compaction_started = _compaction_started
+                    _compaction_text_offset = len(turn.assistant_text)
                     state.broadcast_ws(
                         "chat_message",
                         {"slot": slot.key, "role": "compacting", "content": ""},
@@ -2559,8 +2573,7 @@ async def _run_chat(
                     state, slot, "assistant", "🗑️ Conversation cleared.", "msg msg-a"
                 )
             elif event.kind == EVENT_AGENT_SWITCHED:
-                new_agent, _ = redact_credentials(event.text)
-                new_agent, _ = redact_exfiltration_urls(new_agent)
+                new_agent = redact(event.text)
                 if new_agent and (
                     private_member or (slot.mode == "member" and new_agent != slot.agent)
                 ):
@@ -2799,15 +2812,13 @@ async def _run_chat(
                 # with no explanation. When the card cannot exist yet, persist
                 # the explanation as a slot notice instead.
                 if _sid not in _native_tracker and event.text and event.text.startswith("⛔"):
-                    _txt, _ = redact_exfiltration_urls(event.text)
-                    _txt, _ = redact_credentials(_txt)
+                    _txt = redact(event.text)
                     slot.append("notice", _txt, "msg msg-info")
                 # Some kiro-cli builds also stream the sub-agent's own text via
                 # agent_message_chunk on this channel — surface it on the card.
                 if _sid in _native_tracker and event.text:
                     _card_id = f"native:{_redact_tool_field(_sid)}"
-                    _txt, _ = redact_exfiltration_urls(event.text)
-                    _txt, _ = redact_credentials(_txt)
+                    _txt = redact(event.text)
                     _native_card_output_len[_card_id] = _append_native_output(
                         _native_card_output.setdefault(_card_id, []),
                         _txt,
@@ -3614,8 +3625,7 @@ async def _run_chat(
                 logger.info("Deferred compaction result: %s", compaction_result)
                 if compaction_result["type"] == "completed":
                     _restore_skills_context_after_compaction(turn)
-                    summary, _ = redact_credentials(compaction_result.get("summary", ""))
-                    summary, _ = redact_exfiltration_urls(summary)
+                    summary = redact(compaction_result.get("summary", ""))
                     msg = (
                         f"✅ Conversation compacted: {summary}"
                         if summary
@@ -3636,8 +3646,7 @@ async def _run_chat(
                     # the text is backend-echoed, so it is not trusted to be
                     # free of credentials or exfiltration URLs even though the
                     # provider already redacts once at its own boundary.
-                    error, _ = redact_credentials(compaction_result.get("summary", ""))
-                    error, _ = redact_exfiltration_urls(error)
+                    error = redact(compaction_result.get("summary", ""))
                     error = error.strip()
                     if len(error) > _COMPACT_FAIL_REASON_MAX_CHARS:
                         # A notice is a one-line receipt, not a log: a provider
@@ -3669,9 +3678,20 @@ async def _run_chat(
         # output and must stream, flush and persist — but it is not an answer,
         # and the branch below is what decides whether one was given.
         _answer_text = _answer_text_only(turn.assistant_text, _compaction_notice_chunks)
+        _continuation_answer_text = _answer_text_only(
+            turn.assistant_text[_compaction_text_offset:], _compaction_notice_chunks
+        )
+        # A refusal's explanation answers the turn wherever it streamed: one that
+        # arrived before a compaction still takes the streamed-explanation refusal
+        # path below, instead of the no-text refusal branch, which would retry the
+        # message on the fallback model and word its card as if nothing was said.
+        _branch_answer_text = (
+            _answer_text if _stop_reason == STOP_REASON_REFUSAL else _continuation_answer_text
+        )
 
-        # A turn whose ONLY assistant text was such a notice still has to reach
-        # the wire and the transcript, but it must not take the answer branch:
+        # A turn with no answer after compaction still has to preserve every
+        # pre-compaction fragment and control notice, but it must not take the
+        # answer branch:
         # the post-compaction continuation is an `elif` UNDER that branch, so
         # entering it would shadow the continuation and leave the request
         # unanswered — the exact hang this PR exists to fix. Flush here and fall
@@ -3679,7 +3699,7 @@ async def _run_chat(
         # kept out of `assistant_text`: the answer branch owns the only terminal
         # `_flush_text_stream`, and the rolling redactor withholds the notice
         # until something flushes it, so a skipped notice was emitted nowhere.)
-        if turn.assistant_text and not _answer_text:
+        if turn.assistant_text and not _branch_answer_text:
             _flush_text_stream(turn)
             _flush_segment(state, slot, turn.assistant_text, broadcast=False)
             turn._reply_flushed = True
@@ -3701,7 +3721,7 @@ async def _run_chat(
                 turn._terminal_directive_kind,
             )
 
-        if _answer_text:
+        if _branch_answer_text:
             _flush_text_stream(turn)
             _flush_segment(state, slot, turn.assistant_text, broadcast=False)
             turn._reply_flushed = True
@@ -3739,8 +3759,7 @@ async def _run_chat(
                         # comes from config or the provider envelope.
                         _fb = slot._refusal_fallback_candidate
                         if _fb:
-                            _fb, _ = redact_exfiltration_urls(str(_fb))
-                            _fb, _ = redact_credentials(_fb)
+                            _fb = redact(str(_fb))
                             _fb = _fb[:120]
                         _refusal_card += (
                             f" The configured fallback model ('{_fb}') also declined this request."
@@ -3797,8 +3816,7 @@ async def _run_chat(
                     # the id comes from config or the provider envelope.
                     _fb = slot._refusal_fallback_candidate
                     if _fb:
-                        _fb, _ = redact_exfiltration_urls(str(_fb))
-                        _fb, _ = redact_credentials(_fb)
+                        _fb = redact(str(_fb))
                         _fb = _fb[:120]
                     _refusal_card += (
                         f" The configured fallback model ('{_fb}') also declined this request."
@@ -3838,7 +3856,7 @@ async def _run_chat(
             # The turn's own answer (see `_answer_text` above), not the raw
             # segment: this gate must not mistake "the backend said it was
             # compacting" for "the request was answered".
-            final_segment_text=_answer_text,
+            final_segment_text=_continuation_answer_text,
             stop_reason=_stop_reason,
             end_turn_reason=STOP_REASON_END_TURN,
             prompt_depth=_prompt_depth,
@@ -5984,8 +6002,7 @@ async def _run_chat(
                 slot._fallback_primary_model or "the selected model"
             )
             _fb_primary_safe, _ = redact_credentials(_fb_primary_safe)
-            _fb_cand_safe, _ = redact_exfiltration_urls(_fb_candidate)
-            _fb_cand_safe, _ = redact_credentials(_fb_cand_safe)
+            _fb_cand_safe = redact(_fb_candidate)
             # Persisted notice card (withheld-pin pattern): the explanation has
             # to survive a reload because the state it explains does (the
             # session stays on the fallback until the restore probe succeeds).
@@ -6179,10 +6196,8 @@ async def _run_chat(
             #     ``rejected_model`` and stays terminal, so a real fault is never
             #     masked as a model switch.
             slot.purge_chunks()
-            _rejected_safe, _ = redact_exfiltration_urls(str(_rejected_id))
-            _rejected_safe, _ = redact_credentials(_rejected_safe)
-            _cand_safe, _ = redact_exfiltration_urls(str(_access_fb_candidate))
-            _cand_safe, _ = redact_credentials(_cand_safe)
+            _rejected_safe = redact(str(_rejected_id))
+            _cand_safe = redact(str(_access_fb_candidate))
             # Move the live session onto the accessible model through the shared
             # substitute set_model seam (the same one the throttle walk uses);
             # candidates are pre-filtered against the advertised list, so the
@@ -6201,8 +6216,7 @@ async def _run_chat(
                     slot.key,
                     _rejected_id,
                 )
-                _entitle_text, _ = redact_exfiltration_urls(str(exc))
-                _entitle_text, _ = redact_credentials(_entitle_text)
+                _entitle_text = redact(str(exc))
                 slot.purge_chunks()
                 slot.append(
                     "error",
@@ -6258,8 +6272,7 @@ async def _run_chat(
                             _access_fb_candidate,
                             exc_info=True,
                         )
-                        _entitle_text, _ = redact_exfiltration_urls(str(exc))
-                        _entitle_text, _ = redact_credentials(_entitle_text)
+                        _entitle_text = redact(str(exc))
                         slot.purge_chunks()
                         slot.append(
                             "error",
@@ -6289,8 +6302,7 @@ async def _run_chat(
                                 _access_fb_candidate,
                                 _raw_after,
                             )
-                            _entitle_text, _ = redact_exfiltration_urls(str(exc))
-                            _entitle_text, _ = redact_credentials(_entitle_text)
+                            _entitle_text = redact(str(exc))
                             slot.purge_chunks()
                             slot.append(
                                 "error",
@@ -6624,8 +6636,7 @@ async def _run_chat(
                 slot._transient_5xx_retries = 0
                 slot._infra_retries = 0
             else:
-                _err_text, _ = redact_exfiltration_urls(str(exc))
-                _err_text, _ = redact_credentials(_err_text)
+                _err_text = redact(str(exc))
                 # Fallback-chain story (agent.fallback_model): when this cycle
                 # walked fallback candidates and STILL landed here, the error
                 # card must tell the whole story — the primary throttled AND
@@ -6638,8 +6649,7 @@ async def _run_chat(
                         f"{slot._fallback_primary_model or 'The selected model'} throttled; "
                         f"fallbacks {', '.join(slot._fallback_walked)} also unavailable. "
                     )
-                    _fb_story, _ = redact_exfiltration_urls(_fb_story)
-                    _fb_story, _ = redact_credentials(_fb_story)
+                    _fb_story = redact(_fb_story)
                     _err_text = _fb_story + _err_text
                 # Structural tag for a model-entitlement rejection, so the
                 # frontend can render the fix (model picker / Settings -> Chat)
@@ -6787,8 +6797,7 @@ async def _run_chat(
             await _persist_partial_reply(turn, "error: terminal")
         except Exception:
             logger.debug("Keeping the partial reply failed for slot %s", slot.key, exc_info=True)
-        _err_text, _ = redact_exfiltration_urls(str(exc))
-        _err_text, _ = redact_credentials(_err_text)
+        _err_text = redact(str(exc))
         from kiro_crew.memory_startup import MemoryStartupUnavailable
         from kiro_crew.memory_stores import UnknownMemoryStore  # noqa: F811
 
@@ -7237,6 +7246,8 @@ async def _run_chat(
                 state.sessions.consume_first_turn_history_owed(session_key)
             except Exception:
                 logger.debug("settling first-turn history debt failed", exc_info=True)
+            # A conductor context-cap trim's seed rode in that history.
+            _spend_context_cap_seed(session_key)
         # Clean up mirror stream on any exit path.
         #
         # The release below MUST happen however this block exits. Each await in

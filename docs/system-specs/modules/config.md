@@ -1100,10 +1100,19 @@ kirocrew config set --local agent.log_level debug
 kirocrew config set agent.log_level debug
 ```
 
-`config set --local` does not validate the dotted key: it warns when the top-level
-section is unknown and writes any leaf into `config.local.json`, which outranks
-`config.json`. Only the plain `config set` answers `Unknown key`. The enum, beacon
-and tailnet gates run before that split, so they apply to both.
+Both forms check the dotted key (`_refuse_unknown_key`): a key the
+loaded config does not hold and the schema does not declare exits 1 with
+`Unknown key` before anything is written. The check matters most for `--local`:
+`config.local.json` outranks `config.json`, so a key nothing reads stored there
+(`memory.enabled`) would look pinned while doing nothing. A key plain
+`config set` refuses is refused on `--local` too, such as a field of a map member
+not stored yet (`agents.<name>.model`). `--local` also accepts a key `to_dict()`
+writes from outside its section (`_SECTION_KEYS_EMITTED_ELSEWHERE`, e.g.
+`slack.dm_activation`), because the loader reads it there. Its value is still
+checked: against the registry row for the field's dataclass spelling
+(`slack_dm_activation`, `observe_max_messages`), and for `slack.dm_activation`
+against the activation modes. The enum, beacon and
+tailnet gates also run before the local/base split, so they apply to both.
 
 A list-typed key (`agent.apps_trusted`, `slack.allowed_users`, ...) takes a JSON array
 (`kirocrew config set agent.apps_trusted '["a","b"]'`); anything else is refused with nothing
@@ -1351,6 +1360,19 @@ Contract:
 
 ## Settings import (dashboard Merge)
 
+**Module layout.** `portability.py` is the import path for every `portability` name
+this section cites, and it keeps the import itself: `apply_import_zip` and the settings
+and session merges it runs (`_vet_archive_settings`, `_merge_settings`,
+`_merge_sessions`). It is a `kiro_crew._facade_mirror` facade over four owners, and new
+work goes to the one that owns it: `portability_archive.py` (what an archive holds,
+member names and limits both ways), `portability_templates.py` (agent templates, bundled
+on export and installed on import), `portability_export.py` (what an export reads: the
+walk, the SQLite backups, the session planner and writer) and `portability_vetting.py`
+(`validate_import_zip` and the staged cron and store checks). A patch of
+`portability.<name>` reaches every owner holding the name. The archive builders
+(`create_export_zip`, `stream_export_zip`, `plan_export`) live in `portability_stream.py`,
+which the facade re-exports and which reads these names as `portability.<name>`.
+
 **HTTP refusals** of `/api/portability/*` (`dashboard/handlers/portability.py`)
 each carry a machine-readable `code`: `file_field_required` (400),
 `invalid_import_mode` (400), `import_archive_invalid` (400, with the validator's
@@ -1499,7 +1521,12 @@ keys`. Three exclusions from that warning are named in code:
 
 A deprecated field is announced only when it holds something: `null` and an
 empty map, list or string carry nothing to migrate, so `validation` stays
-silent on them (`False` and `0` are chosen values and are still announced). For
+silent on them (`False` and `0` are chosen values and are still announced). It
+is silent too on a field holding its own schema default (`_is_own_default`,
+which never equates a bool with a number): that value behaves exactly as an
+absent key, and the default-config writer serializes every field, so a config
+Kiro Crew has just created carries `agent.subagent_cpu_cost_cores: 1.0` and the
+loader would otherwise warn about its own write on the first launch. For
 each populated field, `validation` warns once per process for each distinct
 `repr(value)`. It stores only a SHA-256 digest of that representation in the
 warning registry, so configured credentials do not stay there as raw text. A
@@ -2716,7 +2743,7 @@ defer, rather than reading as applied; a successful rebuild also re-runs
 `SessionManager.refresh_defaults` so warm-pool providers minted from the old spec
 are reconciled (`dashboard/server_runtime/config_watch.py` `_apply_default_model`).
 The `wrote=False` refusal is one case of a general ownership guard: every write through
-the shared-spec primitive (`agent.py` `_atomic_json_write`) is refused with
+the shared-spec primitive (`agent_parts/spec_files.py` `_atomic_json_write`) is refused with
 `SharedAgentHomeRefused` when the data home does not own the shared agents directory. The
 derived worker, conductor and service-agent specs and the read-only side spec all take
 that refusal, so the worker's stale mirror raises `DerivedSpecStale` rather than
@@ -2859,7 +2886,7 @@ happens to notice — which is the bug class this closes.
 | `KiroCrewConfig.save()` | `config/loader_config.py` |
 | `_persist_config_migration` | `config/loader_writeback.py` — a boot migration is a config write like any other |
 | `refresh_config_meta_stamp` | `config/loader_document.py` — kicks only when the stamp actually moved (no rewrite, no mtime churn) |
-| `_atomic_json_write` | `agent.py` — via `_notify_if_config_write`, and ONLY when the target resolves to `config_path()`. A safety net rather than a route: no handler writes `config.json` through it — the per-channel savers (`messaging._LockedSectionWrite`), the STT PUT and the MCP gateway-enable toggle all go through `update_config_locked`, and `TestTheAtomicJsonWriteConfigFamilyIsRatcheted` pins that population to an empty baseline so a new saver cannot reopen it |
+| `_atomic_json_write` | `agent_parts/spec_files.py` — via `_notify_if_config_write`, and ONLY when the target resolves to `config_path()`. A safety net rather than a route: no handler writes `config.json` through it — the per-channel savers (`messaging._LockedSectionWrite`), the STT PUT and the MCP gateway-enable toggle all go through `update_config_locked`, and `TestTheAtomicJsonWriteConfigFamilyIsRatcheted` pins that population to an empty baseline so a new saver cannot reopen it |
 
 A handler that must answer only after the new value is in force calls
 `ConfigWatch.refresh_now()` (`handlers/core_config_view.py::_hot_apply_after_write`), which
@@ -3019,6 +3046,7 @@ class SttConfig:
     silence_ms: int = 700          # end-of-phrase pause; clamped to _STT_INTERVAL_MS_MIN.._MAX
     partial_interval_ms: int = 400 # live-transcript refresh cadence; same clamp
     idle_evict_secs: int = 600     # release the resident local model after this idle; 0 = at end of recording
+    threads: int = 0               # local decode threads; 0/"auto" = half the cores capped at 16; KIROCREW_STT_THREADS wins
     endpointing: bool = False      # semantic auto-submit on a complete utterance; needs streaming
     submit_on_release: bool = False  # a deliberate stop sends once the transcript settles; any provider
     polish: bool = False           # hand the FINISHED transcript (never the audio) to a fast model; off = nothing leaves the machine

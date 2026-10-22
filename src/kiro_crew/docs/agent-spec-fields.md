@@ -161,19 +161,22 @@ allowlist -- but it does NOT, by itself, stop the harness's own native tools
 (claude-agent-acp's Bash/Read/Write, for instance): those are outside the array
 entirely. Every mirrored backend carries a second signal from the same spec
 parse, `SessionMcpProjection.zero_tools` (true only for an explicit `[]`, not a
-missing key), but only `opencode` and `goose` close the gap on it:
+missing key), and `opencode`, `goose` and `deepseek` close the gap on it:
 `AcpClient._deny_zero_tools` refuses EVERY permission request on such a session
 -- MCP or native -- and the refusal runs only on `AcpClient` sessions of a
 backend that answers `SessionCapabilities.honors_zero_tool_ban` (an enforced
-routing, `tool_gate.ENFORCED_ROUTINGS`, plus a mirror). `claude`'s
+routing, `tool_gate.ENFORCED_ROUTINGS`, plus something that computes
+`zero_tools`). `pi` has no mirror, but its array is composed by Crew
+(`AcpClient._mirrorless_member_mounts`), which reads `zero_tools` from the same
+spec parse; and pi's gate extension raises `session/request_permission` for
+every tool call, so the same refusal closes the gap there. `claude`'s
 routing (`Routing.SEEDED_SETTINGS`) is declared but not enforced by this core, so
 an inherited `~/.claude` pre-approval can skip `session/request_permission`
 entirely; the refusal is not applied there. `codex` is served by `AcpRuntime` /
 `AcpSessionHandle` rather than `AcpClient`, which carries `spec_denied_tools`
 but no `zero_tools` and no equivalent refusal, so nothing closes the gap on a
-codex session either. `pi` and `deepseek` have no mirror, so neither this nor
-the ordinary allowlist ever applies to them; an agent spec relying on
-`tools: []` for any of claude, codex, pi or deepseek is not enforced at all.
+codex session either. An agent spec relying on `tools: []` on claude or codex is
+not enforced at all.
 
 The knowledge and research pool spawns zero-tool agents and does not rely on the
 native ban alone. On kiro-cli, `--agent` resolves against the project checkout
@@ -380,7 +383,7 @@ itself:
 
 The managed default (`kirocrew`) spec does NOT point `prompt` at the
 operating-contract template. `build_agent_config` and `_refresh_dynamic_fields`
-set it to `_NATIVE_PROMPT_STUB` (`agent.py`), a short authority-delegating
+set it to `_NATIVE_PROMPT_STUB` (`agent_parts/spec_build.py`), a short authority-delegating
 paragraph. It is the only system-role text Crew controls on these harnesses, and
 the harness's own system prompt tells the model to refuse non-system content that
 claims an identity for it — the exact shape of the injected block, which opens
@@ -569,11 +572,9 @@ keyed on the harness label a turn is built with (`provider_type == PROVIDER_ACP`
 A chat or member session is built with its served harness's label, and KAS's is
 `kas`, not `acp`, so there an unmapped custom agent on KAS, Claude Code or any
 other harness gets no skill directory and an empty `skill_search` scope; map its
-skills with `skill://` entries to give it any. Known gap, not intended:
-`/api/hooks/agent` builds its first turn with the configured `agent.provider`
-(`acp` on every ACP backend) instead of the served label, so on KAS its skill
-directory lists trees that `skill_search` cannot load
-([#21860](https://github.com/kirodotdev/KiroCrew/issues/21860)).
+skills with `skill://` entries to give it any. Webhook turns from
+`/api/hooks/agent` follow the same rule: their first turn is built with the
+served label too, so on KAS its skill directory and `skill_search` scope agree.
 
 On kiro-cli, a workspace that
 sets `chat.disableInheritingDefaultResources` gets none, and so does an agent that
@@ -883,7 +884,7 @@ fence requirement, the JSON-twin precedence, and which backends run the form.
 | `name`, `description`, `model`, `welcomeMessage`, the roster | `src/kiro_crew/agent_discovery_parts/spec_fields.py` (`AgentInfo`, `spec_str`, `spec_model`, `spec_welcome_message`), `src/kiro_crew/agent_discovery_parts/agent_roster.py` (`list_agents`, `agent_model_map`, `agent_welcome_message`) |
 | `resources` `skill://` | `src/kiro_crew/agent_discovery_parts/spec_fields.py` (`skill_resource_uris`, `expand_skill_uri`, `skill_uri_for_path`), `src/kiro_crew/agent_discovery_parts/skill_scope.py` (`agent_skill_globs`); a generated spec's own mapping: `src/kiro_crew/agent_materialization/skill_resources.py` |
 | `resources` `file://`, the injection decision | `src/kiro_crew/context_assembly/agent_spec.py` (`_load_steering_resources`), `src/kiro_crew/context.py` (`_skills_injection_plan`) |
-| `tools`, `allowedTools`, `excludedTools`, `mcpServers`, `hooks`, `toolsSettings` — the default spec's composition and the rebuild order | `src/kiro_crew/agent.py` (`build_agent_config`, `_refresh_dynamic_fields`, `rebuild_agent_config`), the facade every writer below is reached through |
+| `tools`, `allowedTools`, `excludedTools`, `mcpServers`, `hooks`, `toolsSettings` — the default spec's composition and the rebuild order | `src/kiro_crew/agent.py` (`_refresh_dynamic_fields`, `rebuild_agent_config`), the facade every writer below is reached through, and `src/kiro_crew/agent_parts/spec_build.py` (`build_agent_config`) |
 | `hooks` — normalization and the kiro-cli object form | `src/kiro_crew/agent_materialization/kiro_hooks.py` |
 | `mcpServers` — Crew's own managed servers | `src/kiro_crew/agent_materialization/managed_mcp.py` |
 | `mcpServers`, `tools`, `allowedTools` — app, global and store servers, and the shared-server sync | `src/kiro_crew/agent_materialization/mcp_sources.py` |
@@ -894,6 +895,11 @@ fence requirement, the JSON-twin precedence, and which backends run the form.
 | the one-time guide grant on an existing default spec | `src/kiro_crew/agent_materialization/guide_platform.py` |
 | the first crewmate, created once | `src/kiro_crew/agent_materialization/first_crewmate.py` |
 | the fork refresh | `src/kiro_crew/agent_materialization/fork_refresh.py` |
+| writing a spec file: the atomic write, the spec lock, the agents directory and the specs it must hold | `src/kiro_crew/agent_parts/spec_files.py` |
+| the `command` of Crew's own managed servers: the `kirocrew` launcher, and first-run setup | `src/kiro_crew/agent_parts/kirocrew_launcher.py` |
+| upgrading a spec already on disk: migrations, model pins, the startup hook repair | `src/kiro_crew/agent_parts/spec_upgrades.py` |
+| locating a spec file, and the checkout's own spec that shadows an installed one | `src/kiro_crew/agent_parts/spec_lookup.py` |
+| who may write a shared agents home | `src/kiro_crew/agent_parts/shared_home.py` |
 | owned filenames | `src/kiro_crew/agent_files.py` |
 | `model_managed`, `cc_model`, fork lineage | `src/kiro_crew/agent_state.py` |
 | the KAS wire projection | `src/kiro_crew/acp/kas_agents.py` |

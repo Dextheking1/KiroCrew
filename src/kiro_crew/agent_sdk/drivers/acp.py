@@ -877,6 +877,14 @@ def pi_install_command() -> str:
     return PI_INSTALL_COMMAND
 
 
+def claude_adapter_min_version() -> str:
+    """``CLAUDE_ACP_SETTING_SOURCES_MIN_VERSION`` as ``x.y.z`` -- the floor the
+    read-only Side Chat shape needs, read from the constant the check uses."""
+    from kiro_crew.acp import client as _client
+
+    return ".".join(str(part) for part in _client.CLAUDE_ACP_SETTING_SOURCES_MIN_VERSION)
+
+
 def claude_adapter_install_command() -> str:
     """``npm i -g <adapter package>`` -- the adapter's remedy, from the repo.
 
@@ -983,6 +991,28 @@ def inherits_default_resources(work_dir: str | Path | None) -> bool:
     )
 
     return projection_inherits_default_resources(work_dir)
+
+
+def native_skill_view(
+    spec: dict[str, Any], source: Path, agent_name: str, *, crew_home_id: str
+) -> tuple[dict[str, Any] | None, bool, str | None]:
+    """*spec*'s native skill view as a Kiro spawn runs it: ``(view, search, refusal)``.
+
+    The skill projection's own transform (``project_agent_view``) for a spec read
+    by its path, judged as the shared runtime mounts it (a per-session
+    ``kirocrew-core`` element) and as if its workspace lends inherited skill trees.
+    Plain data in, plain data out.
+    """
+    from kiro_crew.acp.skill_projection import project_agent_view
+
+    return project_agent_view(
+        spec,
+        source,
+        agent_name,
+        crew_home_id=crew_home_id,
+        inherits_skills=True,
+        per_session_element=True,
+    )
 
 
 def skill_view_alias_census(agents_dir: "Path") -> dict[str, int]:

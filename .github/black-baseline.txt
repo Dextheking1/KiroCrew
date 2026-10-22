@@ -260,7 +260,6 @@ test/metrics/test_watchdog_metrics.py
 test/test_acp_metadata_fields.py
 test/test_acp_offload.py
 test/test_acp_prompt_blocks.py
-test/test_acp_stale_recovery.py
 test/test_acp_tool_search.py
 test/test_acp_true_provider_error.py
 test/test_acp_turn_lock.py
@@ -481,7 +480,6 @@ test/test_design_tweak_queue_routes.py
 test/test_design_tweak_relay_paths.py
 test/test_dev_fleet_node_toolchain.py
 test/test_dev_fleet_server_more_coverage.py
-test/test_diagnostics.py
 test/test_display_time_redaction.py
 test/test_doc_parser.py
 test/test_docker_entrypoint.py
@@ -531,7 +529,6 @@ test/test_hook_matcher_modes.py
 test/test_hooks_json_shared_file.py
 test/test_host_service_guard.py
 test/test_image_artifacts.py
-test/test_installer_distro.py
 test/test_instances_search_federation.py
 test/test_interactions_shortcut.py
 test/test_ios_simulator_preview_skill.py
@@ -598,7 +595,6 @@ test/test_mcp_gateway_stub_optin.py
 test/test_mcp_gateway_stub_paths.py
 test/test_mcp_gateway_stub_poolable_ack.py
 test/test_mcp_gateway_stub_recaller.py
-test/test_mcp_gateway_transport.py
 test/test_mcp_internal_caller.py
 test/test_mcp_knowledge_add_document.py
 test/test_mcp_oauth_banner.py
@@ -740,7 +736,6 @@ test/test_skill_browser.py
 test/test_skill_dedupe.py
 test/test_skill_discover.py
 test/test_skill_home_paths.py
-test/test_skill_index_app_symlinks.py
 test/test_skill_paths_and_mcp_sync.py
 test/test_skill_pending.py
 test/test_skill_pending_notify.py

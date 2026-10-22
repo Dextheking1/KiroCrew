@@ -47,23 +47,9 @@ Every PR names an issue of this repository on a line of its own: `Closes #N` (th
 merge closes it) or `Part of #N` (it stays open). The `Issue Gate` lane checks it.
 It is paused today (`GATE_ENFORCED: "false"`); write the line anyway.
 
-1. No issue yet? Open one from `.github/ISSUE_TEMPLATE/` BEFORE Phase 1.
-2. The Captain — the maintainers' triage crew — scans issues with no tier, writes
-   one tier label and marks the issue `pending-triage`.
-3. The tier says how big the work is:
-
-| Tier | Means | Before you build |
-|---|---|---|
-| `tier:T1` | a bug; the fix keeps the design | go |
-| `tier:T2` | a small additive feature | go |
-| `tier:T3` | a change to an existing experience; needs a one-pager | wait for `triaged` |
-| `tier:T4` | a new concept; needs a design review | wait for `triaged` |
-
-A person flips a T3/T4 issue from `pending-triage` to `triaged` after reading it.
-Unsure of the size? Pick the higher tier. Only a maintainer applies
-`issue-gate: waived` (a production fire, a release PR). The older `needs-triage`
-and verdict labels (`auto-fixable`, `needs-investigation`, `needs-human`) drive
-Issue Radar's dispatch; the gate does not read them.
+No issue yet? Open one from `.github/ISSUE_TEMPLATE/` BEFORE Phase 1. The tier
+table (T1-T4; T3 and T4 wait for `triaged`) and the Captain's triage are in
+`references/ci.md` § Issue tiers.
 
 ### Lanes
 
@@ -87,8 +73,7 @@ All five, together:
 4. One clean commit on a feature branch (when the profile sets `single_commit`).
 5. **Every raised concern answered on the PR** — see "Dispositions" below. A
    red `macOS Tests (on demand)` run on the current head counts as a concern:
-   it is not required, but fix it or show the same test red on main. #12925
-   merged over its own red shard 2 and reddened that shard on every open PR.
+   it is not required, but fix it or show the same test red on main.
 
 When the diff adds or changes a test, review-ready also means the body carries that
 test's determinism proof: the repeats and a shuffled order, and for a fix to a flaky
@@ -96,8 +81,7 @@ test the forced condition red on the parent and green on the fix (testing-conven
 § Proving a determinism fix). `AUTOSDE.yaml`'s `tests-are-deterministic` rule is what
 review holds the test itself to.
 
-Advisory findings may remain *unfixed*. They may not remain *unanswered*.
-A green rollup with an unanswered `CONCERNS` verdict is **not** converged.
+A BLOCK is fixed, rebutted with evidence, or overridden. It never stays unanswered.
 
 ## Three questions per finding
 
@@ -121,7 +105,7 @@ data-loss defect must not be dismissed as speculative. A missing sibling branch
 is an incomplete fix, not optional scope (see Phase 4).
 
 Legitimate Critical/High and applicable blocking AUTOSDE violations block
-readiness. Medium/Low remain advisory unless a human escalates them; do not widen
+readiness. Medium/Low do not block unless a human escalates them; do not widen
 the PR for advice. With no stated severity, correctness/security/build failures
 are High-equivalent and style is Low. Severity governs changes, never whether
 a concern gets a reply.
@@ -182,8 +166,7 @@ Answering is prose work. It never needs a push and never widens the diff.
 
 **What must be answered:**
 
-- Non-PASS verdicts from the **whole-design lanes** — Design, First Principles, UX: every Watch item, Suggestion and Subtraction, each with its own `target=design` / `target=first-principles` / `target=ux` comment naming its `span=`. Their **BLOCK** verdict blocks readiness, and so does an **unanswered CONCERNS** for the current head: `pr_status.py` exits `20` on it even when the rollup is green, and it clears the moment one `target=<lane> head=<current sha>` disposition exists. The `--reviewers` pin does not hide it (`references/rationale.md`). PASS is advisory and must still be answered: its punchline is the ask. `pr_findings.py` prints each item with its `span=` and `Clears when:` line, above the line-level findings.
-- Non-blocking observations in the GPT / Opus bodies.
+- A **BLOCK** from the **whole-design lanes** — Design, First Principles, UX: every Blocker, each with its own `target=design` / `target=first-principles` / `target=ux` comment naming its `span=`. It blocks readiness. `pr_findings.py` prints each item with its `span=`, `Trigger:`, `Outcome:` and `Clears when:` line, above the line-level findings. A PASS, and every `Notes:` bullet, needs no reply.
 - One-way-door concerns from Design Review — fix or justify in writing.
 - Human review comments and inline threads.
 
@@ -345,11 +328,9 @@ that view; no local round log is needed.
   each: remove / smaller replacement / keep / revert to `<head sha>` and redo via
   a smaller path.
 - **The retrospective is a step, not a stop.** Rule on every mechanism and continue
-  Phase 1 → 2 → 3 in the same turn. First that holds: **remove** (goal survives,
-  defect stays fixed); **revert** (mostly beyond the goal since that head);
-  **smaller replacement** (removal reopens the defect); **keep** plus the one
-  invariant that makes the span unreachable. In doubt, smaller wins. Post a
-  class-level `> ` disposition for each subtraction.
+  Phase 1 → 2 → 3 in the same turn. The pick order (remove, revert, smaller
+  replacement, keep) is in `references/retrospective.md`. Post a class-level `> `
+  disposition for each subtraction.
 - **Pause for the user only on these four**, each needing something only a
   human supplies: a user-visible, UI-placement or public-contract change the
   frozen goal did not settle; every option breaks the frozen goal; an
@@ -437,7 +418,7 @@ full suites are CI's job and the Phase 3 poll is the authority on them.
    `rubric`. Local reviewers are read-only, unlike repair subagents.
 
    **Exit 40 is a PARITY FAILURE** — a reviewer workflow no longer has the shape the
-   extractor reads. Only then brief each reviewer from its charter in
+   extractor reads. Unless it names a stale copy, brief each reviewer from its charter in
    `references/fallback-charters.md`, and say so:
    `WARNING: local review ran on hand-written charters, not the extracted CI contract — they may have drifted.` Fix the extractor.
 
@@ -538,38 +519,19 @@ comes after a record, never instead of one:
    runs discovery mode, where a lane that never posted passes silently.
 
    - **0** → answer its punchlines, then Phase 4.
-   - **20** → run `pr_findings.py` and **TRIAGE before re-pushing**. An `unanswered CONCERNS from <LANE>` reason is cleared by POSTING dispositions, not by pushing. `pr_status.py` already reads only the current head's rollup and drops rows a newer run of the same check displaced; never dedupe check rows by name by hand, which drops live rows. **(d) Superseded or unpublished verdict** (`superseded verdict`, `verdict not published, re-run this lane`) → re-run that lane, or override at this head. **(a) CI/build/test failure** → read `gh run view <run-id> --log-failed`. If the same check also fails on main, follow *When main is red*. Otherwise, once you decide to fix, cancel the head's in-flight runs, reproduce the **exact failing node ids** locally, and fix the **root cause**; a flake confirmed and recorded per *Before you rerun a red test* gets `gh run rerun <run-id> --failed` (or `--job <job-id>`) once, never a whole-run replay. **(b) Review finding** → whole-design verdicts first, then the three questions. For Kiro Crew Opus-family or GPT 6.1 findings that need code changes, MUST execute [Review repair routing](#review-repair-routing): delegate the minimal fix and self-review to the model-pinned subagent, then verify in the parent. Otherwise rebut with evidence (never dismiss a CodeQL alert merely to pass), override it per *Overriding a false positive*, or ask a maintainer. **(c) Conflict / behind base** → Phase 1 handles it. Then **loop back to Phase 1** → 2 → 3 carrying those fixes.
+   - **20** → run `pr_findings.py` and **TRIAGE before re-pushing**. `pr_status.py` already reads only the current head's rollup and drops rows a newer run of the same check displaced; never dedupe check rows by name by hand, which drops live rows. **(d) Superseded or unpublished verdict** (`superseded verdict`, `verdict not published, re-run this lane`) → re-run that lane, or override at this head. **(a) CI/build/test failure** → read `gh run view <run-id> --log-failed`. If the same check also fails on main, follow *When main is red*. Otherwise, once you decide to fix, cancel the head's in-flight runs, reproduce the **exact failing node ids** locally, and fix the **root cause**; a flake confirmed and recorded per *Before you rerun a red test* gets `gh run rerun <run-id> --failed` (or `--job <job-id>`) once, never a whole-run replay. **(b) Review finding** → whole-design verdicts first, then the three questions. For Kiro Crew Opus-family or GPT 6.1 findings that need code changes, MUST execute [Review repair routing](#review-repair-routing): delegate the minimal fix and self-review to the model-pinned subagent, then verify in the parent. Otherwise rebut with evidence (never dismiss a CodeQL alert merely to pass), override it per *Overriding a false positive*, or ask a maintainer. **(c) Conflict / behind base** → Phase 1 handles it. Then **loop back to Phase 1** → 2 → 3 carrying those fixes.
    - **10** → still running. In a chat slot, load `kirocrew-core::monitor_start`
      through `tool_search`, request a finite same-session loop, then END THE TURN.
      Slot-less subagent, cron, webhook and task-runner turns cannot arm one: use
      bounded in-turn `wait` + re-poll and disclose that fallback.
 
-     ```
-     monitor_start(
-       message="Check https://github.com/owner/repo/pull/123 with green_age.py "
-               "--pr 123 then pr_status.py --reviewers <profile reviewer names>. "
-               "green_age 30: re-sync, run the related tests, push, post one "
-               "Rebased comment. pr_status 10: stay silent. Exit 20: read "
-               "pr_findings.py and triage; a red main follows When main is red; "
-               "Kiro Crew AI repairs MUST follow kirocrew-prepare-pr Review repair routing "
-               "with model-pinned subagents, then parent verification and Phases "
-               "1 -> 2 -> 3. Push only if authorized. Exit 0: Phase 4, arm "
-               "auto-merge (omit when the merge is on hold), keep watching; "
-               "on a conflict rebase, push, re-arm. "
-               "Merged, terminal state, user stop, blocker or spent budget: "
-               "report the outcome, overrides and open findings, then call "
-               "autonudge_stop.",
-       interval_secs=300, max_cycles=288, max_runtime_secs=86400, gate=False,
-       banner="kirocrew-prepare-pr: polling PR #123")
-     ```
-
-     Replace the example URL with the real one. Under a merge hold, rewrite the
-     `Exit 0` clause to `Exit 0: report review-ready and keep watching; do NOT arm
-     auto-merge` — the message is re-injected verbatim every cycle and outlives
-     the turn that heard the hold. A hold heard after arming goes in with
-     `monitor_update(message=...)` that turn (`references/rationale.md`). Keep `gate=False`: comments and
-     advisory findings are outside the typed provider's evidence. Omit `banner` on
-     Slack/Discord/Webex. Loop mechanics belong to the `babysit` skill.
+     Arm it with the call in `references/monitor-loop.md` (read it first, swap in the
+     real PR URL): `interval_secs=300, max_cycles=288, max_runtime_secs=86400,
+     judge=False`. The loop is gated: an unchanged PR costs no turn and any change
+     wakes it. Under a merge hold, rewrite its `Exit 0` clause as that file says; a
+     hold heard after arming goes in with `monitor_update(message=...)` that turn
+     (`references/rationale.md`). Omit `banner` on Slack/Discord/Webex. Loop mechanics
+     belong to the `babysit` skill.
 
      A create-only refusal means a loop may already be active: inspect it on a
      later turn; never start another driver beside it. Missing hosting context
@@ -602,9 +564,10 @@ outside author asks a maintainer to merge.
   fix it, or rerun it once after *Before you rerun a red test*, then re-arm.
 - **Merged** → report and call `autonudge_stop`.
 
-**Report:** the full PR URL, one-line status, commit SHA, whether auto-merge armed
-or why not, **every override** (lane, span, SHA, reason), every red-main fix PR
-opened, and any Low/nit left on purpose **plus how each was answered**.
+**Report** on the converged turn: the full PR URL, one-line status, commit SHA,
+whether auto-merge armed or why not, **every override** (lane, span, SHA,
+reason), every red-main fix PR opened, and any Low/nit left on purpose **plus
+how each was answered**.
 
 **Escalate** only on the four pause reasons under "Iteration budget", or on a spent
 budget with the PR still open. Hand over: what is red and why, unresolved
@@ -640,20 +603,8 @@ outage is a rerun later, not a code fix.
 
 ## PR description contract
 
-Use these sections only when `.github/PULL_REQUEST_TEMPLATE.md` is absent. Phase 1.5
-checks them against the diff.
-
-1. **Problem / Motivation** — `**Goal:** <one sentence>`, then the symptom, or the gap for a feature.
-2. **Why it matters** — impact if left unfixed. Then **Not a goal**, one bullet per scope.
-3. **What changed (motivation → approach → change)** — symptom → root cause → the specific change. Three short paragraphs at most — one per arrow, well under 500 words of prose; `--check-body` stops past that (exit 21, `WORD_LIMIT`). It describes the **whole diff on this head**, never one round's fix. Write it in the register below.
-4. **Backwards compatibility** — `Compatible:` or `Breaking:`. A diff that tightens a contract (new required field, a validator that raises on input the base accepts, narrowed type, removed kind, renamed key) cannot be `Compatible:`; it takes `Breaking:` plus a writer sweep re-run on FRESH `origin/<base>` before the final push, with that sha in the body. A diff that takes something away lists its readers as `Reader:` lines.
-5. **Tests** — what was added/updated and what each locks in.
-6. **Manual verification** — steps done/needed, or "N/A — unit coverage sufficient" with a one-line why.
-7. **Screenshots / video — MANDATORY for any user-visible UI change**, uploaded as GitHub attachments with `gh ... --attach`, never committed, bar one scoped exception. See below.
-8. **Issue link** — `Closes #<n>` on a line of its own. See *Issue first*.
-9. **Pattern harvest** — `fix`/`revert` PRs only: `Rule candidate:` + `Pattern:`, or `Not generalizable:`.
-
-Omit a section only when truly not applicable, and say so.
+Phase 1.5 checks the body against the diff. When `.github/PULL_REQUEST_TEMPLATE.md`
+is absent, the nine sections are in `references/pr-description-contract.md`.
 
 ### Two checks, two strengths
 

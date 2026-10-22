@@ -43,10 +43,10 @@ which restates what a member's DM session carries in its context.
 | `src/kiro_crew/dashboard/handlers/agent_catalog.py` | Read-only `/api/agents/catalog` execution choices, with separate member and template namespaces |
 | `src/kiro_crew/dashboard/handlers/agent_templates.py` | The Custom agents tab's roster (`/api/agents/templates`), create, delete with reference guard, and the read-only rule the detail PATCH applies to definition edits |
 | `website/src/pages/overview/AgentTemplatesTab.tsx` | The **Custom agents** tab of `CapabilitiesPage` (Customize): list by origin, edit the shared definition, create, delete, chat-with / enroll (an enroll invalidates `['kirocrew-agents']` and `['kirocrewConfig']`) |
-| `src/kiro_crew/dashboard/handlers/members.py` | `/api/members` roster, thread get-or-create, rules, activity |
+| `src/kiro_crew/dashboard/handlers/members.py` and its `members_<role>.py` owners | `/api/members` roster, thread get-or-create, rules, activity |
 | `src/kiro_crew/crew_teams.py` + `src/kiro_crew/dashboard/handlers/teams.py` | Crewmate teams (`teams.json` in the masked gateway-only data-home directory `crew-teams`; `/api/teams`): the Crewmates page's roster grouping and team view — specified under [learn-cron-dashboard](learn-cron-dashboard.md) with the members handlers |
-| `website/src/pages/KiroCrewAgentsPage.tsx` | The crewmate roster and crew editor, mounted as the **Crewmates** tab of `CapabilitiesPage` (Customize). The page holds the roster and editor queries, the editor's draft, opening, saving and deleting a crew, the deep links, the template-switch writes and the Danger zone, and composes its owners beside it: the roster cards, rows, toolbar and list (`KiroCrewAgentsPageRoster.tsx`), the binding fields every crew editor shares (`KiroCrewAgentsPageFields.tsx`; consumers import them from the page, which re-exports each), the editor header and the Model, Workspace & memory and Routing pane bodies (`KiroCrewAgentsPagePanes.tsx`), and the unsaved-work guard with its discard dialog (`KiroCrewAgentsPageDiscard.tsx`). The Crewmates page's own crew editor (`components/crew/CrewEditorNextDialog.tsx` + `useCrewEditor.ts`) mounts the same fields from here and keeps its own `INHERIT_MODEL` twin |
-| `website/src/components/crew/crewEditorSections.ts` | The crew editor's pane registry, including the Routing pane that edits `triggers` |
+| `website/src/pages/KiroCrewAgentsPage.tsx` | The crewmate roster, mounted as the **Crewmates** tab of `CapabilitiesPage` (Customize), and a host of the one crewmate editor. The page holds the roster query, the create door (`NewCrewmateDialog`), the deep links (`?crew=`, `&avatar=1`, `&pane=capabilities`, `?new=1`), the fresh-roster admission latch the editor opens behind, and the editor's guide facts, and composes the roster cards, rows, toolbar and list (`KiroCrewAgentsPageRoster.tsx`) and the binding fields every crew form shares (`KiroCrewAgentsPageFields.tsx`; consumers import them from the page, which re-exports each). Editing a crewmate opens `components/crew/CrewEditorModal.tsx` (`CrewEditorNextDialog` driven by `useCrewEditor`), the same editor the Crewmates page opens in place; that hook keeps its own `INHERIT_MODEL` twin |
+| `website/src/components/crew/crewEditorSections.ts` | The `CrewPaneKey` names and section facts `useCrewEditor` keeps for its deep links and dirty tracking. No dashboard editor renders a Routing, template or Capabilities pane from it, so `triggers` has no editing surface |
 | `website/src/components/CrewWakeSection.tsx` | "What wakes this agent" — schedules, deliberately distinct from `triggers` |
 | `website/src/components/chat/crewmateBubbles.ts` | A crewmate's chat: what the transcript draws (`filterCrewmateChat`) and the run / corner rule for its bubbles (`crewmateRunPosition`, `crewmateBubbleClass`) |
 | `src/kiro_crew/dashboard/warm_task_brief.py` | Owner-return presence, 30-minute in-memory away episodes, durable task-fingerprint claims, two ordinary crewmate summary messages, one bounded background call, and stale-result suppression |
@@ -191,8 +191,9 @@ refusal in the user's language inside the dialog that sent the name
 
 ## Custom agents tab
 
-The **Built from** pane inside a crew editor edits that crew's PRIVATE copy of a
-template (blueprint semantics, below). The **Custom agents** tab under
+The **Built from** section of the crewmate editor is read-only: it shows the
+custom agent a crewmate is built from (details, tools, MCP servers, skills),
+and only the choice of agent is edited there. The **Custom agents** tab under
 Customize (page title and sidebar label; route `/capabilities`) is the other
 half: it manages the shared templates themselves — "custom agents" in every
 user-facing string, the thing a crewmate is **built from** — the files under
@@ -615,6 +616,17 @@ Duplicate affordance, so the three duplicate entry points read as one flow.
 
 ## Owner-reviewed capability inheritance
 
+**Dashboard surface.** The crewmate editor (`CrewEditorNextDialog`) shows a
+read-only **Built from** section, and its **Approvals** section
+(`CrewApprovalsEditor`) is the only dashboard writer of these routes. No
+dashboard surface edits enrollment, Stop following the parent, per-member MCP
+or skill rows, or a private copy's template: the classic `CrewCapabilitiesPane`
+and template pane that did are retired, and agent config is edited on the
+**Custom agents** tab. The routes and their refusal codes below are unchanged.
+Where a paragraph below says "the pane", it records the copy that pane showed,
+kept as the contract the refusal codes were designed against; it is not a
+rendered surface.
+
 `agent_capabilities.py` resolves one verified Parent and explicit per-item
 `set`, `remove` and `inherit` intent. The owner-only GET, POST preview and PUT
 routes at `/api/agents/{name}/capabilities` use schema version 1. Preview ends
@@ -911,16 +923,18 @@ A member agent file that changed since its last review (its digest no longer
 matches the stamped `materialized`) makes `prepare_member_capabilities` raise
 `materialization_changed`. The chat error row carries that code and the
 member, withholds Resume (a retry repeats the same check), and offers a fix
-that opens `/capabilities?tab=crews&crew=<member>&pane=capabilities`. There,
-Review and Save with an empty draft restamps the file when every changed key is
+that opens `/capabilities?tab=crews&crew=<member>&pane=capabilities`, which
+opens that crewmate's editor on its **Approvals** section
+(`CrewApprovalsEditor`). There, Review and Save with an empty draft restamps the file when every changed key is
 one the review can vouch for (`_unvouched`); a changed key the review cannot
 show refuses with `409 unreviewable_drift`, naming the file
 (`_stamp_reviewed`).
 
 Four sibling start refusals get the same row treatment, each with its own fix.
-`parent_identity_changed` offers the same Capabilities pane fix.
-`foreign_private_copy` opens the member editor at
-`/capabilities?tab=crews&crew=<member>`. `project_identity_changed` and
+`parent_identity_changed` and `foreign_private_copy` open the member editor at
+`/capabilities?tab=crews&crew=<member>`, where Built from picks a different
+agent; the `parent_identity_changed` copy also offers putting the parent back,
+since no dashboard surface stops following it. `project_identity_changed` and
 `private_template_shadowed` offer no button, and the copy names the fix. A
 `project_identity_changed` row carries `meta.project`, the saved project to go
 to; when the member was saved with no project, the copy says "another project".
@@ -2120,7 +2134,11 @@ draft guard, so a veto neither remounts the card nor loses its pushed form.
   opens that page with an empty editor and is always shown), the milestones
   (each row a door to its own page: the latest reading large, every earlier
   update, Edit milestone and Remove milestone), the check-ins as three tiles
-  saying on or off and when they run (the card is a door to the switches and
+  saying on or off and when they run, with the **Heartbeat** as one full-width
+  row under them (its name, the line "Every 1 hr, finds work on its own" with
+  its interval, a second line "Each run uses credits. · up to 12 runs a day" while it is on (the daily bound, `wakesPerDay`), and Off
+  or Turned on -- a switch state, never "Running", which
+  read as work in progress beside the crewmate's Idle; the card is a door to the switches and
   pickers), a full-width **Add something {name} should track** row, and the reports. The
   goal colours are five theme tile hues (`--tile-blue`, `--tile-purple`,
   `--tile-pink`, `--tile-teal`, `--tile-indigo`), never the ok/warn green and
@@ -2209,11 +2227,28 @@ draft guard, so a veto neither remounts the card nor loses its pushed form.
   `REQ_CARD_KEY_RESULTS_APPLY`; a Goals-tab edit and an Undo do not) always
   sends a second hidden turn, `[Milestones confirmed]`, the same way, listing
   each milestone with the goals it serves: with no
-  check-in on it offers them with `set_check_ins`, otherwise it says what the
-  crewmate works on first.
+  check-in on it offers them with `set_check_ins` (the Daily Goal Reminder, the
+  Weekly report, the Monthly review, and the Heartbeat, which is off by default:
+  a wake every so often that keeps the work moving while the user is away, the
+  chat quiet, the Dashboard tab showing what it did, each run using credits),
+  otherwise it says what the crewmate works on first.
 - the **`crewmate.check_ins` card** (`set_check_ins`): turns the Daily Goal
-  Reminder, Weekly report and Monthly review on or off and sets `weekday`,
-  `month_day` and `time`, writing through the schedules route, which is a
+  Reminder, Weekly report, Monthly review and Heartbeat on or off and sets
+  `weekday`, `month_day`, `time` and the heartbeat's `interval` (its rows read
+  "Heartbeat (each run uses credits)", whose value when it turns on always
+  names how often and the daily bound, the default too ("On, every 1 hr (up to
+  24 runs a day)"), and "Every 1 hr (up to 24 runs a day)" for a changed
+  interval (`member_goals.wakes_per_day`: 48, 24, 12 or 6); the tool's description names each
+  wake's credit cost too). One formatter writes the interval everywhere:
+  `member_goals.interval_label` ("30 min", "1 hr", "2 hr", "4 hr") on the
+  card, in the wake prompt and, through `interval_choices` /
+  `interval_minutes_text` built from `HEARTBEAT_INTERVALS`, in the
+  `set_check_ins` and card-kind text, which tells the crewmate to write it to
+  the user that way and, since the card has no timing control, to point at the
+  Goals tab's Check-ins (where each check-in is switched off on its own and
+  its time or interval changed) rather than at the card; the Goals tab's `fmtInterval` gives the same English
+  words through `Intl` short units,
+  writing through the schedules route, which is a
   card-hooked route (`change_card_catalog.HOOKED_ROUTES`) like the goal and
   key-results routes, so the card finishes and offers Undo; Undo puts each
   field it changed back and leaves the other check-in fields as they are.
@@ -2236,6 +2271,84 @@ draft guard, so a veto neither remounts the card nor loses its pushed form.
   The check-in jobs are not listed on the Schedule page or in the crewmate's
   Schedules tab (`GET /api/crons` drops them through
   `goal_reminder.is_reminder_job`); the switches are their only control;
+- the **Heartbeat**, a fourth check-in (`member_goals.CADENCE_HEARTBEAT`; related:
+  the RFC "Crewmate heartbeat", rfc-crewmate-heartbeat.md under
+  docs/request-for-change), off by default and
+  disabled without a goal like the other three. A record written before it reads
+  with `heartbeat` off and `interval` 60. Its `interval` is one of
+  `member_goals.HEARTBEAT_INTERVALS` (30, 60, 120, 240 minutes; anything
+  else is refused `invalid_interval`, and a stored value outside the list reads
+  as 60), and its one schedule (`goal-heartbeat:<slug>`, removed with the
+  crewmate by `crew_removal._remove_goal_check_ins` like the others) runs on the
+  clock's marks (`goal_reminder.cron_expr_for`: `*/30 * * * *`, `0 * * * *`,
+  `0 */2 * * *`, `0 */4 * * *`), never at the shared time of day.
+  The floor and the default are a cost choice: each wake is a full model turn
+  over the crewmate's whole context, and a provider's prompt cache lives
+  minutes, so no interval on the list finds the previous wake's cache warm and
+  credits scale with the number of wakes alone; 30 minutes caps it at 48 a day,
+  the hourly default at 24. A wake that finds the gateway stopping after its
+  reads (`kiro_crew.shutdown_event` set, read by `goal_reminder.gateway_stopping`;
+  the cron timer itself stops firing once the event is set) starts no turn and
+  logs `skipped: the gateway is stopping`. A wake whose thread a monitor loop
+  drives (`goal_reminder._monitor_loop_drives`, the work ledger's own
+  `ledger_wake.worker_looping` over `autonudge.get_instance()`: the bare,
+  `dashboard_` and channel keys, an active bounded loop with budget left; any
+  failure reads as no loop) starts no turn either and logs
+  `skipped: a monitor loop is running`, since between two loop cycles the
+  thread is idle. While a `crewmate.key_results` card the crewmate proposed is
+  pending or applying in the thread (`goal_reminder.milestones_card_waiting`;
+  an unreadable card store counts as no card), the prompt drops new milestones
+  from its next steps and says the card already waits on the user, so a wake
+  does not propose a second card.
+  Changing the interval replaces that schedule. On the check-ins page the switch
+  carries the line that each run uses credits with that interval's daily bound,
+  and the interval picker shows under it while it is on, each option naming its
+  own bound ("Every 1 hr · up to 24 runs a day"). Only the owner's schedules route and an applied
+  `crewmate.check_ins` card write the switch, so the crewmate proposes it with
+  `set_check_ins` and cannot turn it on itself. A wake goes through the same
+  `goal_reminder.fire` path and the same skips (thread not open, a turn running
+  or queued, switch off, no goal), checking the thread again after the
+  off-loop tools check, and dispatches one hidden turn
+  (`mate_welcome.dispatch_hidden_turn`, `human_seen=False`)
+  built by `goal_reminder.heartbeat_prompt` from the current record. Right
+  under the progress block, the prompt asks for `nothing_to_do` at once, with
+  no text before it, when nothing can move forward. The rest of the prompt
+  is written as principles: look at the goals, milestones and open work-ledger
+  items; move forward what it can, one thing or several (met milestones or
+  work waiting on the user still leave a step that needs no one -- the next
+  improvement, new milestones, a draft the user can review -- while a step
+  that cannot be undone or reaches outside waits, recorded on the Dashboard
+  tab); hand long work to a
+  worker session (`session_create`, `session_send`, then
+  `session_read_message` on later wakes) rather than a sub-agent when the thread
+  holds the `session_*` tools (`goal_reminder.member_has_session_tools`: the
+  answer the context builder gives a member turn without session evidence when
+  it decides on the operating-mode block, `context._member_dispatch_held(None,
+  cfg)` -- the configured member backend mounts session control per session --
+  narrowed by a user-level switch-off of `kirocrew-dashboard`, read through the
+  `agent_sdk.agent_specs.session_mcp_server_is_disabled` seam, never
+  `kiro_crew.acp`; any failure answers False), and otherwise do it in small steps across wakes, noting in the
+  work ledger where it stopped; either way the next heartbeat is the patrol, so
+  the wake arms no monitor loop or wait (`monitor_start` refuses on a turn no
+  person opened); record quiet work in the work ledger, with
+  `dashboard_write` and with `key_result_progress`; write in the chat only when
+  blocked, when something the user asked for is done, or for a surprise or a
+  risk, and otherwise end with `nothing_to_do`; ask one thing once, with an
+  `[OPTIONS:]` line rather than an `ask_question` card, and take no answer as
+  "not now" (a reversible step goes ahead on the safe default and is noted on
+  the Dashboard tab; an irreversible one is left and recorded there as waiting).
+  The quiet end is admitted on that turn because a hidden turn is opened by the
+  gateway (`_turn_actor="gateway"`, no user, channel or self-wake origin), and
+  `session_directive_apply._nothing_to_do` refuses it only on a turn a person or
+  a channel opened. A hidden turn's text is not folded or held: text the model
+  writes before a tool call is an ordinary reply row, shown in the chat like on
+  any other turn, so the prompt carries the silent end (session.md, "Who may
+  end quietly"). The hidden turns are exactly
+  `dispatch_hidden_turn`'s callers: the first welcome
+  (`mate_welcome._dispatch_greeting`), goal setup's kickoff and
+  `[Milestones confirmed]` turns (`goal_setup`), and the four check-ins
+  (`goal_reminder.fire`: Daily Goal Reminder, Weekly report, Monthly review,
+  Heartbeat);
 - the latest **reports**, each linking its artifact.
 
 What the crewmate is doing now is its work ledger, not the goal record: the tab
@@ -3191,10 +3304,9 @@ and requires reloading and reviewing against the new version. Save success never
 stands in for runtime application: runtime status comes from the server and
 active sessions are not promised a hot reload.
 
-The legacy template pane keeps its instant-save behavior for independent and
-shared definitions. Enrolled definitions direct model and skill edits to
-Capabilities instead. Reset and publish remain in the template pane but lock
-while a capability draft exists. A mask is never a literal replacement value.
+The legacy template pane, which saved instantly and locked reset and publish
+while a capability draft existed, is retired with the classic crewmate sheet;
+see the Dashboard surface note under Owner-reviewed capability inheritance. A mask is never a literal replacement value.
 The form can keep unchanged secrets, select a configured connection, or replace the
 whole transport using a blank form. MCP set operations carry a complete transport
 plus RFC6901 `retain_paths` for unchanged `[REDACTED]` leaves. Each pointer keeps

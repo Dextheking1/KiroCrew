@@ -57,8 +57,8 @@ _SPEC_REJECTION_MARKER = "is invalid"
 def _default_spec_lister() -> list[tuple[str, Path]]:
     """Production enumerator for :class:`KiroPrerequisiteService`'s spec probe.
 
-    Delegates so path resolution and the ownership guard stay in ``agent.py``
-    (see ``present_required_agent_specs``).
+    Delegates so path resolution and the ownership guard stay behind ``kiro_crew.agent``
+    (see ``present_required_agent_specs`` in ``agent_parts/spec_files.py``).
     """
     from kiro_crew.agent import present_required_agent_specs  # circular import
 
@@ -192,7 +192,7 @@ async def _agent_spec_overlay(
     :meth:`session_ready`. That predicate gates poll-driven spawn sites, and
     turn-starting paths intentionally do not block on it — they let the turn
     carry the failure, which now arrives as an actionable missing-spec message
-    from ``acp/runtime.py`` instead of a raw JSON-RPC dict. Narrowing it here
+    from ``acp/runtime_reader_loop.py`` instead of a raw JSON-RPC dict. Narrowing it here
     would re-introduce the stale-latch lockout that design removed.
     """
 

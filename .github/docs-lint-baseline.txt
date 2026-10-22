@@ -205,7 +205,6 @@ line-ref	docs/request-for-change/rfc-crew-agent-sdk-boundary.md	types.py:596-605
 line-ref	docs/request-for-change/rfc-crew-agent-sdk-boundary.md	worker_pool.py:49
 line-ref	docs/request-for-change/rfc-durable-run-coordinator.md	src/kiro_crew/mcp_tools/spawn.py:484-598
 line-ref	docs/request-for-change/rfc-durable-run-coordinator.md	src/kiro_crew/subagent_persistence.py:1-7
-line-ref	docs/request-for-change/rfc-durable-run-coordinator.md	subagent_persistence.py:88-125
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	admission.py:154-156
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/admission.py:200
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/admission.py:25-30
@@ -213,8 +212,6 @@ line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/context.py:51-
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/execution.py:459-460
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/permissions.py:71
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/route_registry.py:122
-line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/routes.py:2336
-line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/routes.py:503
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	apps/version.py:32-33
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	dashboard/handlers_system.py:168-172
 line-ref	docs/request-for-change/rfc-everything-is-an-app.md	manifest.py:247
@@ -275,8 +272,6 @@ line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	context.py:8
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	context.py:897-902
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	dashboard/chat_folders.py:130
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	dashboard/chat_persistence.py:326,476
-line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	dashboard/server.py:1660
-line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	dashboard/server.py:652-660
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	dashboardSlice.ts:280-292
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	governance_profiles.py:190
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	mcp_core.py:228,357,288,318
@@ -284,14 +279,12 @@ line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	platform/gov
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	session_map.py:124-167
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	session_map.py:178-195
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	src/kiro_crew/subagent_persistence.py:4-6
-line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	subagent_persistence.py:224-241
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	subagent_persistence.py:275-280
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	subagent_persistence.py:293
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	suggestions.py:202
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	suggestions.py:96
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	sync_bridge.py:28
 line-ref	docs/request-for-change/rfc-resumable-subagent-sessions.md	tips.py:759
-line-ref	docs/request-for-change/rfc-s3-backup.md	apps/routes.py:310
 line-ref	docs/request-for-change/rfc-s3-backup.md	learn.py:6
 line-ref	docs/request-for-change/rfc-s3-backup.md	profiles.py:1
 line-ref	docs/request-for-change/rfc-s3-backup.md	session_storage.py:7-10

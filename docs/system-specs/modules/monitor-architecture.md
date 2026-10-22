@@ -238,6 +238,14 @@ gated read path. `AutoNudgeService.notify_turn_complete` brings the busy-retry
 forward to `delay=0` on turn end instead of waiting for the loop deadline, and the
 per-loop wake text is held in `_pending_monitor_wake`, a `dict` keyed by loop id.
 
+The steered wake keeps the ROW the fire writes. `steer_into_running_turn` takes the
+loop's `nudge_meta` (`{"cycle", "loop_id"}`) and persists the steer as a `nudge` row
+with `meta.steer`, so it draws as the nudge chip and never as a bubble the person
+typed; the sender names the origin, the role follows from it. A steer the turn ends
+before taking is requeued with `AUTOMATION_STEER_META` on its entry: the drain
+writes it as a `nudge` row too, and the entry drains alone, never merged into the
+person's own queued text (#22747).
+
 The `monitoring/` package now has a different extension point:
 `models.MonitorProbe`, a structural Protocol with no behaviour inheritance, plus
 the data-only kind registry. The four source-provider adapters and the workflow
@@ -1267,8 +1275,11 @@ corner case: a pull request reaches `readiness: passed` only once every non-PASS
 whole-design verdict carries a disposition, and those verdicts live in comment
 bodies. The digest wakes the owner when such a body changes, but a green typed
 board with an unanswered advisory finding whose text never changed is still
-indistinguishable to a probe, which is why the prompt loop keeps `gate=false` for
-that evidence in both positions of this key.
+indistinguishable to a probe, which is why that evidence stays on the prompt loop,
+whose agent turn reads the bodies, in both positions of this key. The comment-aware
+recipes arm that loop gated with `judge: false`: a finding's arrival changes its
+reading (a body digest, or the lane's check run finishing) and wakes it, and the
+quiet floor re-delivers a turn for one the woken turn left unanswered.
 
 The PR-level comment-body digest is carried as one condition,
 `review_comment_bodies:<digest>`, with severity `WAKE` and `resets_on` `NEVER`:

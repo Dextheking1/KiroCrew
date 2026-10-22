@@ -159,6 +159,15 @@ export interface ChatState {
   recoveryRevision?: number
   lastRecoveryRequestId?: string
   activeSlot: string | null
+  /** Count of moves of `activeSlot` to a different session, bumped by
+   *  `enterActiveSlot`. A request that may take the view when it settles
+   *  (a fork) compares it with the count at its start: equal `activeSlot`
+   *  alone cannot tell "never moved" from "moved away and came back". */
+  activeSlotMoves?: number
+  /** Moves the chat page made on its own (`dropActiveSlot` and its
+   *  `automatic` auto-select). Kept apart from `activeSlotMoves`, which then
+   *  counts only moves the user asked for. */
+  activeSlotAutoMoves?: number
   messages: ChatMessage[]
   slotRunning: boolean
   slotStopping: boolean
@@ -399,8 +408,14 @@ export interface ChatState {
    *  effects run in declaration order, an older request could execute last and
    *  cancel a newer one's retry loop. With one field there is only ever one pending
    *  reveal, so the ordering is a property of the state rather than something a
-   *  cross-field nonce comparison has to restore. */
-  revealRequest: { kind: 'session' | 'folder'; target: string; nonce: number } | null
+   *  cross-field nonce comparison has to restore.
+   *
+   *  `openFoldersOnly` marks a request the user did not ask for: the one a
+   *  default-folder create raises so its new row is not left inside a collapsed
+   *  folder. It opens the row's folder path, the same visibility a folder "+"
+   *  create gives, and nothing else: no filter, search or hide is cleared, and
+   *  there is no scroll or flash. */
+  revealRequest: { kind: 'session' | 'folder'; target: string; nonce: number; openFoldersOnly?: boolean } | null
   /** Never-reset counter feeding `revealRequest.nonce`, so revealing the same
    *  session (or folder) twice produces two distinct requests (a key-only request
    *  would make the second reveal indistinguishable from the first). Monotonic
@@ -575,6 +590,8 @@ export interface ChatState {
 
 export const initialState: ChatState = {
   activeSlot: null,
+  activeSlotMoves: 0,
+  activeSlotAutoMoves: 0,
   messages: [],
   slotRunning: false,
   slotStopping: false,

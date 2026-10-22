@@ -61,6 +61,7 @@ from kiro_crew.acp.types import (
 )
 from kiro_crew.acp.types import (  # noqa: F401
     ACP_BACKENDS_HARNESS_OWNED_SESSIONS,
+    ACP_BACKENDS_KIRO_FAMILY,
     ACP_BACKENDS_KIRO_SLASH_COMMANDS,
     ACP_BACKENDS_KNOWN,
     ACP_BACKENDS_MEMBER_CAPABILITIES,
@@ -197,6 +198,10 @@ class AcpProvider(LLMProvider):
             kwargs["agent"] = agent
         self.member_context = member_context
         self.memory_mode = memory_mode
+        # The name kiro-cli is asked for in place of ``agent`` (an app's launch
+        # copy, ``apps.agent_launch``), set by session allocation; ``agent``
+        # stays the session's identity. Read by the Kiro runtime start only.
+        self.app_launch_agent = ""
         # Kept on the provider, not only on the placeholder client: on the kiro
         # path ``_start_kiro_runtime_impl`` replaces that client with an
         # ``AcpRuntime`` it constructs itself, and a dedicated subagent's
@@ -290,7 +295,7 @@ class AcpProvider(LLMProvider):
                     self._effort_per_model.setdefault(m, lvl)
             except Exception:
                 logger.debug("ACP effort overlay recovery failed", exc_info=True)
-        if self._client.backend in ACP_BACKENDS_KIRO_SLASH_COMMANDS:
+        if self._client.backend in ACP_BACKENDS_KIRO_FAMILY:
             # Write the overlay BEFORE the first spawn so kiro-cli reads it on
             # session/new. Each writer is scoped to the harnesses that read its keys.
             self._apply_effort_overlay()

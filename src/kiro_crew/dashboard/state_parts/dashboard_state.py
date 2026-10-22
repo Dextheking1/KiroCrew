@@ -292,8 +292,9 @@ class DashboardState:
         # start behavior and leave this callback unset.
         self.resume_channel_agents: "Callable[[], None] | None" = None
         self.tunnel_manager: Any = None  # lazy-init in server.py (TunnelManager)
-        self.instances_manager: Any = None  # lazy-init in server.py (SshTunnelManager)
-        self.instances_registry: Any = None  # lazy-init in server.py (InstancesRegistry)
+        # Both lazy-init in server_runtime/instances_lifecycle.py.
+        self.instances_manager: Any = None  # SshTunnelManager
+        self.instances_registry: Any = None  # InstancesRegistry
         # Cloud provisioning launch jobs (lazy-init in handlers_cloud).
         self.cloud_launch_store: Any = None  # LaunchJobStore
         self.cloud_launch_cancels: Any = None  # dict[str, threading.Event]
@@ -313,7 +314,7 @@ class DashboardState:
         # Read by the restart handler: stops the broker this gateway owns before
         # the exec, so a successor never meets a daemon still owned by this pid.
         self._mcp_gateway_stop: Any = None  # async () -> None
-        # Secretary subsystem removed; kept as permanent None for apps/routes.py
+        # Secretary subsystem removed; kept as permanent None for apps/routes_enable.py
         # builtin-service restart lookup (getattr-based, no-op when None).
         self._secretary_restart: Any = None  # restart callback (always None — service removed)
         self.workflow_service: Any = None  # published only after complete recovery
@@ -1024,6 +1025,7 @@ class DashboardState:
     is_yolo_active = _dashboard_services.is_yolo_active
     request_approval = _dashboard_services.request_approval
     pending_coordinator_approvals = _dashboard_services.pending_coordinator_approvals
+    linked_session_busy = _dashboard_services.linked_session_busy
     _audit_and_broadcast_approval = _dashboard_services._audit_and_broadcast_approval
     _audit_approval = _dashboard_services._audit_approval
     resolve_state_approval = _dashboard_services.resolve_state_approval

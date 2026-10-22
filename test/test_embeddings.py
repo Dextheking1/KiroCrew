@@ -25,7 +25,6 @@ import mmap
 import os
 import struct
 import threading
-import time
 import urllib.error
 from collections.abc import Callable
 from pathlib import Path
@@ -59,6 +58,7 @@ from kiro_crew.embeddings import (
     reset_shared_embedder,
     start_background_model_download,
 )
+from kiro_crew.testing.wait import wait_until
 
 # The shared autouse fixture, bound here by name so pytest registers it for this module.
 _reset_embedding_singletons = embeddings_helpers._reset_embedding_singletons
@@ -378,18 +378,28 @@ class TestModelContextPolicy:
     @pytest.mark.parametrize(
         ("architecture", "context_length", "expected_sizes"),
         [
-            # gpt2: 1,024 learned absolute positions; the micro-batch stays 512.
-            ("gpt2", 1024, (1024, 1024, 512)),
+            # gpt2: 1,024 learned absolute positions; the micro-batch stays 256.
+            ("gpt2", 1024, (1024, 1024, 256)),
+            # A decoder trained for twice the micro-batch count.
+            ("starcoder", 512, (512, 512, 256)),
             # A decoder trained for exactly the micro-batch count.
-            ("starcoder", 512, (512, 512, 512)),
-            # Below the micro-batch: n_ubatch may never exceed n_batch.
             ("gpt2", 256, (256, 256, 256)),
+            # Below the micro-batch: n_ubatch may never exceed n_batch.
+            ("gpt2", 128, (128, 128, 128)),
             # Qwen3-Embedding declares 32,768: the ceiling, the shipped sizes.
             ("qwen3", 32768, _DECODER_SIZES),
             ("qwen3", 8192, _DECODER_SIZES),
             ("qwen3", None, _DECODER_SIZES),
         ],
-        ids=["gpt2-1024", "starcoder-512", "gpt2-256", "qwen3-32768", "qwen3-8192", "qwen3-absent"],
+        ids=[
+            "gpt2-1024",
+            "starcoder-512",
+            "gpt2-256",
+            "gpt2-128",
+            "qwen3-32768",
+            "qwen3-8192",
+            "qwen3-absent",
+        ],
     )
     def test_decoder_context_is_clamped_to_the_trained_position_count(
         self,
@@ -428,7 +438,7 @@ class TestModelContextPolicy:
 
     @pytest.mark.parametrize(
         ("architecture", "expected_sizes"),
-        [("bert", (512, 512, 512)), ("gpt2", (512, 512, 512))],
+        [("bert", (512, 512, 512)), ("gpt2", (512, 512, 256))],
         ids=["encoder", "decoder"],
     )
     def test_trained_position_count_reaches_llama_constructor_with_one_warning(
@@ -836,12 +846,15 @@ class TestLlamaCppEmbedder:
         # Both claims are read WHILE the worker is held, which is the only window in
         # which a refusal is distinguishable from a completed embed: after release
         # every admitted job succeeds and returns a vector too.
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
+
+        def _a_refusal_landed() -> bool:
             with lock:
-                if any(r is None for r in outcomes.values()):
-                    break
-            time.sleep(0.02)
+                return any(r is None for r in outcomes.values())
+
+        wait_until(
+            _a_refusal_landed,
+            describe=lambda: f"no refusal while the worker was held; outcomes so far: {outcomes}",
+        )
         with lock:
             refused_while_held = sorted(i for i, r in outcomes.items() if r is None)
         depth = emb._jobs.qsize()

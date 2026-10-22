@@ -1847,7 +1847,7 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # goes out to a human.
         "context.py",
         "context_assembly/session_start.py",
-        "agent.py",
+        "agent_parts/spec_build.py",
         # Capture-side, not egress: redacts a Slack thread's first message as it
         # is READ from Slack, before the text is kept for the model's fenced
         # thread-context block and for the transcript's display-only notice row.
@@ -2084,6 +2084,11 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # The run-record owner the ``apps/job_sdk.py`` facade serves: it hosts ``_redact``,
         # the record's ingest scrub, under the facade's classification.
         "apps/job_sdk_records.py",
+        # Partitions of the "App lifecycle output" sink beside the registered apps/routes.py.
+        "apps/routes_enable.py",
+        "apps/routes_lifecycle.py",
+        "apps/routes_listing.py",
+        "apps/routes_registry.py",
         # Same shape: hosts _redact_memory_field, the shared recursive scrubber
         # for memory fields. It owns no output of its own — the handler modules
         # that call it (memory.py and the cron.py owners) are the covered surfaces.
@@ -2206,10 +2211,13 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # compaction notice, whose display sink is already registered, so it is
         # not an egress boundary of its own.
         "acp/compaction_errors.py",
+        "acp/runtime_frame_accounting.py",
         # Redacts the tool title in the auto-rejected-permission WARNING (a
         # gate-side log line) and defers user-facing display to the routed
         # permission event, whose sinks are already registered.
-        "acp/runtime.py",
+        "acp/runtime_host_requests.py",
+        "acp/runtime_liveness.py",
+        "acp/runtime_session_registry.py",
         "acp/session_handle_compaction.py",
         "acp/session_handle_dispatch.py",
         "acp/session_handle_kas.py",
@@ -2449,11 +2457,12 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         "dashboard/handlers/sessions_parts/summaries.py",
         "dashboard/handlers/sessions_parts/tool_policy.py",
         "dashboard/handlers/sessions_parts/usage_scrape.py",
-        # Roster last-message previews: same preview + redaction chain as
-        # handlers/sessions_parts/history_reads.py, feeding the same dashboard
-        # HTTP surface the registered sink already covers.
-        "dashboard/handlers/members.py",
-        # The crewmate recap lines `handlers/members.py`'s recap route returns:
+        # Roster last-message previews, and the drawer's reads of one crewmate: same
+        # preview + redaction chain as handlers/sessions_parts/history_reads.py,
+        # feeding the same dashboard HTTP surface the registered sink already covers.
+        "dashboard/handlers/members_roster.py",
+        "dashboard/handlers/members_drawer.py",
+        # The crewmate recap lines `handlers/members_drawer.py`'s recap route returns:
         # a helper behind that same dashboard HTTP surface, not a boundary itself.
         "member_recap.py",
         "dashboard/handlers/artifacts_parts/artifact_comments.py",
@@ -2821,6 +2830,9 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # this app's panel, not a core egress path.
         "apps/builtins/code_review_sage/sage_lib/followup.py",
         "apps/builtins/code_review_sage/backend/routes.py",
+        # `backend/routes_parts/publishing` scrubs a dismissed finding's reason before
+        # the run record stores it. Same classification as `backend/routes` above.
+        "apps/builtins/code_review_sage/backend/routes_parts/publishing.py",
         # Dev Fleet's redactor wrapper and the cohesive owners that apply it to
         # the app's own API/state/worktree surfaces, all carrying the same
         # non-core-egress classification. `gateway_routes` is the same surface

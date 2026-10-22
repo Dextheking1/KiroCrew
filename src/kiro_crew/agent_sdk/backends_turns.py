@@ -30,7 +30,7 @@ from kiro_crew.agent_sdk.backends import (
 # claude-agent-acp does not implement it, so a steer sent there is answered with
 # method-not-found rather than reaching the turn. It takes a user's steer over
 # ``_session/steering`` instead (see ``ACP_BACKENDS_STEERING_REQUEST``).
-# codex-acp (1.11.0) has a steering channel, but not this one and not usable for
+# codex-acp (measured on 1.11.0) has a steering channel, but not this one and not usable for
 # what membership buys. Measured against a real adapter: it is a different method
 # (``_session/steering``, ``{sessionId, prompt: [ContentBlock]}``, answered with
 # ``{outcome: injected|startedNewTurn|failed}``, advertised as
@@ -60,6 +60,12 @@ from kiro_crew.agent_sdk.backends import (
 # ``steering_queued`` then ``steering_injected`` (a ``session_info_update`` with the
 # kind under ``_meta.kiro``), and the model obeyed it before that turn's
 # ``stopReason``. No lane re-runs it, so a later kiro-cli is not re-measured.
+#
+# kiro-cli is a member on a LIVE capture against kiro-cli 2.32.0:
+# ``test/fixtures/acp_frames/kiro/steering-live.jsonl``. The same steer, sent while a
+# shell call ran, was answered ``{queued: true}``, echoed as
+# ``AgentExecutionUserMessageQueued`` then ``AgentExecutionSteeringInjected`` (on
+# ``_kiro.dev/session/update``), and obeyed before that turn's ``stopReason``.
 #
 # This set answers the DENY-NOTICE question as well as the user one: a member's
 # steer can carry a refusal reason into the turn that was refused. A backend that
@@ -187,7 +193,7 @@ ACP_BACKENDS_STEER_CONCURRENT_PROMPT = frozenset({ACP_BACKEND_OPENCODE})
 # claude-agent-acp, codex-acp, opencode, goose and pi finish the whole compaction inside
 # the ``session/prompt`` turn.
 #
-# opencode is a member on a LIVE capture against opencode 1.18.30, and it joins
+# opencode is a member on a LIVE capture, measured on opencode 1.18.30, and it joins
 # despite advertising nothing: its ``available_commands_update`` lists only
 # ``customize-opencode``, ``init`` and ``review``. That silence was read here as "no
 # compaction capability of any kind", and it is not one -- the harness serves
@@ -205,8 +211,8 @@ ACP_BACKENDS_STEER_CONCURRENT_PROMPT = frozenset({ACP_BACKEND_OPENCODE})
 # retaken on the Real Adapter Contract lane's pin
 # (``test/real_adapters/package.json``).
 #
-# codex is a member on a capture rather than on its documentation. codex-acp 1.11.0
-# driven over stdio advertises ``compact`` in its ``available_commands_update``
+# codex is a member on a capture rather than on its documentation. Measured on
+# codex-acp 1.11.0 over stdio, it advertises ``compact`` in its ``available_commands_update``
 # ("Summarize conversation to avoid hitting the context limit"), intercepts the
 # ``/compact`` prompt as that command, and answers the same ``session/prompt``
 # request once the compaction is done. On 1.11.0 the frames are a MARKED tool-call
@@ -223,7 +229,7 @@ ACP_BACKENDS_STEER_CONCURRENT_PROMPT = frozenset({ACP_BACKEND_OPENCODE})
 # configured it. That capture is on 1.11.0 and is not re-measured on the Real
 # Adapter Contract lane's pin (``test/real_adapters/package.json``).
 #
-# goose is a member on a LIVE capture against goose 1.50.1. Driven over three turns,
+# goose is a member on a LIVE capture, measured on goose 1.50.1. Driven over three turns,
 # its ``usage_update.used`` climbed 1529 -> 1991 -> 2453. A ``/compact`` prompt then
 # answered ``Compaction complete`` inside the turn, read ``used: 224``, and returned
 # ``stopReason: end_turn`` with no status frame after it. The next ORDINARY turn read
@@ -342,6 +348,9 @@ ACP_BACKENDS_COMPACT = frozenset(
 # louder. What such a harness gets instead is a WARNING from the gate naming both
 # memberships it lacks, and the refusal arm that promises nothing -- so the leak is
 # reported rather than either denied or answered by ending the conversation.
+#
+# kiro-cli is not a member: no capture shows it compacting on its own, and its
+# ``/compact`` is served through ``ACP_BACKENDS_COMPACT``.
 ACP_BACKENDS_HARNESS_MANAGED_COMPACTION = frozenset({ACP_BACKEND_KAS})
 
 # Backends whose FULL context is answered by recycling the session, because no
@@ -436,17 +445,39 @@ ACP_BACKENDS_UNMARKED_COMPACTION_PAIR = frozenset({ACP_BACKEND_CODEX})
 # slash commands go through ``session/prompt`` and are interpreted by the adapter
 # (or degrade to prompt text) instead of returning -32601 for the whole call.
 #
-# This membership does NOT decide who reads the workspace ``cli.json`` overlay: KAS
-# speaks this dialect but never opens that file, so its effort keys and its Tool
-# Search keys each have their own, narrower sets, ``ACP_BACKENDS_EFFORT_OVERLAY``
-# and ``ACP_BACKENDS_TOOL_SEARCH_OVERLAY``.
+# Membership means "Crew may SEND this verb", and nothing wider: the kiro-family
+# reads (Crew's agent spec, the native set-model request, the effort live path)
+# stand on ``ACP_BACKENDS_KIRO_FAMILY`` below.
+# KAS is not a member: it refuses the verb with -32603 "has no persistence
+# classification" for every command tried (``tools``, ``context``, ``effort``),
+# captured in ``test/fixtures/acp_frames/kas/commands-refused-live.jsonl``. Its
+# effort travels as the ``effortLevel`` config option, and the dashboard answers
+# its other harness commands itself.
 # opencode is not a member: it has no ``_kiro.dev`` verb, and it publishes its own
 # command list as an ``available_commands_update`` on ``session/update`` instead.
 # pi is not a member for the same reason: pi-acp publishes its built-ins the same
 # way and has no ``_kiro.dev`` verb.
 # deepseek is not a member and publishes no command list either: it carries commands
 # internally and its ACP surface rejects them, so it exposes none over the wire.
-ACP_BACKENDS_KIRO_SLASH_COMMANDS = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_KAS})
+#
+# kiro-cli is a member on a LIVE capture against kiro-cli 2.32.0:
+# ``test/fixtures/acp_frames/kiro/commands-execute-live.jsonl``, where the object form
+# ``{command: effort, args: {level: high}}`` answered ``{success: true}``.
+ACP_BACKENDS_KIRO_SLASH_COMMANDS = frozenset({ACP_BACKEND_KIRO})
+
+# The kiro family: kiro-cli and KAS, the two harnesses Crew spawns through
+# ``kiro-cli``. Membership is not a capability of its own. It is the family the
+# readers below mean when they mean "kiro-cli or KAS", so none of them stands on a
+# capability set (the command verb above, or the runtime set, which codex shares
+# for TRANSPORT reasons) that happens to hold the same two members today:
+#
+# - the card's crew-tools, reasoning-effort and model-switch lines, where the
+#   family loads Crew's agent spec and takes the native set-model request;
+# - ``AcpProvider``'s effort live path, which re-applies an unpinned level and
+#   pushes a cleared default down whichever channel the capability layer names;
+# - the gate in front of the workspace ``cli.json`` overlay writers, each of which
+#   is scoped again to its own narrower reader set.
+ACP_BACKENDS_KIRO_FAMILY = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_KAS})
 
 # Backends that interpret ``/todos`` as a native prompt command. This is separate
 # from ``ACP_BACKENDS_KIRO_SLASH_COMMANDS``: that set names the private RPC used by

@@ -24,7 +24,6 @@ lives in ``context_composition_contract_helpers.py``.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
 import threading
@@ -41,6 +40,7 @@ from kiro_crew.config.loader import KiroCrewConfig
 from kiro_crew.context_blocks import measure_prompt
 from kiro_crew.hooks import HookManager, HookResult
 from kiro_crew.skills import SkillsLoader
+from kiro_crew.testing.wait import finished
 
 pytestmark = [
     pytest.mark.xdist_group("context_composition_contract"),
@@ -103,8 +103,8 @@ _STABLE_TEXT = {
 
 _STABLE_TEXT_SHA256 = {
     "context_scope_all_withheld": "98ed04f8fca6f805d76f7fd3f518c63f221d5af6da6636fd30b28dc217207a0a",
-    "critical_rules": "06ea61438802e0538dbf1f107e2e6b07cf2416348734f330e0cf0ec3ef52e899",
-    "critical_rules_channel": "7e0dc53a1e4db382d51bb8ead062cd94ed5752dbb30b40149b6d9728ba734742",
+    "critical_rules": "16827ce030089653769a3f16a6fb96e6c9fcda799ef4750630080011b5ac1647",
+    "critical_rules_channel": "7b7ea4db70ccbc233959938b561281591e3b3c26544b383046942ce229eacf7e",
     "docs_section": "971b6008afbd9ff048c498c06cffecc6dafc7a58b0df75ff9db0b15cf9e26c09",
     "member_how_you_work": "aecaa26113f1d8909cc3188cece6f3455c02354fefe72b4ed5f6fa9d2db68f14",
     "member_how_you_work_unavailable": "d7e0fda68e64a84f1bc17dc3a8b2fa0fbbeec42a352dc0ea06d0808eadb04f3d",
@@ -1156,6 +1156,8 @@ async def test_session_routing_is_read_off_the_event_loop(monkeypatch) -> None:
 
     monkeypatch.setattr(ctx, "store_of_session", _store_of_session)
     monkeypatch.setattr(ctx, "prepare_store_vectors", _prepare)
-    store = await asyncio.wait_for(ctx.session_store_for_turn(object(), "dashboard:k"), 10)
+    store = await finished(
+        ctx.session_store_for_turn(object(), "dashboard:k"), "the turn's store lookup", timeout=10
+    )
     assert store == ""
     assert seen and all(thread != loop_thread for thread in seen)

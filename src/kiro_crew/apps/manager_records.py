@@ -224,21 +224,135 @@ class InstalledApp:
         return inst
 
 
+# ---------------------------------------------------------------------------
+# Record lock: one writer of an app's installed.json at a time
+# ---------------------------------------------------------------------------
+
+# Every writer reads the record, changes it and replaces the whole file, so two
+# writers that overlap lose one change (a dev-mode save landing after a widening
+# update undoes its consent-pending mark). The lock is a SIDECAR outside the app
+# directories, never installed.json: the record is replaced via os.replace, so a
+# lock on it would sit on an inode the next writer never opens; and update_app
+# moves the whole app directory aside, so a lock inside it would too.
+_record_lock_state = threading.local()
+
+
+def _record_lock_path(name: str) -> Path:
+    # Outside apps/ so app listings and tree scans never meet a lock file.
+    return config_dir() / "app-record-locks" / f"{name}.lock"
+
+
+@contextmanager
+def app_record_lock(name: str) -> Iterator[None]:
+    """Hold *name*'s cross-process record lock; reentrant within one thread.
+
+    POSIX ``flock`` / Windows ``msvcrt.locking`` via ``platform_compat.file_lock``,
+    bounded and FAIL-CLOSED: a lock that cannot be taken raises, so no writer
+    proceeds unserialized. A nested acquire in the same thread (a transaction
+    calling ``_write_installed``) reuses the held lock instead of deadlocking on
+    a second descriptor.
+    """
+    held: dict[str, int] = getattr(_record_lock_state, "held", None) or {}
+    _record_lock_state.held = held
+    if held.get(name):
+        held[name] += 1
+        try:
+            yield
+        finally:
+            held[name] -= 1
+        return
+    from kiro_crew import platform_compat
+
+    path = _record_lock_path(name)
+    ensure_directory(path.parent)
+    fd = platform_compat.open_create_or_existing(path, os.O_RDWR)
+    try:
+        with platform_compat.file_lock(fd, exclusive=True):
+            held[name] = 1
+            try:
+                yield
+            finally:
+                held.pop(name, None)
+    finally:
+        os.close(fd)
+
+
+def holds_app_record_locks(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Release every record lock *fn* took with :func:`hold_app_record_lock`."""
+    import functools
+    from contextlib import ExitStack
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        stacks: list[ExitStack] = getattr(_record_lock_state, "stacks", None) or []
+        _record_lock_state.stacks = stacks
+        with ExitStack() as stack:
+            stacks.append(stack)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                stacks.pop()
+
+    return wrapper
+
+
+def hold_app_record_lock(name: str) -> None:
+    """Take *name*'s record lock until the enclosing ``@holds_app_record_locks`` returns.
+
+    Called right before a writer first reads the record, so the lock spans its
+    read, its checks and its write. Outside such a function it raises rather
+    than run unserialized.
+    """
+    stacks = getattr(_record_lock_state, "stacks", None)
+    if not stacks:
+        raise RuntimeError("hold_app_record_lock needs an @holds_app_record_locks caller")
+    stacks[-1].enter_context(app_record_lock(name))
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _read_installed(name: str) -> InstalledApp | None:
-    """Read installed.json for an app, or None if not installed."""
+def _read_installed(name: str, *, manifest: AppManifest | None = None) -> InstalledApp | None:
+    """Read installed.json for an app, or None if not installed.
+
+    *manifest* is the live manifest the caller already read. A permission
+    check passes it so the pending decision uses the same manifest that
+    showed the grant, rather than a second read that could differ.
+    """
     meta_path = app_dir(name) / INSTALLED_META_FILENAME
     if not meta_path.is_file():
         return None
     try:
         data = json.loads(meta_path.read_text(encoding="utf-8"))
-        return InstalledApp.from_dict(data)
+        meta = InstalledApp.from_dict(data)
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Failed to read %s: %s", meta_path, exc)
         return None
+    if _session_approval_consent_unrecorded(name, data, manifest=manifest):
+        meta.sessionApprovalConsentPending = True
+    return meta
+
+
+SESSION_APPROVAL_PENDING_KEY = "sessionApprovalConsentPending"
+
+
+def _session_approval_consent_unrecorded(
+    name: str, data: Any, *, manifest: AppManifest | None = None
+) -> bool:
+    """Whether a record predates the consent marker while its manifest needs one.
+
+    Every record this host writes carries ``sessionApprovalConsentPending``
+    (``to_dict`` keeps every bool), so a record without the key was written by a
+    host that ignored ``permissions.sessionApproval``. If the live manifest
+    declares that grant, nobody ever consented to it. Key absence is only read
+    in this fail-closed direction: it makes the grant pending, never approved.
+    """
+    if isinstance(data, dict) and SESSION_APPROVAL_PENDING_KEY in data:
+        return False
+    if manifest is None:
+        manifest = get_app_manifest(name)
+    return bool(manifest and manifest.permissions.sessionApproval)
 
 
 def _credential_free_source_metadata(value: str) -> str:
@@ -253,8 +367,55 @@ def _credential_free_source_metadata(value: str) -> str:
     return _strip_git_target_userinfo(candidate)
 
 
-def _write_installed(name: str, meta: InstalledApp) -> None:
+def _session_approval_save_rule(
+    name: str, meta: InstalledApp, *, session_approval_consent: bool
+) -> str:
+    """How a save writes *name*'s ``sessionApprovalConsentPending``.
+
+    ``"as_is"`` writes the caller's value, ``"pending"`` writes True and
+    ``"unrecorded"`` leaves the key out. One read of the record ON DISK and one
+    look for the manifest decide it, so two observations can never disagree.
+
+    When the disk copy has no consent key (it never had a consent moment) or
+    already says pending, a save may record "no consent needed" only when the
+    owner just consented, or when the live manifest is readable and does not
+    declare the grant. A manifest that cannot be read keeps it pending. With no
+    manifest at all a pending record stays pending and a key-less one stays
+    key-less, so a manifest that returns with the grant still asks for consent.
+    So an unreadable or missing manifest, an early save, a stale copy written
+    back by a rollback, or two writers overlapping never record a consent that
+    was not given.
+    """
+    if meta.sessionApprovalConsentPending or session_approval_consent:
+        return "as_is"
+    try:
+        raw = json.loads((app_dir(name) / INSTALLED_META_FILENAME).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "as_is"  # a new record; its writer decides from the manifest
+    except (OSError, ValueError):
+        return "pending"
+    if not isinstance(raw, dict):
+        return "pending"
+    on_disk = raw.get(SESSION_APPROVAL_PENDING_KEY, None)
+    if SESSION_APPROVAL_PENDING_KEY in raw and on_disk is not True:
+        return "as_is"
+    if not os.path.lexists(app_dir(name) / APP_MANIFEST_FILENAME):
+        return "pending" if on_disk is True else "unrecorded"
+    manifest = get_app_manifest(name)
+    if manifest is None or manifest.permissions.sessionApproval:
+        return "pending"
+    return "as_is"
+
+
+def _write_installed(
+    name: str, meta: InstalledApp, *, session_approval_consent: bool = False
+) -> None:
     """Write credential-free installed.json metadata for an app.
+
+    ``session_approval_consent`` is True only on the write that records the
+    owner's consent (``enable_app``). Without it, a record that has no consent
+    key on disk keeps ``sessionApprovalConsentPending`` (see
+    ``_session_approval_save_rule``).
 
     A raw clone/source URL is a transport capability, not durable app identity.
     Registry callers already pass credential-free provenance, but the external
@@ -273,16 +434,26 @@ def _write_installed(name: str, meta: InstalledApp) -> None:
     """
     from kiro_crew.apps.registry import _strip_git_target_userinfo
 
-    credential_free_meta = replace(
-        meta,
-        approvedGrantsStored=meta.approvedGrantsStored or _approved_grants_path(name).is_file(),
-        source=_credential_free_source_metadata(str(meta.source or "")),
-        sourceUrl=_strip_git_target_userinfo(str(meta.sourceUrl or "")),
-        sourceRegistry=_credential_free_source_metadata(str(meta.sourceRegistry or "")),
-    )
-    meta_path = app_dir(name) / INSTALLED_META_FILENAME
-    meta_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(meta_path, json.dumps(credential_free_meta.to_dict(), indent=2) + "\n")
+    # The save rule's on-disk read and the replace run under the record lock,
+    # so no other writer can land between them.
+    with app_record_lock(name):
+        rule = _session_approval_save_rule(
+            name, meta, session_approval_consent=session_approval_consent
+        )
+        credential_free_meta = replace(
+            meta,
+            approvedGrantsStored=meta.approvedGrantsStored or _approved_grants_path(name).is_file(),
+            sessionApprovalConsentPending=meta.sessionApprovalConsentPending or rule == "pending",
+            source=_credential_free_source_metadata(str(meta.source or "")),
+            sourceUrl=_strip_git_target_userinfo(str(meta.sourceUrl or "")),
+            sourceRegistry=_credential_free_source_metadata(str(meta.sourceRegistry or "")),
+        )
+        body = credential_free_meta.to_dict()
+        if rule == "unrecorded":
+            body.pop(SESSION_APPROVAL_PENDING_KEY, None)
+        meta_path = app_dir(name) / INSTALLED_META_FILENAME
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(meta_path, json.dumps(body, indent=2) + "\n")
 
 
 # Grant families held back on a widening update. ``sessionApproval`` is a flag
@@ -693,8 +864,9 @@ def _scan_installed_app_config_keys(root: Path) -> frozenset[str]:
     for entry in root.iterdir():
         if not entry.is_dir():
             continue
+        manifest = get_app_manifest(entry.name)
         try:
-            installed = _read_installed(entry.name)
+            installed = _read_installed(entry.name, manifest=manifest)
         except Exception:
             # InstalledApp.from_dict performs real coercion and can raise for a
             # malformed field. One damaged record must not freeze every other
@@ -705,7 +877,6 @@ def _scan_installed_app_config_keys(root: Path) -> frozenset[str]:
             continue
         if installed is None:
             continue
-        manifest = get_app_manifest(entry.name)
         if manifest is not None and not manifest.config_keys_error:
             keys.update(manifest.config_keys)
     return frozenset(keys)

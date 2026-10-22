@@ -13,11 +13,15 @@ here too, so the 409 and the setup guide print the same command. The route layer
 
 from __future__ import annotations
 
+import shlex
 from typing import Any
 
 from aiohttp import web
 
-from kiro_crew.security import redact_credentials, redact_exfiltration_urls
+from kiro_crew.security import (  # noqa: F401 - pinned by test_handlers_deploy_facade.py
+    redact_credentials,
+    redact_exfiltration_urls,
+)
 from kiro_crew.sel import sel
 
 # --- restricted-session guard (consistent across all mutating endpoints) -----
@@ -65,8 +69,9 @@ def _redact_text(s: str) -> str:
     _mask_credential is applied at Finding creation time, this catches any path
     where raw matched content leaks through.
     """
-    s, _ = redact_credentials(s)
-    s, _ = redact_exfiltration_urls(s)
+    from kiro_crew.security import redact
+
+    s = redact(s)
     return s
 
 
@@ -129,6 +134,18 @@ def _redact_pending_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any
     return out
 
 
+# Both remediation commands are POSIX shell lines: ``install-reaper.sh`` is a
+# bash script and the base step chains onto it with ``&&``, so on every host
+# the user pastes them into ``sh``/``bash`` (Git Bash or WSL on Windows).
+# ``shlex.join`` is that shell's quoting; a word made only of safe characters
+# stays bare, so the common ``--profile dev --region us-west-2`` reads as
+# before, while a value carrying whitespace, quotes or metacharacters is
+# single-quoted and reaches its program as one literal argument. The script
+# and template paths are spelled POSIX-style (``as_posix``): on Windows a
+# ``str(Path)`` carries backslashes, which ``shlex.join`` would single-quote,
+# while ``C:/Users/...`` is bare and is a path Git Bash runs as-is.
+
+
 def _reaper_remediation(profile: str, region: str) -> str:
     """Exact operator command for the finite-TTL reaper precondition.
 
@@ -142,13 +159,19 @@ def _reaper_remediation(profile: str, region: str) -> str:
     install rooted at ``~/.kirocrew`` and one rooted at ``~/.kiro/crew`` both
     occur, so a hardcoded spelling is wrong on one of them. Falls back to the
     bare name if the skills root cannot be resolved.
+
+    Every word is shell-quoted with ``shlex.join``: the profile and
+    region may come from the agent-writable registry, and the dashboard offers
+    this string with a copy button, so a value carrying ``;`` or ``$`` must
+    reach the script as one literal argument instead of running as a second
+    command.
     """
     script = "install-reaper.sh"
     try:
         from kiro_crew.skills import skills_dir
 
         candidate = skills_dir() / "artifact-deploy" / "scripts" / "install-reaper.sh"
-        script = str(candidate)
+        script = candidate.as_posix()
     except Exception:  # noqa: BLE001 — remediation text must never break the 409
         pass
     parts = [script]
@@ -156,7 +179,7 @@ def _reaper_remediation(profile: str, region: str) -> str:
         parts += ["--profile", profile]
     if region:
         parts += ["--region", region]
-    return " ".join(parts)
+    return shlex.join(parts)
 
 
 def _base_remediation(profile: str, region: str) -> str:
@@ -174,7 +197,7 @@ def _base_remediation(profile: str, region: str) -> str:
     try:
         from kiro_crew.skills import skills_dir
 
-        template = str(skills_dir() / "artifact-deploy" / "templates" / "base-stack.yaml")
+        template = (skills_dir() / "artifact-deploy" / "templates" / "base-stack.yaml").as_posix()
     except Exception:  # noqa: BLE001 — remediation text must never break the 409
         pass
     parts = [
@@ -193,7 +216,7 @@ def _base_remediation(profile: str, region: str) -> str:
         parts += ["--profile", profile]
     if region:
         parts += ["--region", region]
-    return " ".join(parts) + " && " + _reaper_remediation(profile, region)
+    return shlex.join(parts) + " && " + _reaper_remediation(profile, region)
 
 
 def _audit(action: str, site_id: str, outcome: str, *, error: str = "") -> None:

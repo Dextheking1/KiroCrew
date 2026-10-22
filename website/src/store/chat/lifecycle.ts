@@ -13,6 +13,7 @@ import { isChatPageSurface } from '../../utils/channelOrigin'
 import { mergePreservedPastes } from '../../utils/pasteTokens'
 import { findReport, parseErrorCode } from '../../utils/errorReport'
 import { errMessage } from '../../utils/thunkError'
+import { writePrefill } from '../../utils/navIntent'
 import type { HistoryDeleteRefusal } from '../../utils/historyDeleteRefusal'
 import type { ChatState } from './state'
 import { filterMessages, safeKey } from './wire'
@@ -41,8 +42,8 @@ const configuredDefaultMemoryMode = () =>
 
 export const createSlot = createAsyncThunk<
   ChatSlot,
-  { agent?: string; agent_kind?: 'member' | 'template'; appAgentOwner?: string; model?: string; mode?: string; memory_mode?: string; folder_id?: string | null; title?: string; color_index?: number | null; color_hex?: string | null; project?: string | null; activate?: boolean; sessionFolder?: boolean } | string | undefined,
-  { fulfilledMeta: { originActiveSlot: string | null; activate: boolean } }
+  { agent?: string; agent_kind?: 'member' | 'template'; appAgentOwner?: string; model?: string; mode?: string; memory_mode?: string; folder_id?: string | null; title?: string; color_index?: number | null; color_hex?: string | null; project?: string | null; activate?: boolean; sessionFolder?: boolean; defaultFolder?: boolean; prefill?: string } | string | undefined,
+  { fulfilledMeta: { originActiveSlot: string | null; activate: boolean; prefillStaged?: boolean } }
 >(
   'chat/createSlot',
   async (opts, { getState, fulfillWithValue }) => {
@@ -74,6 +75,13 @@ export const createSlot = createAsyncThunk<
     // owner turned on a fresh folder per new chat. A carried project opts out
     // too: the server would otherwise make a folder the carry then replaces.
     const skipSessionFolder = !!project || (typeof opts !== 'string' && opts?.sessionFolder === false)
+    // The person's default sidebar folder is OPT-IN: only the plain New entry
+    // points pass `defaultFolder: true`, so a create path that has not chosen
+    // it (an app's launch, a hand-off, a recreated slot) keeps today's unfiled
+    // placement instead of moving into another folder and its project. A
+    // folder or project named on the same call still wins over the default.
+    const useDefaultFolder = typeof opts === 'object' && opts.defaultFolder === true
+      && opts.folder_id === undefined && !project
     // Capture the active slot BEFORE the (potentially slow) create round-trip.
     // The fulfilled reducer compares this against the active slot at resolution
     // time: if the user switched to a different session while the create was
@@ -84,7 +92,7 @@ export const createSlot = createAsyncThunk<
     // entry points resolve the persisted preference here, before the first turn
     // can read or write memory.
     const memory_mode = requestedMemoryMode || await configuredDefaultMemoryMode()
-    const slot = await api.createChatSlot(undefined, agent, model, mode, memory_mode, title, undefined, folderId || undefined, agentKind, skipSessionFolder, appAgentOwner)
+    const slot = await api.createChatSlot(undefined, agent, model, mode, memory_mode, title, undefined, folderId || undefined, agentKind, skipSessionFolder, appAgentOwner, useDefaultFolder)
     const dashState = (getState() as RootState).dashboard
     // An explicit color (e.g. carried from a slot being recreated on a
     // mode switch) wins; otherwise fall back to the default-color policy.
@@ -161,7 +169,16 @@ export const createSlot = createAsyncThunk<
     // the payload, so it can never leak into the persisted slot object. The
     // fulfilled reducer reads action.meta.originActiveSlot to decide whether
     // activating the new slot is safe.
-    return fulfillWithValue(slot, { originActiveSlot, activate })
+    //
+    // `prefill` seeds the new session's composer. It is staged HERE, before the
+    // fulfilled action, because the composer's slot-restore effect reads
+    // `kirocrew_prefill` once, on the commit that activates the slot. A caller
+    // writing it after awaiting this thunk lands after that read and is never
+    // consumed. `prefillStaged` is false when storage refused the write, so the
+    // caller can fall back to another channel.
+    const prefill = typeof opts === 'string' ? undefined : opts?.prefill
+    const prefillStaged = !!prefill && writePrefill(slot.key, prefill)
+    return fulfillWithValue(slot, { originActiveSlot, activate, prefillStaged })
   },
 )
 
@@ -184,6 +201,37 @@ export const resumeFromHistory = createAsyncThunk(
     return { ok: d.ok, key: d.key, surface: d.surface ?? d.mode, nextBefore: cursor ?? 0, messages: filterMessages(d.messages || []), hasMore: cursor !== null && (d.has_more || false), total: d.total || 0 }
   },
 )
+
+/** The action that lists a successful fork in the sidebar. Every fork path
+ *  dispatches this before activating the fork: the chat page clears an active
+ *  session its slot list lacks. memory_mode is the parent's, echoed by the
+ *  server; without it the new tab would read as persistent until the next
+ *  slots refresh. */
+export function listForkedSlot(d: Pick<ChatSlot, 'key'> & Partial<Pick<ChatSlot, 'title' | 'messages' | 'folder_id' | 'memory_mode' | 'pinned'>>) {
+  return addSlotOptimistic({ key: d.key, title: d.title || d.key, messages: d.messages || 0, running: false, folder_id: d.folder_id, memory_mode: d.memory_mode, ...(d.pinned ? { pinned: true } : {}) })
+}
+
+/** Where the user stood when a fork started; see `forkMayOpen`. */
+export interface ForkOrigin { activeSlot: string | null; moves: number; autoMoves: number }
+
+export function captureForkOrigin(state: Pick<RootState, 'chat'>): ForkOrigin {
+  return { activeSlot: state.chat.activeSlot, moves: state.chat.activeSlotMoves ?? 0, autoMoves: state.chat.activeSlotAutoMoves ?? 0 }
+}
+
+/** Whether a fork that just resolved may open its child. Every fork caller
+ *  captures the origin when the fork starts and asks this before it switches:
+ *  a fork can take seconds, and a session the user opened in that time is a
+ *  choice the late response must not undo. Stricter than `createSlot`'s
+ *  equality guard: the move count also refuses a user who went to another
+ *  session and came back, since coming back is a choice too. A move the chat
+ *  page made on its own, after it lost the source from its list, is not a
+ *  choice, and the fork still opens. The child is
+ *  listed in the sidebar either way; only the switch, and what the caller does
+ *  on opening it, is skipped. */
+export function forkMayOpen(state: Pick<RootState, 'chat'>, origin: ForkOrigin): boolean {
+  if ((state.chat.activeSlotMoves ?? 0) !== origin.moves) return false
+  return state.chat.activeSlot === origin.activeSlot || (state.chat.activeSlotAutoMoves ?? 0) !== origin.autoMoves
+}
 
 export const forkSlot = createAsyncThunk(
   'chat/forkSlot',
@@ -212,11 +260,7 @@ export const forkSlot = createAsyncThunk(
       }
       throw e
     }
-    if (d.ok) {
-      // memory_mode is the parent's, echoed by the server; without it the new
-      // tab would read as persistent until the next slots refresh.
-      dispatch(addSlotOptimistic({ key: d.key, title: d.title || d.key, messages: d.messages || 0, running: false, folder_id: d.folder_id, memory_mode: d.memory_mode, ...(d.pinned ? { pinned: true } : {}) }))
-    }
+    if (d.ok) dispatch(listForkedSlot(d))
     return d
   },
 )
@@ -356,6 +400,19 @@ export function addLifecycleCases(builder: ActionReducerMapBuilder<ChatState>): 
       }
       enterActiveSlot(state, action.payload.key)
       state.lastCreatedActivation = { slot: action.payload.key, requestId: action.meta.requestId }
+      // A default-folder create learns its folder only from this response, so
+      // no caller can open a collapsed default folder (or a collapsed
+      // ancestor) before the create, the way a folder "+" create does. The
+      // chat would then be active with its row hidden. Ask the sidebar to open
+      // the row's folder path. `openFoldersOnly`: the user asked for a chat,
+      // not a reveal, so their search and filters stay as they set them.
+      // Placed after the activation guards above, so a background or
+      // switched-away create never moves the sidebar.
+      const arg = action.meta.arg
+      if (typeof arg === 'object' && arg?.defaultFolder === true && action.payload.folder_id) {
+        state.revealNonce += 1
+        state.revealRequest = { kind: 'session', target: action.payload.key, nonce: state.revealNonce, openFoldersOnly: true }
+      }
       // The replay floor belongs to the slot that was streaming, not to this
       // one. `state.lastChunkSeq` is the ACTIVE slot's floor, and a brand-new
       // chat has no replay history at all — carrying the outgoing slot's floor

@@ -34,6 +34,7 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from kiro_crew.agent_sdk.kas_floor_wait import await_kas_floor_verdict
 from kiro_crew.aws_project_profiles import (
     AWS_PROFILE_ENV,
     bound_profile_env,
@@ -421,6 +422,10 @@ async def _get_or_create_impl(
     # no provider factory is handed a key it does not know; each retry below
     # hands it back.
     app_name = str(extra_factory_kwargs.pop("app_name", "") or "")
+    # The app launch copy kiro-cli is asked for in place of ``agent``
+    # (``apps.agent_launch``); ``agent`` stays the session's identity. Stamped
+    # on the cold-started provider below, never handed to a factory.
+    app_launch_agent = str(extra_factory_kwargs.pop("app_launch_agent", "") or "")
     from kiro_crew.execution_context import read_session_execution
 
     execution = await asyncio.to_thread(read_session_execution, key)
@@ -551,6 +556,7 @@ async def _get_or_create_impl(
             _won_race_retries=_won_race_retries + 1,
             start_priority=start_priority,
             app_name=app_name,
+            app_launch_agent=app_launch_agent,
             **extra_factory_kwargs,
         )
 
@@ -660,6 +666,9 @@ async def _get_or_create_impl(
         # its tools; cold-starting through the factory is what makes the
         # member route real. String check — as cheap as the arms above.
         pool_decision = "bypass_member"
+    elif app_launch_agent:
+        # A pooled child was spawned as the pool's agent, never as this copy.
+        pool_decision = "bypass_app_launch"
     elif memory_mode != "persistent":
         pool_decision = "bypass_restricted_context"
     elif member_context:
@@ -851,6 +860,9 @@ async def _get_or_create_impl(
             owner._dispatch_hard_kill(provider)
             raise
     else:
+        # A defaulted KAS waits (bounded) for the kiro-cli floor's verdict, so
+        # the factory below picks the backend the verdict decided.
+        await await_kas_floor_verdict(member=_is_member_key(key))
         provider = factory(
             key,
             agent=agent,
@@ -863,6 +875,7 @@ async def _get_or_create_impl(
         cast(Any, provider).memory_mode = memory_mode
         if self._deps.is_acp_provider(provider):
             cast(Any, provider).member_context = member_context
+            cast(Any, provider).app_launch_agent = app_launch_agent
         if memory_mode != "persistent":
             resume_sid = None
         provider_switched = False
@@ -1065,6 +1078,7 @@ async def _get_or_create_impl(
                 # what keeps the id sent and the id read identical.
                 session.requested_model = model or ""
                 session.backend_override = extra_factory_kwargs.get("backend_override")
+                session.app_launch_agent = app_launch_agent
                 session.extra_env = dict(caller_env) if caller_env else None
                 session.reasoning_effort_override = extra_factory_kwargs.get(
                     "reasoning_effort_override"
@@ -1225,6 +1239,7 @@ async def _get_or_create_impl(
             _won_race_retries=_won_race_retries + 1,
             start_priority=start_priority,
             app_name=app_name,
+            app_launch_agent=app_launch_agent,
             **extra_factory_kwargs,
         )
 

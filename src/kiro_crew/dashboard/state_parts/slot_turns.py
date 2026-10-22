@@ -16,9 +16,10 @@ Writes: ``_acp_client``, ``_active_turn_session_key``, ``_approval_futures``,
 ``_git_repos_evicted_overflow``, ``_git_repos_incomplete``, ``_git_repos_seeded``,
 ``_has_reader_flag``,
 ``_hook_continuation_depth``, ``_last_enqueue_ts``, ``_last_turn_auth_required``,
-``_last_turn_awaiting_permission``, ``_last_turn_children_announced``, ``_lock``,
+``_last_turn_awaiting_permission``, ``_last_turn_children_announced``,
+``_linked_session_busy``, ``_lock``,
 ``_member_approval_seeded``, ``_on_card_event``, ``_on_message``,
-``_on_question_retired``, ``_on_row``, ``_pending``, ``_pending_consumers``,
+``_on_question_retired``, ``_on_row``, ``_pending``, ``_preparing_count``, ``_pending_consumers``,
 ``_pending_context``, ``_pending_release_deferred``, ``_pending_variants``,
 ``_question_pending``, ``_queue``, ``_queue_persist_inflight``, ``_queue_persist_owed``,
 ``_queue_persisted_sig``, ``_queue_repository``, ``_responsive``, ``_side``,
@@ -52,7 +53,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from kiro_crew.dashboard.slot_buffers import SlotBufferCoordinator
 from kiro_crew.dashboard.slot_queue_repository import EMPTY_QUEUE_SIGNATURE, SlotQueueRepository
 from kiro_crew.dashboard.state_parts.transcript_rows import row_mid
-from kiro_crew.security import redact_credentials, redact_exfiltration_urls
 from kiro_crew.security.credential_sources import CredentialEvidence
 
 if TYPE_CHECKING:
@@ -124,8 +124,9 @@ def _log_task_exception(task: asyncio.Task[Any]) -> None:
     if exc is not None:
         try:
             tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            redacted_tb, _ = redact_credentials(tb)
-            redacted_tb, _ = redact_exfiltration_urls(redacted_tb)
+            from kiro_crew.security import redact
+
+            redacted_tb = redact(tb)
             logger.error("Background task failed:\n%s", redacted_tb)
         except Exception as redaction_err:
             # Include the redaction failure class so bugs in the redactor are visible,
@@ -329,6 +330,11 @@ def init_turns_fields(self: _ChatSlot) -> None:
     # registry, never on _approval_futures, so the projection has to ask
     # the state to learn that this slot is waiting.
     self._coordinator_approvals = None
+    # The linked session's turn-lease probe (``SessionManager.is_busy``), wired
+    # by DashboardState like _coordinator_approvals. A channel-born slot's
+    # turns usually run on the channel path, which holds that lease and never
+    # sets this slot's task; ``linked_turn_running`` reads it through this.
+    self._linked_session_busy = None
     self._has_reader_flag = False  # True when HTTP SSE stream is draining
     # True while the session manager runs an automatic compaction on this
     # slot's session. Written by the compacting observer wired in
@@ -337,6 +343,11 @@ def init_turns_fields(self: _ChatSlot) -> None:
     # can warn before a press that would fail it. Not persisted:
     # a compaction never outlives the gateway process.
     self._compacting = False
+    # Background assistant messages being prepared for this slot outside any
+    # turn (``dashboard.slot_preparing``). A count, so two producers on one
+    # slot cannot clear each other's indicator. Not a turn and not persisted:
+    # the work it marks dies with the gateway process.
+    self._preparing_count = 0
     # Monotonic time of the last cooperative Stop this slot DECLINED because
     # its session was compacting; 0.0 when none. Kept apart from
     # ``_stop_state`` on purpose: that machine is read by the queue drain as

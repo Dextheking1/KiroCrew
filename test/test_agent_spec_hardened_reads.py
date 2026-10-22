@@ -1032,13 +1032,17 @@ _EXPECTED_CALL_SITE_LABELS: dict[str, list[tuple[str, str]]] = {
     # two was refused rather than leaving the reader to guess. The third is the same
     # project read made for Crew-fired spec hooks (``project_agent_spec``), named
     # for that surface so a refusal there is not filed under the MCP projection.
+    # The app launch copy, read by its reserved name's path to hold it as a view.
+    "kiro_crew/acp/runtime_spawn_launch.py": [("app_agent_launch", "acp")],
+    # The pinned spec a session's skill scope is read from (an app launch copy's).
+    "kiro_crew/skill_scope_pin.py": [("agent_skill_globs", "unknown")],
     "kiro_crew/acp/session_mcp.py": [
         ("session_mcp_project_agent", "unknown"),
         ("session_mcp_servers", "unknown"),
         ("spec_hooks_project_agent", "unknown"),
     ],
-    "kiro_crew/agent.py": [
-        ("agent_spec_lookup", "unknown"),
+    "kiro_crew/agent_parts/spec_lookup.py": [("agent_spec_lookup", "unknown")],
+    "kiro_crew/agent_parts/spec_upgrades.py": [
         ("migrate_agent_specs", "unknown"),
         ("migrate_relocated_skill_uris", "unknown"),
     ],
@@ -1067,6 +1071,12 @@ _EXPECTED_CALL_SITE_LABELS: dict[str, list[tuple[str, str]]] = {
         ("forward:operation", "forward:source"),
     ],
     "kiro_crew/agent_discovery_parts/spec_snapshot.py": [("forward:operation", "forward:source")],
+    "kiro_crew/apps/agent_launch.py": [
+        ("app_agent_launch", "unknown"),
+        ("app_agent_launch", "unknown"),
+        ("app_agent_launch", "unknown"),
+        ("app_agent_launch", "unknown"),
+    ],
     "kiro_crew/apps/builtins/auto_improvement/spine/crew_runner.py": [
         ("auto_improvement_assignment", "unknown")
     ],
@@ -1195,14 +1205,14 @@ _EXPECTED_PROJECT_NAMES_CALL_SITE_LABELS: dict[str, list[tuple[str, str]]] = {
 
 
 # The file scan under the name scan: most surfaces want the FILES, so they reach
-# the refusal directly and must name themselves the same way. ``agent.py`` holds
+# the refusal directly and must name themselves the same way. ``agent_parts/spec_lookup.py`` holds
 # two lookups with different user-facing meanings (resolving a markdown spec for
 # an agent, and deciding whether a checkout shadows a managed agent), so they are
 # labelled apart. The in-module hop inside ``project_agent_names`` is pinned as
 # forwarding: a literal there would erase the surface that asked.
 _EXPECTED_PROJECT_FILES_CALL_SITE_LABELS: dict[str, list[tuple[str, str]]] = {
     "kiro_crew/acp/session_mcp.py": [("session_mcp_project_agent", "unknown")],
-    "kiro_crew/agent.py": [
+    "kiro_crew/agent_parts/spec_lookup.py": [
         ("agent_project_shadow", "unknown"),
         ("markdown_spec_lookup", "unknown"),
     ],
@@ -1345,7 +1355,7 @@ _EXPECTED_PARSED_SPECS_CALL_SITE_LABELS: dict[str, list[tuple[str, str]]] = {
     # pins nothing usable, so the folding snapshot is the right reader.
     "kiro_crew/diagnose_probes.py": [("diagnose", "dashboard")],
     # Export/import warn about crew rows whose template this machine lacks.
-    "kiro_crew/portability.py": [("portability", "dashboard")],
+    "kiro_crew/portability_templates.py": [("portability", "dashboard")],
 }
 
 

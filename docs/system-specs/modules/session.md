@@ -488,6 +488,12 @@ persistence alone cannot claim application.
 
 ## Background Session
 
+`get_bg_session()` awaits the bounded KAS floor verdict for the main backend
+before selecting the shared-runtime or provider-backed path, outside its runtime
+lock and start admission. Background one-liners use `agent.acp_backend`, not the
+member backend. The persistent provider path also waits before its start permit
+and provider factory.
+
 `BACKGROUND_KEY = "_bg"` is a persistent shared session for lightweight
 background work. It is:
 
@@ -2135,7 +2141,8 @@ newest turn opener before the resume row (a user, nudge or sub-agent row, or an
 `inject` whose kind is in `dashboard.state.TURN_OPENING_INJECT_KINDS` -- a cron,
 app or synthesis delivery; a recovery inject such as an earlier Resume press is
 walked past) plus the assistant text it had streamed, bracketed `[INTERRUPTED TURN …]` / `[END INTERRUPTED TURN]`.
-A mid-turn steer (a `user` row whose `meta.steer` is true, `replay._is_steer_row`)
+A mid-turn steer (a `user` row, or a monitor wake's `nudge` row, whose `meta.steer` is
+true, `replay._is_steer_row`)
 never opens the turn: the walk passes it on the way to the opener, and each steer
 is carried in the partial output, in the order it was sent, prefixed
 `[Steered mid-turn]`. A steer whose `meta.steerState` is `requeued` is walked
@@ -2916,7 +2923,7 @@ Two exemptions from the release-site rule, each on a fact about itself:
   that answer `has_active_or_initializing_sessions()`, so it has no running child to end
   and the parent conversation continues.
 
-A ratchet in `test_session.py` reads that off the source on the AST: a method that releases
+A ratchet in `test_session_parent_end_teardown.py` reads that off the source on the AST: a method that releases
 a companion runtime without calling both halves fails it, the two exemptions are named
 there, and an exempt method that stops releasing a runtime is reported so its exemption
 never goes unchecked. The `ends_conversation=True` call sites are pinned separately, by
@@ -4268,7 +4275,7 @@ recorded, by the session's identity, when its own teardown ends. Bounded by cons
 entry lives exactly as long as the reset coroutine that recorded it, which already
 holds that session, so the table adds a reference per teardown in flight and never
 a lifetime. A caller that must know exactly which session ITS reset popped opens the scope itself (`SessionManager.teardown_scope(on_pop=...)`, passed to `reset` as `scope`): `on_pop` runs in the same lock hold as the pop, handed that session -- how the cron reaper takes the handle of the process a timed-out reset holds. A `SessionLifecycleService.reset` called without a scope records
-nothing; the facade is the caller that opens one. `test_session.py::
+nothing; the facade is the caller that opens one. `test_session_ending_verbs.py::
 TestResetRetainsTheTornDownSession` pins the entry's life; the cron module spec
 records what the reaper does with it.
 
@@ -4344,7 +4351,7 @@ hard-kill path on the shared runtime, so
 a per-step create already in flight is what the ending caller's post-pass read of
 the key remains the net for. Additive to the allocation-boundary predecessor
 capture: new state fields, new methods, and door checks as separate statements.
-`test_session.py::TestTheEndingFenceAdmitsNothingUnderTheKey` pins the held front
+`test_session_get_or_create.py::TestTheEndingFenceAdmitsNothingUnderTheKey` pins the held front
 door (cold start and claim), the in-flight invalidation with the hard kill and the
 re-allocation (fence up when the start returns, and lifted before), the pre-start
 variant, the spawn read (a start inside `start()` is a spawn in flight; a claim

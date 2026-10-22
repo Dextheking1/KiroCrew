@@ -7,6 +7,7 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from kiro_crew.dashboard.slot_preparing import is_preparing
 from kiro_crew.safety_override import safety_override, yolo_policy_permits
 from kiro_crew.session_lifecycle import STOP_DECLINED_ESCALATION_SECS
 
@@ -295,8 +296,25 @@ class SlotProjection:
 
         slot_pending = any(not future.done() for future in slot._approval_futures.values())
         pending_approval = slot_pending or bool(coordinator_pending)
+        # A turn is in flight when this slot's own task runs it OR when another
+        # path (a channel dispatcher answering in the Slack thread this slot is
+        # bound to) holds the linked session's turn lease. The second is not a
+        # dashboard turn, so it has no task, no generation and no queue here;
+        # it only stops the summary from reading its trailing user row as an
+        # interruption, and reports the row as running like any other turn.
+        turn_in_flight = slot.turn_running or getattr(slot, "linked_turn_running", False) is True
+        # A turn running only on the linked session has no number here, so the
+        # row names none, as the slot detail does: naming the slot's last
+        # dashboard turn would tell the open pane, which already saw that turn
+        # end, that this running row is stale, and the pane would stay idle --
+        # no Stop, and Resume offered on a reply still being written.
+        turn_identity: dict[str, object] = (
+            {}
+            if turn_in_flight and not slot.turn_running
+            else {"turn": slot._turn_generation, "turn_gen": chunk_generation()}
+        )
         last_turn_ts = last_ts
-        if slot.turn_running:
+        if turn_in_flight:
             prompt_ts = next(
                 (
                     message.get("ts") or ""
@@ -311,14 +329,14 @@ class SlotProjection:
                 last_turn_ts = latest_transcript_ts(prompt_ts, queued_ts) or queued_ts
 
         waiting_for_input = (
-            not slot.turn_running
+            not turn_in_flight
             and not has_options
             and not pending_approval
             and bool(rows)
             and last_conv_role == "assistant"
         )
         needs_input = bool(slot._question_pending)
-        interrupted = not slot.turn_running and is_turn_interrupted(rows)
+        interrupted = not turn_in_flight and is_turn_interrupted(rows)
 
         pending_approval_info: dict[str, str] | None = None
         if slot_pending:
@@ -417,7 +435,7 @@ class SlotProjection:
             "row_identity": resolved_row_identity(slot),
             "artifact": slot._artifact,
             "messages": len(rows),
-            "running": slot.turn_running,
+            "running": turn_in_flight,
             # A loop wake is opening this running turn and its row is not in the
             # transcript yet: a structured monitor writes that row only once the
             # runner accepts the turn. Rides the same frame as `running`, so a
@@ -426,13 +444,17 @@ class SlotProjection:
             "wake_starting": bool(
                 slot.turn_running and getattr(slot, "_wake_starting_task", None) is slot.task
             ),
-            "turn": slot._turn_generation,
-            "turn_gen": chunk_generation(),
+            **turn_identity,
             # An automatic compaction in flight on this session. Separate from
             # `running` because it is NOT a dashboard turn: the composer reads
             # idle while it holds the session, which without this field looks
             # like a stall worth pressing Stop on.
             "compacting": bool(getattr(slot, "_compacting", False)),
+            # A background assistant message is being prepared outside any
+            # turn (``slot_preparing``). Separate from `running` for the same
+            # reason as `compacting`: it must not make the slot look busy to
+            # sends or queueing, only show the chat's working indicator.
+            "preparing": is_preparing(slot),
             # A cooperative Stop was declined moments ago (the session was
             # compacting) and the next press escalates to a force stop. Read
             # with the same window the stop route uses, so the button's hint and

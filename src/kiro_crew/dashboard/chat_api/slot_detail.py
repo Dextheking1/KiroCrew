@@ -1258,6 +1258,12 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
     turn_running = slot.turn_running
     verdict_key = slot_history_key(slot)
     running = slot.running
+    # A turn another path runs on this slot's linked session (the Slack thread a
+    # channel-born tab is bound to) has no task here but IS in flight: the same
+    # read the slots summary makes, so the open pane and the sidebar agree and
+    # the pane does not offer Resume on a turn that is still answering.
+    if not running and slot.linked_turn_running:
+        running = True
     # Admission-only running has no numbered turn yet. Omitting the pair keeps
     # this response from naming the preceding turn as the one currently running.
     turn_identity: dict[str, object] = (
@@ -1328,6 +1334,7 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
                     live_child=live_child,
                     workspace=workspace,
                     use_memo=use_memo,
+                    scope=memo_scope,
                 )
                 plan = slot_detail_delta.plan_page(
                     fragments,
@@ -1340,7 +1347,11 @@ async def api_chat_slot_detail(request: web.Request) -> web.Response:
                 messages_json = "[" + ", ".join(plan.fragments) + "]"
             elif use_memo:
                 messages_json = wire_render.prepare_messages_json(
-                    messages, running, live_child=live_child, workspace=workspace
+                    messages,
+                    running,
+                    live_child=live_child,
+                    workspace=workspace,
+                    scope=memo_scope,
                 )
             else:
                 messages_json = json.dumps(

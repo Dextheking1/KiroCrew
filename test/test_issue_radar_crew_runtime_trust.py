@@ -9,7 +9,6 @@ autouse fixtures live in ``issue_radar_crew_runtime_helpers.py``.
 """
 
 import ast
-import asyncio
 import contextlib
 import inspect
 import os
@@ -38,11 +37,13 @@ from issue_radar_crew_runtime_helpers import (  # noqa: F401 -- the autouse fixt
 
 import kiro_crew.sel as sel_mod
 from kiro_crew import platform_compat
+from kiro_crew.apps import teardown
 from kiro_crew.apps.builtins.issue_radar.backend import crew_runtime as cr
 from kiro_crew.apps.builtins.issue_radar.backend import crew_store as cs
 from kiro_crew.apps.builtins.issue_radar.backend import watch as watch_mod
 from kiro_crew.dashboard import chat_runner
 from kiro_crew.safety_override import reset_singleton, safety_override
+from kiro_crew.testing.wait import async_wait_until
 
 
 class TestTheWakesLivenessGuardIsTotal(unittest.TestCase):
@@ -258,7 +259,15 @@ class TestRevocation(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
+        # Use platform_compat.rmtree_force instead of TemporaryDirectory.cleanup
+        # so that read-only files written by the crew store (which the Windows
+        # CRT cannot unlink without first clearing the read-only attribute) do
+        # not leave the directory behind and trip the tmp-residue guard.  Also
+        # unregister the process-global slot-close hook that watchdog_cycle
+        # installs with root=self.root, so no background callback can open
+        # files in the directory while it is being removed.
+        self.addCleanup(platform_compat.rmtree_force, self._tmp.name)
+        self.addCleanup(teardown.unregister_slot_close_hook, cr.APP_NAME)
         self.root = Path(self._tmp.name)
         reset_singleton()
         self.addCleanup(reset_singleton)
@@ -444,12 +453,10 @@ class TestDisablingTheAppRevokesInline(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(platform_compat.rmtree_force, self._tmp.name)
         self.root = Path(self._tmp.name)
         reset_singleton()
         self.addCleanup(reset_singleton)
-        from kiro_crew.apps import teardown
-
         # ``watchdog_cycle`` re-registers the dismissal hook, which is process-wide
         # state; drop it again so these tests cannot change another's outcome.
         self.addCleanup(teardown.unregister_slot_close_hook, cr.APP_NAME)
@@ -857,12 +864,12 @@ class TestSelRootIsolation(unittest.IsolatedAsyncioTestCase):
             # commit retires. Retry non-blocking attempts — never a blocking
             # acquire on the event-loop thread — until the transient hold
             # clears; the budget is generous because a miss fails the test.
-            for _ in range(200):
-                if platform_compat.try_acquire_lock(fd, exclusive=True):
-                    break
-                # flake-ok: a bounded retry (200 x 50 ms) of a non-blocking lock attempt, not a barrier; pre-existing, moved verbatim
-                await asyncio.sleep(0.05)
-            else:
+            try:
+                await async_wait_until(
+                    lambda: platform_compat.try_acquire_lock(fd, exclusive=True),
+                    describe=lambda: "the writer's transient hold never cleared",
+                )
+            except AssertionError:
                 self.fail("could not stage the foreign holder on the shared root")
             try:
                 slot = _FakeSlot("crew-c_7029iso")

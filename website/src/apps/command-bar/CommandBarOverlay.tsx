@@ -56,9 +56,11 @@ import { commandBarOverlaySlotRenderer } from './CommandBarOverlaySlot'
 export default function CommandBarOverlay({
   open,
   onClose,
+  initialQuery = '',
 }: {
   open: boolean
   onClose: () => void
+  initialQuery?: string
 }) {
   const ime = useImeGuard()
   /**
@@ -78,8 +80,11 @@ export default function CommandBarOverlay({
   const vv = useVisualViewport()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const dialogRef = useRef<HTMLDivElement | null>(null)
-  const [query, setQuery] = useState('')
-  const [debounced, setDebounced] = useState('')
+  // Seeded from what the host caught while this chunk loaded, so keys typed right
+  // after the gesture rank the first render instead of being lost. The host mounts
+  // the bar once per open, so this is also what makes each open start fresh.
+  const [query, setQuery] = useState(initialQuery)
+  const [debounced, setDebounced] = useState(initialQuery)
   const [scope, setScope] = useState<Scope>(null)
   /**
    * The contributed command whose ARGUMENT the field is currently collecting.
@@ -106,6 +111,33 @@ export default function CommandBarOverlay({
   const [previewClipped, setPreviewClipped] = useState(false)
 
   const [selected, setSelected] = useState(0)
+  /**
+   * Where the pointer was at the last mousemove anywhere over the bar, so hover
+   * selects a row only on REAL motion.
+   *
+   * The browser fires mouseover, mouseenter and even mousemove when rows re-render
+   * or scroll under a pointer that has not moved. None of those is the reader
+   * pointing at a row, and selecting on them would let a resting pointer overwrite
+   * the reset to row 0 that every keystroke makes, so Enter would act on whatever row
+   * landed under the cursor.
+   *
+   * The position is recorded by the backdrop, which every mousemove inside the bar
+   * bubbles to: over a row, a group header, the empty notice or the backdrop itself.
+   * A row compares against it before the event reaches the backdrop. Recording only
+   * over rows would compare a pointer resting on a header against an older row
+   * position and read the re-render as motion. The first event only records: with
+   * nothing to compare against it cannot be told apart from a re-render under a
+   * resting pointer, and one swallowed pixel of motion is the cost.
+   */
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null)
+  const recordPointer = (e: { clientX: number; clientY: number }) => {
+    lastPointerRef.current = { x: e.clientX, y: e.clientY }
+  }
+  const selectOnPointerMove = (i: number, e: { clientX: number; clientY: number }) => {
+    const last = lastPointerRef.current
+    if (!last || (last.x === e.clientX && last.y === e.clientY)) return
+    setSelected(i)
+  }
   /**
    * Whether the reader asked to see every session waiting on them. Until then the
    * attention group keeps the root's per-group cap and ends on a row counting the
@@ -197,13 +229,14 @@ export default function CommandBarOverlay({
     mates,
   } = useCommandBarOverlayEngines({ scope, liveSlots, dispatch, navigate })
 
+  // The query is NOT reset here. It is seeded at mount, and clearing it on the open
+  // edge would drop the type-ahead along with anything typed before this effect ran.
   useEffect(() => {
     if (!open) return
-    setQuery('')
-    setDebounced('')
     setScope(null)
     setArgCommand(null)
     setSelected(0)
+    lastPointerRef.current = null
     setUsage(loadUsage())
     setActionError(null)
     setPendingRow(null)
@@ -613,6 +646,9 @@ export default function CommandBarOverlay({
       onMouseDown={e => {
         if (e.target === e.currentTarget) onClose()
       }}
+      // Every mousemove in the bar ends here, after a row has compared against the
+      // previous position. See `lastPointerRef`.
+      onMouseMove={recordPointer}
     >
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- a dialog owns the keyboard dismissal of its own subtree; the handler below is Escape only, and every gesture inside is on a real control */}
       <div
@@ -948,7 +984,7 @@ export default function CommandBarOverlay({
                     tabIndex={-1}
                     aria-selected={selected === i}
                     onMouseDown={() => activateIndex(i, 'pointer')}
-                    onMouseEnter={() => setSelected(i)}
+                    onMouseMove={e => selectOnPointerMove(i, e)}
                     className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer text-[13px] ${
                       selected === i ? 'bg-bg-hover text-text' : 'text-text'
                     }`}

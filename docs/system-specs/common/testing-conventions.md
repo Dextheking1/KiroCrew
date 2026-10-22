@@ -49,8 +49,14 @@ promise-sleep, `waitForTimeout`); a deliberate one says why with
   executor thread), and a ceiling of 30 s or more only names a hang -- a
   `wait_for(..., timeout=2)`, a `.result(timeout=5)` or a poll of N short sleeps bets
   on the runner's speed, and `test/test_wait_discipline_ratchet.py` holds each test
-  file to the number of those it already has (a renamed file keeps its line under its
-  new path: `python test/test_wait_discipline_ratchet.py --move OLD NEW`).
+  file to the number of those it already has: on a pull request each touched file is
+  compared to its count at the PR's merge-base, and also to its committed baseline
+  entry, so a PR is not blamed for drift it did not cause but a rename without a
+  baseline-entry update is still caught.  A new file the PR splits off may declare
+  its count by adding an entry to ``test/wait_discipline_baseline.txt``; without
+  that entry its sites are a violation.  Merge-order drift in untouched files is
+  still caught by the committed baseline on main and in the merge queue.  A renamed file
+  keeps its line under its new path: `python test/test_wait_discipline_ratchet.py --move OLD NEW`.
   [Class 2](#2-wall-clock-races).
 - **D2. One clock, injected or frozen at the seam the code reads.** Replace the module's
   own `time` / `datetime` name with a `ManualClock` (`kiro_crew.testing.clock`, or the
@@ -3212,7 +3218,7 @@ went red, or the fix lands in the wrong file and the leak stays.
   repeat would time `re`'s compile cache rather than the translator, and the cheaper of
   two readings would let a stall that reproduces intermittently pass.
 - **A helper that counts WARNINGs over unfiltered `caplog.records` asserts on every thread
-  in the worker.** `test_taskq_runner_adapter.py`'s `_one_warning` demanded exactly one
+  in the worker.** `test_taskq_runner_adapter_durability.py`'s `_one_warning` demanded exactly one
   record while the test had scoped `at_level` to `kiro_crew.taskq.adapters.runner`; the
   second record was `kiro_crew.sandbox`'s mount-source sweep, finishing on the shared
   `mc-maint` executor seconds after the `SessionManager` test that armed it had torn down
@@ -3442,7 +3448,15 @@ that survives neither is the probe's.
   `test_a_nested_collection_reads_only_the_named_files` pins that only the named files
   reach `pytest_collect_file`. A Windows runner is slower at the per-entry `stat` and
   `relative_to` work this removes, so the saving is likely larger there; this pass did not
-  measure it on Windows.
+  measure it on Windows. What kept the Windows children at 44-64 s against about 4 s on
+  Linux was `test/conftest.py`'s Windows `collect_ignore` list (91 names): pytest's own
+  `pytest_ignore_collect` rebuilds a conftest ignore list into absolute paths for every
+  entry it is offered, before it reads `--ignore-glob`, and it walks `test/` (~5,400
+  entries) once per file argument, so each three-file child built ~1.47 million paths, one
+  `GetFullPathNameW` call each. A Linux child given the same list goes from 4 s to 17 s.
+  The list is now a frozenset behind the conftest's own `pytest_ignore_collect`
+  (`platform_collect_ignore_helpers.py`), which builds none, and
+  `test_platform_collect_ignore.py` pins that on every platform. The 60 s cap stays.
 - **Reading a claim's task after the POST names whichever task won the race.**
   `test_cron_manual_run_claim_window.py::test_the_manual_wrappers_backstop_leaves_a_replacement_claim_alone`
   took `first = svc._claims[job.id].task` after the route answered; when the first run's
@@ -5667,7 +5681,7 @@ using `scripts.ci_file_shards`. Ownership is SHA-256 of the root-relative POSIX
 path, not a duration or test-count balance. Other shards skip the file before
 import, while discovery patterns and platform ignores remain pytest's own.
 
-macOS assigns whole files like the other platforms, in four shards. The shard
+macOS assigns whole files like the other platforms, in five shards. The shard
 count is the knob to reach for there rather than the 40-minute cap, because that
 cap is a spend guard as much as a hang guard on a lane billed at ten times Linux:
 a higher cap bounds a runaway more loosely, while a higher count is what divides

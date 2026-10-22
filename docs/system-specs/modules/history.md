@@ -301,6 +301,15 @@ instead of a page that silently omits the archive.
 
 `dashboard/wire_render.py` keeps rendered row JSON in a process-local bounded
 LRU. Unfilled pages use `_prepare_messages`; a delayed worker fills their rows.
+Each memo entry records the page that last stored or read it. When the cap
+evicts an entry, a filled page that a read has used is forgotten, so its next
+read is `_prepare_messages` again and schedules a fresh fill instead of missing
+row by row. A fill the cap undoes before any read used it (the page lost a row
+while its own fill ran, or the reader cycles through more pages than the memo
+holds) marks the page plain for eight reads before it is filled again. A memo
+read digests the redaction context before and after its rows; when the context
+moved, every row the memo answered is rendered again against the live context,
+nothing from that read is stored and no row identity is issued.
 Filled pages reuse fragments only when the complete source row and render
 context match. The context reuses `_display_redaction_cache_key("")`, so changes
 to that key's redaction dependencies invalidate row fragments too. Workspace
@@ -435,7 +444,10 @@ permanent-delete lifecycle.
 A change card (`propose_change`) or a guide offer (`guide_start`) is part of the
 conversation, so it is a transcript row: `dashboard/chat_cards.py` appends ONE
 `card` row to the proposing slot when the agent-half propose/start route accepts
-it. The proposal is an MCP tool call of the running turn, so the row lands after
+it. A proposal identical to a card the same slot still has waiting (same kind, same
+params, pending or applying and not expired) is refused with `409 duplicate_card`
+naming the waiting card (`CardStore._open_duplicate`), so no row is written for it.
+The proposal is an MCP tool call of the running turn, so the row lands after
 that call's `tool` row and before the turn's later text, and the turn-end refresh
 keeps it there. The live frame is placed the same way client-side (ahead of the
 open streaming row, like a tool row), and the "tools finished" scan that runs when

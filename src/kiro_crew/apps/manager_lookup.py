@@ -31,6 +31,8 @@ from kiro_crew.apps.manager_records import (
     _write_installed,
     app_dir,
     apps_dir,
+    hold_app_record_lock,
+    holds_app_record_locks,
 )
 from kiro_crew.apps.manifest import AppManifest, contain_command_agents
 from kiro_crew.platform_compat import is_link_or_junction
@@ -172,6 +174,14 @@ def app_agent_backend_refusal(owner: str) -> str:
     )
 
 
+def app_agent_launch_refusal(owner: str, detail: str) -> str:
+    """Why app *owner*'s agent cannot launch: its launch copy failed with *detail*.
+
+    Reads the app's manifest for its label; call it off the event loop.
+    """
+    return f"{_app_display_name(owner)} can't run: {detail}"
+
+
 def app_command_agent_refusal(owner: str, agent: str, *projects: str | None) -> str | None:
     """Why a session bound to app *owner*'s agent must not run as *agent* now, or None.
 
@@ -187,13 +197,14 @@ def app_command_agent_refusal(owner: str, agent: str, *projects: str | None) -> 
     filesystem I/O; call it off the event loop.
     """
     from kiro_crew.agent_sdk import project_claims_agent_name
-    from kiro_crew.agent_spec_format import NATIVE_SKILL_ALIAS_PREFIX
+    from kiro_crew.agent_spec_format import APP_AGENT_LAUNCH_PREFIX, NATIVE_SKILL_ALIAS_PREFIX
 
     app = _app_display_name(owner)
     # A skill-view name is never launched as itself: the spawn maps it to the host
     # agent its view was built from, even after the view file is pruned, so it can
     # never mean the app's own spec.
-    if agent.startswith(NATIVE_SKILL_ALIAS_PREFIX):
+    # A launch-copy name is reserved the same way: it names a file Crew writes.
+    if agent.startswith(NATIVE_SKILL_ALIAS_PREFIX) or agent.startswith(APP_AGENT_LAUNCH_PREFIX):
         return (
             f"{app} can't run: it has a setup problem its author needs to fix "
             f'(its agent "{agent}" uses a name Kiro Crew reserves). '
@@ -602,6 +613,7 @@ def app_disabled(name: str) -> bool:
     return meta is not None and not meta.enabled
 
 
+@holds_app_record_locks
 def set_app_source(name: str, source: str) -> bool:
     """Update the ``source`` field of an installed app's metadata.
 
@@ -609,6 +621,7 @@ def set_app_source(name: str, source: str) -> bool:
     Used by the registry module to mark apps as registry-installed after
     the temp clone directory is cleaned up.
     """
+    hold_app_record_lock(name)
     meta = _read_installed(name)
     if not meta:
         return False
@@ -617,6 +630,7 @@ def set_app_source(name: str, source: str) -> bool:
     return True
 
 
+@holds_app_record_locks
 def set_app_provenance(
     name: str,
     *,
@@ -641,6 +655,7 @@ def set_app_provenance(
 
     Returns True if the update succeeded, False if the app is not installed.
     """
+    hold_app_record_lock(name)
     meta = _read_installed(name)
     if not meta:
         return False

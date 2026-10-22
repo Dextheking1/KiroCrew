@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { type ErrorReport, findReport } from '../../utils/errorReport'
 import { isStaleProjectDirError, resolveFolderAgent, resolveFolderProjectDir } from '../../utils/folderAgent'
 import { unwrapResult } from '@reduxjs/toolkit'
-import { createSlot } from '../../store/chatSlice'
+import { createSlot, requestSlotFolderOpen } from '../../store/chatSlice'
 import { focusComposer } from '../chat/composerFocus'
 import { i18nT } from '../../i18n/t'
 import type { Slot } from './types'
@@ -305,7 +305,7 @@ export function useSessionCreate({ setNewChatError, dispatch, mode, onOpenSlotIn
   const createChatMutation = useMutation({
     mutationFn: ({ inNewTab }: { inNewTab: NewTabMode }) => {
       setNewChatError('')
-      return createSlotWithOrigin(dispatch, { mode: mode || '', activate: !inNewTab })
+      return createSlotWithOrigin(dispatch, { mode: mode || '', activate: !inNewTab, defaultFolder: true })
     },
     onSuccess: ({ slot, originSlot }, { inNewTab: requested }) => {
       const inNewTab = settledTabMode(store, requested, originSlot)
@@ -314,6 +314,11 @@ export function useSessionCreate({ setNewChatError, dispatch, mode, onOpenSlotIn
         // Background: the user stays on their transcript, so its composer keeps
         // whatever focus it had — no `focusComposer`, same as the row gesture.
         if (inNewTab === 'background') return
+        // Foreground: the new chat is now in view, but its create ran with
+        // `activate: false`, so createSlot asked the sidebar for nothing. Open
+        // the default folder's path here, or its row stays hidden in a
+        // collapsed folder, as for a plain New.
+        if (slot.folder_id) dispatch(requestSlotFolderOpen(slot.key))
       }
       // Plain create activated the new slot: leave Split View so it shows,
       // the same answer a row click gets (#21935). Guard on the live
@@ -376,7 +381,7 @@ export function useSessionCreate({ setNewChatError, dispatch, mode, onOpenSlotIn
   const createEphemeralChatMutation = useMutation({
     mutationFn: (memoryMode: 'incognito' | 'temporary') => {
       setNewChatError('')
-      return dispatch(createSlot({ mode: mode || '', memory_mode: memoryMode })).unwrap()
+      return dispatch(createSlot({ mode: mode || '', memory_mode: memoryMode, defaultFolder: true })).unwrap()
     },
     // Incognito/temporary always activate the new slot, so always leave Split
     // View and show it, then focus the composer (#21935). Guard on the live
