@@ -383,3 +383,28 @@ def _report(
         pr=pr,
         reason=reason,
     )
+
+
+async def read_worker_binding(key: str) -> tuple[str, str] | None:
+    """The ``(conductor key, item id)`` the ledger-spelled ``key`` is bound to, or ``None``.
+
+    The lookup :func:`api_work_brief` resolves, for an in-process caller (the worker
+    context cap) that has no request to refuse.
+    """
+    return await asyncio.to_thread(work_ledger.read_binding, key)
+
+
+async def read_bound_work_item(key: str) -> Any | None:
+    """The work item the ledger-spelled ``key`` is bound to, read as the brief reads it.
+
+    Under the board's lock, and ``None`` while the cache is flagged dirty, so an
+    in-process caller never sees an item :func:`api_work_brief` would refuse.
+    ``None`` too when the binding or the item is gone.
+    """
+    binding = await read_worker_binding(key)
+    if binding is None:
+        return None
+    async with _board_lock(binding[0]):
+        if await asyncio.to_thread(work_ledger.cache_dirty, binding[0]) is not None:
+            return None
+        return await asyncio.to_thread(work_ledger.read_work_item, *binding)
