@@ -3385,7 +3385,11 @@
         "untitled": "Reunião sem título",
         "renameFailed": "Não foi possível renomear a reunião.",
         "minutesSaveFailed": "Não foi possível salvar suas edições.",
-        "minutesRevertFailed": "Não foi possível descartar suas edições."
+        "minutesRevertFailed": "Não foi possível descartar suas edições.",
+        "anotherMeetingActiveNamed": "“{{title}}” ainda está a decorrer. Abra-a em Reuniões e escolha primeiro “Terminar e revisar”.",
+        "anotherMeetingReviewing": "“{{title}}” ainda está em revisão. Abra-a em Reuniões e escolha primeiro “Fechar a reunião”.",
+        "sttStreamingDisabled": "A transcrição ao vivo está desativada. Em Configurações → Voz, verifique se a entrada de voz está ativada, se o provedor suporta streaming e se Streaming está ativado.",
+        "openVoiceSettings": "Abrir configurações de voz"
       },
       "settings": {
         "addTerm": "Adicionar",
@@ -5670,6 +5674,9 @@
     "viewPr": "Pull request"
   },
   "components": {
+    "agentLabel": {
+      "builtin_conductor": "Maestro"
+    },
     "voicePlaybackNotice": {
       "failed": "Não foi possível usar “{{speak}}”. Verifique as configurações de texto para fala e tente novamente.",
       "consent_required": "“{{speak}}” precisa que você confirme o Amazon Polly para este perfil da AWS e esta região. Confirme nas configurações de texto para fala e tente novamente.",
@@ -7289,6 +7296,9 @@
       "chat_folder_retrying": "Tentando novamente…",
       "chat_folder_none_yet": "Ainda não há pastas. Salve esta tarefa agora; crie uma pasta na barra lateral de conversa e reabra a tarefa para escolhê-la.",
       "chat_folder_was_deleted": "A pasta em que esta tarefa arquivava foi excluída. Escolha outra ou salve para deixar as execuções sem arquivar.",
+      "auto_pause_after_failures": "Pausar automaticamente após N falhas seguidas",
+      "auto_pause_after_failures_description": "0 significa nunca pausar. A partir da 5ª falha seguida, uma tarefa com 0 ou mais de 5 espera 5 minutos antes da próxima execução, dobrando até uma hora.",
+      "auto_pause_after_failures_invalid": "O limite de pausa automática deve ser um número inteiro de 0 a 10000.",
       "runs_as": "Executa como",
       "runs_as_custom_agent": "Agente personalizado",
       "runs_as_crewmate": "Colega",
@@ -7375,7 +7385,6 @@
       "check_again": "Verificar novamente",
       "check_again_for_kiro_cli": "Verificar o Kiro CLI novamente",
       "check_sign_in_again": "Verificar o início de sessão novamente",
-      "complete": "Concluído",
       "copied": "Copiado",
       "copy_command": "Copiar comando",
       "copy_failed": "Não foi possível copiar. Selecione o texto do comando e copie manualmente.",
@@ -7413,7 +7422,6 @@
       "remedy_spec_rejected_update": "Atualize o {{productName}}. É a solução quando o Kiro CLI passa a esperar um formato que esta versão não sabe escrever.",
       "remedy_userns_denied": "O kernel recusou a criação do namespace de usuário. Em hosts da família Debian, verifique este parâmetro legado e persista o valor em /etc/sysctl.d/ para que sobreviva a uma reinicialização. Dentro de um contêiner, normalmente é o próprio filtro seccomp do contêiner negando o unshare, o que se resolve com flags de execução do contêiner, e não com configurações do host.",
       "repair_rewrites_the_specs_kiro_crew_owns": "“Verificar de novo” pede ao Kiro CLI que carregue as especificações outra vez. Não as reescreve: sobrescrever um arquivo que já existe descartaria as permissões de ferramentas MCP que você alterou. Se verificar não resolver, uma das duas soluções abaixo resolve.",
-      "required": "Obrigatório",
       "retry_the_gateway_check_before_starting_a_sessio": "Tente a verificação do gateway novamente antes de iniciar uma sessão.",
       "run_kirocrew_doctor_on_the_gateway_host_for_a_ful": "Execute isto no host do gateway para obter um relatório completo dos pré-requisitos, incluindo qual etapa do sandbox falhou.",
       "sandbox_unavailable": "Sandbox indisponível",
@@ -7450,7 +7458,6 @@
       "update_kiro_cli": "Atualizar Kiro CLI",
       "update_kiro_cli_runs_on_host": "Executa <0>{{command}}</0> por você no host do gateway.",
       "updating_kiro_cli": "Atualizando o Kiro CLI…",
-      "waiting": "Aguardando",
       "we_could_not_check_kiro_cli": "Não foi possível verificar o Kiro CLI.",
       "your_crew_is_almost_ready": "Sua crew está quase pronta.",
       "your_kiro_cli_is_out_of_date": "Seu Kiro CLI está desatualizado",
@@ -16600,6 +16607,8 @@
         "show_thinking_inline": "Mostrar raciocínio embutido",
         "show_timestamps": "Mostrar carimbos de hora",
         "show_token_usage": "Mostrar os tokens de contexto",
+        "sidebar_click_opens_tab": "Abrir sessões da barra lateral em uma aba de sessão",
+        "sidebar_click_opens_tab_desc": "Clicar em uma sessão a abre em uma aba de sessão própria, em vez de substituir a sessão da aba ativa.",
         "simplified_tool_call_names": "Nomes simplificados de chamadas de ferramenta",
         "tool_calls_start_expanded": "Mostrar chamadas de ferramentas expandidas",
         "tool_calls_start_expanded_desc": "Abre as linhas de chamadas de ferramentas com a entrada e a saída visíveis, em vez de recolhidas. As linhas que você abre ou fecha manualmente mantêm sua escolha.",

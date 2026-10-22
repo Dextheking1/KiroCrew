@@ -439,7 +439,13 @@ def _url_payload_command(n: int) -> str:
 #: and its manifest entry: words percent-encoded in a URL path (a Chinese headline) do not trip the heavy
 #: percent-encoding rule. It is new rule logic, not glue; nothing else moved.
 #:
-#: Raised again, from 32,097, for a real new rule in ``redaction_patterns.py``: the
+#: Raised by 14, from 32,097, for each harness's own permission files on the write
+#: tier: the leaf splice and the project-file matcher alias in ``paths_lists``; the
+#: leaves joining the override arm, and the resolved-root list it reads, in
+#: ``paths_targets``; and one ``or`` clause, its import and three ``TYPE_CHECKING``
+#: lines in ``paths``. The registry lives in ``agent_sdk``.
+#:
+#: Raised again, from 32,111, for a real new rule in ``redaction_patterns.py``: the
 #: Telegram-bot-token branch (``_CREDENTIAL_PATTERNS``) false-positives on a long
 #: CDK-generated ARN, whose account-id/resource boundary shares that branch's bare
 #: ``<digits>:<30+ run>`` shape. Two new compiled patterns (an alternation with the
@@ -458,7 +464,7 @@ def _url_payload_command(n: int) -> str:
 #: facade's ``TYPE_CHECKING`` mirror manifest (the two ARN-prefix regexes, the lookback
 #: constant, the 12-digit account-id regex and the sans-Telegram alternation), which
 #: ``test_facade_mirror_guards`` requires name everything the facade forwards.
-_PACKAGE_LINE_BUDGET = 32_148
+_PACKAGE_LINE_BUDGET = 32_162
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
