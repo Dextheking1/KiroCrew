@@ -35,6 +35,20 @@ def declared_editions(source: str) -> frozenset[str]:
     raise ValueError("edition.py declares no EDITIONS set")
 
 
+def _checked_source(path: str, edition: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    allowed = declared_editions(source)
+    if edition not in allowed:
+        raise ValueError(f"unknown {ENV} '{edition}' (want one of: {', '.join(sorted(allowed))})")
+    return source
+
+
+def check_edition(path: str, edition: str) -> None:
+    """Raise ValueError unless ``edition`` is one the edition.py at ``path`` declares."""
+    _checked_source(path, edition)
+
+
 def stamp_file(path: str, edition: str) -> None:
     """Rewrite the ``EDITION = ...`` line of the edition.py at ``path``.
 
@@ -42,11 +56,7 @@ def stamp_file(path: str, edition: str) -> None:
     is replaced, not written in place, so a built copy hard-linked to the source
     can never carry the stamp back into the checkout.
     """
-    with open(path, encoding="utf-8") as fh:
-        source = fh.read()
-    allowed = declared_editions(source)
-    if edition not in allowed:
-        raise ValueError(f"unknown {ENV} '{edition}' (want one of: {', '.join(sorted(allowed))})")
+    source = _checked_source(path, edition)
     stamped, count = _EDITION_LINE.subn(f'EDITION = "{edition}"', source)
     if count != 1:
         raise ValueError(f"expected one EDITION line in {path}, found {count}")

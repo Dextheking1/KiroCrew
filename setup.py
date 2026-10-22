@@ -148,16 +148,16 @@ class BuildWithFrontend(build_py):
         """
         stamp = _load_edition_stamp()
         edition = stamp.requested_edition(os.environ)
-        if getattr(self, "editable_mode", False):
-            # An editable install runs the source tree, which is always oss.
-            if edition != stamp.DEFAULT:
-                raise SystemExit(
-                    f"ERROR: {stamp.ENV}={edition} needs a built package "
-                    "(make wheel / backend-bin / desktop), not an editable install"
-                )
-            return
         path = os.path.join(self.build_lib, "kiro_crew", "edition.py")
         try:
+            if getattr(self, "editable_mode", False):
+                # An editable install runs the source tree, which stays oss. The
+                # packaging targets run one as a prerequisite with the variable
+                # still set, so check the value but stamp nothing.
+                base = os.path.dirname(os.path.abspath(__file__))
+                stamp.check_edition(os.path.join(base, "src", "kiro_crew", "edition.py"), edition)
+                print(f"Editable install: {stamp.ENV}={edition} not stamped; source is oss")
+                return
             stamp.stamp_file(path, edition)
         except ValueError as exc:
             raise SystemExit(f"ERROR: {exc}") from exc

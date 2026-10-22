@@ -116,6 +116,13 @@ def test_stamp_refuses_unknown_edition(tmp_path: Path) -> None:
     assert built.read_bytes() == _EDITION_SRC.read_bytes()
 
 
+def test_check_edition_accepts_declared_and_refuses_unknown() -> None:
+    _edition_stamp.check_edition(str(_EDITION_SRC), "enterprise")
+    _edition_stamp.check_edition(str(_EDITION_SRC), "oss")
+    with pytest.raises(ValueError, match="unknown KIROCREW_BUILD_EDITION 'foo'"):
+        _edition_stamp.check_edition(str(_EDITION_SRC), "foo")
+
+
 def test_stamp_never_writes_through_a_hard_link(tmp_path: Path) -> None:
     source = tmp_path / "src_edition.py"
     shutil.copyfile(_EDITION_SRC, source)
@@ -181,11 +188,16 @@ def test_setup_py_build_py_stamps_and_refuses(tmp_path: Path) -> None:
     """End to end through the real setup.py, where setuptools is installed."""
     pytest.importorskip("setuptools")
     env = {k: v for k, v in os.environ.items() if k != "KIROCREW_BUILD_EDITION"}
+    lib, egg = tmp_path / "lib", tmp_path / "egg"
+    egg.mkdir()
+    src_before = {p.name: p.stat().st_mtime_ns for p in (_REPO / "src").iterdir()}
 
     def build(value: str | None) -> subprocess.CompletedProcess[str]:
         run_env = dict(env) if value is None else {**env, "KIROCREW_BUILD_EDITION": value}
+        # egg_info --egg-base keeps setuptools' metadata out of the checkout's src/.
+        argv = ["egg_info", "--egg-base", str(egg), "build_py", "--build-lib", str(lib)]
         return subprocess.run(
-            [sys.executable, "setup.py", "-q", "build_py", "--build-lib", str(tmp_path)],
+            [sys.executable, "setup.py", "-q", *argv],
             cwd=_REPO,
             env=run_env,
             capture_output=True,
@@ -194,7 +206,7 @@ def test_setup_py_build_py_stamps_and_refuses(tmp_path: Path) -> None:
             timeout=300,
         )
 
-    built = tmp_path / "kiro_crew" / "edition.py"
+    built = lib / "kiro_crew" / "edition.py"
     assert build("enterprise").returncode == 0
     assert _load(built).EDITION == "enterprise"
     assert build(None).returncode == 0
@@ -203,3 +215,4 @@ def test_setup_py_build_py_stamps_and_refuses(tmp_path: Path) -> None:
     assert refused.returncode != 0
     assert "unknown KIROCREW_BUILD_EDITION 'foo'" in refused.stderr
     assert _load(_EDITION_SRC).EDITION == "oss"
+    assert {p.name: p.stat().st_mtime_ns for p in (_REPO / "src").iterdir()} == src_before
