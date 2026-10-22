@@ -199,6 +199,29 @@ def _closed_titles(state: Any, keys: list[str]) -> dict[str, tuple[str, str]]:
     return out
 
 
+#: Rows read from a closed worker's saved transcript for its lane: the newest ones,
+#: bounded like a live window, so a long-closed worker costs one bounded tail read.
+CLOSED_LANE_ROWS = 2000
+
+
+def _closed_rows(state: Any, key: str) -> list[dict[str, Any]] | None:
+    """A closed worker's newest saved transcript rows, or ``None``. BLOCKING.
+
+    ``None`` means no record: no conversation log, a read that failed, or a
+    transcript with no row left (deleted or never written).
+    """
+    log = getattr(state, "conversation_log", None)
+    if log is None:
+        return None
+    try:
+        rows = log.read_messages_chained_tail(f"dashboard:{key}", CLOSED_LANE_ROWS)
+    except Exception:
+        logger.debug("crew timeline: no transcript for closed %s", key, exc_info=True)
+        return None
+    rows = [row for row in rows if isinstance(row, dict)]
+    return rows or None
+
+
 def _short_key(key: str) -> str:
     """``chat-3-1792540567`` -> ``chat-3``: the slot's number without its timestamp."""
     head, _, tail = key.rpartition("-")
@@ -374,8 +397,10 @@ async def api_crew_timeline(request: web.Request) -> web.Response:
     """GET /api/chat/slots/{slot}/crew-timeline -- the root's and workers' lanes.
 
     One lane per session (the root first, then its live workers in list order,
-    then closed ones with no bars), each drawn from that session's own transcript
-    window by :func:`kiro_crew.crew_timeline.derive_lane`. ``gaps`` names what the
+    then closed ones), each drawn from that session's own transcript window by
+    :func:`kiro_crew.crew_timeline.derive_lane`. A closed worker carries the saved
+    title the worker list shows and is drawn from the newest rows of its saved
+    transcript; ``record`` is false when none can be read. ``gaps`` names what the
     transcript does not record, so the view can say it instead of drawing it.
     """
     refused = await _gate(request, "crew_mode.timeline")
@@ -422,29 +447,44 @@ async def api_crew_timeline(request: web.Request) -> web.Response:
     for lane in lanes:
         lane["group"] = _group(lane["status"], items.get(lane["key"], NO_LEDGER).progress)
     live_keys = {str(row.get("key")) for row in rows}
-    lanes.extend(
-        {
-            "key": key,
-            "title": "",
-            "agent": "",
-            "model": "",
-            "model_source": MODEL_DEFAULT,
-            "role": "worker",
-            "status": STATUS_CLOSED,
-            "group": GROUP_DONE,
-            "running": False,
-            "waiting": False,
-            "segments": [],
-            "marks": [],
-            "seeds": [],
-            "sends": [],
-            "credits": 0.0,
-            "first_ts": "",
-            "last_ts": "",
-            "dropped_segments": 0,
-        }
-        for key in _closed_workers(root, live_keys)
-    )
+    closed = _closed_workers(root, live_keys)
+
+    def closed_lanes() -> list[dict[str, Any]]:
+        from kiro_crew.dashboard.chat_utils_display import _redact_for_display
+
+        names = _closed_titles(state, closed)
+        out: list[dict[str, Any]] = []
+        for key in closed:
+            title, agent = names.get(key, (_short_key(key), ""))
+            saved = _closed_rows(state, key)
+            # Drawn from its saved transcript like a live lane; with none left the
+            # lane says so instead of drawing an empty track.
+            drawn = crew_timeline.derive_lane(
+                saved or [], now=now, running=False, waiting_now=False
+            )
+            out.append(
+                crew_timeline.redact_labels(
+                    {
+                        "key": key,
+                        "title": title,
+                        "agent": agent,
+                        "model": "",
+                        "model_source": MODEL_DEFAULT,
+                        "role": "worker",
+                        "status": STATUS_CLOSED,
+                        "group": GROUP_DONE,
+                        "running": False,
+                        "waiting": False,
+                        "record": saved is not None,
+                        **drawn,
+                    },
+                    _redact_for_display,
+                )
+            )
+        return out
+
+    lanes.extend(await asyncio.to_thread(closed_lanes))
+    no_record = any(lane.get("record") is False for lane in lanes)
     live = any(lane["running"] or lane["waiting"] for lane in lanes)
     # Off the event loop like the lane derivation: pairing scans every seed
     # against its sender's sends, which grows with a long-running crew.
@@ -457,12 +497,16 @@ async def api_crew_timeline(request: web.Request) -> web.Response:
             **crew_timeline.summarize(lanes, now=now, live=live),
             "lanes": lanes,
             "handoffs": handoffs,
-            # The served-model gap is named only when a lane actually runs on it.
+            # The served-model gap is named only when a lane actually runs on it,
+            # and the closed-worker gap only when a closed lane has no record left.
             "gaps": [
                 gap
                 for gap in crew_timeline.GAPS
-                if gap != crew_timeline.GAP_SERVED_MODEL
-                or any(lane.get("model_source") == MODEL_DEFAULT for lane in lanes)
+                if (
+                    gap != crew_timeline.GAP_SERVED_MODEL
+                    or any(lane.get("model_source") == MODEL_DEFAULT for lane in lanes)
+                )
+                and (gap != crew_timeline.GAP_CLOSED_NO_RECORD or no_record)
             ],
         }
     )

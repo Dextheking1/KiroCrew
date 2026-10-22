@@ -496,10 +496,15 @@ needs no guard.
 
 `GET /api/chat/slots/{slot}/crew-timeline` (same gate, roots only) answers the
 root's timeline: one lane per session (the root, then its live workers, then
-closed ones with no bars), each with its title, agent and model
+closed ones), each with its title, agent and model
 and `model_source`: `served` (the backend's report), `chosen` (the session's pick) or
 `default` (the gateway's `agent.model`), which the lane shows as "Default (<name>)". `crew_timeline.derive_lane` reads each live
-slot's loaded transcript window, loaded off the loop, and draws bars from
+slot's loaded transcript window, loaded off the loop. A closed worker's lane
+carries the saved title and agent the Workers list shows (`_closed_titles`) and
+is drawn from the newest 2,000 rows of its saved transcript
+(`read_messages_chained_tail`, off the loop); with no row left to read it has
+`record: false`, the lane shows one muted "Closed · no record" line instead of a
+track, and the closed-worker gap is named. Bars come from
 recorded rows only: a turn from the assistant row's `turn_stats.elapsed_ms`
 (an open turn runs from its user row to now while the slot runs), a tool call
 from its `🔧` row, a wait from the `🔧` row to the `✅` row an approval writes,
@@ -520,7 +525,8 @@ no tokens or money. Its state word is "Live" while any lane runs or waits on an
 approval, "Finished" only when every worker is `done`, and otherwise the open
 workers' group ("Needs you", else "Waiting") (`timelineStateKey`). `gaps` names what is not recorded and so not drawn:
 thinking vs output inside a turn, a tool's end time, a tool's failure status,
-tokens, closed workers' rows and rows older than the loaded window. A lane
+tokens, rows older than the loaded window, and closed workers whose saved
+transcript can no longer be read (named only when such a lane is shown). A lane
 keeps its newest 400 bars and counts the rest in `dropped_segments`.
 
 The dashboard draws this as design B. A Crew Mode root's session-list row is the

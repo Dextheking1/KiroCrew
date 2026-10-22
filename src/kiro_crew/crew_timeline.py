@@ -44,7 +44,8 @@ GAPS: tuple[str, ...] = (
     "tool_failure_status",
     # Tokens are not recorded per turn; only credits are.
     "tokens",
-    # A worker whose tab is closed has no live transcript window to read.
+    # A closed worker whose saved transcript cannot be read draws no bars;
+    # named only when such a lane is shown (``GAP_CLOSED_NO_RECORD``).
     "closed_worker_rows",
     # Only the loaded window (the newest rows) is read, not older history.
     "rows_before_window",
@@ -54,6 +55,8 @@ GAPS: tuple[str, ...] = (
 
 #: The gap a lane on the gateway default model adds (see ``GAPS``).
 GAP_SERVED_MODEL: Final[str] = "served_model_unreported"
+#: The gap a closed worker with no readable transcript adds (see ``GAPS``).
+GAP_CLOSED_NO_RECORD: Final[str] = "closed_worker_rows"
 
 #: Bars kept per lane, newest last. A lane over the cap keeps its newest bars and
 #: says how many older ones it dropped, so one chatty session bounds the reply.

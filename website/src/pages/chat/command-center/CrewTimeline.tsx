@@ -370,10 +370,16 @@ const Lane = memo(function Lane({ lane, scale, current, onOpen }: {
       />
     })}
   </span>
+  // A closed worker whose saved transcript cannot be read says so on one muted
+  // line instead of an empty track.
+  const noRecord = closed && lane.record === false
+  const body = noRecord
+    ? <span className="flex-1 truncate text-[11px] text-muted" data-testid="crew-timeline-no-record">{t('commandCenter.timeline_closed_no_record')}</span>
+    : track
   const cls = `flex items-center gap-2 w-full rounded-md px-1 py-1 ${current ? 'crew-card' : ''}`
   return <div role="listitem" data-testid="crew-timeline-lane" data-lane={lane.key} data-role={lane.role}>
     {closed
-      ? <div className={`${cls} opacity-60`} title={t('commandCenter.timeline_closed_lane')}>{head}{track}</div>
+      ? <div className={`${cls} opacity-60`} title={noRecord ? undefined : t('commandCenter.timeline_closed_lane')}>{head}{body}</div>
       : <button type="button" className={`${cls} cursor-pointer hover:bg-bg-hover min-h-11`} aria-current={current ? 'true' : undefined} aria-label={t('commandCenter.timeline_open_lane', { title })} onClick={() => onOpen(lane.key)}>{head}{track}</button>}
   </div>
 })

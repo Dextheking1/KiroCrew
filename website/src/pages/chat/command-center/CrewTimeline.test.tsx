@@ -118,6 +118,31 @@ describe('CrewTimeline', () => {
     expect(within(gone).queryAllByTestId('crew-timeline-bar')).toHaveLength(0)
   })
 
+  it('draws a closed worker from its saved transcript under its saved title', async () => {
+    const saved = lane('w-gone', {
+      title: 'Write the welcome note', status: 'closed', record: true,
+      segments: [{ kind: 'turn', start: at(40), end: at(50), end_bound: 'recorded', label: '' }],
+    })
+    api.crewTimeline.mockResolvedValue({ ...DONE, lanes: [DONE.lanes[0], saved] })
+    renderWith(<CrewTimeline root="root-1" viewing={null} active onOpen={vi.fn()} />)
+    const gone = (await screen.findAllByTestId('crew-timeline-lane'))[1]
+    expect(within(gone).getByTestId('crew-timeline-title')).toHaveTextContent('Write the welcome note')
+    expect(within(gone).getAllByTestId('crew-timeline-bar')).toHaveLength(1)
+    expect(within(gone).queryByTestId('crew-timeline-no-record')).toBeNull()
+  })
+
+  it('says a closed worker with no saved record on one muted line, not an empty track', async () => {
+    const lost = lane('w-gone', { title: 'Pick a lunch place', status: 'closed', record: false, first_ts: '', last_ts: '' })
+    api.crewTimeline.mockResolvedValue({ ...DONE, lanes: [DONE.lanes[0], lost], gaps: ['closed_worker_rows'] })
+    renderWith(<CrewTimeline root="root-1" viewing={null} active onOpen={vi.fn()} />)
+    const gone = (await screen.findAllByTestId('crew-timeline-lane'))[1]
+    expect(within(gone).getByTestId('crew-timeline-title')).toHaveTextContent('Pick a lunch place')
+    expect(within(gone).getByTestId('crew-timeline-no-record')).toHaveTextContent('Closed · no record')
+    expect(gone.querySelector('[data-track-of]')).toBeNull()
+    const tip = (await screen.findByTestId('crew-timeline-gaps')).querySelector('[title]')?.getAttribute('title') ?? ''
+    expect(tip).toContain('Closed workers whose saved transcript can no longer be read')
+  })
+
   it('heads the view with real elapsed time and credits, and is static once done', async () => {
     api.crewTimeline.mockResolvedValue(DONE)
     renderWith(<CrewTimeline root="root-1" viewing={null} active onOpen={vi.fn()} />)

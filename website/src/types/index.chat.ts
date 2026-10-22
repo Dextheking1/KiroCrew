@@ -697,6 +697,9 @@ export interface CrewTimelineLane {
   last_ts: string
   /** Older bars left out to bound the reply; 0 when every bar is here. */
   dropped_segments: number
+  /** A closed worker's lane only: false when its saved transcript cannot be read,
+   *  so it has no bars to draw. */
+  record?: boolean
 }
 
 /** A dispatch: the sender's `session_send` call to the worker's seed row. */

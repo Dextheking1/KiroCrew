@@ -307,14 +307,34 @@ def _route(monkeypatch):
     return crew_workers
 
 
-def _state(rows: list[dict[str, Any]], windows: dict[str, list[dict[str, Any]]]) -> Any:
+def _state(
+    rows: list[dict[str, Any]], windows: dict[str, list[dict[str, Any]]], log: Any = None
+) -> Any:
     def serialize_slots(**_k: Any) -> list[dict[str, Any]]:
         out = [dict(r) for r in rows]
         crew_mode.stamp_rows(out)
         return out
 
     slots = {key: SimpleNamespace(key=key, messages=msgs) for key, msgs in windows.items()}
-    return SimpleNamespace(serialize_slots=serialize_slots, get_slot=slots.get)
+    return SimpleNamespace(
+        serialize_slots=serialize_slots, get_slot=slots.get, conversation_log=log
+    )
+
+
+class _SavedLog:
+    """A conversation log holding a closed worker's saved metadata and rows."""
+
+    def __init__(self, meta: dict[str, Any], rows: list[dict[str, Any]] | Exception) -> None:
+        self.meta, self.rows, self.tail_reads = meta, rows, []
+
+    def get_metadata(self, key: str) -> dict[str, Any]:
+        return self.meta if key == "dashboard:gone" else {}
+
+    def read_messages_chained_tail(self, key: str, limit: int) -> list[dict[str, Any]]:
+        self.tail_reads.append((key, limit))
+        if isinstance(self.rows, Exception):
+            raise self.rows
+        return self.rows if key == "dashboard:gone" else []
 
 
 def _get(state: Any, slot: str) -> Any:
@@ -350,6 +370,9 @@ async def test_the_route_draws_the_root_then_its_workers_then_closed_ones(_route
     assert (body["lanes"][0]["model"], body["lanes"][0]["model_source"]) == ("claude-x", "chosen")
     assert (body["lanes"][1]["model"], body["lanes"][1]["model_source"]) == ("claude-y", "served")
     assert body["lanes"][2]["status"] == "closed" and body["lanes"][2]["segments"] == []
+    # No conversation log to read: the closed lane has no record and says so.
+    assert body["lanes"][2]["record"] is False and body["lanes"][2]["title"] == "gone"
+    assert "closed_worker_rows" in body["gaps"]
     assert body["handoffs"] == [{"from": "root", "to": "w1", "start": _at(1), "end": _at(2)}]
     assert body["credits"] == 0.5 and body["live"] is False
     assert body["elapsed_ms"] == 6000
@@ -357,6 +380,48 @@ async def test_the_route_draws_the_root_then_its_workers_then_closed_ones(_route
     # The closed lane runs on the default, so the served-model gap is named.
     assert "served_model_unreported" in body["gaps"]
     assert "other" not in {lane["key"] for lane in body["lanes"]}
+
+
+@pytest.mark.asyncio
+async def test_a_closed_worker_is_drawn_from_its_saved_transcript_under_its_saved_title(_route):
+    rows = [_slot_row("root", agent="kirocrew-conductor")]
+    windows = {"root": [_row("user", 0, "go"), _send(1, "gone", "s")]}
+    log = _SavedLog(
+        {"title": "Write the welcome note", "agent": "kirocrew-worker"},
+        [
+            _row("user", 2, "[sent by session root via session_send]\n\nhi"),
+            _row("assistant", 6, "ok", turn_stats={"elapsed_ms": 4000, "credits": 0.3}),
+        ],
+    )
+    resp = await _route.api_crew_timeline(_get(_state(rows, windows, log), "root"))
+    body = json.loads(resp.text)
+    gone = body["lanes"][-1]
+    assert (gone["key"], gone["status"], gone["record"]) == ("gone", "closed", True)
+    assert (gone["title"], gone["agent"]) == ("Write the welcome note", "kirocrew-worker")
+    assert [bar["kind"] for bar in gone["segments"]] == ["turn"]
+    assert gone["credits"] == 0.3
+    assert body["handoffs"] == [{"from": "root", "to": "gone", "start": _at(1), "end": _at(2)}]
+    assert "closed_worker_rows" not in body["gaps"]
+    assert log.tail_reads == [("dashboard:gone", crew_workers_module().CLOSED_LANE_ROWS)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved", [[], OSError("gone")], ids=["no rows", "unreadable"])
+async def test_a_closed_worker_with_no_record_says_so_in_the_gaps(_route, saved):
+    rows = [_slot_row("root", agent="kirocrew-conductor")]
+    windows = {"root": [_row("user", 0, "go")]}
+    log = _SavedLog({"title": "Pick a lunch place"}, saved)
+    resp = await _route.api_crew_timeline(_get(_state(rows, windows, log), "root"))
+    body = json.loads(resp.text)
+    gone = body["lanes"][-1]
+    assert (gone["title"], gone["record"], gone["segments"]) == ("Pick a lunch place", False, [])
+    assert "closed_worker_rows" in body["gaps"]
+
+
+def crew_workers_module() -> Any:
+    from kiro_crew.dashboard.handlers import crew_workers
+
+    return crew_workers
 
 
 @pytest.mark.asyncio
