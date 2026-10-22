@@ -513,6 +513,19 @@ temporary session is listed, searched and filtered like any other (see
 The row reads memory mode only to draw its incognito or temporary glyph, and a
 restricted session cannot be dropped into the composer as a reference.
 
+Messages that name one session name an untitled one "Untitled session", never its
+key: the could-not-delete sentence (`utils/historyDeleteRefusal.ts`) and the
+auto-title error notice (`chat-sidebar/rename.ts`). A bulk "Delete all" refusal can
+name several untitled sessions, so each named line keeps the key beside the label.
+A session chip's tooltip (`utils/sessionRoster.ts`) names an untitled session
+"Untitled session"; the chip's own text already shows the key. The chat page and a
+crewmate DM rebuild that roster on a language switch, so the label follows the
+active language. The editable session
+title in a split-view pane header and in the main chat header
+(`pages/chat/SessionTitleControl.tsx`) shows and announces "Untitled session" for an
+untitled session, and its rename editor opens empty, so neither the key nor the
+label is saved as a name; rename, Auto-title and Undo still act on the key.
+
 An untitled session (no title, or a title equal to its key) reads "Untitled
 session" in an Older Sessions row's text and hover title, in the session grid's
 picker rows (`components/SessionGridView.tsx`) and in the Sessions page rows
@@ -529,6 +542,17 @@ shown label. Where nothing else on the row tells untitled sessions apart, the
 key leads the row's second line, never its name: a session search hit with no
 body snippet (the query highlighted there) and a "Continue a previous chat"
 suggestion (beside its date).
+
+The live session list follows the same rule: a sidebar row
+(`chat-sidebar/SessionRow.tsx`) and its drag preview (`chat-sidebar/dnd/targets.tsx`)
+read "Untitled session", and so does a session tab (`components/SessionTabStrip.tsx`).
+A row or tab has no second line, so its hover title carries the key instead
+(`Untitled session · <key>`); a crewmate's own thread keeps the crewmate's name.
+The System → Sessions table names an untitled row "Untitled session" beside its
+slot key (`pages/system/sessionRows.ts`), in place of the backend's
+`New Session…` placeholder. A single-session message names it "Untitled session"
+with no key: the could-not-open notice (`pages/chat/page/ChatPaneNotices.tsx`) and
+the Memory tab's failed-consolidation line (`pages/overview/MemoryTab.tsx`).
 
 `ChatSidebar.tsx` is a facade over owners that each hold one responsibility. It
 calls each owner hook where that block used to sit, so React runs the effects in

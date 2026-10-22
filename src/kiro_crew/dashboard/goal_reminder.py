@@ -65,6 +65,7 @@ from typing import Any
 
 from kiro_crew import member_goals
 from kiro_crew import members as members_mod
+from kiro_crew.dashboard_templates.page_look import PAGE_LOOK
 
 logger = logging.getLogger(__name__)
 
@@ -272,15 +273,139 @@ def _finished_lines(tasks: list[dict[str, str]]) -> str:
     )
 
 
+#: Added to a crewmate's daily reminder and goal-setup wake while it has no Dashboard
+#: page of its own (:func:`dashboard_line`).
+DASHBOARD_BUILD_LINE: str = (
+    "Kiro Crew notes: your Dashboard tab has no page of your own yet. Build one with "
+    "the dashboard skill: dashboard_save stores your HTML page (view.html), and "
+    "dashboard_apply puts it live. Read dashboard_types for paths and row keys: "
+    "work and workstreams for progress, hourly history and "
+    "project spend, goal for relevant milestones, waiting for things needing the "
+    "person, timeline for recent events, tools and usage for the live session's "
+    "activity. Bind values through the model. A verified project snapshot can be "
+    "agentic, with its source and observation time visible. "
+    + PAGE_LOOK
+    + " After apply, one short message says what changed and that the page is on your "
+    "Dashboard tab."
+)
+
+
+def knows_its_page(rec: dict[str, Any]) -> bool:
+    """Whether a crewmate knows what its page is about: a goal and confirmed milestones.
+
+    Milestones are stored only once the person confirms them (the
+    ``crewmate.key_results`` card or the Goals tab), so a stored one is a confirmed one.
+    """
+    return member_goals.has_goal(rec) and bool(rec.get("key_results"))
+
+
+def dashboard_line(slug: str, rec: dict[str, Any]) -> str:
+    """The build-your-page line for crewmate *slug*, or ``""``.
+
+    Only while its Dashboard tab shows nothing of its own: no package bound to it
+    (:func:`kiro_crew.dashboard_agentic.bound_package`) and the suggestions page
+    (:func:`kiro_crew.dashboard_agentic.tab_shows_suggestions`, the read route's own
+    answer), so a template page the person picked, or the page named for the
+    crewmate, is never replaced on a wake. And only once *rec* holds a goal and
+    confirmed milestones (:func:`knows_its_page`), so the page has something to be
+    about. With ``agent.crew_panel`` off (:func:`kiro_crew.members.crew_panel_enabled`)
+    no DM session mounts ``kirocrew-panel``, so there are no ``dashboard_save`` /
+    ``dashboard_apply`` tools and no line. An empty *slug*, or a lookup that fails,
+    gets no line. Blocking IO.
+    """
+    if not slug or not knows_its_page(rec):
+        return ""
+    from kiro_crew import dashboard_agentic
+
+    try:
+        from kiro_crew.dashboard_templates import instance as template_instance
+        from kiro_crew.members import crew_panel_enabled
+
+        if not crew_panel_enabled():
+            return ""
+        if template_instance.is_locked(slug):
+            # The person locked the layout: an apply would be refused, so no wake
+            # asks for a page.
+            return ""
+        if dashboard_agentic.bound_package(slug):
+            return ""
+        if not dashboard_agentic.tab_shows_suggestions(slug):
+            return ""
+    except Exception:
+        logger.debug("dashboard line for %s: page lookup failed", slug, exc_info=True)
+        return ""
+    return DASHBOARD_BUILD_LINE
+
+
+#: How a weekly report or monthly review looks: one piece both prompts share, and
+#: the one ``save_goal_report``'s description points at. Principles the crewmate
+#: phrases itself; the look is its own, inside them. The viewer opens the page in
+#: the crewmate Dashboard page's sandbox, so it reaches no network and loads no
+#: library, which is why a chart is inline SVG. A page embeds no raster image, so
+#: it takes the plain credential scrub on save and read and loses nothing to it.
+REPORT_LOOK = (
+    "How the report looks: send it as html, one whole self-contained page that "
+    "reads like a printed document a team lead hands round as a PDF, top to "
+    "bottom, rather than an app screen; markdown stays available for a plain one. "
+    "Lay it out on A4 sheets (@page { size: A4; margin: 0 }, each sheet 210mm by "
+    "297mm) with a strong header band, numbered sections, and a footer on each "
+    "sheet carrying your name, the date range and the page number. A sheet has a "
+    "fixed height, so plan what each one holds: a section that would run past a "
+    "sheet's bottom or into its footer starts on the next sheet, and a chart takes a height that "
+    "fits. Break pages between sheets so nothing is cut at a sheet's edge, and keep "
+    "print-color-adjust: exact so the colours survive printing. Open with the "
+    "conclusion of the period, readable at a glance. Give each section the shape "
+    "of its content: a comparison as a table, a flow as steps, movement over time "
+    "as a chart drawn from the readings, a blocker as a card that says who it "
+    "waits on, rather than a wall of bullets. Keep one visual system across the "
+    "page, a type scale, a spacing rhythm and a small palette on light paper, so "
+    "it reads well on screen and on paper. Give each colour one meaning across the "
+    "page and pair it with a word, so the page still reads in grey or for someone "
+    "who cannot tell the colours apart. For type, build every family from the "
+    "CSS generic families alone (system-ui, sans-serif; ui-serif, serif; "
+    "ui-monospace, monospace) and name no typeface, so each system draws its own "
+    "face; when the page has its own :root, define them there as --font-sans, "
+    "--font-serif and --font-mono. Two families at most, each with a clear job: "
+    "serif headings with sans for body and tables, or sans for both; mono only for "
+    "code, ids and aligned figures, and not for body text or headings. Build the "
+    "hierarchy with size, weight and colour rather than more families, align "
+    "figures with font-variant-numeric: tabular-nums, and keep text in any one "
+    "script in one style; the generic families already pick each script's system "
+    "face. The page is a snapshot: its numbers are "
+    "the readings at the time you wrote it, so it needs no live data, no scripts "
+    "and no motion; draw every chart as inline SVG, and embed no raster image "
+    "(no <img>, no data:image), since the page opens with no network. Links on "
+    "the page stay inert, so name a pull request or a task in plain text. Use plain "
+    "words, without internal ids "
+    "or file paths: the reader knows only the page, so a word like reading "
+    "gets a short explanation where it first appears (one recorded value of a key "
+    "result, with its date), or is left out. Call each key result by one name and "
+    "measure it over one time span everywhere it appears, so a table, a card and a "
+    "chart are plainly the same measure, and a chart's axis ends on the report's "
+    "last day, with the date of the last reading stated. Call the period by the "
+    "one word the report uses (a week is a week, not a sprint). Give each status "
+    "label its own word, one the page uses for nothing "
+    "else, with a short legend where the labels first appear; a colour named in a "
+    "key is the colour drawn. A blocked item names the person or outside event it "
+    "waits on, or reads like Waits on: nothing outside me. Use only real "
+    "evidence: real states and "
+    "real counts that agree "
+    "with the readings above, with no invented percentage or made-up time. Your "
+    "own style is welcome; a style the user has asked for wins."
+)
+
+
 def reminder_prompt(
     rec: dict[str, Any],
     cadence: str = member_goals.CADENCE_DAILY,
     *,
     finished: list[dict[str, str]] | None = None,
+    dashboard: str = "",
 ) -> str:
     """The hidden turn's text for *cadence*, built from the current goal record.
 
     *finished* is :func:`finished_tasks` for the weekly and monthly prompts.
+    *dashboard* is :func:`dashboard_line`, added last to the daily prompt.
     """
     block = member_goals.progress_block(rec)
     done = _finished_lines(finished or [])
@@ -292,7 +417,7 @@ def reminder_prompt(
             "number or a short note. Lead your message with those readings and say "
             "briefly where things stand toward each goal, then continue "
             "with your next task. Ask the user something only when you are blocked."
-        )
+        ) + (f"\n\n{dashboard}" if dashboard else "")
     if cadence == member_goals.CADENCE_WEEKLY:
         return (
             "[Weekly report] "
@@ -301,12 +426,13 @@ def reminder_prompt(
             + _movement_lines(rec, cadence)
             + "\n\nTasks you finished this week, from your work ledger:\n"
             + done
-            + "\n\nWrite this week's report for the user in Markdown: how each key "
+            + "\n\nWrite this week's report for the user: how each key "
             "result moved, the tasks you finished, what is stuck and why, "
             "and the plan for next week. Base the numbers on the readings above, and "
-            "take a fresh reading first when one is stale. Save it with "
-            'save_goal_report (kind "weekly"), then reply in the thread with one short '
-            "line pointing at it; the report itself stays out of the chat."
+            "take a fresh reading first when one is stale. "
+            + REPORT_LOOK
+            + ' Save it with save_goal_report (kind "weekly"), then reply in the thread '
+            "with one short line pointing at it; the report itself stays out of the chat."
         )
     return (
         "[Monthly review] "
@@ -316,10 +442,11 @@ def reminder_prompt(
         + "\n\nTasks you finished this month, from your work ledger:\n"
         + done
         + "\n\nReview whether your goals and their key results still fit the "
-        "work you are actually doing. Write the review in Markdown: what the month "
-        "showed, whether the direction still holds, and what you would change. Save "
-        'it with save_goal_report (kind "monthly"), then reply in the thread with one '
-        "short line pointing at it. When the key results or a goal no longer fit the "
+        "work you are actually doing. Write the review for the user: what the month "
+        "showed, whether the direction still holds, and what you would change. "
+        + REPORT_LOOK
+        + ' Save it with save_goal_report (kind "monthly"), then reply in the thread '
+        "with one short line pointing at it. When the key results or a goal no longer fit the "
         "work, propose the replacement as a card in this turn (set_key_results for the "
         "whole set, set_goal with that goal's id for a goal) with the reason drawn from "
         "the review; the user decides with the card's button. When they still fit, "
@@ -497,6 +624,15 @@ async def fire(state: Any, job: Any) -> str:
     if skip:
         return skip
     finished: list[dict[str, str]] = []
+    dashboard = ""
+    if cadence == member_goals.CADENCE_DAILY:
+        dashboard = await asyncio.to_thread(dashboard_line, slug, rec)
+        # The binding read ran off the loop: a turn may have started meanwhile.
+        again, skip = _idle_thread(state, slot_key, member)
+        if skip:
+            return skip
+        if again is not slot:
+            return "skipped: the crewmate's thread is not open"
     if cadence in member_goals.REPORT_KINDS:
         finished = await asyncio.to_thread(finished_tasks, slot_key, cadence)
         # A turn (a cron notification, a user message) can start while the
@@ -522,7 +658,7 @@ async def fire(state: Any, job: Any) -> str:
             return LOOP_SKIP
         prompt = heartbeat_prompt(rec, has_session_tools=has_tools, milestones_waiting=waiting)
     else:
-        prompt = reminder_prompt(rec, cadence, finished=finished)
+        prompt = reminder_prompt(rec, cadence, finished=finished, dashboard=dashboard)
     dispatch_hidden_turn(state, slot, prompt, human_seen=False)
     return "started"
 
@@ -595,33 +731,68 @@ def _folder_label(label: str) -> str:
 
 
 def save_report(
-    slug: str, member: str, label: str, *, kind: str, title: str, markdown: str, session_key: str
+    slug: str,
+    member: str,
+    label: str,
+    *,
+    kind: str,
+    title: str,
+    session_key: str,
+    markdown: str = "",
+    html: str = "",
 ) -> dict[str, Any]:
-    """Save one report as a Markdown artifact under ``Crewmates/<name>/Reports``.
+    """Save one report as an artifact under ``Crewmates/<name>/Reports``.
 
-    Records it on the goal record and returns ``{"slug", "title", "url",
-    "folder"}``. Blocking IO.
+    The report is either *markdown* (a ``markdown`` artifact) or *html*, a whole
+    self-contained page (an ``html`` artifact), and exactly one of the two is
+    given. Both are marked :attr:`~kiro_crew.artifact_store.model.Artifact.goal_report`,
+    so the viewer opens the page in the crewmate Dashboard page's sandbox. Records
+    it on the goal record and returns ``{"slug", "title", "url", "folder",
+    "format"}``. Blocking IO.
     """
     from kiro_crew.artifacts import get_default_folder_store, get_default_store
 
     if kind not in member_goals.REPORT_KINDS:
         raise member_goals.GoalError("invalid_report_kind", "a report is weekly or monthly")
-    if not isinstance(markdown, str) or not markdown.strip():
-        raise member_goals.GoalError("empty_report", "the report needs some text")
-    # The crewmate wrote the report: scrubbed like every goal string it writes.
+    given = [
+        (fmt, text)
+        for fmt, text in (("markdown", markdown), ("html", html))
+        if isinstance(text, str) and text.strip()
+    ]
+    if not given:
+        raise member_goals.GoalError(
+            "empty_report", "the report needs some text, as markdown or as html"
+        )
+    if len(given) > 1:
+        raise member_goals.GoalError(
+            "report_format_ambiguous", "send the report as markdown or as html, not both"
+        )
+    ((fmt, body),) = given
+    if fmt == "html":
+        size = len(body.encode("utf-8"))
+        if size > member_goals.REPORT_HTML_MAX_BYTES:
+            raise member_goals.GoalError(
+                "report_too_large",
+                f"the html report is {size} bytes, over the "
+                f"{member_goals.REPORT_HTML_MAX_BYTES}-byte limit",
+            )
+    # The crewmate wrote the report: scrubbed like every goal string it writes,
+    # in either format. A page draws its charts as inline SVG and embeds no raster
+    # image, so the plain scrub costs it nothing.
     title = member_goals.scrub_text(title)
-    markdown = member_goals.scrub_text(markdown)
+    body = member_goals.scrub_text(body)
     folder_path = REPORTS_FOLDER.format(name=_folder_label(label))
     folder_id = get_default_folder_store().resolve_path(folder_path, create_missing=True)
     art = get_default_store().create(
         name=title,
-        content=markdown,
-        kind="markdown",
+        content=body,
+        kind=fmt,
         source="chat",
         description=f"{_NAMES[kind]} by {label}",
         tags=["goal-report", kind],
         folder_id=folder_id,
         session_key=session_key,
+        goal_report=True,
     )
     member_goals.record_report(slug, member, kind=kind, artifact=art.slug, title=title)
     return {
@@ -629,4 +800,5 @@ def save_report(
         "title": title,
         "url": f"/artifacts/{art.slug}",
         "folder": folder_path,
+        "format": fmt,
     }

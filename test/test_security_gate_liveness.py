@@ -445,7 +445,26 @@ def _url_payload_command(n: int) -> str:
 #: ``paths_targets``; and one ``or`` clause, its import and three ``TYPE_CHECKING``
 #: lines in ``paths``. The registry lives in ``agent_sdk``.
 #:
-#: Raised again, from 32,111, for a real new rule in ``redaction_patterns.py``: the
+#: Raised again, from 32,111, for the host-set snapshot on
+#: ``exfil.redact_exfiltration_urls_with_records`` and its two-tuple wrapper: one
+#: optional ``exempt_hosts`` keyword that REPLACES the live platform read and the
+#: scoped override when a caller supplies the set it keyed a cache on, so the display
+#: cache stores output computed under exactly the set its key names. Fourteen lines:
+#: the keyword on both signatures, a two-branch read and the docstrings saying why.
+#: No rule widened or narrowed; the default path is the live read.
+#:
+#: Raised again, from 32,125, for ``redaction._SRI_INTEGRITY_RE``: pass 3 skips a run
+#: that is the whole digest of a Subresource Integrity value (``sha256-<43>=``,
+#: ``sha384-<64>``, ``sha512-<86>==``), because a digest is random base64 and a window
+#: inside it clears every gate. The shape is closed: the lowercase algorithm name after
+#: a non-run character, exactly that algorithm's digest length, exactly its padding,
+#: and nothing glued after. One regex of three fixed-width alternatives, a helper that
+#: returns the digest spans, their comment, and the one clause beside the document-link
+#: exemption. No pass widened, no threshold moved, and the exfil URL scan is unchanged.
+#: Six more for its ``keep_sri_digests=False`` switch: a streamed segment whose delta
+#: boundary split an SRI value saves main's verdict on the digest, not the notice.
+#:
+#: Raised again, from 32,188, for a real new rule in ``redaction_patterns.py``: the
 #: Telegram-bot-token branch (``_CREDENTIAL_PATTERNS``) false-positives on a long
 #: CDK-generated ARN, whose account-id/resource boundary shares that branch's bare
 #: ``<digits>:<30+ run>`` shape. Two new compiled patterns (an alternation with the
@@ -464,7 +483,7 @@ def _url_payload_command(n: int) -> str:
 #: facade's ``TYPE_CHECKING`` mirror manifest (the two ARN-prefix regexes, the lookback
 #: constant, the 12-digit account-id regex and the sans-Telegram alternation), which
 #: ``test_facade_mirror_guards`` requires name everything the facade forwards.
-_PACKAGE_LINE_BUDGET = 32_162
+_PACKAGE_LINE_BUDGET = 32_241
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

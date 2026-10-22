@@ -6576,6 +6576,8 @@
       "use_starting_directory_hint": "Abre um novo shell no diretório de terminal configurado no servidor (dashboard.terminal.cwd ou, se não houver, o diretório pessoal do servidor). O comando que falhou não é reenviado."
     },
     "codeBlock": {
+      "add_comment": "Adicionar comentário",
+      "comment_thread": "Tópico de comentários ({{count}})",
       "copied": "Copiado!",
       "copy": "Copiar",
       "generating": "gerando…"
@@ -7371,7 +7373,7 @@
       "loopback_slow_hint": "Está demorando? Se a página de login não conseguir alcançar este computador, mude para um código: funciona de qualquer dispositivo.",
       "loopback_fell_back": "O login não conseguiu voltar direto para este computador, então aqui está um código.",
       "cancel_unsettled": "Não foi possível cancelar o login. Ele ainda está ativo: pressione a mesma opção novamente para tentar de novo.",
-      "card_intro": "Usado apenas pelo backend KAS (kiro-agent): seus agentes são executados com esta conta Kiro. O Kiro CLI mantém o próprio login do kiro-cli, então entrar aqui não o altera.",
+      "card_intro": "Usado apenas pelo backend Kiro Agent: seus agentes são executados com esta conta Kiro. O Kiro CLI mantém o próprio login do kiro-cli, então entrar aqui não o altera.",
       "previous_sign_in_not_removed": "Conectado, mas não foi possível remover o login anterior",
       "previous_sign_in_not_removed_body": "A nova conta foi salva, mas a conta da qual você estava saindo ainda está lá e tem prioridade. Saia dela e depois confira o login mostrado aqui."
     },
@@ -13450,7 +13452,7 @@
         "experimental": "Experimental",
         "in_use": "Em uso.",
         "install_check_failed": "Não foi possível verificar se isto está instalado nesta máquina.",
-        "kas_kiro_agent": "KAS (kiro-agent)",
+        "kas_kiro_agent": "Kiro Agent",
         "kiro_cli": "Kiro CLI",
         "loading_configuration": "Carregando a configuração…",
         "mcp_concern_auto_approve": "As regras de aprovação automática que o seu arquivo de configuração do agente define — o {{name}} não as aplica",
@@ -18191,10 +18193,11 @@
         "plugin_refused_found": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: {{reason}}.",
         "plugin_refused_guide": "Abrir as etapas de solução de problemas do guia Remote Crew on EC2",
         "plugin_refused_next": "Corrija o proprietário ou as permissões do arquivo e verifique de novo. Se não souber como, use “Perguntar ao agente”.",
+        "plugin_refused_next_other_owner": "Instale uma cópia com o instalador da própria AWS e verifique de novo. O {{productName}} só executa essa cópia se ela e cada pasta acima dela pertencerem ao root ou à conta em que o {{productName}} roda. Se uma pasta como /usr/local/bin pertencer à outra conta, um administrador precisa primeiro tornar o root o dono dela. O guia mostra como.",
         "plugin_refused_next_root_gateway": "Inicie o {{productName}} com uma conta comum em vez de root e verifique de novo.",
         "plugin_refused_next_strict_policy": "Instale-o onde só o root possa alterar o arquivo e suas pastas, em um caminho sem links simbólicos, e verifique de novo. Se não souber como, use “Perguntar ao agente”.",
-        "plugin_refused_other_owner": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: o arquivo ou uma pasta acima dele pertence a outra conta ({{owner}}, ID de usuário {{uid}}). O {{productName}} só executa programas que pertencem à própria conta dele ou à conta de administrador do sistema (root).",
-        "plugin_refused_other_owner_uid": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: o arquivo ou uma pasta acima dele pertence a outra conta (ID de usuário {{uid}}, sem nome no computador em que o {{productName}} roda). O {{productName}} só executa programas que pertencem à própria conta dele ou à conta de administrador do sistema (root).",
+        "plugin_refused_other_owner": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: o arquivo ou uma pasta acima dele pertence a outra conta de usuário ({{owner}}, ID de usuário {{uid}}). O {{productName}} só executa programas que pertencem à própria conta dele ou à conta de administrador do sistema (root).",
+        "plugin_refused_other_owner_uid": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: o arquivo ou uma pasta acima dele pertence a outra conta de usuário (ID de usuário {{uid}}, sem nome no computador em que o {{productName}} roda). O {{productName}} só executa programas que pertencem à própria conta dele ou à conta de administrador do sistema (root).",
         "plugin_refused_root_gateway": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: o {{productName}} está rodando como root e não executa programas auxiliares como root.",
         "plugin_refused_strict_policy": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: a verificação estrita (KIROCREW_PROVIDER_BIN_STRICT) está ativada e só aceita um arquivo e pastas que apenas o root pode alterar, em um caminho sem links simbólicos.",
         "plugin_refused_world_writable": "Encontrado em {{path}}, mas o {{productName}} não vai executá-lo: qualquer conta pode alterar o arquivo ou uma pasta acima dele.",

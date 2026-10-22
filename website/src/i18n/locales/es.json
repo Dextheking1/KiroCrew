@@ -6576,6 +6576,8 @@
       "use_starting_directory_hint": "Abre un shell nuevo en el directorio de terminal configurado en el servidor (dashboard.terminal.cwd o, si no existe, el directorio personal del servidor). El comando fallido no se vuelve a enviar."
     },
     "codeBlock": {
+      "add_comment": "Añadir comentario",
+      "comment_thread": "Hilo de comentarios ({{count}})",
       "copied": "¡Copiado!",
       "copy": "Copiar",
       "generating": "generando…"
@@ -7371,7 +7373,7 @@
       "loopback_slow_hint": "¿Tarda demasiado? Si la página de inicio de sesión no puede llegar a este equipo, cambia a un código: funciona desde cualquier dispositivo.",
       "loopback_fell_back": "El inicio de sesión no pudo volver directamente a este equipo, así que aquí tienes un código.",
       "cancel_unsettled": "No se pudo cancelar el inicio de sesión. Sigue activo: pulsa la misma opción otra vez para reintentar.",
-      "card_intro": "Solo lo usa el backend KAS (kiro-agent): sus agentes se ejecutan con esta cuenta de Kiro. Kiro CLI conserva su propio inicio de sesión de kiro-cli, así que iniciar sesión aquí no lo cambia.",
+      "card_intro": "Solo lo usa el backend Kiro Agent: sus agentes se ejecutan con esta cuenta de Kiro. Kiro CLI conserva su propio inicio de sesión de kiro-cli, así que iniciar sesión aquí no lo cambia.",
       "previous_sign_in_not_removed": "Sesión iniciada, pero no se pudo eliminar el inicio de sesión anterior",
       "previous_sign_in_not_removed_body": "La cuenta nueva está guardada, pero la cuenta de la que cambiaste sigue ahí y tiene prioridad. Cierra esa sesión y luego comprueba el inicio de sesión que se muestra aquí."
     },
@@ -13450,7 +13452,7 @@
         "experimental": "Experimental",
         "in_use": "En uso.",
         "install_check_failed": "No se pudo comprobar si esto está instalado en esta máquina.",
-        "kas_kiro_agent": "KAS (kiro-agent)",
+        "kas_kiro_agent": "Kiro Agent",
         "kiro_cli": "Kiro CLI",
         "loading_configuration": "Cargando la configuración…",
         "mcp_concern_auto_approve": "Las reglas de aprobación automática que define tu archivo de configuración del agente — {{name}} no las aplica",
@@ -18191,10 +18193,11 @@
         "plugin_refused_found": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: {{reason}}.",
         "plugin_refused_guide": "Abrir los pasos de solución de problemas de la guía Remote Crew on EC2",
         "plugin_refused_next": "Corrige el propietario o los permisos del archivo y vuelve a comprobar. Si no sabes cómo, usa «Preguntar al agente».",
+        "plugin_refused_next_other_owner": "Instala una copia con el instalador propio de AWS y vuelve a comprobar. {{productName}} solo ejecuta esa copia si ella y cada carpeta superior pertenecen a root o a la cuenta con la que se ejecuta {{productName}}. Si una carpeta como /usr/local/bin pertenece a la otra cuenta, un administrador debe hacer primero que root sea su propietario. La guía explica cómo.",
         "plugin_refused_next_root_gateway": "Inicia {{productName}} desde una cuenta normal en lugar de root y vuelve a comprobar.",
         "plugin_refused_next_strict_policy": "Instálalo donde solo root pueda modificar el archivo y sus carpetas, en una ruta sin enlaces simbólicos, y vuelve a comprobar. Si no sabes cómo, usa «Preguntar al agente».",
-        "plugin_refused_other_owner": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: el archivo o una carpeta superior pertenece a otra cuenta ({{owner}}, ID de usuario {{uid}}). {{productName}} solo ejecuta programas que pertenecen a su propia cuenta o a la cuenta de administrador del sistema (root).",
-        "plugin_refused_other_owner_uid": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: el archivo o una carpeta superior pertenece a otra cuenta (ID de usuario {{uid}}, sin nombre en el equipo donde se ejecuta {{productName}}). {{productName}} solo ejecuta programas que pertenecen a su propia cuenta o a la cuenta de administrador del sistema (root).",
+        "plugin_refused_other_owner": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: el archivo o una carpeta superior pertenece a otra cuenta de usuario ({{owner}}, ID de usuario {{uid}}). {{productName}} solo ejecuta programas que pertenecen a su propia cuenta o a la cuenta de administrador del sistema (root).",
+        "plugin_refused_other_owner_uid": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: el archivo o una carpeta superior pertenece a otra cuenta de usuario (ID de usuario {{uid}}, sin nombre en el equipo donde se ejecuta {{productName}}). {{productName}} solo ejecuta programas que pertenecen a su propia cuenta o a la cuenta de administrador del sistema (root).",
         "plugin_refused_root_gateway": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: {{productName}} se ejecuta como root y no ejecuta programas auxiliares como root.",
         "plugin_refused_strict_policy": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: la comprobación estricta (KIROCREW_PROVIDER_BIN_STRICT) está activada y solo acepta un archivo y carpetas que únicamente root puede modificar, en una ruta sin enlaces simbólicos.",
         "plugin_refused_world_writable": "Encontrado en {{path}}, pero {{productName}} no lo ejecutará: cualquier cuenta puede modificar el archivo o una carpeta superior.",

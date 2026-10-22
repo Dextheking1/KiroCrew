@@ -6352,6 +6352,8 @@
       "use_starting_directory_hint": "サーバーで設定されたターミナルのディレクトリ（dashboard.terminal.cwd、未設定ならサーバーのホームディレクトリ）で新しいシェルを開きます。失敗したコマンドは再送されません。"
     },
     "codeBlock": {
+      "add_comment": "コメントを追加",
+      "comment_thread": "コメントスレッド（{{count}}）",
       "copied": "コピーしました！",
       "copy": "コピー",
       "generating": "生成中…"
@@ -7123,7 +7125,7 @@
       "loopback_slow_hint": "時間がかかっていますか？サインインページがこのコンピューターに到達できない場合は、コードに切り替えてください。どの端末からでも使えます。",
       "loopback_fell_back": "サインインの結果がこのコンピューターに直接戻れなかったため、代わりにコードを表示しています。",
       "cancel_unsettled": "サインインをキャンセルできませんでした。サインインはまだ有効です。同じ項目をもう一度押して再試行してください。",
-      "card_intro": "KAS (kiro-agent) バックエンドのみが使用します。そのエージェントはこの Kiro アカウントとして動作します。Kiro CLI は独自の kiro-cli ログインを使い続けるため、ここでサインインしても変わりません。",
+      "card_intro": "Kiro Agent バックエンドのみが使用します。そのエージェントはこの Kiro アカウントとして動作します。Kiro CLI は独自の kiro-cli ログインを使い続けるため、ここでサインインしても変わりません。",
       "previous_sign_in_not_removed": "サインインしましたが、以前のサインインを削除できませんでした",
       "previous_sign_in_not_removed_body": "新しいアカウントは保存されましたが、切り替え前のアカウントも残っており、そちらが優先されます。そのアカウントからサインアウトしてから、ここに表示されるサインインを確認してください。"
     },
@@ -13014,7 +13016,7 @@
         "experimental": "実験的",
         "in_use": "使用中。",
         "install_check_failed": "このマシンにインストールされているか確認できませんでした。",
-        "kas_kiro_agent": "KAS (kiro-agent)",
+        "kas_kiro_agent": "Kiro Agent",
         "kiro_cli": "Kiro CLI",
         "loading_configuration": "設定を読み込んでいます…",
         "mcp_concern_auto_approve": "エージェント設定ファイルが定める自動承認ルール — {{name}} はそれを適用しません",
@@ -17649,10 +17651,11 @@
         "plugin_refused_found": "{{path}} で見つかりましたが、{{productName}} は実行しません（{{reason}}）。",
         "plugin_refused_guide": "Remote Crew on EC2 ガイドのトラブルシューティング手順を開く",
         "plugin_refused_next": "ファイルの所有者または権限を修正してから、もう一度確認してください。方法がわからない場合は、「エージェントに質問」を使ってください。",
+        "plugin_refused_next_other_owner": "AWS 独自のインストーラーでコピーをインストールしてから、もう一度確認してください。{{productName}} がそのコピーを実行するのは、ファイルとその上位のすべてのフォルダーが root または {{productName}} を実行しているアカウントの所有である場合だけです。/usr/local/bin などのフォルダーが別のアカウントの所有になっている場合は、先に管理者が所有者を root に変更する必要があります。手順はガイドを参照してください。",
         "plugin_refused_next_root_gateway": "{{productName}} を root ではなく通常のアカウントで起動してから、もう一度確認してください。",
         "plugin_refused_next_strict_policy": "ファイルとそのフォルダーを root だけが変更できる場所に、シンボリックリンクを含まないパスでインストールしてから、もう一度確認してください。方法がわからない場合は、「エージェントに質問」を使ってください。",
-        "plugin_refused_other_owner": "{{path}} で見つかりましたが、{{productName}} は実行しません。ファイルまたは上位フォルダーが別のアカウント（{{owner}}、ユーザー ID {{uid}}）の所有になっています。{{productName}} が実行するのは、自身のアカウントまたはシステム管理者アカウント（root）が所有するプログラムだけです。",
-        "plugin_refused_other_owner_uid": "{{path}} で見つかりましたが、{{productName}} は実行しません。ファイルまたは上位フォルダーが別のアカウント（ユーザー ID {{uid}}、{{productName}} が動いているコンピューター上に名前なし）の所有になっています。{{productName}} が実行するのは、自身のアカウントまたはシステム管理者アカウント（root）が所有するプログラムだけです。",
+        "plugin_refused_other_owner": "{{path}} で見つかりましたが、{{productName}} は実行しません。ファイルまたは上位フォルダーが別のユーザーアカウント（{{owner}}、ユーザー ID {{uid}}）の所有になっています。{{productName}} が実行するのは、自身のアカウントまたはシステム管理者アカウント（root）が所有するプログラムだけです。",
+        "plugin_refused_other_owner_uid": "{{path}} で見つかりましたが、{{productName}} は実行しません。ファイルまたは上位フォルダーが別のユーザーアカウント（ユーザー ID {{uid}}、{{productName}} が動いているコンピューター上に名前なし）の所有になっています。{{productName}} が実行するのは、自身のアカウントまたはシステム管理者アカウント（root）が所有するプログラムだけです。",
         "plugin_refused_root_gateway": "{{path}} で見つかりましたが、{{productName}} は実行しません。{{productName}} は root として動いており、補助プログラムを root として実行しません。",
         "plugin_refused_strict_policy": "{{path}} で見つかりましたが、{{productName}} は実行しません。厳格なチェック（KIROCREW_PROVIDER_BIN_STRICT）が有効で、root だけが変更できるファイルとフォルダーを、シンボリックリンクを含まないパスでのみ受け付けます。",
         "plugin_refused_world_writable": "{{path}} で見つかりましたが、{{productName}} は実行しません。どのアカウントでもファイルまたは上位フォルダーを変更できます。",
