@@ -339,3 +339,37 @@ async def test_app_only_sees_own_origin_reactions(tmp_path):
         resp = await client.get("/api/chat/reactions?slot=slot-shared")
         data = await resp.json()
         assert [r["id"] for r in data["reactions"]] == ["r-a"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_delete_does_not_strand_an_app_owned_duplicate(tmp_path):
+    """A dashboard caller never sees or deletes an app's copy of the same emoji.
+
+    Dashboard and app-a both react with the same emoji on the same message, so
+    two records exist with identical (slot, mid, emoji) and different
+    origin_app. The dashboard list must show only its own record, the dashboard
+    delete must remove only its own, and after that delete the dashboard list
+    must stay empty — the removed reaction cannot reappear from the surviving
+    app-owned record. (Regression for the GPT 6.1 origin-visibility finding.)
+    """
+    state = _make_state(tmp_path)
+    state.get_or_create_slot("slot-shared", app="app-a")
+    _seed_reactions(
+        state,
+        [
+            _reaction("r-dash", "slot-shared", "m-dup", "👍", origin_app=""),
+            _reaction("r-app-a", "slot-shared", "m-dup", "👍", origin_app="app-a"),
+        ],
+    )
+    # Dashboard caller (no app token): sees only its own record.
+    async with _client(tmp_path, state=state) as client:
+        listing = await (await client.get("/api/chat/reactions?slot=slot-shared")).json()
+        assert [r["id"] for r in listing["reactions"]] == ["r-dash"]
+        resp = await client.delete("/api/chat/reactions?slot=slot-shared&mid=m-dup&emoji=👍")
+        assert resp.status == 200, await resp.json()
+        after = await (await client.get("/api/chat/reactions?slot=slot-shared")).json()
+        # The dashboard's reaction is gone and does NOT reappear.
+        assert after["reactions"] == []
+    # The app's own record survived the dashboard's delete.
+    assert any(r["id"] == "r-app-a" for r in state._chat_reactions)
+    assert not any(r["id"] == "r-dash" for r in state._chat_reactions)

@@ -3,7 +3,11 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement, type ReactNode } from 'react'
-import { useChatReactions } from '../hooks/useChatReactions'
+import {
+  useChatReactions,
+  reactionTogglePending,
+  __resetReactionToggleLedgerForTests,
+} from '../hooks/useChatReactions'
 import { MessageReactionBar } from '../pages/chat/MessageReactionBar'
 import type { ChatReaction } from '../api/reactions'
 
@@ -128,6 +132,78 @@ describe('useChatReactions', () => {
     await waitFor(() => expect(result.current.error).toEqual({ mid: 'm-nocache', kind: 'react' }))
     // Not left active despite the absent initial cache.
     expect(result.current.reactionsFor('m-nocache').has('👍')).toBe(false)
+  })
+
+  it('a queued off-click after a failed create does NOT re-POST the reaction (intent, not cache)', async () => {
+    // Click an absent reaction ON (POST fails, optimistic entry rolled out of
+    // the cache), then click it OFF. The queued off-click must act on the
+    // user's INTENT (off), not re-read the post-failure cache and send another
+    // POST. (GPT 6.1 useChatReactions:237.)
+    ;(reactionsApi.list as ReturnType<typeof vi.fn>).mockResolvedValue({ reactions: [] })
+    const { result } = renderHook(() => useChatReactions('slot-abc'), { wrapper: createWrapper() })
+    await waitFor(() => expect(result.current.reactions).toHaveLength(0))
+
+    ;(reactionsApi.create as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'))
+
+    await act(async () => {
+      // Both clicks queued in the same tick: ON then OFF. Intent converges to
+      // OFF on an already-absent reaction, so the chain settles to "nothing to
+      // do" — crucially it never sends a POST that would persist it ON.
+      const on = result.current.toggleReaction('m-x', '👀').catch(() => {})
+      const off = result.current.toggleReaction('m-x', '👀').catch(() => {})
+      await Promise.all([on, off])
+    })
+    // The reaction the user ended OFF is NOT persisted ON: no stray POST.
+    expect(reactionsApi.remove).not.toHaveBeenCalled()
+    expect(result.current.reactionsFor('m-x').has('👀')).toBe(false)
+  })
+
+  it('a single on-click still sends one create', async () => {
+    // Guard the converge-to-intent logic does not swallow a lone click.
+    ;(reactionsApi.list as ReturnType<typeof vi.fn>).mockResolvedValue({ reactions: [] })
+    const created: ChatReaction = { ...mockReaction, id: 'r-one', mid: 'm-one', emoji: '👀' }
+    ;(reactionsApi.create as ReturnType<typeof vi.fn>).mockResolvedValue(created)
+    const { result } = renderHook(() => useChatReactions('slot-abc'), { wrapper: createWrapper() })
+    await waitFor(() => expect(result.current.reactions).toHaveLength(0))
+
+    await act(async () => { await result.current.toggleReaction('m-one', '👀') })
+    expect(reactionsApi.create).toHaveBeenCalledTimes(1)
+    expect(reactionsApi.create).toHaveBeenCalledWith({ slot_key: 'slot-abc', mid: 'm-one', emoji: '👀' })
+  })
+
+  it('a reaction started in one slot settles against that slot after a switch', async () => {
+    // Start a reaction in slot A, then re-render the hook for slot B before the
+    // POST settles. The mutation's bookkeeping (ledger release + settled
+    // refetch) must act on slot A, not the now-current slot B, or A's pending
+    // count strands and A's cross-tab refreshes defer forever. (GPT 6.1
+    // useChatReactions:121.)
+    __resetReactionToggleLedgerForTests()
+    ;(reactionsApi.list as ReturnType<typeof vi.fn>).mockResolvedValue({ reactions: [] })
+    let resolveCreate: (r: ChatReaction) => void = () => {}
+    const createStarted = new Promise<void>(start => {
+      ;(reactionsApi.create as ReturnType<typeof vi.fn>).mockImplementation(
+        () => { start(); return new Promise<ChatReaction>(res => { resolveCreate = res }) })
+    })
+    const created: ChatReaction = { ...mockReaction, id: 'r-sw', slot_key: 'slot-A', mid: 'm-sw', emoji: '👍' }
+
+    const { result, rerender } = renderHook(
+      ({ slot }: { slot: string }) => useChatReactions(slot),
+      { wrapper: createWrapper(), initialProps: { slot: 'slot-A' } },
+    )
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    let p: Promise<void> = Promise.resolve()
+    await act(async () => {
+      p = result.current.toggleReaction('m-sw', '👍')
+      await createStarted // the POST is now in flight for slot A
+    })
+    expect(reactionTogglePending('slot-A')).toBe(true)
+    // Switch to slot B before the create resolves.
+    rerender({ slot: 'slot-B' })
+    await act(async () => { resolveCreate(created); await p })
+    // Slot A drained despite the hook now pointing at B.
+    expect(reactionTogglePending('slot-A')).toBe(false)
+    expect(reactionsApi.create).toHaveBeenCalledWith({ slot_key: 'slot-A', mid: 'm-sw', emoji: '👍' })
   })
 
   it('a queued second toggle on another identity is not reversed by the first settle', async () => {

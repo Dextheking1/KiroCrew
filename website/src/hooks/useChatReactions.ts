@@ -17,10 +17,13 @@ const reactionQueryKey = (slotKey: string | undefined) => ['chat-reactions', slo
 // bypass it entirely. Keyed by slot_key so a toggle on one slot never defers
 // another slot's refresh.
 const pendingToggles = new Map<string, number>()
-// Deferred `reactions_changed` invalidations: a slot whose refetch arrived
-// while a toggle was still pending. Drained once that slot hits zero pending,
-// so the other tab's change still lands — just after local intent commits.
-const deferredInvalidations = new Set<string>()
+// A slot whose settled refetch must fire once its last toggle drains. Set by
+// the hook's own onSettled (it always wants the server truth once nothing is
+// pending) and by a `reactions_changed` frame that arrived mid-flight (a
+// concurrent-tab change that must still land). Either way the refetch is held
+// until the slot's pending count hits zero so it cannot drop a still-pending
+// optimistic entry, then fired exactly once.
+const refetchWhenDrained = new Set<string>()
 
 function beginToggle(slotKey: string): void {
   pendingToggles.set(slotKey, (pendingToggles.get(slotKey) ?? 0) + 1)
@@ -28,16 +31,16 @@ function beginToggle(slotKey: string): void {
 
 function endToggle(slotKey: string, qc: QueryClient): void {
   const next = Math.max(0, (pendingToggles.get(slotKey) ?? 0) - 1)
-  if (next === 0) {
-    pendingToggles.delete(slotKey)
-    // Nothing is pending for this slot now: flush a WS refresh that we held
-    // back so a concurrent-tab change still reaches this view.
-    if (deferredInvalidations.delete(slotKey)) {
-      qc.invalidateQueries({ queryKey: reactionQueryKey(slotKey) })
-    }
-  } else {
+  if (next > 0) {
     pendingToggles.set(slotKey, next)
+    return
   }
+  // Nothing pending for this slot now. Fire the single settled refetch — the
+  // server truth the hook always wants once its own toggles drain, and the
+  // flush of any WS refresh held back while a toggle was in flight.
+  pendingToggles.delete(slotKey)
+  refetchWhenDrained.delete(slotKey)
+  qc.invalidateQueries({ queryKey: reactionQueryKey(slotKey) })
 }
 
 /** True when a reaction toggle is still in flight for `slotKey`. The
@@ -50,13 +53,13 @@ export function reactionTogglePending(slotKey: string): boolean {
 /** Record that a `reactions_changed` refresh for `slotKey` was held back
  *  because a toggle was in flight; it is flushed when the last toggle settles. */
 export function deferReactionInvalidation(slotKey: string): void {
-  deferredInvalidations.add(slotKey)
+  refetchWhenDrained.add(slotKey)
 }
 
 /** Test seam: drop all cross-consumer toggle state between cases. */
 export function __resetReactionToggleLedgerForTests(): void {
   pendingToggles.clear()
-  deferredInvalidations.clear()
+  refetchWhenDrained.clear()
 }
 
 /** Test seam: pin a slot's pending-toggle count so a WS-frame test can drive
@@ -106,46 +109,42 @@ export function useChatReactions(slotKey: string | undefined) {
     [reactions],
   )
 
-  // Count of toggle mutations currently in flight. The settled refetch is held
-  // until this hits zero, because a refetch fired for identity A's settle would
-  // otherwise overwrite the cache and drop identity B's still-pending optimistic
-  // entry — B's queued off-toggle would then read B as absent and POST instead
-  // of DELETE, leaving the wrong final state. Draining to the server truth only
-  // once nothing is pending keeps every pending identity intact until it commits.
-  const inFlight = useRef(0)
-  const settleWhenIdle = useCallback(() => {
-    inFlight.current = Math.max(0, inFlight.current - 1)
-    if (inFlight.current === 0) qc.invalidateQueries({ queryKey })
-    // Release this toggle from the cross-consumer ledger too, flushing any
-    // `reactions_changed` refresh that was held back while it was pending.
-    if (slotKey) endToggle(slotKey, qc)
-  }, [qc, queryKey, slotKey])
-
+  // Every mutation carries the slot it STARTED on through its variables, and
+  // every callback derives its cache key and ledger slot from that — never from
+  // the hook's render-captured `slotKey`. The hook is reused across slots
+  // (ChatPage keeps one instance and swaps the active slot), so a reaction
+  // started in slot A can settle after the user has switched to B. Reading the
+  // render slot in onSettled would then release B's pending count and refetch
+  // B's cache while A's count stays stuck above zero — stranding A's deferred
+  // `reactions_changed` refreshes for the rest of the session. Keying off the
+  // originating slot keeps each mutation's bookkeeping on its own slot.
   const { mutateAsync: addReactionAsync } = useMutation({
     mutationFn: (body: ReactMessageBody) => reactionsApi.create(body),
     onMutate: async (body: ReactMessageBody) => {
-      inFlight.current += 1
-      beginToggle(body.slot_key)
-      await qc.cancelQueries({ queryKey })
+      const sk = body.slot_key
+      const qk = reactionQueryKey(sk)
+      beginToggle(sk)
+      await qc.cancelQueries({ queryKey: qk })
       const optimisticId = `temp-${secureRandomId()}`
       const optimistic: ChatReaction = {
         id: optimisticId,
-        slot_key: body.slot_key,
+        slot_key: sk,
         mid: body.mid,
         emoji: body.emoji,
         reacted_at: new Date().toISOString(),
       }
-      qc.setQueryData<ChatReaction[]>(queryKey, old => [...(old ?? []), optimistic])
-      return { optimisticId }
+      qc.setQueryData<ChatReaction[]>(qk, old => [...(old ?? []), optimistic])
+      return { optimisticId, sk, qk }
     },
     onError: (err: unknown, body, ctx) => {
       // Drop THIS optimistic entry by id rather than restoring a captured
       // snapshot: when the initial GET failed there is no prior snapshot to
       // restore, and a snapshot would also clobber other identities' pending
-      // entries. Removing by id leaves the failed reaction off, so a re-click
-      // correctly retries the create instead of sending a DELETE.
+      // entries. Removing by id leaves the failed reaction off; the chained
+      // toggle's own per-identity intent (not this cache) decides the next
+      // queued write, so a queued off-click still resolves to "leave it off".
       if (ctx?.optimisticId) {
-        qc.setQueryData<ChatReaction[]>(queryKey, old =>
+        qc.setQueryData<ChatReaction[]>(ctx.qk, old =>
           (old ?? []).filter(r => r.id !== ctx.optimisticId),
         )
       }
@@ -157,11 +156,10 @@ export function useChatReactions(slotKey: string | undefined) {
       // Replace the optimistic row with the server record. If the optimistic
       // row is GONE — a concurrent refetch (e.g. a `reactions_changed` frame
       // from another identity's save) dropped it before this resolved — append
-      // `real` instead of silently losing it, so a queued off-toggle still
-      // reads the reaction as present and sends DELETE rather than POST. The
-      // ledger guard above normally prevents the drop; this makes the create
-      // self-healing even if an invalidation slips through.
-      qc.setQueryData<ChatReaction[]>(queryKey, old => {
+      // `real` instead of silently losing it, so the cache still reflects the
+      // server. The ledger guard normally prevents the drop; this makes the
+      // create self-healing even if an invalidation slips through.
+      qc.setQueryData<ChatReaction[]>(ctx.qk, old => {
         const list = old ?? []
         if (list.some(r => r.id === ctx.optimisticId)) {
           return list.map(r => r.id === ctx.optimisticId ? real : r)
@@ -169,51 +167,57 @@ export function useChatReactions(slotKey: string | undefined) {
         return list.some(r => r.id === real.id) ? list : [...list, real]
       })
     },
-    onSettled: settleWhenIdle,
+    onSettled: (_data, _err, _body, ctx) => { if (ctx) endToggle(ctx.sk, qc) },
   })
 
   const { mutateAsync: removeReactionAsync } = useMutation({
-    mutationFn: ({ mid, emoji }: { mid: string; emoji: string }) =>
-      reactionsApi.remove(slotKey!, mid, emoji),
-    onMutate: async ({ mid, emoji }: { mid: string; emoji: string }) => {
-      inFlight.current += 1
-      if (slotKey) beginToggle(slotKey)
-      await qc.cancelQueries({ queryKey })
+    mutationFn: ({ slot_key, mid, emoji }: { slot_key: string; mid: string; emoji: string }) =>
+      reactionsApi.remove(slot_key, mid, emoji),
+    onMutate: async ({ slot_key, mid, emoji }: { slot_key: string; mid: string; emoji: string }) => {
+      const qk = reactionQueryKey(slot_key)
+      beginToggle(slot_key)
+      await qc.cancelQueries({ queryKey: qk })
       // Snapshot just the removed records so a failed delete restores exactly
       // them by id, without touching other identities' pending entries.
-      const removed = (qc.getQueryData<ChatReaction[]>(queryKey) ?? []).filter(
+      const removed = (qc.getQueryData<ChatReaction[]>(qk) ?? []).filter(
         r => r.mid === mid && r.emoji === emoji,
       )
-      qc.setQueryData<ChatReaction[]>(queryKey, old =>
+      qc.setQueryData<ChatReaction[]>(qk, old =>
         (old ?? []).filter(r => !(r.mid === mid && r.emoji === emoji)),
       )
-      return { removed }
+      return { removed, sk: slot_key, qk }
     },
     onError: (_err, { mid }, ctx) => {
       if (ctx?.removed?.length) {
-        qc.setQueryData<ChatReaction[]>(queryKey, old => {
+        qc.setQueryData<ChatReaction[]>(ctx.qk, old => {
           const have = new Set((old ?? []).map(r => r.id))
           return [...(old ?? []), ...ctx.removed.filter(r => !have.has(r.id))]
         })
       }
       setError({ mid, kind: 'unreact' })
     },
-    onSettled: settleWhenIdle,
+    onSettled: (_data, _err, _vars, ctx) => { if (ctx) endToggle(ctx.sk, qc) },
   })
 
-  // Serializes toggles per `(mid, emoji)`: a new toggle on the same identity
-  // chains onto the one in flight rather than racing it, so a bodyless DELETE
-  // that 404s before a concurrent POST takes the backend lock can no longer
-  // leave the wrong final state persisted. Keyed by a tail promise per
-  // identity; a NUL separator keeps the `mid`/`emoji` boundary unambiguous.
-  const chains = useRef(new Map<string, Promise<void>>())
+  // Per-identity toggle state, keyed by `(mid, emoji)`. `tail` serializes the
+  // writes so a new click chains onto the one in flight rather than racing it
+  // (a bodyless DELETE that 404s before a concurrent POST takes the backend
+  // lock could otherwise leave the wrong final state). `want` is the user's
+  // LATEST intended state for that identity — flipped on every click at request
+  // time — and is what the chained callback acts on. Reading intent from `want`
+  // rather than the live cache is what fixes the queued-off-click-after-failure
+  // race: a failed create rolls its optimistic entry out of the cache, but the
+  // queued off-click still knows the user wants it OFF and sends nothing (it is
+  // already absent) instead of re-POSTing it ON.
+  const toggles = useRef(new Map<string, { tail: Promise<void>; want: boolean }>())
 
-  /** Toggle `emoji` on `mid`: adds it if the caller has not reacted with it
-   *  yet on this message, removes it otherwise. Rejects on failure so the
-   *  caller can await it; the hook's own `error` state drives the UI notice. */
+  /** Toggle `emoji` on `mid`: flips the caller's reaction on this message.
+   *  Rejects on failure so the caller can await it; the hook's own `error`
+   *  state drives the UI notice. */
   const toggleReaction = useCallback(
     (mid: string, emoji: string): Promise<void> => {
       if (!slotKey) return Promise.resolve()
+      const sk = slotKey
       setError(null)
       // Chain key is the (mid, emoji) pair joined by a NUL, which cannot occur
       // in either value so the boundary is unambiguous. Built with join +
@@ -221,35 +225,42 @@ export function useChatReactions(slotKey: string | undefined) {
       // key, never user-facing, and a literal separator string on this line
       // would trip the i18n added-lines gate (no-literal-string) as if it were
       // untranslated copy.
-      const key = [mid, emoji].join(String.fromCharCode(0))
+      const key = [sk, mid, emoji].join(String.fromCharCode(0))
+      const entry = toggles.current.get(key)
+      // The new desired state is the opposite of the last INTENDED state, not
+      // the last committed one: three fast clicks mean on, off, on regardless
+      // of what has committed yet. Seed the first click's intent from the live
+      // cache (whether the reaction is currently placed).
+      const currentlyPlaced = (qc.getQueryData<ChatReaction[]>(reactionQueryKey(sk)) ?? [])
+        .some(r => r.mid === mid && r.emoji === emoji)
+      const want = entry ? !entry.want : !currentlyPlaced
       // Wait for the previous toggle on this identity to settle (success OR
-      // failure) before deciding add vs. remove, so the decision reads the
-      // true current state rather than racing an in-flight mutation.
-      const prior = (chains.current.get(key) ?? Promise.resolve()).catch(() => {})
+      // failure) before issuing the next, so the writes never race.
+      const prior = (entry?.tail ?? Promise.resolve()).catch(() => {})
       const next = prior.then(() => {
-        // Read the add/remove decision from the LIVE cache inside the chained
-        // callback, not the render-captured `reactionsFor`: a second and third
-        // click queued while the first POST is still pending would otherwise
-        // both see the click-time optimistic snapshot and emit POST, DELETE,
-        // DELETE — the last DELETE 404s and the reaction ends OFF when the user
-        // ended ON. The onSettled refetch keeps the cache current between links.
-        const current = qc.getQueryData<ChatReaction[]>(queryKey) ?? []
-        const alreadyReacted = current.some(r => r.mid === mid && r.emoji === emoji)
-        return alreadyReacted
-          ? removeReactionAsync({ mid, emoji }).then(() => {})
-          : addReactionAsync({ slot_key: slotKey, mid, emoji }).then(() => {})
+        // Act on the recorded intent, re-read at run time so a later click that
+        // landed while this one waited wins. If the server already matches the
+        // intent (the reaction is placed and we want it on, or absent and we
+        // want it off), there is nothing to send.
+        const placed = (qc.getQueryData<ChatReaction[]>(reactionQueryKey(sk)) ?? [])
+          .some(r => r.mid === mid && r.emoji === emoji)
+        const desired = toggles.current.get(key)?.want ?? want
+        if (desired === placed) return
+        return desired
+          ? addReactionAsync({ slot_key: sk, mid, emoji }).then(() => {})
+          : removeReactionAsync({ slot_key: sk, mid, emoji }).then(() => {})
       })
       // The stored tail swallows rejections (so it never becomes an unhandled
-      // rejection and a later toggle can still await it); drop it once it is
-      // the settled tail and nothing newer replaced it.
+      // rejection and a later toggle can still await it); drop the entry once
+      // it is the settled tail and nothing newer replaced it.
       const tail = next.catch(() => {})
-      chains.current.set(key, tail)
+      toggles.current.set(key, { tail, want })
       void tail.then(() => {
-        if (chains.current.get(key) === tail) chains.current.delete(key)
+        if (toggles.current.get(key)?.tail === tail) toggles.current.delete(key)
       })
       return next
     },
-    [slotKey, qc, queryKey, addReactionAsync, removeReactionAsync],
+    [slotKey, qc, addReactionAsync, removeReactionAsync],
   )
 
   return {

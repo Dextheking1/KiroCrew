@@ -58,12 +58,19 @@ async def api_chat_reactions_list(request: web.Request) -> web.Response:
         return denied
     await state.ensure_chat_reactions_loaded()
     request_app = request.get("app", "")
-    reactions = [r for r in state._chat_reactions if r["slot_key"] == slot_key]
-    # Record-level app ownership mirrors chat_pins: app callers only see
-    # reactions they created; legacy/dashboard records (origin_app="") are
-    # visible only to dashboard callers.
-    if request_app:
-        reactions = [r for r in reactions if r.get("origin_app", "") == request_app]
+    # Record-level app ownership mirrors chat_pins, and visibility is scoped to
+    # the caller's OWN origin in both directions: an app caller sees only the
+    # reactions it created, and a dashboard caller (origin_app="") sees only
+    # dashboard records — never an app's. Create, quota and delete all key off
+    # the same (slot_key, mid, emoji, origin_app) identity; if the list instead
+    # showed a dashboard caller an app-owned duplicate of the same emoji, the
+    # dashboard's single toggle would DELETE only its own record and the app's
+    # copy would survive and reappear on the next fetch.
+    reactions = [
+        r
+        for r in state._chat_reactions
+        if r["slot_key"] == slot_key and r.get("origin_app", "") == request_app
+    ]
     reactions.sort(key=lambda r: r.get("reacted_at", ""))
     return web.json_response({"reactions": reactions})
 
@@ -218,12 +225,18 @@ async def api_chat_reactions_delete_by_query(request: web.Request) -> web.Respon
         )
 
     async with state._chat_reactions_lock:
+        # Scope the match to the caller's OWN origin, same identity the list and
+        # create routes use. A dashboard caller (origin_app="") matches only
+        # dashboard records, not an app's copy of the same emoji — the list
+        # never showed the dashboard that copy, so the toggle must not delete
+        # it. This keeps visibility and deletion on one consistent identity, so
+        # a removed reaction cannot reappear from a surviving foreign-origin
+        # duplicate on the next fetch.
         idx = next(
             (
                 i
                 for i, reaction in enumerate(state._chat_reactions)
-                if _matches_identity(reaction)
-                and (not request_app or reaction.get("origin_app", "") == request_app)
+                if _matches_identity(reaction) and reaction.get("origin_app", "") == request_app
             ),
             None,
         )
