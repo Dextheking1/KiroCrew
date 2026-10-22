@@ -3,12 +3,18 @@
  * active thread (`meta.kind === 'warm_task_brief_result'`).
  *
  * The gateway validates the model's JSON into `meta.brief` (`asked`, `now`,
- * `needs_you[]`, `next[]`) and this card draws it in a FIXED layout. Every
+ * `needs_you[]`, `next[]`) and this card draws it in a FIXED layout as the
+ * BODY of the ordinary assistant bubble, so the row keeps its timestamp and
+ * row actions (Copy, Reply in thread) and Copy takes the row's plain-text
+ * `content`. Only an assistant row is ever a brief: the kind is a key in
+ * `meta`, which a user row can carry too, and drawing that as the crewmate's
+ * card would put words in the crewmate's mouth. Every
  * field is untrusted model output grounded in an untrusted snapshot, so each
  * one is drawn as a plain React text node: never markdown, never HTML, never a
  * link or a button. A row without a valid `meta.brief` (an older prose brief)
  * is not claimed here and keeps its ordinary bubble.
  */
+import type { ReactNode } from 'react'
 import { i18nT } from '../../i18n/t'
 import type { ChatMessage } from '../../types'
 
@@ -35,6 +41,7 @@ function items(value: unknown): string[] {
 
 /** The row's validated brief, or null when this row is not a structured brief. */
 export function warmBriefOf(m: ChatMessage): WarmBrief | null {
+  if (m.role !== 'assistant') return null
   const meta = m.meta as { kind?: unknown; brief?: unknown } | undefined
   if (meta?.kind !== 'warm_task_brief_result') return null
   const raw = meta.brief
@@ -45,20 +52,39 @@ export function warmBriefOf(m: ChatMessage): WarmBrief | null {
   return { asked: text(b.asked), now, needsYou: items(b.needs_you), next: items(b.next) }
 }
 
+/** The text the card puts on screen, one text node per line, in DOM order, so
+ *  chat search counts exactly the matches the highlighter can find. Labels
+ *  follow the current UI language, as the card's do. */
+export function warmBriefVisibleText(brief: WarmBrief): string {
+  const lines: string[] = []
+  if (brief.asked) lines.push(`${i18nT('components.warmBriefCard.asked')}: ${brief.asked}`)
+  lines.push(brief.now)
+  if (brief.needsYou.length) lines.push(i18nT('components.warmBriefCard.needs_you'), ...brief.needsYou)
+  if (brief.next.length) lines.push(i18nT('components.warmBriefCard.next'), ...brief.next)
+  return lines.join('\n')
+}
+
+/** The card as the assistant bubble's body, or undefined for any other row. */
+export function warmBriefBodyOf(m: ChatMessage): ReactNode | undefined {
+  const brief = warmBriefOf(m)
+  return brief ? <WarmBriefCard brief={brief} /> : undefined
+}
+
 const SECTION_LABEL = 'text-[11px] leading-4 font-semibold mb-0.5'
 
-export default function WarmBriefCard({ brief, className = '' }: { brief: WarmBrief; className?: string }) {
+export default function WarmBriefCard({ brief }: { brief: WarmBrief }) {
   return (
     <div
-      className={`message-bubble text-text leading-relaxed min-w-0 flex flex-col gap-2 ${className}`}
-      style={{ overflowWrap: 'anywhere', fontSize: 'var(--mc-message-font-size, 14px)' }}
+      className="min-w-0 flex flex-col gap-2"
       data-testid="warm-brief-card"
       role="group"
       aria-label={i18nT('components.warmBriefCard.label')}
     >
       {brief.asked && (
         <div className="text-[12px] leading-4 text-muted" data-testid="warm-brief-asked">
-          {i18nT('components.warmBriefCard.asked')}: {brief.asked}
+          {/* One text node, the same string search counts (`warmBriefVisibleText`):
+              the highlighter matches within a single node. */}
+          {`${i18nT('components.warmBriefCard.asked')}: ${brief.asked}`}
         </div>
       )}
       <div className="font-semibold text-text-strong" data-testid="warm-brief-now">{brief.now}</div>

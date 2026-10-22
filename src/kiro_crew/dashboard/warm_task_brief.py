@@ -22,6 +22,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -703,8 +704,34 @@ class Brief:
         }
 
 
+# A chat control marker the dashboard acts on when it reads an assistant row's
+# ``content``: ``[OPTIONS: …]`` becomes send buttons, ``[STEERING …]`` a chip,
+# and an HTML comment such as ``<!-- kirocrew:open-file … -->`` a file chip or a
+# transcript control. Every opener spelling the option parser accepts is caught
+# (ASCII and the three full-width brackets, any case).
+_CONTROL_MARKER_RE = re.compile(
+    r"[\[\u3010\uFF3B\u3014](?=\s*(?:OPTIONS?|STEERING)\b)", re.IGNORECASE
+)
+
+_HTML_COMMENT_OPENER_RE = re.compile(r"<!-+")
+
+
+def _defang_markers(text: str) -> str:
+    """Make a model-written field unable to act as a chat control marker.
+
+    A brief is display-only: the card draws each field as text, but the row's
+    plain-text ``content`` is still read by the option bar and other marker
+    readers on every surface, so a field the model copied from a transcript
+    would otherwise turn into live controls. The marker stays readable.
+    """
+    # The whole dash run collapses to one, so the result can never re-form an
+    # opener: ``<!---`` must not become ``<!--`` after one dash is removed.
+    return _HTML_COMMENT_OPENER_RE.sub("<!-", _CONTROL_MARKER_RE.sub("(", text))
+
+
 def _clean(value: object, cap: int) -> str:
-    """One redacted plain-text line: whitespace collapsed, bold markers dropped, capped.
+    """One redacted plain-text line: whitespace collapsed, bold markers dropped,
+    control markers defanged, capped.
 
     Redaction runs twice, both before the cap: on the raw field, so a
     credential is matched whole (a cap that cut a PEM block's closing marker
@@ -713,7 +740,7 @@ def _clean(value: object, cap: int) -> str:
     """
     if not isinstance(value, str):
         return ""
-    text = _redact(" ".join(_redact(value).replace("**", "").split()))
+    text = _defang_markers(_redact(" ".join(_redact(value).replace("**", "").split())))
     if len(text) <= cap:
         return text
     return text[: cap - 1].rstrip() + "…"

@@ -177,11 +177,18 @@ The model returns one JSON object: `asked` (at most 160 characters), `now`
 words it to the user's `dashboard.verbosity` level. `now` is required; an older
 `{"message"}` reply is read as `now`, and a missing `asked` falls back to the
 quoted original request. Each field is redacted before and after whitespace is
-collapsed and `**` dropped, then capped. The result is a second mate
+collapsed and `**` dropped, then control markers (`[OPTIONS:`, `[STEERING`,
+`<!--`, any bracket form) are defanged so no reader of `content` turns a field
+into a live control, then the field is capped. The result is a second mate
 message: `meta.brief` holds the fields and `content` holds the same brief as
 labelled plain text. The transcript draws `meta.brief` as a fixed card
 (`WarmBriefCard`) that renders every field as a plain text node; a row without a
-valid `meta.brief` keeps the ordinary bubble. These generated rows
+valid `meta.brief` keeps the ordinary bubble. The card is the body of the
+ordinary assistant bubble, so the row keeps its timestamp and row actions, and
+Copy takes the plain-text `content`; chat search reads the card's own visible
+text, so its count matches what can be highlighted. Only an assistant row draws it: any other
+role carrying the same `meta.kind` (the send route keeps client `meta` keys on
+the user row) draws as its own role. These generated rows
 are excluded from the task fingerprint. A new user turn, the owner leaving,
 slot replacement, reset, close, and a finished task drop a stale result
 unposted. Patrol turns, `[work-ledger wake]` rows, and worker reports change
