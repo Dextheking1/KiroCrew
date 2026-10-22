@@ -499,6 +499,8 @@ def apply_env_credential_changes(
     changed: Iterable[str],
     new: Mapping[str, str],
     old: Mapping[str, str] | None = None,
+    *,
+    path_additions: Mapping[str, tuple[str, ...]] | None = None,
 ) -> frozenset[str]:
     """Push the *changed* ``.env`` keys into ``os.environ``, set or pop per key.
 
@@ -551,6 +553,16 @@ def apply_env_credential_changes(
     * ``PATH`` and other prepend-style keys extend the process PATH rather than
       replacing it, the same as boot.
 
+    *path_additions* lets the live reloader hand in PATH directories it already
+    expanded and validated OFF the event loop (keyed by the PATH key name, e.g.
+    ``{"PATH": (...)}``). Expanding a ``~otheruser`` entry calls ``pwd.getpwnam``
+    / the SAM database synchronously, which an LDAP/SSSD/AD lookup can stall; the
+    live applier runs on the loop, so it prepares the additions in a worker
+    thread (:func:`kiro_crew.env.prepare_env_path_additions`) and passes them
+    here, leaving only the ``os.environ["PATH"]`` mutation on the loop. When a
+    PATH key is absent from this map (boot, the off-loop dashboard writer, tests)
+    the expansion runs inline as before.
+
     The whole batch is validated BEFORE any mutation: a changed key whose *new*
     value is non-empty (so it would be written to ``os.environ`` or extend the
     PATH) must be a legal environment name AND carry a value with no embedded NUL
@@ -583,36 +595,44 @@ def apply_env_credential_changes(
                 raise ValueError("illegal environment variable name in .env credential diff")
             if "\x00" in v:
                 raise ValueError("embedded NUL in .env credential value")
-    # The os.environ entries that STILL EXIST in the new ``.env`` -- every key
-    # in ``new`` with a non-empty value, keyed canonically. A removed key must
-    # not pop an entry that another ``.env`` key still configures. On Windows
-    # ``os.environ`` is case-insensitive, so ``HTTPS_PROXY`` and ``https_proxy``
-    # are ONE entry, and two spellings can share it two ways:
+    # The os.environ entry each canonical key STILL has in the new ``.env`` --
+    # the value a surviving spelling configures, keyed canonically. A removed key
+    # must not strand an entry that another ``.env`` key still configures. On
+    # Windows ``os.environ`` is case-insensitive, so ``HTTPS_PROXY`` and
+    # ``https_proxy`` are ONE entry, and two spellings can share it two ways:
     #   * a case-only rename -- the lowercase line edited to uppercase -- which
     #     the diff sees as one key added and one removed, and
     #   * a duplicate pair -- both spellings present, and only one removed --
     #     where the removed spelling is in ``changed`` but the surviving one is
-    #     NOT, so a set built from ``changed`` alone would miss it and the
-    #     removal would delete the value the surviving line still sets.
-    # Building from all of ``new`` (not just the changed subset) covers both: a
-    # removed alias is dropped only when NO spelling of its entry survives. This
-    # is a superset of the changed-with-value keys, so the rename case is
-    # unchanged. On POSIX the canonical key is the name itself, so a removed key
-    # (absent from ``new``) never matches a surviving entry and the behaviour is
-    # unchanged there too.
-    kept_entry_keys = {_env_name_key(k) for k, v in new.items() if v}
+    #     NOT, so a view built from ``changed`` alone would miss it.
+    # Built from all of ``new`` (not just the changed subset) so both are seen.
+    # When two surviving spellings share a canonical key, precedence is
+    # DETERMINISTIC -- the name that sorts last wins, so an uppercase canonical
+    # spelling (``HTTPS_PROXY``) beats its lowercase alias -- rather than
+    # depending on dict/iteration order. On POSIX the canonical key is the name
+    # itself, so no two distinct names ever share one and this is a plain
+    # name->value view of the non-empty entries.
+    kept_entry_values: dict[str, str] = {}
+    for _name in sorted(new):
+        _val = new[_name]
+        if _val:
+            kept_entry_values[_env_name_key(_name)] = _val
     applied: set[str] = set()
     for k in changed:
         if scrubbed and (k in CREDENTIAL_KEYS or _JIRA_TOKEN_RE.match(k)):
             continue
         if platform_compat.env_key_allowed(k, ("PATH",)):
             # PATH is always present, so there is nothing to clear; a new value
-            # extends it exactly as boot's propagate loop does.
+            # extends it exactly as boot's propagate loop does. When the caller
+            # pre-expanded the additions off the event loop, use those so the
+            # blocking ``~otheruser`` lookup never runs on the loop; otherwise
+            # expand inline (boot / off-loop dashboard / tests).
             val = new.get(k)
             if val:
                 from kiro_crew.env import extend_process_path
 
-                extend_process_path(val)
+                prepared = path_additions.get(k) if path_additions is not None else None
+                extend_process_path(val, prepared=prepared)
                 applied.add(k)
             continue
         if k in new and new[k]:
@@ -653,15 +673,22 @@ def apply_env_credential_changes(
             # dashboard path, no ownership tracking) pop unconditionally, the
             # pre-baseline behaviour.
             prior = os.environ.get(k)
-            # Do not pop an entry another ``.env`` key still configures: on a
-            # case-insensitive os.environ (Windows) a case-only rename, OR a
-            # duplicate pair with only one spelling removed, leaves another
-            # spelling of the same entry live in ``new``. Popping the removed one
-            # would delete the value that surviving spelling sets. Leave
-            # ownership alone too -- the surviving spelling owns the entry, and
-            # order within the batch is not deterministic, so discarding here
-            # could drop the ownership its set recorded.
-            if _env_name_key(k) in kept_entry_keys:
+            # A removed spelling whose canonical entry a SURVIVING ``.env`` key
+            # still configures must not strand that entry. On a case-insensitive
+            # os.environ (Windows) a case-only rename, OR a duplicate pair with
+            # only one spelling removed, leaves another spelling live in ``new``.
+            # Reconcile the shared entry to the surviving value rather than
+            # popping it: when both spellings held the same value this is a
+            # no-op, but when they differed -- and the removed spelling was the
+            # one boot propagated -- popping would leave the entry reading the
+            # obsolete removed value until a restart, so the entry is SET to the
+            # surviving value here. Ownership is left intact: the surviving
+            # spelling still owns the entry.
+            surviving = kept_entry_values.get(_env_name_key(k))
+            if surviving is not None:
+                if prior != surviving:
+                    os.environ[k] = surviving
+                    applied.add(k)
                 continue
             if old is None or prior is None or env_owns_key(k):
                 os.environ.pop(k, None)

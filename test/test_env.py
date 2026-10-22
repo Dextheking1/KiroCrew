@@ -340,46 +340,12 @@ class TestExtraMcpPathDirs:
         assert dirs.index("/opt/pinned/bin") < dirs.index("/opt/pixi/bin")
 
     def test_configured_dir_expands_tilde(self, monkeypatch, tmp_path) -> None:
-        """``~/x/bin`` is what a human writes in a config file.
-
-        Expanded against the CURRENT user's home read from ``$HOME`` -- not
-        through ``os.path.expanduser``, which would call ``pwd.getpwnam`` for a
-        ``~otheruser`` prefix, a blocking directory-service call this validator
-        must never make on the event loop (see
-        :func:`_expanduser_no_account_lookup`).
-        """
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        """``~/x/bin`` is what a human writes in a config file."""
+        monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1))
         self._set_configured(monkeypatch, ["~/pixi/bin"])
         dirs = self._mcp_dirs()
         assert str(tmp_path / "pixi" / "bin") in dirs
         assert "~/pixi/bin" not in dirs
-
-    def test_configured_tilde_account_dir_is_dropped_without_a_lookup(
-        self, monkeypatch, tmp_path
-    ) -> None:
-        """A ``~otheruser`` configured dir is dropped and never triggers a lookup.
-
-        The MCP search path is resolved on the event loop (``probe_server``,
-        the agent-config resolver), so a ``~name`` prefix must not reach
-        ``os.path.expanduser``'s ``pwd.getpwnam`` call. It is left unexpanded and
-        then dropped by the absolute-path gate, like any relative entry.
-        """
-        import sys
-
-        if "pwd" in sys.modules or os.name != "nt":
-            import pwd
-
-            def _fail(_name: str) -> object:  # pragma: no cover - must never run
-                raise AssertionError("pwd.getpwnam was called resolving the MCP search path")
-
-            monkeypatch.setattr(pwd, "getpwnam", _fail)
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        self._set_configured(monkeypatch, ["~someaccount/pixi/bin"])
-        dirs = self._mcp_dirs()
-        assert "~someaccount/pixi/bin" not in dirs
-        assert not any("someaccount" in d for d in dirs)
 
     @pytest.mark.parametrize(
         "bad",

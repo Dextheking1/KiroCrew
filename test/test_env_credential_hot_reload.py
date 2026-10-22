@@ -653,6 +653,47 @@ class TestWatchEnvTracking:
         assert os.environ["TELEGRAM_BOT_TOKEN"] == "second"
 
     @pytest.mark.asyncio
+    async def test_env_path_edit_expands_additions_off_the_event_loop(
+        self, home: Path, monkeypatch
+    ):
+        """A ``.env`` PATH line is expanded/validated in a worker thread, not on
+        the loop. Expanding a ``~otheruser`` entry calls ``pwd.getpwnam`` / the
+        SAM database synchronously, which an LDAP/SSSD/AD lookup can stall; doing
+        it on the loop would freeze chat processing and the liveness heartbeat.
+        (Fixes the GPT finding at loader_credentials.py extend_process_path.)
+        """
+        import threading
+
+        from kiro_crew import env as env_mod
+
+        extra = str(home / "extra-bin")
+        monkeypatch.setenv("PATH", str(home / "sys-bin"))
+        _write_env(home, "TELEGRAM_BOT_TOKEN=first\n")
+        w = self._primed_watch(home)
+
+        loop_thread = threading.get_ident()
+        prepare_threads: list[int] = []
+        real_prepare = env_mod.prepare_env_path_additions
+
+        def _spy(value: str):
+            prepare_threads.append(threading.get_ident())
+            return real_prepare(value)
+
+        monkeypatch.setattr(env_mod, "prepare_env_path_additions", _spy)
+
+        _write_env(home, f"TELEGRAM_BOT_TOKEN=first\nPATH={extra}\n")
+        change = await w._cycle()  # not forced: only .env moved
+
+        assert change is not None
+        assert "credentials.PATH" in change.changed
+        # The additions landed on PATH (expansion really ran) ...
+        assert extra in os.environ["PATH"].split(os.pathsep)
+        # ... and the expand/validate step ran OFF the event-loop thread, so a
+        # blocking ~otheruser lookup could never stall the loop.
+        assert prepare_threads, "prepare_env_path_additions was never called"
+        assert loop_thread not in prepare_threads
+
+    @pytest.mark.asyncio
     async def test_a_properly_primed_first_read_dispatches_nothing(self, home: Path):
         """When _prime_creds_baseline already read the SAME map definitively
         (the normal boot path), the first _cycle() sees no change and dispatches

@@ -130,41 +130,32 @@ class TestOnlyAbsoluteDirectoriesPass:
         assert added == [os.path.expanduser("~/bin")]
         assert os.path.isabs(added[0])
 
-    @pytest.mark.skipif(
-        os.name == "nt", reason="pwd is POSIX-only; ~name hits the SAM DB on Windows"
-    )
-    def test_a_tilde_account_entry_is_dropped_without_an_account_lookup(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    def test_a_tilde_account_entry_still_expands_via_expanduser(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A ``~otheruser`` entry must never reach an account-database lookup.
+        """A ``~otheruser`` entry keeps resolving through ``os.path.expanduser``.
 
-        :func:`os.path.expanduser` resolves ``~name`` by calling
-        ``pwd.getpwnam`` (POSIX) / the SAM database (Windows), a synchronous
-        directory-service call. This validator runs on the gateway event loop
-        (the ``.env`` PATH hot-reload applier reaches it from ``_cycle``), so a
-        slow LDAP/SSSD/AD lookup would stall chat processing and the liveness
-        heartbeat. The entry is dropped by the absolute-path gate -- the same as
-        any non-absolute entry -- and no name lookup is attempted.
+        The event-loop stall this guards against is removed by expanding the
+        PATH additions OFF the loop (``ConfigWatch._prepare_path_additions`` ->
+        :func:`env.prepare_env_path_additions`), NOT by narrowing what expands.
+        So a ``~someaccount/bin`` line that resolved to an absolute dir before
+        still does -- here ``expanduser`` is patched to a deterministic absolute
+        path, standing in for the ``pwd.getpwnam`` result.
         """
-        import pwd  # POSIX-only; this guard matches the module's platform gate
+        account_home = tmp_path / "accounts" / "someaccount"
+        real_expanduser = os.path.expanduser
 
-        home = tmp_path / "home"
-        home.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        def _fake(p: str) -> str:
+            if p.startswith("~someaccount"):
+                return str(account_home) + p[len("~someaccount") :]
+            return real_expanduser(p)
 
-        def _fail(_name: str) -> object:  # pragma: no cover - must never run
-            raise AssertionError("pwd.getpwnam was called on the event loop path")
-
-        monkeypatch.setattr(pwd, "getpwnam", _fail)
+        monkeypatch.setattr(os.path, "expanduser", _fake)
         base = _dirs(tmp_path, "sys")[0]
-        good = _dirs(tmp_path, "good")[0]
-        _setup(monkeypatch, tmp_path, [f"PATH=~someaccount/bin{SEP}{good}"], base)
-        with caplog.at_level(logging.WARNING, logger="kiro_crew.env"):
-            _load()
-        assert [entry for entry in _path() if entry != base] == [good]
-        dropped = [r.getMessage() for r in caplog.records if ".env PATH" in r.getMessage()]
-        assert any("~someaccount/bin" in m for m in dropped)
+        _setup(monkeypatch, tmp_path, ["PATH=~someaccount/bin"], base)
+        _load()
+        added = [entry for entry in _path() if entry != base]
+        assert added == [str(account_home / "bin")]
 
 
 class TestPathIsASupportedKey:

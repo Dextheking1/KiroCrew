@@ -807,6 +807,16 @@ class ConfigWatch:
             # the diff and the ``os.environ`` apply below are pure CPU work. The
             # second element says whether the read was definitive.
             env_read = await asyncio.to_thread(self._read_env_credentials) if env_changed else None
+            # Expand/validate any PATH line OFF the loop too: a ``~otheruser``
+            # entry makes expansion call pwd.getpwnam / the SAM database, which
+            # an LDAP/SSSD/AD lookup can stall. Done here so only the os.environ
+            # mutation in the applier runs on the loop. A non-definitive read is
+            # not applied, so skip the prep for it.
+            env_path_additions = (
+                await asyncio.to_thread(self._prepare_path_additions, env_read[0])
+                if env_read is not None and env_read[1]
+                else None
+            )
             if self._hold_depth > 0 or self._hold_gen != hold_gen:
                 # A transaction began during one of the off-loop reads above (a
                 # dashboard channel save writes ``config.json`` then ``.env``, both
@@ -825,7 +835,9 @@ class ConfigWatch:
                 # is applied and dispatched. A synthetic change carries the
                 # ``credentials.*`` paths to the channel-restart applier, old and
                 # new being the same live config.
-                cred_paths = self._apply_credential_diff(env_fingerprint, env_read)
+                cred_paths = self._apply_credential_diff(
+                    env_fingerprint, env_read, env_path_additions
+                )
                 if not cred_paths or self._cfg is None:
                     if self._stale and self._cfg is not None:
                         await self._retry_stale(self._cfg)
@@ -882,7 +894,9 @@ class ConfigWatch:
             # dispatch covers both and a channel whose credential changed restarts
             # alongside one whose config did.
             if env_changed:
-                changed = changed | self._apply_credential_diff(env_fingerprint, env_read)
+                changed = changed | self._apply_credential_diff(
+                    env_fingerprint, env_read, env_path_additions
+                )
             old = self._cfg
             # Adopt before dispatch so an applier that reads snapshot() sees the
             # new config, and record the PRE-load fingerprint: a write landing
@@ -1028,6 +1042,26 @@ class ConfigWatch:
         creds = loader.read_env_credentials_raw(definitive=definitive)
         return creds, bool(definitive and definitive[0])
 
+    @staticmethod
+    def _prepare_path_additions(creds: "dict[str, str]") -> "dict[str, tuple[str, ...]]":
+        """Expand/validate the PATH line(s) in *creds* OFF the event loop.
+
+        A ``PATH`` ``.env`` line holding a ``~otheruser`` entry makes expansion
+        call ``pwd.getpwnam`` / the SAM database synchronously, which an
+        LDAP/SSSD/AD lookup can stall. :meth:`_cycle` runs this in a worker
+        thread and hands the result to :meth:`_apply_credential_diff`, so the
+        applier only mutates ``os.environ`` on the loop. Keyed by the PATH key
+        name as it appears in ``.env`` (``PATH``, or a case variant on Windows),
+        matching what the applier's PATH carve-out iterates.
+        """
+        from kiro_crew import env, platform_compat
+
+        out: dict[str, tuple[str, ...]] = {}
+        for key, val in creds.items():
+            if val and platform_compat.env_key_allowed(key, ("PATH",)):
+                out[key] = env.prepare_env_path_additions(val)
+        return out
+
     async def _prime_creds_baseline(self) -> None:
         """Read the boot credential map off-loop as the diff baseline.
 
@@ -1044,12 +1078,19 @@ class ConfigWatch:
         self._creds = creds if definitive else None
 
     def _apply_credential_diff(
-        self, env_fingerprint: tuple, read: "tuple[dict[str, str], bool] | None"
+        self,
+        env_fingerprint: tuple,
+        read: "tuple[dict[str, str], bool] | None",
+        path_additions: "dict[str, tuple[str, ...]] | None" = None,
     ) -> frozenset[str]:
         """Diff ``.env`` credentials against the last read, apply them, return change paths.
 
         Pure CPU work: *read* is ``(raw map, definitive)`` already read off the
         loop (``None`` means re-read here, for the test/``refresh_now`` path).
+        *path_additions* is the PATH directories expanded and validated off the
+        loop (:meth:`_prepare_path_additions`), passed to the applier so the
+        blocking ``~otheruser`` expansion never runs on the loop; ``None`` lets
+        the applier expand inline (the test/``refresh_now`` path).
         Diffs the map against :attr:`_creds`, pushes the changed keys into
         ``os.environ`` through the loader's live applier (set/pop per key,
         honouring the Docker scrub and PATH carve-outs), and returns one
@@ -1107,8 +1148,13 @@ class ConfigWatch:
         try:
             # Pass the previous baseline so the apply can pop only what ``.env``
             # itself propagated (never an inherited value) and warn only on a
-            # genuine inherited-value collision, not on a routine rotation.
-            loader.apply_env_credential_changes(changed_keys, new_creds, old_creds)
+            # genuine inherited-value collision, not on a routine rotation. The
+            # PATH additions were expanded off the loop (see the caller): hand
+            # them in so the one call that can block -- a ``~otheruser``
+            # directory-service lookup -- is not run here on the event loop.
+            loader.apply_env_credential_changes(
+                changed_keys, new_creds, old_creds, path_additions=path_additions
+            )
         except Exception:  # noqa: BLE001 - a bad apply must not kill the poll
             # Leave the baseline AND the fingerprint exactly as they were, the
             # same retry contract as a non-definitive read above: advancing
