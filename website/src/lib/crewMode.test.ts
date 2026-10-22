@@ -102,3 +102,14 @@ describe('runsCrewMode', () => {
     expect(runsCrewMode('old-one', 'template', '')).toBe(false)
   })
 })
+
+describe('agentCycleTarget and the Crew Mode stamp', () => {
+  it('does not cycle a chat that stays in Crew Mode on its stamped conductor', () => {
+    setCrewModeCatalog('new-one', ['new-one'], ['new-one'])
+    const agents = [{ name: 'kirocrew' }, { name: 'old-one' }, { name: 'helper' }]
+    expect(agentCycleTarget(agents, 'old-one', 'template', 1, 'old-one')).toBeNull()
+    expect(agentCycleTarget(agents, 'old-one', 'template', -1, 'old-one')).toBeNull()
+    // Without the stamp the same chat is an ordinary one and cycles.
+    expect(agentCycleTarget(agents, 'old-one', 'template', 1)).not.toBeNull()
+  })
+})

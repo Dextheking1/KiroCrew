@@ -298,3 +298,48 @@ async def test_the_agent_switch_route_adopts_the_board_for_the_conductor(tmp_pat
     assert slot.crew_mode_agent == CONDUCTOR
     meta = state.conversation_log.get_metadata(slot_history_key(slot))
     assert meta.get("crew_mode_agent") == CONDUCTOR
+
+
+@pytest.mark.asyncio
+async def test_a_chat_created_on_the_conductor_is_stamped_like_a_switch(tmp_path, monkeypatch):
+    """A create naming the Crew Mode conductor stamps it, so the chat stays in Crew
+    Mode after ``agent.crew_mode_agent`` changes, as the agent switch does."""
+    from unittest.mock import AsyncMock
+
+    from aiohttp.test_utils import TestClient, TestServer
+    from chat_test_helpers import _make_app_with_agent_routes, _make_state
+    from dashboard_owner_helpers import as_owner
+
+    from kiro_crew.config.loader import KiroCrewConfig, ResolvedBindings
+    from kiro_crew.execution_context import ExecutionContext, MemoryStoreRef
+
+    mod = "kiro_crew.dashboard.chat_handlers"
+    bindings = ResolvedBindings(
+        workspace_dir=tmp_path / "ws",
+        effective_memory_config={},
+        memory_store_name="default",
+        requested_resolved=True,
+        resolved_alias=CONDUCTOR,
+        kiro_agent=CONDUCTOR,
+        selection_kind="template",
+        execution_context=ExecutionContext(
+            None, MemoryStoreRef("default"), "template", CONDUCTOR, selection_name=CONDUCTOR
+        ),
+    )
+    monkeypatch.setattr(f"{mod}.KiroCrewConfig.load", lambda: KiroCrewConfig())
+    monkeypatch.setattr(f"{mod}.resolve_agent_bindings", lambda *_a, **_k: bindings)
+    monkeypatch.setattr(f"{mod}._workspace_name_for_dir", lambda cfg, ws_dir: "default")
+    monkeypatch.setattr(f"{mod}.warm_project_agent_names", AsyncMock())
+    monkeypatch.setattr(f"{mod}.cached_project_agent_names", lambda project_dir: frozenset())
+    monkeypatch.setattr(f"{mod}.default_project_dir", lambda ws: str(tmp_path / "ws"))
+    monkeypatch.setattr("kiro_crew.dashboard.state.config_dir", lambda: tmp_path)
+    state = _make_state(tmp_path)
+    monkeypatch.setattr(dashboard_agentic, "adopt_crew_mode_board", lambda key: False)
+
+    async with TestClient(TestServer(as_owner(_make_app_with_agent_routes(state)))) as client:
+        resp = await client.post(
+            "/api/chat/slots",
+            json={"name": "born-crew", "agent": CONDUCTOR, "agent_kind": "template"},
+        )
+        assert resp.status == 200, await resp.text()
+    assert state.get_slot("born-crew").crew_mode_agent == CONDUCTOR

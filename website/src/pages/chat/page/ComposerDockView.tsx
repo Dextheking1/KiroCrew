@@ -2,7 +2,7 @@ import type { NavigateFunction } from 'react-router-dom'
 import { useId, type RefObject, type Dispatch, type SetStateAction, type MutableRefObject } from 'react'
 import { OverlayPortal } from '../../../components/overlayRoot'
 import { Send, Undo2 } from 'lucide-react'
-import { CrewModeComposerChip } from '../../../components/crew/CrewModeMarks'
+import { CrewModeComposerChip, CrewModeMarkSource } from '../../../components/crew/CrewModeMarks'
 import { Composer, type ComposerHandle, type ComposerVoiceOptions } from '../../../chat-core/composer/Composer'
 import type { ComposerPasteSlice } from '../../../chat-core/composer/composerPastes'
 import type { ComposerDraftStore } from '../../../chat-core/composer/draftStore'
@@ -262,6 +262,9 @@ interface ComposerDockViewProps {
    *  composer (ringed, labelled with the worker, and a running turn takes the
    *  text as a steer rather than queueing it). The worker's title. */
   steerWorker?: string
+  /** The steered worker's group on the worker list is done: its hint says a send
+   *  starts a new turn even while a turn flag is still stale. */
+  steerWorkerDone?: boolean
 }
 
 /**
@@ -285,13 +288,15 @@ export default function ComposerDockView({
   effortSupported, modelMarker, pinModelToAgentMut, projectBranch, projectGit, projectGitError, shownModel, cardOwnsRecovery, continuable, continuing, handleContinue, interrupted, dockGutter, dockRef,
   endQuoteFlight, flyingQuote, inputAreaRef, isAtBottom, answerQuestionCard, handleCancelQueued, handleEditQueued, handleInterruptQueued, handleReorderQueued, keepQuestionAnswer, queuedMessages,
   queuePendingIds, steer, stopTurn, systemDeliveryCount, handleEditLastRequest, composerOptimizing, handleOptimizingChange, memorySwitching, showComposerMemoryChip, switchMemoryMode, composerAbove,
-  composerSessionControls, crewModeOffered, turnOnCrewMode, agentPickerHidden = false, steerWorker,
+  composerSessionControls, crewModeOffered, turnOnCrewMode, agentPickerHidden = false, steerWorker, steerWorkerDone = false,
 }: ComposerDockViewProps) {
   const crewModeNoteId = useId()
   // Disabled while a reply runs (the agent switch refuses mid-turn): the
   // composer's own turn state, which a send sets at once, as well as the listed
   // slot's, which follows the server.
   const crewModeBusy = slotRunning || !!currentSlot?.running
+  // A done worker takes a send as a new turn, whatever a stale turn flag says.
+  const steerRunning = crewModeBusy && !steerWorkerDone
   // The chip's hint as a visible line, named by its `aria-describedby`, so a
   // keyboard, a screen reader and a touch reader all reach it, not only a mouse
   // hovering the title. It says, while a reply runs, when the chip works again.
@@ -479,7 +484,9 @@ export default function ComposerDockView({
                   {crewModeOffered && (
                     // Busy while a reply runs; disabled while a memory-mode switch is
                     // replacing this session.
-                    <CrewModeChip onTurnOn={turnOnCrewMode} busy={crewModeBusy} disabled={memorySwitching} describedBy={crewModeNote ? crewModeNoteId : undefined} />
+                    // Wrapped in the mark's layout id: pressed, the chip moves into the
+                    // composer's Crew Mode mark instead of vanishing.
+                    <CrewModeMarkSource><CrewModeChip onTurnOn={turnOnCrewMode} busy={crewModeBusy} disabled={memorySwitching} describedBy={crewModeNote ? crewModeNoteId : undefined} /></CrewModeMarkSource>
                   )}
                   {crewModeNote && (
                     <span id={crewModeNoteId} data-testid="crew-mode-note" className="text-[12px] text-muted text-center">
@@ -704,7 +711,7 @@ export default function ComposerDockView({
               connected={connected}
             />
               </Composer>
-              {steerWorker !== undefined && <p className="mt-1 px-1 text-[11px] text-muted" data-testid="crew-steer-hint" data-running={crewModeBusy ? 'true' : 'false'}>{crewModeBusy ? i18nT('components.crewMode.steer_hint_running') : i18nT('components.crewMode.steer_hint_idle', { name: steerWorker })}</p>}
+              {steerWorker !== undefined && <p className="mt-1 px-1 text-[11px] text-muted" data-testid="crew-steer-hint" data-running={steerRunning ? 'true' : 'false'}>{steerRunning ? i18nT('components.crewMode.steer_hint_running') : i18nT('components.crewMode.steer_hint_idle', { name: steerWorker })}</p>}
               </div>
             </div>
             {/* Agent dropdown portal — triggered from input bar */}

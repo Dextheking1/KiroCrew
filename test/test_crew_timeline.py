@@ -360,6 +360,32 @@ async def test_the_route_draws_the_root_then_its_workers_then_closed_ones(_route
 
 
 @pytest.mark.asyncio
+async def test_the_route_pairs_hand_offs_off_the_event_loop(_route, monkeypatch):
+    """Pairing grows with a crew's seeds and sends, so it runs in a worker thread."""
+    import threading
+
+    from kiro_crew import crew_timeline as timeline_module
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = timeline_module.handoffs
+
+    def spy(lanes):
+        seen.append(threading.get_ident())
+        return real(lanes)
+
+    monkeypatch.setattr(timeline_module, "handoffs", spy)
+    rows = [_slot_row("root", agent="kirocrew-conductor"), _slot_row("w1", created_by="root")]
+    windows = {
+        "root": [_row("user", 0, "go"), _send(1, "w1", "s")],
+        "w1": [_row("user", 2, "[sent by session root via session_send]\n\nhi")],
+    }
+    resp = await _route.api_crew_timeline(_get(_state(rows, windows), "root"))
+    assert json.loads(resp.text)["handoffs"][0]["to"] == "w1"
+    assert seen and all(ident != loop_thread for ident in seen)
+
+
+@pytest.mark.asyncio
 async def test_the_route_redacts_what_the_rows_carry(_route):
     """G4: a permission row with a key in it reaches the browser redacted."""
     key = "AKIA" + "ABCDEFGHIJKLMNOP"
@@ -411,3 +437,30 @@ async def test_the_timeline_is_owner_only(monkeypatch):
     monkeypatch.setattr(crew_workers, "require_owner_dashboard_request", _deny)
     resp = await crew_workers.api_crew_timeline(_get(_state([], {}), "root"))
     assert resp.status == 403
+
+
+def test_a_hand_off_pairs_a_send_named_by_stem_or_unique_title():
+    """``session_send`` accepts a slot key, its transcript stem or an exact title, so
+    the pairing reads all three; an ambiguous title pairs nothing."""
+
+    def lanes_for(target: str, *, twin: bool = False) -> list[dict]:
+        conductor = {
+            "key": "root",
+            "title": "Root",
+            "sends": [{"ts": "2026-10-21T03:00:01+00:00", "to": target}],
+            "seeds": [],
+        }
+        worker = {
+            "key": "chat-7",
+            "title": "Welcome note",
+            "sends": [],
+            "seeds": [{"ts": "2026-10-21T03:00:02+00:00", "from": "root"}],
+        }
+        out = [conductor, worker]
+        if twin:
+            out.append({"key": "chat-8", "title": "Welcome note", "sends": [], "seeds": []})
+        return out
+
+    for target in ("chat-7", "dashboard_chat-7", "welcome NOTE"):
+        assert [h["to"] for h in crew_timeline.handoffs(lanes_for(target))] == ["chat-7"], target
+    assert crew_timeline.handoffs(lanes_for("Welcome note", twin=True)) == []

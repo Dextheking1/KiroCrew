@@ -148,8 +148,10 @@ describe('CrewModeWelcome', () => {
   })
 
   it('plays for a different chat', () => {
-    renderWithProviders(<CrewModeWelcome chatKey="chat-replay" />).unmount()
-    renderWithProviders(<CrewModeWelcome chatKey="chat-other" />)
+    // Keys of its own: the played-once memory is module state, so sharing a key with
+    // the test above would make the outcome depend on the order they run in.
+    renderWithProviders(<CrewModeWelcome chatKey="chat-different-a" />).unmount()
+    renderWithProviders(<CrewModeWelcome chatKey="chat-different-b" />)
     expect(screen.getByTestId('crew-mode-welcome')).toHaveAttribute('data-motion', 'playing')
   })
 

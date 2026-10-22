@@ -432,10 +432,14 @@ at once, and neither comes back: the composer has no off control and no off note
 If the server refuses the switch, the chat never turned on and both chips return.
 A normal chat's agent picker lists no conductor at all (`withoutConductors` over the catalog's `conductor_agents`: every shipped conductor plus the configured one),
 and the keyboard agent cycle steps over the same list (`agentCycleTarget`; a
-conductor chat does not cycle at all), so Crew Mode is the way into one. A
-conductor chat's composer offers no agent picker: a Crew Mode chip (a label in
-the crew gradient, `CrewModeComposerChip`) sits where the agent chip would, and
-the workspace and model controls stay. The server route itself is
+Crew Mode chat does not cycle at all), so Crew Mode is the way into one. A
+Crew Mode chat's composer offers no agent picker (another conductor's chat keeps
+its picker and shows no Crew Mode label): a Crew Mode mark
+(`CrewModeComposerChip`, a read-only status named "Crew Mode is on for this
+chat": the ghost and gradient text, no pill, no hover or pressed state, not
+focusable) sits where the agent chip would, and the workspace and model
+controls stay. The pressed chip moves into that mark (a shared Framer Motion
+`layoutId`); under reduced motion the mark only fades in. The server route itself is
 unchanged: an empty agent name still stamps the configured default template.
 
 Every slot row says where it sits in Crew Mode (`crew_mode.stamp_rows`, run by
@@ -587,7 +591,7 @@ breadcrumb (`CrewWorkerBreadcrumb`: ghost, root title, worker, status) with
 "Back to conductor", and its composer is the steer composer: ringed in the crew
 purple, labelled "Steer · <worker>", a hint chosen from the worker's state
 ("Cuts into its current reply." while a turn runs, "Starts a new turn in <worker>."
-when it is idle or done), and `busyMode="steer-only"` so a running turn takes the
+when it is idle, or done on the worker list even if a turn flag is stale), and `busyMode="steer-only"` so a running turn takes the
 text as a steer. `POST /api/chat/slots/{slot}/crew-workers/{worker}/steer`
 types `{message}` into one of them as the person: it cuts into a running turn
 (`steer_into_running_turn`, `user_origin=True`) or queues for the next one and

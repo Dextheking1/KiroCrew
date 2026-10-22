@@ -320,6 +320,25 @@ def handoffs(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     is not a lane, or which has no such call, is not drawn.
     """
     by_key = {lane["key"]: lane for lane in lanes}
+    titles: dict[str, int] = {}
+    for lane in lanes:
+        title = str(lane.get("title") or "").strip().casefold()
+        if title:
+            titles[title] = titles.get(title, 0) + 1
+
+    def names(target: object, lane: dict[str, Any]) -> bool:
+        """Whether a recorded ``session_send`` target names *lane*, in any form the
+        delivery accepts: the slot key, its transcript stem, or a title that only
+        this lane carries (an ambiguous title is refused by the delivery too)."""
+        if not isinstance(target, str) or not target:
+            return False
+        key = str(lane["key"])
+        if target in (key, f"dashboard_{key}"):
+            return True
+        wanted = target.strip().casefold()
+        title = str(lane.get("title") or "").strip().casefold()
+        return bool(wanted) and wanted == title and titles.get(title) == 1
+
     out: list[dict[str, Any]] = []
     for lane in lanes:
         for seed in lane.get("seeds", []):
@@ -334,7 +353,7 @@ def handoffs(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 for ts in (
                     parse_ts(send.get("ts"))
                     for send in sender.get("sends", [])
-                    if send.get("to") == lane["key"]
+                    if names(send.get("to"), lane)
                 )
                 if ts and ts <= landed
             ]

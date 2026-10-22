@@ -735,6 +735,7 @@ def test_a_crew_mode_root_creates_its_worker_outside_the_persons_folders(tmp_pat
     assert child is not None
     assert not child.folder_id
     assert created.get("folder_ignored") == "crew_mode"
+    assert created.get("crew_mode") is True
     # Not filed, but the folder still gives the worker its project directory, so it
     # does its work in the folder's repository rather than the workspace default.
     assert child.project == str(folder_project.resolve())
@@ -756,3 +757,4 @@ def test_a_plain_caller_still_files_its_child(tmp_path):
     )
     assert state.get_slot(created["target"]).folder_id == "fold00000001"
     assert "folder_ignored" not in created
+    assert "crew_mode" not in created

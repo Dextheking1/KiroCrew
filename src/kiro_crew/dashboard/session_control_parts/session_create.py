@@ -289,9 +289,13 @@ async def create_session(
     # directory, so a worker does its work in the folder's repository.
     from kiro_crew import crew_mode
 
-    folder_ignored = bool(folder_id) and crew_mode.slot_in_crew_tree(
-        state._slots, str(getattr(caller_slot, "key", "") or ""), _frame_parents(state)
+    in_crew_tree = crew_mode.slot_in_crew_tree(
+        state._slots,
+        str(getattr(caller_slot, "key", "") or ""),
+        _frame_parents(state),
+        settled=crew_mode.lineage_is_settled(),
     )
+    folder_ignored = bool(folder_id) and in_crew_tree
     if folder_id:
         folder_snapshot = await state.read_folders(
             lambda folders: [dict(folder) for folder in _safe_folder_tree(folders)]
@@ -1302,6 +1306,9 @@ async def create_session(
         **({"inherited_model_dropped": True} if inherited_model_dropped else {}),
         # The folder a Crew Mode caller named was dropped (``crew_mode``).
         **({"folder_ignored": "crew_mode"} if folder_ignored else {}),
+        # The child is a Crew Mode worker: listed in the root's side panel, not the
+        # person's sidebar, so a caller can say where it is.
+        **({"crew_mode": True} if in_crew_tree else {}),
     }
 
 

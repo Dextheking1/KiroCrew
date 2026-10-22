@@ -34,12 +34,15 @@ const deleteChatSlot = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 // An empty name is "use the default": the server stamps the default template.
 const chatSlotAgent = vi.hoisted(() => vi.fn(async (_slot: string, agent: string) => ({ agent: agent || 'default', workspace: 'default' })))
 const dashboardConfig = vi.hoisted(() => vi.fn().mockResolvedValue({}))
+// The worker list read; by default it fails, which the breadcrumb says with a notice.
+const crewWorkers = vi.hoisted(() => vi.fn((): Promise<unknown> => Promise.reject(new Error('no worker list'))))
 vi.mock('../api/client', () => ({
   api: {
     createChatSlot,
     deleteChatSlot,
     chatSlotAgent,
     dashboardConfig,
+    crewWorkers,
     chatSlots: vi.fn().mockResolvedValue([]),
     chatSlotDetail: vi.fn(() => detail.hold
       ? new Promise(() => {})
@@ -139,7 +142,7 @@ async function renderWith(slot: Slot) {
 }
 
 describe('Crew Mode on ChatPage', () => {
-  afterEach(() => { agentsState.defaultAgent = 'default'; detail.running = false; detail.hold = false; localStorage.clear(); setCrewModeCatalog(undefined, undefined) })
+  afterEach(() => { crewWorkers.mockReset(); crewWorkers.mockImplementation(() => Promise.reject(new Error('no worker list'))); agentsState.defaultAgent = 'default'; detail.running = false; detail.hold = false; localStorage.clear(); setCrewModeCatalog(undefined, undefined) })
 
   it('sits right of the memory chip on the welcome state', async () => {
     await renderWith({ messages: [] })
@@ -172,7 +175,20 @@ describe('Crew Mode on ChatPage', () => {
   it('shows the Crew Mode chip, not a picker, on a conductor chat', async () => {
     await renderWith({ messages: [{ role: 'user', content: 'hello' }], agent: 'kirocrew-conductor', agentKind: 'template' })
     expect(screen.getByTestId('crew-mode-composer-chip')).toHaveTextContent('Crew Mode')
-    expect(screen.getByTestId('crew-mode-composer-chip').tagName).not.toBe('BUTTON')
+    const mark = screen.getByTestId('crew-mode-composer-chip')
+    expect(mark.tagName).not.toBe('BUTTON')
+    // A read-only status: named for what it says, not focusable, no pointer.
+    expect(mark).toHaveAttribute('aria-label', 'Crew Mode is on for this chat')
+    expect(mark).not.toHaveAttribute('tabindex')
+    expect(mark).not.toHaveAttribute('title')
+    expect(mark.className).toContain('cursor-default')
+    expect(mark.className).not.toMatch(/\bborder\b|rounded|hover:/)
+  })
+
+  it('shows no Crew Mode badge on a conductor that is not Crew Mode, and keeps its picker', async () => {
+    setCrewModeCatalog('kirocrew-conductor', ['kirocrew-conductor', 'kirocrew-pipeline-conductor'], ['kirocrew-conductor'])
+    await renderWith({ messages: [{ role: 'user', content: 'hello' }], agent: 'kirocrew-pipeline-conductor', agentKind: 'template' })
+    expect(screen.queryByTestId('crew-mode-composer-chip')).toBeNull()
   })
 
   it('opens a worker like a session: breadcrumb, back to conductor, and a steer composer', async () => {
@@ -194,6 +210,14 @@ describe('Crew Mode on ChatPage', () => {
     await renderWith({ messages: [{ role: 'user', content: 'do part 2' }], agent: 'kirocrew-worker', agentKind: 'template', createdBy: 'root-1', crewRoot: 'root-1', slotKeys: ['slot-a', 'root-1'], listedRunning: true })
     await waitFor(() => expect(screen.getByTestId('crew-steer-hint')).toHaveTextContent('Cuts into its current reply.'))
     expect(screen.getByTestId('crew-steer-hint')).toHaveAttribute('data-running', 'true')
+  })
+
+  it("a done worker's steer hint says a send starts a new turn, even with a stale turn flag", async () => {
+    crewWorkers.mockResolvedValue({ workers: [{ key: 'slot-a', title: 'Worker B', agent: 'kirocrew-worker', status: 'working', group: 'done', last_activity: '', ledger_item: '', created_by: 'root-1' }] })
+    detail.running = true
+    await renderWith({ messages: [{ role: 'user', content: 'do part 2' }], agent: 'kirocrew-worker', agentKind: 'template', createdBy: 'root-1', crewRoot: 'root-1', slotKeys: ['slot-a', 'root-1'], listedRunning: true })
+    await waitFor(() => expect(screen.getByTestId('crew-steer-hint')).toHaveTextContent('Starts a new turn in Worker B.'))
+    expect(screen.getByTestId('crew-steer-hint')).toHaveAttribute('data-running', 'false')
   })
 
   it('a plain chat has no breadcrumb and no steer composer', async () => {

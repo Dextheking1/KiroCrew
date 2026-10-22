@@ -253,6 +253,28 @@ class TestSlotRemoved:
         [patched] = [r for r in frame["data"]["slots"] if r["key"] == "worker"]
         assert patched["crew_root"] == "" and patched["crew_mode_root"] is False
 
+    def test_a_closed_roots_workers_are_restated_with_a_legacy_client_connected(
+        self, state: DashboardState
+    ) -> None:
+        """The legacy push serializes the remaining slots first, which rebuilds the
+        root cache without the closed root; the patch must still restate."""
+        root = _slot(state, "root")
+        root.agent = "kirocrew-conductor"
+        worker = _slot(state, "worker")
+        worker._created_by = "root"
+        state.serialize_slots()
+        capable = _WS(patch_capable=True)
+        legacy = _WS(patch_capable=False)
+        state.register_ws(capable)  # type: ignore[arg-type]
+        state.register_ws(legacy)  # type: ignore[arg-type]
+
+        del state._slots["root"]
+        state.push_slot_removed("root")
+
+        [frame] = [f for f in capable.frames() if f["type"] == "slot_patch"]
+        [patched] = [r for r in frame["data"]["slots"] if r["key"] == "worker"]
+        assert patched["crew_root"] == ""
+
     def test_a_reregistered_key_is_not_removed(self, state: DashboardState) -> None:
         _slot(state, "chat-a")
         capable = _WS(patch_capable=True)

@@ -76,6 +76,13 @@ describe('CrewWorkerList (design B)', () => {
     expect(screen.queryByRole('button', { name: /Worker E/ })).toBeNull()
   })
 
+  it('shows no raw ledger id on a card', async () => {
+    api.crewWorkers.mockResolvedValue(WORKERS)
+    renderWith(<CrewWorkerList root="root-1" viewing="root-1" active />)
+    const card = (await screen.findByText('Worker E')).closest('[data-testid="crew-worker-row"]') as HTMLElement
+    expect(card).not.toHaveTextContent('it_9')
+  })
+
   it('says when the list cannot be read', async () => {
     api.crewWorkers.mockRejectedValue(new Error('nope'))
     renderWith(<CrewWorkerList root="root-1" viewing="root-1" active />)

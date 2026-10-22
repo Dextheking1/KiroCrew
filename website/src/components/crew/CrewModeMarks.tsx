@@ -2,6 +2,8 @@
  *  gradient "CREW MODE" eyebrow, a worker's state dot and a stack of tiny worker
  *  ghosts coloured by state. Colours are theme tokens (`styles/crew-mode.css`,
  *  `lib/crewWorkers.ts`), so light and dark themes follow without a branch here. */
+import type { ReactNode } from 'react'
+import { motion, useReducedMotion } from 'framer-motion'
 import { KiroGhostMark } from '../KiroGhostMark'
 import { i18nT } from '../../i18n/t'
 import { CREW_GROUP_LABEL_KEY, CREW_GROUP_TONE, type CrewWorkerGroup } from '../../lib/crewWorkers'
@@ -53,12 +55,35 @@ export function CrewWorkerStack({ groups, max = 6 }: { groups: CrewWorkerGroup[]
   )
 }
 
-/** The composer's Crew Mode mark on a conductor chat: a label, not a control. */
+/** The layout id the pressed Crew Mode chip and the composer mark share, so the
+ *  chip is seen to move into the mark. */
+export const CREW_MODE_MARK_LAYOUT_ID = 'crew-mode-mark'
+
+/** The pressed chip's half of the move: wraps the chip with the shared layout id.
+ *  Under reduced motion it carries none, and the mark only fades in. */
+export function CrewModeMarkSource({ children }: { children: ReactNode }) {
+  const reduceMotion = useReducedMotion()
+  return <motion.span layoutId={reduceMotion ? undefined : CREW_MODE_MARK_LAYOUT_ID} className="inline-flex">{children}</motion.span>
+}
+
+/** The composer's Crew Mode mark on a conductor chat: a read-only status, not a
+ *  control. No pill, no hover or pressed state, not focusable; gradient text and
+ *  the ghost keep it easy to see. */
 export function CrewModeComposerChip() {
+  const reduceMotion = useReducedMotion()
   return (
-    <span data-testid="crew-mode-composer-chip" className="crew-grad inline-flex items-center gap-1.5 h-7 rounded-lg px-2.5 text-[12px] font-medium shrink-0" title={i18nT('components.crewMode.composer_chip_title')}>
-      <KiroGhostMark size={13} className="inline-block shrink-0" />
-      {i18nT('components.crewMode.chip_off')}
-    </span>
+    <motion.span
+      data-testid="crew-mode-composer-chip"
+      role="img"
+      aria-label={i18nT('components.crewMode.composer_chip_label')}
+      layoutId={reduceMotion ? undefined : CREW_MODE_MARK_LAYOUT_ID}
+      initial={reduceMotion ? { opacity: 0 } : false}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.2 }}
+      className="inline-flex items-center gap-1.5 h-7 text-[12px] font-semibold shrink-0 cursor-default select-none"
+    >
+      <KiroGhostMark size={13} className="inline-block shrink-0 text-aim" />
+      <span className="crew-grad-text">{i18nT('components.crewMode.chip_off')}</span>
+    </motion.span>
   )
 }

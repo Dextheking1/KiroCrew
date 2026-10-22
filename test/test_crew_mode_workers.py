@@ -356,16 +356,38 @@ def test_session_create_from_a_crew_mode_root_files_nothing_and_says_so():
     assert "folder ignored" in out
 
 
+def test_session_create_from_a_crew_mode_root_without_a_folder_names_the_workers_panel():
+    routes = {
+        **_routes(_crew_slots()),
+        "POST /api/session-control/create": {
+            "target": "chat-9-900",
+            "title": "w",
+            "crew_mode": True,
+        },
+    }
+    out, _dash = _call("session_create", {"title": "haiku"}, routes)
+    assert "sidebar" not in out and "Workers panel" in out
+
+
 def test_session_create_from_a_crew_mode_root_still_names_an_existing_folder():
     """An existing folder is passed on, so the server gives the worker that folder's
     project directory (and files nothing); no folder is created for it."""
-    out, dash = _call(
-        "session_create", {"title": "haiku", "folder": "Travel"}, _routes(_crew_slots())
-    )
+    routes = {
+        **_routes(_crew_slots()),
+        "POST /api/session-control/create": {
+            "target": "chat-9-900",
+            "title": "w",
+            "folder_ignored": "crew_mode",
+        },
+    }
+    out, dash = _call("session_create", {"title": "haiku", "folder": "Travel"}, routes)
     writes = _writes(dash)
     assert [w.route for w in writes] == ["POST /api/session-control/create"]
     assert writes[0].body["folder_id"] == "cccccccccccc"
     assert "folder ignored" in out
+    # The reply never says the worker was filed, nor that it sits in the sidebar.
+    assert "filed in" not in out
+    assert "sidebar" not in out and "Workers panel" in out
 
 
 def test_session_fork_from_a_crew_mode_root_names_no_folder_even_an_existing_one():
@@ -766,3 +788,34 @@ async def test_the_worker_list_carries_each_workers_group(_open_gate):
     by_key = {w["key"]: w for w in json.loads(resp.text)["workers"]}
     assert by_key["w1"]["group"] == "working"
     assert by_key["w2"]["group"] == "needs_you"
+
+
+def test_an_adopted_worker_belongs_to_the_root_that_adopted_it():
+    """``session_adopt`` moves the crew log's parent edge; the birth stamp stays.
+    Membership follows the current edge."""
+    rows = _stamped(
+        _row("A", agent="kirocrew-conductor"),
+        _row("B", agent="kirocrew-conductor"),
+        _row("w", created_by="A", parent={"slot": "B", "key": "B"}),
+    )
+    assert rows["w"][crew_mode.WORKER_FIELD] == "B"
+
+
+def test_a_released_worker_stands_on_its_own_once_the_lineage_is_settled():
+    """``session_release`` clears the crew log edge; the birth stamp stays. With the
+    lineage settled a ``None`` edge is the answer, and the worker leaves the tree;
+    while the lineage is not known, the birth stamp still nests it."""
+    rows = [
+        _row("A", agent="kirocrew-conductor"),
+        _row("w", created_by="A", parent=None),
+    ]
+    settled = [dict(r) for r in rows]
+    crew_mode.stamp_rows(settled, settled=True)
+    assert crew_mode.WORKER_FIELD not in settled[1]
+    unknown = [dict(r) for r in rows]
+    crew_mode.stamp_rows(unknown)
+    assert unknown[1][crew_mode.WORKER_FIELD] == "A"
+    pending = [dict(r) for r in rows]
+    pending[1]["lineage_pending"] = True
+    crew_mode.stamp_rows(pending, settled=True)
+    assert pending[1][crew_mode.WORKER_FIELD] == "A"

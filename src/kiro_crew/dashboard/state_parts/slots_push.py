@@ -689,6 +689,12 @@ def push_slot_removed(self: DashboardState, key: str) -> None:
         # slot the gateway ever hosted, for nothing. This is the only place that knows the
         # removal is definitive rather than a replacement.
         self._dynamic_cards.forget_retired(key)
+    # Read BEFORE the legacy push below, which re-serializes the remaining slots and
+    # so rebuilds the root cache without *key*.
+    roots = getattr(self, "_crew_mode_roots", None)
+    was_crew_root = isinstance(roots, set) and key in roots
+    if isinstance(roots, set):
+        roots.discard(key)
     if self._has_legacy_slots_audience():
         self.push_slots_update(legacy_only=True)
     if self._has_slot_patch_clients():
@@ -705,9 +711,7 @@ def push_slot_removed(self: DashboardState, key: str) -> None:
         # ``crew_root`` on the sessions it dispatched, so the patch restates both stamps on
         # every live row, or the person's lists keep hiding them under a root that
         # is gone. Only when *key* was a root; the client skips an unchanged row.
-        roots = getattr(self, "_crew_mode_roots", None)
-        if isinstance(roots, set) and key in roots:
-            roots.discard(key)
+        if was_crew_root:
             for row_key, (crew_root, crew_mode_root) in _crew_stamps(self, rows).items():
                 entry = restated.setdefault(row_key, {"key": row_key})
                 entry["crew_root"] = crew_root
@@ -734,6 +738,7 @@ def _crew_stamps(self: DashboardState, rows: list[dict[str, Any]]) -> dict[str, 
         return crew_mode.live_stamps(
             {k: s for k, s in list(self._slots.items()) if k in keys},
             {row["key"]: row.get("parent") for row in rows},
+            settled=crew_mode.lineage_is_settled(),
         )
     except Exception:  # pragma: no cover - a stamp fault must cost the stamp only
         logger.warning("Crew Mode stamps not restated", exc_info=True)

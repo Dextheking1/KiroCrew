@@ -495,6 +495,14 @@ async def api_chat_slot_create(request: web.Request) -> web.Response:
             # it from the committed resolution, and a non-owner create would
             # otherwise leave a template-stamped slot reading as a bare name.
             slot.agent_kind = agent_kind
+        if is_new_slot and not getattr(slot, "crew_mode_agent", ""):
+            # A chat born on the Crew Mode conductor (the conductor as the default
+            # template, or a create naming it) is stamped the way the agent switch
+            # stamps one, so it stays in Crew Mode after `agent.crew_mode_agent`
+            # changes. The stamp counts only while the chat is still on that agent.
+            from kiro_crew import crew_mode
+
+            slot.crew_mode_agent = crew_mode.stamp_for_switch(slot.agent, slot.agent_kind)
         if reopening_persisted_cron:
             # The creator fence already loaded and authorized this metadata
             # snapshot. Reuse it so a closed-session reopen restores the user's

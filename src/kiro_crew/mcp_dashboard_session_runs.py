@@ -96,7 +96,8 @@ def _resolve_folder_for_new_session(
         crew_folders, crew_err = _get_rows(ctx.client, "/api/chat/folders")
         if crew_err:
             return "", "", "", redact(f"Error: {crew_err}")
-        return _existing_folder(folder_ref, crew_folders) + (CREW_MODE_FOLDER_NOTE, None)
+        # The id only: the session is not filed there, so no label says it is.
+        return _existing_folder(folder_ref, crew_folders)[0], "", CREW_MODE_FOLDER_NOTE, None
     if _caller_app_scope(gate_key, scope_rows):
         return (
             "",
@@ -257,7 +258,8 @@ def _run_session_create(args: dict[str, Any], ctx: ToolContext) -> str:
         )
     except DashboardError as refused:
         return f"Error: {_refused(refused, made_note)}"
-    filed = f" filed in `{folder_label}`" if folder_label else ""
+    crew_mode = bool(resp.get("crew_mode") or resp.get("folder_ignored"))
+    filed = f" filed in `{folder_label}`" if folder_label and not crew_mode else ""
     on_model = f" on model `{resp['model']}`" if resp.get("model") else ""
     if resp.get("reasoning_effort"):
         on_model += f" at reasoning effort `{resp['reasoning_effort']}`"
@@ -271,9 +273,11 @@ def _run_session_create(args: dict[str, Any], ctx: ToolContext) -> str:
             " (your crewmate profile's worker model is not usable here, so the "
             "session starts on the default model; fix the profile or pass `model`)"
         )
+    # A Crew Mode chat's worker is listed in its side panel, not the sidebar.
+    where = "this chat's Workers panel" if crew_mode else "the user's sidebar"
     return redact(
         f"\U0001f195 Opened `{resp.get('target')}` ({resp.get('title')}){filed}{on_model}.{made_note} "
-        "It is empty and waiting in the user's sidebar; watch it with "
+        f"It is empty and waiting in {where}; watch it with "
         "session_read_message." + reply_line(resp)
     )
 

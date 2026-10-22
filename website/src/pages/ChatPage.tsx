@@ -18,7 +18,8 @@ import { useActiveSlotState } from './chat/page/activeSlotState'
 import { useComposerDraftState, ComposerDraftSync, useComposerIntakeRefs, useMainComposerHandoff, useComposerVoiceHost } from './chat/page/composerHost'
 import { useModelPickerModels, useNewSessionPicks, useSessionChoices } from './chat/page/sessionPicks'
 import { useCrewModeSwitch } from './chat/page/crewModeSwitch'
-import { runsConductor } from '../lib/crewMode'
+import { useCrewWorkerIsDone } from './chat/command-center/CrewWorkerList'
+import { runsCrewMode } from '../lib/crewMode'
 import { useSteerDelivery, useRefusedPress, useRegenerate } from './chat/page/turnActions'
 import { useTranscriptScrollRefs, useTranscriptPaging } from './chat/page/transcriptPaging'
 import { useRunInTerminalConfig, useAppPanelReveal } from './chat/page/panelTabs'
@@ -651,6 +652,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
 
   const currentSlot = slots.find(s => s.key === activeSlot)
   const { crewModeEligible, crewModeOn, crewModeChosen, turnOnCrewMode, openTaskBoard } = useCrewModeSwitch({ currentSlot, defaultAgent, switchAgent, openView: tabsCtl.openView })
+  const steerWorkerDone = useCrewWorkerIsDone(currentSlot?.crew_root ?? '', currentSlot?.key ?? '')
   // From the chip press to the first message the transcript shows the Crew Mode
   // welcome without a break: a slot reload in that window (the switch's own reads,
   // or a re-fetch of the same empty chat, `slotLoading`) and a slot record that has
@@ -1098,8 +1100,9 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
               // is still loading: drawn alone first, the Crew Mode chip would slide
               // across the memory chip arriving beside it.
               crewModeOffered={crewModeEligible && !crewModeChosen && !slotLoading && showComposerMemoryChip} turnOnCrewMode={turnOnCrewMode}
-              agentPickerHidden={crewModeChosen || runsConductor(currentSlot?.agent, currentSlot?.agent_kind)}
+              agentPickerHidden={crewModeChosen || runsCrewMode(currentSlot?.agent, currentSlot?.agent_kind, currentSlot?.crew_mode_agent)}
               steerWorker={currentSlot?.crew_root ? (currentSlot.title || i18nT('commandCenter.worker_untitled')) : undefined}
+              steerWorkerDone={steerWorkerDone}
             />
           </div>
           </SearchHighlightContext.Provider>

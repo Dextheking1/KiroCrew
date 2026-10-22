@@ -446,6 +446,9 @@ async def api_crew_timeline(request: web.Request) -> web.Response:
         for key in _closed_workers(root, live_keys)
     )
     live = any(lane["running"] or lane["waiting"] for lane in lanes)
+    # Off the event loop like the lane derivation: pairing scans every seed
+    # against its sender's sends, which grows with a long-running crew.
+    handoffs = await asyncio.to_thread(crew_timeline.handoffs, lanes)
     return web.json_response(
         {
             "root": root,
@@ -453,7 +456,7 @@ async def api_crew_timeline(request: web.Request) -> web.Response:
             "live": live,
             **crew_timeline.summarize(lanes, now=now, live=live),
             "lanes": lanes,
-            "handoffs": crew_timeline.handoffs(lanes),
+            "handoffs": handoffs,
             # The served-model gap is named only when a lane actually runs on it.
             "gaps": [
                 gap

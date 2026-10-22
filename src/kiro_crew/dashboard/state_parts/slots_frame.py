@@ -877,7 +877,7 @@ def serialize_slots(
     from kiro_crew import crew_mode
 
     try:
-        crew_mode.stamp_rows(out)
+        crew_mode.stamp_rows(out, settled=crew_mode.lineage_is_settled())
         # The roots this frame named, so a removal patch knows to restate the
         # stamps of a closed root's workers (``push_slot_removed``).
         self._crew_mode_roots = {row["key"] for row in out if row.get(crew_mode.ROOT_FIELD)}

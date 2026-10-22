@@ -176,16 +176,47 @@ def _row_is_root(row: Mapping[str, Any]) -> bool:
     )
 
 
-def _creator_of(row: Mapping[str, Any]) -> str:
-    """The slot key that dispatched *row*, from either reading, or ``""``."""
-    created_by = row.get("created_by")
-    if isinstance(created_by, str) and created_by:
-        return created_by
+def lineage_is_settled() -> bool:
+    """Whether the slot frame's ``parent`` edges are the gateway's settled lineage.
+
+    True while the crew log records and its projection is seeded for this store
+    with no failed seed pending: then a row's ``parent`` (already falling back to a
+    just-minted child's ``created_by``) is the whole answer, ``None`` included, so a
+    released worker stands on its own. False otherwise, and the birth stamp decides.
+    In memory only; never raises.
+    """
+    try:
+        from kiro_crew.crew_log import emit as crew_log_emit
+
+        if not crew_log_emit.enabled():
+            return False
+        from kiro_crew.crew_log.session_tree_projection import projection
+
+        proj = projection()
+        return bool(proj.seeded_for_current_store) and not bool(proj.seed_retry_due)
+    except Exception:
+        return False
+
+
+def _creator_of(row: Mapping[str, Any], settled: bool = False) -> str:
+    """The slot key that holds *row* now, or ``""``.
+
+    The crew log's ``parent`` edge first: it is the current lineage, which an
+    adoption (``session_adopt``) moves, so an adopted worker belongs to its new
+    root. With *settled* lineage (:func:`lineage_is_settled`) a row whose edge is
+    ``None`` has no holder, because ``session_release`` cleared it. Otherwise
+    ``created_by`` (the birth stamp) stands in for a missing edge.
+    """
     parent = row.get("parent")
     if isinstance(parent, Mapping):
         cited = parent.get("slot") or parent.get("key")
-        if isinstance(cited, str):
+        if isinstance(cited, str) and cited:
             return cited
+    if settled and "parent" in row and not row.get("lineage_pending"):
+        return ""
+    created_by = row.get("created_by")
+    if isinstance(created_by, str) and created_by:
+        return created_by
     return ""
 
 
@@ -203,7 +234,7 @@ def _live_ancestor_of(row: Mapping[str, Any]) -> str:
     return ""
 
 
-def stamp_rows(rows: Iterable[dict[str, Any]]) -> None:
+def stamp_rows(rows: Iterable[dict[str, Any]], *, settled: bool = False) -> None:
     """Stamp :data:`ROOT_FIELD` on every row and :data:`WORKER_FIELD` on each worker. IN PLACE.
 
     A worker is found by walking its creators up to a live Crew Mode root, so a
@@ -228,7 +259,7 @@ def stamp_rows(rows: Iterable[dict[str, Any]]) -> None:
             continue
         seen = {key}
         current = row
-        creator = _creator_of(row)
+        creator = _creator_of(row, settled)
         while creator and creator not in seen:
             if creator in roots:
                 row[WORKER_FIELD] = creator
@@ -239,7 +270,7 @@ def stamp_rows(rows: Iterable[dict[str, Any]]) -> None:
                 creator = _live_ancestor_of(current)
                 continue
             current = above
-            creator = _creator_of(above)
+            creator = _creator_of(above, settled)
 
 
 def in_crew_tree(row: Mapping[str, Any] | None) -> bool:
@@ -295,7 +326,7 @@ def _live_row(slot: Any) -> dict[str, Any]:
 
 
 def live_stamps(
-    slots: Mapping[str, Any], parents: Mapping[str, Any] | None = None
+    slots: Mapping[str, Any], parents: Mapping[str, Any] | None = None, *, settled: bool = False
 ) -> dict[str, tuple[str, bool]]:
     """``{key: (crew_root, crew_mode_root)}`` for every live slot in *slots*.
 
@@ -307,8 +338,11 @@ def live_stamps(
     """
     rows = [_live_row(s) for s in list(slots.values())]
     for row in rows:
-        row["parent"] = (parents or {}).get(row["key"])
-    stamp_rows(rows)
+        if parents is not None:
+            row["parent"] = parents.get(row["key"])
+        else:
+            row.pop("parent", None)
+    stamp_rows(rows, settled=settled and parents is not None)
     return {
         str(row["key"]): (str(row.get(WORKER_FIELD) or ""), bool(row.get(ROOT_FIELD)))
         for row in rows
@@ -316,7 +350,11 @@ def live_stamps(
 
 
 def slot_in_crew_tree(
-    slots: Mapping[str, Any], slot_key: str, parents: Mapping[str, Any] | None = None
+    slots: Mapping[str, Any],
+    slot_key: str,
+    parents: Mapping[str, Any] | None = None,
+    *,
+    settled: bool = False,
 ) -> bool:
     """Whether live slot *slot_key* is a Crew Mode root or one of its workers.
 
@@ -327,5 +365,5 @@ def slot_in_crew_tree(
     slot frame resolves it) when given, so an adoption edge and a closed creator's
     live ancestor count as the full frame counts them. No I/O.
     """
-    crew_root, is_root = live_stamps(slots, parents).get(slot_key, ("", False))
+    crew_root, is_root = live_stamps(slots, parents, settled=settled).get(slot_key, ("", False))
     return bool(crew_root or is_root)

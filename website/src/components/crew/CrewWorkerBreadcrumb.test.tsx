@@ -12,7 +12,8 @@ import { createTestStore } from '../../test/helpers'
 
 const mobile = vi.hoisted(() => ({ value: true }))
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => mobile.value }))
-vi.mock('../../api/client', () => ({ api: { crewWorkers: vi.fn().mockResolvedValue({ root: 'root', workers: [] }) } }))
+const fail = vi.hoisted(() => ({ on: false }))
+vi.mock('../../api/client', () => ({ api: { crewWorkers: () => (fail.on ? Promise.reject(new Error('down')) : Promise.resolve({ root: 'root', workers: [] })) } }))
 
 import { CrewWorkerBreadcrumb } from './CrewWorkerBreadcrumb'
 
@@ -46,5 +47,16 @@ describe('CrewWorkerBreadcrumb on a phone', () => {
     renderCrumb()
     expect(screen.getByTestId('crew-status').querySelector('.sr-only')).toBeNull()
     mobile.value = true
+  })
+
+  it('says a failed worker-list read beside the status it fell back to', async () => {
+    fail.on = true
+    try {
+      renderCrumb()
+      expect(await screen.findByText('Could not load the workers.')).toBeInTheDocument()
+      expect(screen.getByTestId('crew-worker-breadcrumb')).toBeInTheDocument()
+    } finally {
+      fail.on = false
+    }
   })
 })
