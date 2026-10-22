@@ -58,6 +58,170 @@ def _literal_ancestor_guards(paths: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(guards)
 
 
+def _caller_can_rename(path: str) -> bool:
+    """Whether a process running as this uid could rename the directory *path*.
+
+    ``rename(2)`` needs write permission on the PARENT directory, and the owner of a
+    directory can grant itself that permission with ``chmod`` at any time, so a parent
+    this uid owns counts even while its mode withholds the write bit. A sticky parent
+    (``/tmp``, ``/private/tmp``) that this uid writes but does not own additionally
+    requires owning the entry itself, so its ``lstat`` owner decides: another user's
+    link or directory in ``/tmp`` cannot be renamed by this uid. A parent or entry that
+    cannot be inspected is reported renameable: guarding a directory that turns out to
+    be fixed costs one rule, while leaving out one that can move leaves every seal
+    beneath it unpinned.
+    """
+    normalized = os.path.normpath(path)
+    parent = os.path.dirname(normalized)
+    try:
+        info = os.stat(parent)
+    except OSError:
+        return True
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is not None and info.st_uid == geteuid():
+        return True
+    if not os.access(parent, os.W_OK):
+        return False
+    if geteuid is None or not info.st_mode & stat.S_ISVTX:
+        return True
+    try:
+        return os.lstat(normalized).st_uid == geteuid()
+    except OSError:
+        return True
+
+
+def _renameable_ancestor_guards(paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Every ancestor of *paths*, down from *paths* themselves, that this uid can rename.
+
+    A read-only seal holds only while every directory on its path stays where it is: a
+    renamed ancestor carries the seal away and frees the sealed name for a planted
+    replacement that the unsandboxed gateway then reads. The walk runs to the filesystem
+    root for EACH path independently and keeps every directory :func:`_caller_can_rename`
+    says could move -- no common ceiling, because seals that live under different roots
+    (a data home under ``$HOME``, a ``KIRO_HOME`` relocated to an operator-owned folder in
+    ``/private/tmp``) have different renameable chains, and a renameable directory may
+    sit ABOVE one that is fixed. Directories this uid cannot rename (``/home``, ``/``,
+    ``/private/tmp`` itself) are left out, so the namespace launcher never re-binds a
+    system tree and the Seatbelt profile carries no rule that could never matter.
+    """
+    guards: list[str] = []
+    for item in paths:
+        current = os.path.normpath(item)
+        while True:
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            if current not in guards and _caller_can_rename(current):
+                guards.append(current)
+            current = parent
+    return tuple(guards)
+
+
+def _renameable_symlink_ancestors(paths: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """``(link, target)`` for every symlink this uid could rename on the way *paths* resolve.
+
+    A pin or a path rule can hold a DIRECTORY in place, but a symlink entry cannot be made
+    a mountpoint and the namespace launcher's pin lands on what the link points to. So a
+    renameable link on a seal's path (``~/.kiro -> ~/dotfiles/kiro``) is a part of that
+    path the sandbox cannot hold in place.
+    The namespace planner refuses the spawn for any entry returned here; the Seatbelt
+    planner write-denies each link by name instead, which holds a path-matched link.
+    Links this uid cannot rename
+    (``/tmp`` on macOS, in root-owned ``/``) are left out. Each chain is walked from *paths*
+    themselves up to the filesystem root, lexically, so a link is reported at the spelling
+    the gateway reads. Each path is then resolved the way the kernel resolves it
+    (:func:`_resolution_entries`), and every link that resolution passes through is
+    checked too, so a renameable link reached only through another link's target
+    (``/opt/kiro -> ~/current -> ~/store``, or a target such as ``/srv/bridge/../current``
+    whose ``..`` applies after ``bridge`` is followed) is found as well. A path whose
+    resolution cannot be finished (a link loop, an unreadable link) is reported as its own
+    entry, so the namespace planner refuses it rather than trusting it.
+    """
+    found: dict[str, str] = {}
+    for item in paths:
+        lexical = os.path.normpath(item)
+        current = lexical
+        while True:
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            if current not in found and os.path.islink(current) and _caller_can_rename(current):
+                found[current] = os.path.realpath(current)
+            current = parent
+        links, _dirs, complete = _resolution_entries(item)
+        for link in links:
+            if link not in found and _caller_can_rename(link):
+                found[link] = os.path.realpath(link)
+        if not complete:
+            found.setdefault(lexical, lexical)
+    return tuple(found.items())
+
+
+def _renameable_resolution_dirs(paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Every directory resolving *paths* passes through that this uid could rename.
+
+    Resolving a path through links visits directories that are on neither its lexical nor
+    its canonical spelling: with ``/opt/kiro -> ~/managed/current -> ~/store``, the kernel
+    walks ``~/managed`` to read ``current``, and renaming ``~/managed`` changes what the
+    path resolves to even when both links themselves are fixed. Each directory listed here
+    is pinned (namespace) or write-denied by name (Seatbelt) beside the seal-parent chains,
+    so every entry the resolution of a seal depends on is held in place: a directory by
+    its pin or rule, a link by the refusal or rule of :func:`_renameable_symlink_ancestors`.
+    """
+    found: dict[str, None] = {}
+    for item in paths:
+        _links, dirs, _complete = _resolution_entries(item)
+        for directory in dirs:
+            if directory not in found and _caller_can_rename(directory):
+                found[directory] = None
+    return tuple(found)
+
+
+def _resolution_entries(path: str) -> tuple[list[str], list[str], bool]:
+    """The symlinks and the directories resolving *path* passes through, and whether it finished.
+
+    Components are taken in the order the kernel takes them: a link is expanded before any
+    component after it, and ``..`` steps to the parent of the directory actually reached,
+    not of the spelling. So ``/srv/bridge/../current`` with ``bridge`` a link visits the
+    ``current`` beside the bridge's target, as ``open(2)`` would. Every entry is reported
+    at the physical spelling it was reached by; a component that does not exist ends the
+    directories reported. Resolution gives up (``False``) after 40 links, as the kernel
+    does with ``ELOOP``, or when a link cannot be read. On a platform whose paths are not
+    ``/``-separated nothing is resolved.
+    """
+    if os.sep != "/":
+        return [], [], True
+    absolute = path if path.startswith("/") else os.getcwd() + "/" + path
+    links: list[str] = []
+    dirs: list[str] = []
+    resolved = "/"
+    remaining = [part for part in absolute.split("/") if part]
+    while remaining:
+        part = remaining.pop(0)
+        if part == ".":
+            continue
+        if part == "..":
+            resolved = os.path.dirname(resolved)
+            continue
+        candidate = os.path.join(resolved, part)
+        if not os.path.islink(candidate):
+            if os.path.isdir(candidate) and candidate not in dirs:
+                dirs.append(candidate)
+            resolved = candidate
+            continue
+        links.append(candidate)
+        if len(links) > 40:
+            return links, dirs, False
+        try:
+            target = os.readlink(candidate)
+        except OSError:
+            return links, dirs, False
+        if target.startswith("/"):
+            resolved = "/"
+        remaining = [part for part in target.split("/") if part] + remaining
+    return links, dirs, True
+
+
 def prime_voice_runtime_sandbox_paths() -> str:
     """Cache and create the canonical agent-denied decoder runtime off-loop.
 
