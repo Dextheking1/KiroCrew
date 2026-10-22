@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 from slack_code_channels_helpers import OWNER
 from test_slack_code_channel_agent_surface import CH, SLOT, env  # noqa: F401
-from test_slack_code_channel_trust_from_slack import _slot, chan  # noqa: F401
+from test_slack_code_channel_trust_from_slack import ANCHOR, _slot, chan  # noqa: F401
 from test_slack_code_channel_worker_approvals import (  # noqa: F401
     REQUEST,
     WORKER,
@@ -373,16 +373,29 @@ def test_a_command_with_hidden_characters_is_shown_raw(chan: Any) -> None:  # no
     assert any("\\u202e" in t for t in texts)
 
 
-def test_the_runner_keeps_a_card_the_trust_rewrote() -> None:
-    """The permission prompt asks keep_card before it deletes a linked card (reverting fails)."""
-    import inspect
+@pytest.mark.parametrize("rewritten", [True, False], ids=["trust-rewrote-it", "plain"])
+def test_a_real_turn_keeps_a_card_the_trust_rewrote(
+    chan: Any, rewritten: bool  # noqa: F811
+) -> None:
+    """A decided prompt's card is deleted, unless the Trust sweep re-wrote it in place."""
+    from slack_code_channel_turns import prompt_in_channel_session
+    from turn_harness import APPROVED
 
-    from kiro_crew.dashboard import chat_runner
+    def _sweep(channel: str, ts: str) -> None:
+        # What set_channel_mode does to the channel's own pending cards before
+        # its Trust sweep answers them (the sweep then writes "Ran under Trust").
+        if rewritten:
+            approval_picker._kept_cards.add(f"{channel}:{ts}")
 
-    src = inspect.getsource(chat_runner._on_permission_prompt)
-    assert "and not keep_code_channel_card(" in src
-    keep = src.index("and not keep_code_channel_card(")
-    assert src.index("delete_message", keep) > keep
+    asyncio.run(
+        prompt_in_channel_session(
+            chan, slot_key=SLOT, channel=CH, anchor=ANCHOR, answer=APPROVED, during=_sweep
+        )
+    )
+    ts = chan.slack.blocks_posts[-1]
+    card_ts = f"300.{chan.slack._n:06d}"
+    assert ts[0] == CH
+    assert chan.slack.deleted == ([] if rewritten else [(CH, card_ts)])
 
 
 def test_a_clicked_channel_card_is_written_once(chan: Any) -> None:  # noqa: F811

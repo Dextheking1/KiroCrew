@@ -313,18 +313,65 @@ def test_finish_absorbs_a_cancelled_relay(relay: Any) -> None:
     assert relay.slack.updates == []
 
 
-def test_the_session_runner_relays_and_retires_worker_cards() -> None:
-    """The permission prompt starts the relay without an await and retires it in the finally."""
+@pytest.mark.parametrize(
+    ("answer", "settled"),
+    [
+        ("approved", wa.ANSWERED_ELSEWHERE["approved"]),
+        ("rejected", wa.ANSWERED_ELSEWHERE["rejected"]),
+        ("unanswered", wa.ANSWERED_ELSEWHERE["timeout"]),
+        ("stop", wa.ANSWERED_ELSEWHERE["ended"]),
+        ("cancel_turn", wa.ANSWERED_ELSEWHERE["ended"]),
+    ],
+)
+def test_a_real_worker_turn_relays_its_prompt_and_settles_the_card(
+    relay: Any, answer: str, settled: str  # noqa: F811
+) -> None:
+    """A worker's dashboard turn posts its prompt in the channel, and the card says
+    how the prompt ended once the dashboard (or the host) decided it."""
+    from slack_code_channel_turns import prompt_in_worker
+
+    asyncio.run(
+        prompt_in_worker(
+            relay,
+            worker_key=WORKER,
+            title="Fix #21964",
+            conductor_key=SLOT,
+            channel=CH,
+            anchor="100.000001",
+            answer=answer,
+        )
+    )
+    channel, blocks, _text, thread_ts = relay.slack.blocks_posts[-1]
+    assert (channel, thread_ts) == (CH, None)
+    assert blocks[0]["text"]["text"] == "🔐 *Worker: Fix #21964* wants to run:"
+    ts = f"300.{relay.slack._n:06d}"
+    lines = [u[2] for u in relay.slack.updates if u[1] == ts]
+    assert len(lines) == 1 and settled in lines[0]
+
+
+def test_a_real_worker_turn_relays_no_prompt_born_rejected(relay: Any) -> None:  # noqa: F811
+    """With no approval window the runner declines the prompt as it raises it; the
+    relay is told so (through the row's meta) and posts nothing in the channel."""
+    from unittest.mock import patch
+
+    from slack_code_channel_turns import prompt_in_worker
+
     from kiro_crew.dashboard import chat_runner
 
-    src = inspect.getsource(chat_runner._on_permission_prompt)
-    assert "_worker_relay = start_worker_approval_relay(" in src
-    assert "await start_worker_approval_relay" not in src
-    assert "perm_meta=perm_meta" in src and "linked_ts=_slack_approval_ts" in src
-    assert "deny_cause=_host_deny_cause" in src
-    assert "host_ended=bool(_host_cancelled or _host_stopped)" in src
-    assert chat_runner.start_worker_approval_relay is wa.start
-    assert chat_runner.finish_worker_approval is wa.finish
+    posts = len(relay.slack.blocks_posts)
+    with patch.object(chat_runner, "tool_approval_timeout_secs", return_value=0.0):
+        asyncio.run(
+            prompt_in_worker(
+                relay,
+                worker_key=WORKER,
+                title="Fix #21964",
+                conductor_key=SLOT,
+                channel=CH,
+                anchor="100.000001",
+                answer="rejected",
+            )
+        )
+    assert len(relay.slack.blocks_posts) == posts
 
 
 # ── A card spent while the owner's click was in flight ────────────────────

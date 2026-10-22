@@ -17,7 +17,6 @@ Recorded Slack payloads in, recorded calls out (the agent-surface ``env``).
 from __future__ import annotations
 
 import asyncio
-import inspect
 from types import SimpleNamespace
 from typing import Any
 
@@ -192,13 +191,29 @@ def test_an_ordinary_linked_thread_keeps_threading_and_has_no_trust_button(chan:
     assert all(b["action_id"] != approval_picker.TRUST_CALL_ACTION_ID for b in _buttons(blocks))
 
 
-def test_the_session_runner_posts_through_the_mirror_thread_rule() -> None:
-    """The permission prompt picks the card's thread from the mirror helper (reverting fails)."""
-    from kiro_crew.dashboard import chat_runner
+@pytest.mark.parametrize(
+    ("channel", "anchor", "top_level"),
+    [(CH, ANCHOR, True), (OTHER_CH, "555.000001", False)],
+    ids=["code-channel", "ordinary-thread"],
+)
+def test_a_real_turn_posts_its_card_by_the_mirror_thread_rule(
+    chan: Any, channel: str, anchor: str, top_level: bool  # noqa: F811
+) -> None:
+    """A dashboard turn's prompt in the channel's own session posts top-level with
+    Trust this channel; an ordinary linked thread keeps threading without it."""
+    from slack_code_channel_turns import prompt_in_channel_session
+    from turn_harness import APPROVED
 
-    src = inspect.getsource(chat_runner._on_permission_prompt)
-    assert "code_channel_post_thread(slot._slack_channel, slot._slack_thread_ts)" in src
-    assert "channel_trust=_approval_thread is None" in src
+    asyncio.run(
+        prompt_in_channel_session(
+            chan, slot_key=SLOT, channel=channel, anchor=anchor, answer=APPROVED
+        )
+    )
+    posted, blocks, _text, thread_ts = chan.slack.blocks_posts[-1]
+    assert posted == channel
+    assert thread_ts == (None if top_level else anchor)
+    trust = [b for b in _buttons(blocks) if b["action_id"] == approval_picker.TRUST_CALL_ACTION_ID]
+    assert bool(trust) is top_level
 
 
 def test_the_card_keeps_one_primary_button() -> None:
