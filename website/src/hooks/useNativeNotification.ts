@@ -37,6 +37,7 @@ import { useAppSelector } from '../store'
 // attention surfaces that spell this rule separately can drift apart, and the
 // backend states it once for all of them.
 import { isSilencedNote } from '../store/notificationsSlice'
+import type { Notification } from '../types'
 // A note's `body` is MARKDOWN by contract -- the detail panel renders it as
 // markdown and producers write `**name** -- description`, `_italics_`,
 // `**Triggers:**` (see `_pending_skill_notification`, dashboard/server.py).
@@ -52,23 +53,37 @@ import { isWindowAway } from './windowAway'
 import { nativeNotificationPermitted, postNativeNotification } from '../lib/nativeNotify'
 import { i18nT } from '../i18n/t'
 
+/** An unread note this hook may toast. A quiet replacement is left out: it is
+ *  a keyed note moving along its lifecycle, which lands in the bell unannounced. */
+const announcesToOs = (n: Notification): boolean => !n.acked && !isSilencedNote(n) && !n.quiet
+
 export function useNativeNotification(botName: string, avatar: string) {
-  const notifCount = useAppSelector(
-    (s) => s.notifications.items.filter((n) => !n.acked && !isSilencedNote(n)).length,
+  // The timestamps of the notes that may toast, as one string so the selector
+  // returns a primitive and the effect runs only when that set changes.
+  const announcingTs = useAppSelector(
+    (s) => s.notifications.items.filter(announcesToOs).map((n) => n.ts).join('\n'),
   )
   const latestNotif = useAppSelector((s) => {
-    const unacked = s.notifications.items.filter((n) => !n.acked && !isSilencedNote(n))
+    const unacked = s.notifications.items.filter(announcesToOs)
     return unacked.length > 0 ? unacked[unacked.length - 1] : null
   })
 
-  const prev = useRef(0)
+  // A note toasts the first time it is seen, not when the count rises: a keyed
+  // replacement swaps one unread note for another, so the count holds steady
+  // while the user still has something new to hear about. The set is reset to
+  // the current notes each run, so it stays bounded and a note marked unread
+  // again is announced again, as a rising count announced it before.
+  const seen = useRef<Set<string>>(new Set())
   useEffect(() => {
-    if (notifCount > prev.current) {
+    const current = announcingTs ? announcingTs.split('\n') : []
+    const unseen = current.filter((ts) => !seen.current.has(ts)).length
+    seen.current = new Set(current)
+    if (unseen > 0) {
       // The visibility gate sits inside the permission branch on purpose:
       // the best-effort permission prompt below is about capability, not
       // attention, and must not depend on where the window is.
       if (nativeNotificationPermitted() && isWindowAway()) {
-        const delta = notifCount - prev.current
+        const delta = unseen
         const title = latestNotif?.title || botName
         // stripMd only on the note's own markdown body; the generic fallback
         // and the title are plain text already (the feed renders the title
@@ -91,6 +106,8 @@ export function useNativeNotification(botName: string, avatar: string) {
             latestNotif?.approval_id ||
             latestNotif?.job_id ||
             latestNotif?.task_id ||
+            // An escalated keyed note replaces its own earlier toast in the OS.
+            (latestNotif?.key ? `key:${latestNotif.source ?? ''}:${latestNotif.key}` : '') ||
             'kirocrew-notif',
         })
       } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -103,6 +120,5 @@ export function useNativeNotification(botName: string, avatar: string) {
         Notification.requestPermission()
       }
     }
-    prev.current = notifCount
-  }, [notifCount, botName, avatar, latestNotif])
+  }, [announcingTs, botName, avatar, latestNotif])
 }
