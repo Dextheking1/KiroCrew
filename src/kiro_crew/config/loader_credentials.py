@@ -583,15 +583,24 @@ def apply_env_credential_changes(
                 raise ValueError("illegal environment variable name in .env credential diff")
             if "\x00" in v:
                 raise ValueError("embedded NUL in .env credential value")
-    # The os.environ entries this batch WRITES (a changed key with a non-empty
-    # new value). A removed key must not pop an entry another key in the same
-    # batch is writing -- on Windows os.environ is case-insensitive, so a
-    # case-only rename (``https_proxy`` -> ``HTTPS_PROXY``) is one key added and
-    # one removed that share an entry; without this the removal would delete the
-    # value the addition just wrote. On POSIX the canonical key is the name
-    # itself, so a removed key (absent from ``new``) never collides and the
-    # behaviour is unchanged.
-    written_entry_keys = {_env_name_key(k) for k in changed if new.get(k)}
+    # The os.environ entries that STILL EXIST in the new ``.env`` -- every key
+    # in ``new`` with a non-empty value, keyed canonically. A removed key must
+    # not pop an entry that another ``.env`` key still configures. On Windows
+    # ``os.environ`` is case-insensitive, so ``HTTPS_PROXY`` and ``https_proxy``
+    # are ONE entry, and two spellings can share it two ways:
+    #   * a case-only rename -- the lowercase line edited to uppercase -- which
+    #     the diff sees as one key added and one removed, and
+    #   * a duplicate pair -- both spellings present, and only one removed --
+    #     where the removed spelling is in ``changed`` but the surviving one is
+    #     NOT, so a set built from ``changed`` alone would miss it and the
+    #     removal would delete the value the surviving line still sets.
+    # Building from all of ``new`` (not just the changed subset) covers both: a
+    # removed alias is dropped only when NO spelling of its entry survives. This
+    # is a superset of the changed-with-value keys, so the rename case is
+    # unchanged. On POSIX the canonical key is the name itself, so a removed key
+    # (absent from ``new``) never matches a surviving entry and the behaviour is
+    # unchanged there too.
+    kept_entry_keys = {_env_name_key(k) for k, v in new.items() if v}
     applied: set[str] = set()
     for k in changed:
         if scrubbed and (k in CREDENTIAL_KEYS or _JIRA_TOKEN_RE.match(k)):
@@ -644,14 +653,15 @@ def apply_env_credential_changes(
             # dashboard path, no ownership tracking) pop unconditionally, the
             # pre-baseline behaviour.
             prior = os.environ.get(k)
-            # Do not pop an entry another key in THIS batch is writing: on a
-            # case-insensitive os.environ (Windows) a case-only rename adds one
-            # key and removes another that share the entry, so popping the
-            # removed one would delete the renamed value the addition just set.
-            # Leave ownership alone too -- the writing key owns the entry, and
+            # Do not pop an entry another ``.env`` key still configures: on a
+            # case-insensitive os.environ (Windows) a case-only rename, OR a
+            # duplicate pair with only one spelling removed, leaves another
+            # spelling of the same entry live in ``new``. Popping the removed one
+            # would delete the value that surviving spelling sets. Leave
+            # ownership alone too -- the surviving spelling owns the entry, and
             # order within the batch is not deterministic, so discarding here
-            # could drop the ownership the set recorded.
-            if _env_name_key(k) in written_entry_keys:
+            # could drop the ownership its set recorded.
+            if _env_name_key(k) in kept_entry_keys:
                 continue
             if old is None or prior is None or env_owns_key(k):
                 os.environ.pop(k, None)

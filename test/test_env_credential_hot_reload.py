@@ -531,6 +531,37 @@ class TestLoaderCredentialHelpers:
         assert loader.env_owns_key("https_proxy")
         assert loader.env_owns_key("HTTPS_PROXY")
 
+    def test_windows_removing_one_of_two_case_duplicates_keeps_the_entry(self, monkeypatch):
+        """On Windows os.environ is case-insensitive, so ``HTTPS_PROXY`` and
+        ``https_proxy`` are ONE entry. When ``.env`` holds BOTH and the operator
+        removes only the lowercase line, the uppercase line still configures the
+        entry -- but it is UNCHANGED, so it is absent from ``changed``. The
+        removal must still not pop the shared entry, or a channel restart would
+        build its client without the proxy it still needs. (Fixes the GPT
+        duplicate-case-alias finding.)"""
+        from kiro_crew import platform_compat
+        from kiro_crew.config import loader
+
+        monkeypatch.setattr(platform_compat, "IS_WINDOWS", True, raising=False)
+        forget_env_at_teardown(monkeypatch, "https_proxy", "HTTPS_PROXY")
+
+        # Boot owned both spellings; os.environ folds them to one entry.
+        loader.note_env_owned_key("https_proxy")
+        loader.note_env_owned_key("HTTPS_PROXY")
+        os.environ["HTTPS_PROXY"] = "http://proxy:8080"
+        # Only the lowercase spelling left .env; the uppercase one is unchanged
+        # (same value in old and new), so it is NOT in the changed set.
+        loader.apply_env_credential_changes(
+            {"https_proxy"},
+            {"HTTPS_PROXY": "http://proxy:8080"},
+            {"https_proxy": "http://proxy:8080", "HTTPS_PROXY": "http://proxy:8080"},
+        )
+        # The surviving uppercase line still configures the entry; the removed
+        # lowercase alias did not delete it.
+        assert os.environ.get("HTTPS_PROXY") == "http://proxy:8080"
+        # Ownership of the shared entry is left intact for the surviving spelling.
+        assert loader.env_owns_key("HTTPS_PROXY")
+
     def test_apply_rejects_a_nul_bearing_value_before_mutating(self, monkeypatch):
         """A NUL in a VALUE (not just the key) is also something os.environ
         rejects, so the batch must be refused before any key is written -- a
