@@ -118,12 +118,19 @@ and `test_aws_control_app_profiles.py::TestBootstrapReauthorizes.test_consent_wi
 pin those guarantees.
 
 A created drive is ownership-checked before it becomes discoverable. The storage
-layer enables versioning and then calls `deploy.engine._harden_bucket`, which
+layer enables versioning, writes a bucket policy that denies every `s3:*` call
+when `aws:SecureTransport` is false (on the bucket and its objects, in the
+region's partition), and then calls `deploy.engine._harden_bucket`, which
 sets S3 Block Public Access, bucket-owner-enforced ownership controls, default
 SSE, and the discovery tags. The order is load-bearing: a partially configured
-bucket is left untagged rather than becoming a usable drive without versioning.
+bucket is left untagged rather than becoming a usable drive without versioning
+or the TLS-only policy. The policy lives in `create_drive`, not `_harden_bucket`,
+because deploy-web's `put_oac_bucket_policy` replaces its bucket's whole policy.
+Drives created before this policy existed are not back-filled; there is no
+ensure path that rewrites an existing drive's configuration.
 `test_aws_control_storage.py::TestCreateDrive.test_versioning_is_enabled_before_hardening_tags_land`
-pins the sequence.
+pins the sequence, and `TestCreateDrive.test_tls_only_policy_denies_plain_http`
+pins the policy shape.
 
 Drive objects live beneath the `artifacts/`, `drive/`, and `backup/` prefixes.
 `storage.validate_key` rejects paths that could escape a section. Folder deletion

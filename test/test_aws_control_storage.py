@@ -225,7 +225,7 @@ class TestCreateDrive:
         # that it cannot happen.
         bucket, calls = self._run_create("us-west-2")
         kinds = [c[0] for c in calls]
-        assert kinds == ["checked", "run_aws", "checked", "harden"]
+        assert kinds == ["checked", "run_aws", "checked", "checked", "harden"]
 
         create_args = calls[0][1]
         assert create_args[:2] == ["s3api", "create-bucket"]
@@ -235,9 +235,12 @@ class TestCreateDrive:
         assert versioning_args[:2] == ["s3api", "put-bucket-versioning"]
         assert "Status=Enabled" in versioning_args
 
+        policy_args = calls[3][1]
+        assert policy_args[:2] == ["s3api", "put-bucket-policy"]
+
         # The tags handed to hardening carry BOTH discovery tags — this is what
         # a later find_drive() will require.
-        _bucket, tagset = calls[3][1]
+        _bucket, tagset = calls[4][1]
         assert f"Key={engine.TAG_MANAGED},Value=true" in tagset
         assert f"Key={storage.TAG_DRIVE},Value={storage.DRIVE_ID}" in tagset
 
@@ -287,6 +290,56 @@ class TestCreateDrive:
         ):
             storage.create_drive("p", "us-west-2", "123456789012")
         assert not any("delete-bucket" in str(a) for _k, a in calls)
+
+    @pytest.mark.parametrize(
+        ("region", "partition"),
+        [
+            ("us-west-2", "aws"),
+            ("us-east-1", "aws"),
+            ("eu-central-1", "aws"),
+            ("us-gov-west-1", "aws-us-gov"),
+            ("cn-north-1", "aws-cn"),
+        ],
+    )
+    def test_tls_only_policy_denies_plain_http(self, region, partition):
+        # CWE-319: every drive bucket denies all S3 calls made without TLS, on
+        # the bucket AND its objects, in the bucket's own partition (a wrong
+        # partition makes S3 reject the policy as malformed).
+        bucket, calls = self._run_create(region)
+        policy_args = next(a for k, a in calls if k == "checked" and a[1] == "put-bucket-policy")
+        assert policy_args[policy_args.index("--bucket") + 1] == bucket
+        policy = json.loads(policy_args[policy_args.index("--policy") + 1])
+        arn = f"arn:{partition}:s3:::{bucket}"
+        assert policy == {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "DenyInsecureTransport",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Action": "s3:*",
+                    "Resource": [arn, f"{arn}/*"],
+                    "Condition": {"Bool": {"aws:SecureTransport": "false"}},
+                }
+            ],
+        }
+
+    def test_a_failed_tls_policy_leaves_the_bucket_untagged(self):
+        # Same failure contract as versioning: the error surfaces and the
+        # discovery tags never land, so no drive exists without the policy.
+        def checked(args, profile, *, action, timeout=30):
+            if args[1] == "put-bucket-policy":
+                raise storage.AWSError("AccessDenied (s3:PutBucketPolicy)")
+            return ""
+
+        with (
+            mock.patch.object(storage, "_checked", side_effect=checked),
+            mock.patch.object(storage, "_harden_bucket") as harden,
+            mock.patch.object(storage.engine, "run_aws", return_value=(0, "", "")),
+            pytest.raises(storage.AWSError),
+        ):
+            storage.create_drive("p", "us-west-2", "123456789012")
+        harden.assert_not_called()
 
     def test_us_east_1_omits_the_location_constraint(self):
         # us-east-1 is the API's implicit home region; sending a

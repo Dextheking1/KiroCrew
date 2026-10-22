@@ -235,6 +235,8 @@ def _drive_statements() -> list[dict[str, Any]]:
                 "s3:PutBucketVersioning",
                 "s3:GetBucketVersioning",
                 "s3:ListBucketVersions",
+                # create_drive writes the TLS-only (aws:SecureTransport) policy.
+                "s3:PutBucketPolicy",
             ],
             "Resource": [drive_arn],
         },

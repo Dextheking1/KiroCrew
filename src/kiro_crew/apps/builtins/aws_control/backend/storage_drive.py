@@ -173,6 +173,40 @@ def _assert_owned_by(bucket: str, profile: str, account: str) -> None:
     )
 
 
+#: Region-name prefix -> ARN partition. A bucket policy's Resource must name the
+#: bucket's real partition or S3 rejects the policy as malformed.
+_PARTITION_BY_REGION_PREFIX = (
+    ("cn-", "aws-cn"),
+    ("us-gov-", "aws-us-gov"),
+    ("eusc-", "aws-eusc"),
+)
+
+
+def _partition(region: str) -> str:
+    for prefix, partition in _PARTITION_BY_REGION_PREFIX:
+        if region.startswith(prefix):
+            return partition
+    return "aws"
+
+
+def _tls_only_policy(bucket: str, region: str) -> dict:
+    """Deny every S3 action on the bucket and its objects over plain HTTP."""
+    arn = f"arn:{_partition(region)}:s3:::{bucket}"
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "DenyInsecureTransport",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:*",
+                "Resource": [arn, f"{arn}/*"],
+                "Condition": {"Bool": {"aws:SecureTransport": "false"}},
+            }
+        ],
+    }
+
+
 def create_drive(profile: str, region: str, account: str) -> str:
     """Create + harden the drive bucket, versioning ON. Returns the name.
 
@@ -209,6 +243,22 @@ def create_drive(profile: str, region: str, account: str) -> str:
         ],
         profile,
         action="s3:PutBucketVersioning",
+    )
+    # TLS-only (CWE-319), also BEFORE the tags. Written here and not in the shared
+    # _harden_bucket: deploy-web's put_oac_bucket_policy replaces its bucket's
+    # whole policy, so a statement added there would be overwritten. Nothing
+    # else writes a policy to a drive bucket.
+    _checked(
+        [
+            "s3api",
+            "put-bucket-policy",
+            "--bucket",
+            bucket,
+            "--policy",
+            json.dumps(_tls_only_policy(bucket, region)),
+        ],
+        profile,
+        action="s3:PutBucketPolicy",
     )
     _harden_bucket(
         bucket,

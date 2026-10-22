@@ -1106,6 +1106,8 @@ class TestDriveIamTier:
             "arn:*:s3:::kirocrew-drive-*/drive/*",
             "arn:*:s3:::kirocrew-drive-*/artifacts/*",
         ]
+        # create_drive writes the TLS-only bucket policy, so the tier must allow it.
+        assert "s3:PutBucketPolicy" in by_sid["DriveBucketLevel"]["Action"]
         # No deploy-web statements leak into the drive tier.
         assert not any("kirocrew-web" in json.dumps(s) for s in doc["Statement"])
         assert not any("cloudfront" in json.dumps(s).lower() for s in doc["Statement"])
