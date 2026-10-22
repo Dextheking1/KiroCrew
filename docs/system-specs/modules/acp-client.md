@@ -1329,7 +1329,7 @@ Data-driven — no code changes needed:
 - `~/.kiro/crew/agent.json` — user overrides (optional)
 - Run `kirocrew setup --agent-only` after editing
 
-There is no checked-in `agents/` directory. `agent.py` reads
+There is no checked-in `agents/` directory. `agent_parts/spec_build.py` reads
 `<KIROCREW_PROJECT_DIR>/agents/defaults.json` and `prompt.md` only when that variable
 points at a project holding them; otherwise it uses the bundled `src/kiro_crew/config/`.
 
@@ -1350,7 +1350,7 @@ relying on a skill pointer for those controls.
 
 Default model: `auto`. Default tools: `execute_bash`, `fs_read`, `fs_write`, `code`, `grep`, `glob`, `web_fetch`, `web_search`, `introspect`, `session`, `report`, `tool_search`, `@kirocrew-cron`, `@kirocrew-core`, `@kirocrew-computer`, `@kirocrew-guide`.
 
-**Agent compatibility repair** (`agent.py`): `repair_agent_configs()` is the single
+**Agent compatibility repair** (`agent_parts/spec_upgrades.py`): `repair_agent_configs()` is the single
 entry point. It runs as the last step of every `rebuild_agent_config()`, which is
 event-driven (setup and install, a provider or model change, the MCP and connection
 handlers, a governance ceiling refresh); there is no timer. Its
@@ -1610,10 +1610,10 @@ advertised entry's `_meta.kiro.resource.source.origin`
 (`_dispatch.advertised_mode_origin`). The value `bundled` -- the one stamp
 MEASURED on kiro-cli 2.23.0 for the engine's own agents -- means the engine kept
 its OWN built-in under that id and discarded the `customAgents` definition; a
-`set_mode` would succeed and run the built-in under the crewmate's name, so the
+`set_mode` would succeed and run the built-in under the mate's name, so the
 harness answers the refusal text -- the id is reserved for a built-in agent,
-plus the crewmate-side remedy in the dashboard's own labels (the Agent Template
-tab; on the crewmate's own copy 'Save as new template…' under another name or
+plus the mate-side remedy in the dashboard's own labels (the Agent Template
+tab; on the mate's own copy 'Save as new template…' under another name or
 'Reset my changes'; on a shared template -- one created under a reserved id
 before the refusal existed, where neither control renders -- the template
 picker at the top of the tab), in plain words with no wire vocabulary or
@@ -1622,15 +1622,15 @@ the offline fake, an older engine) is not evidence and never refuses, and a
 positive stamp this code has never measured (an engine that renames `client`)
 is logged at WARNING and let through, because kiro-cli is the operator's own
 install, not pinned by Crew, and an unmeasured value must not become a
-session-start denial of every crewmate with a rename remedy that cannot help.
+session-start denial of every mate with a rename remedy that cannot help.
 The ids measured to trip (C) on kiro-cli 2.23.0
 (`agent_files.KAS_RESERVED_AGENT_IDS`) never reach the wire under their own name:
 `attach_kas_custom_agents` sends the batch entry as
 `agent_files.kas_wire_agent_id(id)` (`<id>-crewmate`), and both session-start
 paths read the advertised modes, ask (C) and send `set_mode` with that same wire
-id, so a `default` crewmate carried over from kiro-cli runs unchanged. Nothing
+id, so a `default` mate carried over from kiro-cli runs unchanged. Nothing
 else sees the alias: the batch Crew records, `handle.active_agent` and
-`kas_projected_agent` keep the crewmate's id, and a `current_mode_update` naming
+`kas_projected_agent` keep the mate's id, and a `current_mode_update` naming
 the alias is mapped back through the registered batch
 (`_dispatch.kas_crew_agent_id`). (C) is the read of the wire itself, so a
 built-in a later engine adds under a new id fails loudly instead of resurrecting
@@ -2813,7 +2813,7 @@ applies it.
   paths pass FOREGROUND unless a trusted bot posted. The CLI chat. **Every
   dashboard claimer reads WHO ASKED**
   (`dashboard/request_priority.owner_start_priority`, which reads
-  `is_owner_dashboard_request`): the composer optimizer, Side Chat, crewmate
+  `is_owner_dashboard_request`): the composer optimizer, Side Chat, mate
   reply threads, Task Runner Refine and Plan, workflow authoring, Issue Radar's
   AI routes (`_run_oneshot_model`), and the eager spawn a slot action arms. An
   app token on its own slot is BACKGROUND there, because the person-only

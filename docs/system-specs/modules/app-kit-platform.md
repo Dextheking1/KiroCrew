@@ -1787,7 +1787,7 @@ with it), so it is a trust-scale indicator, not a live metric. Absence means
 
 Writers: `apps/manager_builtins.py` (`_BUILTIN_APPS`, `_DEFAULT_ON_BUILTINS`,
 `_DEFAULT_ON_BACKFILL`, `register_builtin_apps`, `backfill_default_on_builtins`),
-`agent.py::run_first_run_setup`, `apps/discovery.py::discover_builtin_apps`,
+`agent_parts/kirocrew_launcher.py::run_first_run_setup`, `apps/discovery.py::discover_builtin_apps`,
 `apps/registry_pipeline/catalog.py::_apply_trust_fields`;
 consumers: `website/src/pages/apps/useAppsData.ts` (`pickFeatured`),
 `website/src/components/appstore/types.ts` (`isVerified`, `sourceLabel`).
@@ -1997,6 +1997,18 @@ and pending and audits `session_approval_widened` with SEL caller `app_boot`.
 It rebuilds the agent spec once when it disabled anything. Nothing waits for
 it, because the read-side refusal already holds; the owner re-enables through
 the same consent step.
+
+Writers of one app's `installed.json` never overlap. Each one (install, update,
+external registration, enable, disable, dev mode, provenance, the builtin sync
+and the consent reconcile) is decorated `@holds_app_record_locks` and calls
+`hold_app_record_lock(name)` before it first reads the record, so the lock
+spans its read, its checks and its replace; `_write_installed` also takes it.
+`app_record_lock` is a cross-process `platform_compat.file_lock` on a sidecar,
+`<data home>/app-record-locks/<name>.lock`, never on `installed.json` (replaced
+via `os.replace`) nor inside the app tree (moved aside by an update). It is
+reentrant within one thread, bounded, and fails closed: a lock that cannot be
+taken raises, so no writer runs unserialized. On the event-loop thread the
+acquire is single-shot, as `file_lock` is everywhere.
 
 `permissions.api` and `permissions.events` are read live as well, and an update
 that adds any entry to either is held back rather than disabled. Each app stores

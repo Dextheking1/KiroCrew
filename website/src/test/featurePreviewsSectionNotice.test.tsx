@@ -62,7 +62,7 @@ describe('Feature previews section, refused toggles', () => {
   it.each([
     [/artifact deploy/i, 'Artifact Deploy'],
     [/webhooks/i, 'Webhooks'],
-    [/crewmates/i, 'Crewmates'],
+    [/^mates$/i, 'Mates'],
     [/chat on a crew/i, 'Chat on a crew'],
     [/composable layout/i, 'Composable layout'],
     [/folder conductor/i, 'Folder conductor'],
@@ -82,8 +82,8 @@ describe('Feature previews section, refused toggles', () => {
     vi.spyOn(api, 'patchConfig').mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }))
     renderSection()
     await waitFor(() => expect(api.kirocrewConfig).toHaveBeenCalled())
-    await act(async () => { screen.getAllByRole('switch', { name: /crewmates/i })[0].click() })
-    await waitFor(() => expect(notice()).toMatch(/couldn’t save “Crewmates”, so it was switched back/i))
+    await act(async () => { screen.getAllByRole('switch', { name: /^mates$/i })[0].click() })
+    await waitFor(() => expect(notice()).toMatch(/couldn’t save “Mates”, so it was switched back/i))
     await waitFor(() => expect(api.kirocrewConfig).toHaveBeenCalledTimes(2))
   })
 
