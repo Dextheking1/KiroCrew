@@ -8,6 +8,7 @@ import { sanitizeLlmOutput, isUnsafeKey } from '../utils/sanitize'
 import type { StatusData, ChatSlot, TodoList, McpSessionReport } from '../types'
 import type { SessionColorMode, PaletteName, DefaultColorSetting, IntensityName } from '../utils/sessionColors'
 import { isChatPageSurface } from '../utils/channelOrigin'
+export { selectPersonSlots } from './personSlots'
 
 export interface SubagentDetail {
   id: string; task: string; agent: string; turns: number; last_tool: string; startedAt: number

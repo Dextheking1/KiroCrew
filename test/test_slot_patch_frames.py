@@ -230,6 +230,29 @@ class TestSlotRemoved:
             }
         ]
 
+    def test_a_closed_crew_mode_roots_workers_come_back_to_the_lists(
+        self, state: DashboardState
+    ) -> None:
+        """The full frame stops stamping ``crew_root`` once the root is gone, so the
+        removal patch restates it: otherwise the person's lists keep hiding the
+        workers under a root no list shows."""
+        root = _slot(state, "root")
+        root.agent = "kirocrew-conductor"
+        worker = _slot(state, "worker")
+        worker._created_by = "root"
+        [row] = [r for r in state.serialize_slots() if r["key"] == "worker"]
+        assert row["crew_root"] == "root"
+        capable = _WS(patch_capable=True)
+        state.register_ws(capable)  # type: ignore[arg-type]
+
+        del state._slots["root"]
+        state.push_slot_removed("root")
+
+        [frame] = capable.frames()
+        assert frame["data"]["removed"] == ["root"]
+        [patched] = [r for r in frame["data"]["slots"] if r["key"] == "worker"]
+        assert patched["crew_root"] == "" and patched["crew_mode_root"] is False
+
     def test_a_reregistered_key_is_not_removed(self, state: DashboardState) -> None:
         _slot(state, "chat-a")
         capable = _WS(patch_capable=True)

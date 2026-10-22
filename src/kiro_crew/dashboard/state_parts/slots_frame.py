@@ -6,7 +6,7 @@ frame and note shape and its size-paced interval, and member slot transitions.
 
 Instance fields of ``DashboardState`` this module reads and writes:
 
-Writes: ``_member_driven_slots_seen``.
+Writes: ``_crew_mode_roots``, ``_member_driven_slots_seen``.
 Reads only: ``_member_slots_retry``, ``_member_slots_unconfirmed``,
 ``_pinned_order_rev``, ``_slots``, ``_slots_under_construction``, ``sessions``,
 ``subagents``.
@@ -871,6 +871,18 @@ def serialize_slots(
     # the nesting and must cost the nesting rather than the whole sidebar.
     # ``getattr`` because a stub state in the suite may not carry the method at all.
     _attach_slot_parents(out, getattr(self, "spend_slot_by_session", None))
+    # After the parents, which the worker walk reads: every row says whether it is a
+    # Crew Mode root, and each session a root dispatched names that root, so the
+    # person's own list can leave workers out and the side panel can list them.
+    from kiro_crew import crew_mode
+
+    try:
+        crew_mode.stamp_rows(out)
+        # The roots this frame named, so a removal patch knows to restate the
+        # stamps of a closed root's workers (``push_slot_removed``).
+        self._crew_mode_roots = {row["key"] for row in out if row.get(crew_mode.ROOT_FIELD)}
+    except Exception:  # pragma: no cover - a stamp fault must cost the stamp only
+        logger.warning("Crew Mode rows not stamped", exc_info=True)
     return out
 
 

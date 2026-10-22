@@ -386,6 +386,11 @@ async def switch_slot_agent(
             # before any slot, provider or history mutation.
             try:
                 choice_cfg = await asyncio.to_thread(KiroCrewConfig.load)
+                # The switch decides Crew Mode by this config's conductor, so the
+                # remembered name is refreshed from the same read.
+                from kiro_crew import crew_mode as _crew_mode
+
+                _crew_mode.remember(choice_cfg)
                 await warm_project_agent_names(
                     slot.project or None, operation="api_chat_slot_agent", source="dashboard"
                 )
@@ -490,6 +495,9 @@ async def switch_slot_agent(
         committed_agent_kind: str | None = None
         try:
             cfg = KiroCrewConfig.load()
+            from kiro_crew import crew_mode as _crew_mode
+
+            _crew_mode.remember(cfg)
             # Resolve by the name being STORED, which is exactly the name dispatch
             # will resolve later (`chat_runner` -> resolve_agent_bindings(
             # slot.agent)). Looking it up as an alias first and taking THAT
@@ -689,6 +697,19 @@ async def switch_slot_agent(
         slot.agent_kind = _CommitToken(new_agent_kind)
         committed_agent = slot.agent
         committed_agent_kind = slot.agent_kind
+        # Crew Mode turning on stamps the agent it turned on with, so the chat stays
+        # in Crew Mode on that conductor after ``agent.crew_mode_agent`` changes. A
+        # re-pick of the stamped agent keeps it; any other pick clears it.
+        from kiro_crew import crew_mode
+
+        prior_crew_stamp = getattr(slot, crew_mode.STAMP_FIELD, "") or ""
+        new_crew_stamp = crew_mode.stamp_for_switch(agent_name, new_agent_kind) or (
+            prior_crew_stamp if agent_name == prior_crew_stamp else ""
+        )
+        slot.crew_mode_agent = new_crew_stamp
+        # The metadata line carries the stamp only when this switch moves one, so a
+        # chat that never turned Crew Mode on keeps the line it had.
+        crew_stamp_moves = bool(new_crew_stamp or prior_crew_stamp)
         # The resolved namespace decides, not the request's spelling alone: a
         # name-only pick can still change member/template (the member lookup
         # answered by the shared template, or the reverse), which is a rebind
@@ -770,6 +791,7 @@ async def switch_slot_agent(
             if slot.agent is committed_agent and slot.agent_kind is committed_agent_kind:
                 slot.agent = prior_agent
                 slot.agent_kind = prior_agent_kind
+                slot.crew_mode_agent = prior_crew_stamp
                 if (
                     committed_active_fallback_model is not None
                     and slot._active_fallback_model is committed_active_fallback_model
@@ -940,7 +962,15 @@ async def switch_slot_agent(
                     await drained_to_thread(
                         conversation_log.update_metadata,  # type: ignore[union-attr]
                         _history_key_for(name),
-                        {"agent": str(slot.agent), "agent_kind": slot.agent_kind},
+                        {
+                            "agent": str(slot.agent),
+                            "agent_kind": slot.agent_kind,
+                            **(
+                                {"crew_mode_agent": str(slot.crew_mode_agent or "")}
+                                if crew_stamp_moves
+                                else {}
+                            ),
+                        },
                     )
                 except Exception:
                     logger.warning(
@@ -957,7 +987,15 @@ async def switch_slot_agent(
                 await drained_to_thread(
                     conversation_log.update_metadata,
                     _history_key_for(name),
-                    {"agent": agent_name, "agent_kind": new_agent_kind},
+                    {
+                        "agent": agent_name,
+                        "agent_kind": new_agent_kind,
+                        **(
+                            {"crew_mode_agent": str(slot.crew_mode_agent or "")}
+                            if crew_stamp_moves
+                            else {}
+                        ),
+                    },
                 )
             except asyncio.CancelledError:
                 # Drain the writer before restoring history, and retain both
@@ -993,7 +1031,15 @@ async def switch_slot_agent(
                     await drained_to_thread(
                         state.conversation_log.update_metadata,
                         _history_key_for(name),
-                        {"agent": str(slot.agent), "agent_kind": slot.agent_kind},
+                        {
+                            "agent": str(slot.agent),
+                            "agent_kind": slot.agent_kind,
+                            **(
+                                {"crew_mode_agent": str(slot.crew_mode_agent or "")}
+                                if crew_stamp_moves
+                                else {}
+                            ),
+                        },
                     )
                 except Exception:
                     logger.warning(
@@ -1021,7 +1067,15 @@ async def switch_slot_agent(
                         await drained_to_thread(
                             state.conversation_log.update_metadata,
                             _history_key_for(name),
-                            {"agent": str(slot.agent), "agent_kind": slot.agent_kind},
+                            {
+                                "agent": str(slot.agent),
+                                "agent_kind": slot.agent_kind,
+                                **(
+                                    {"crew_mode_agent": str(slot.crew_mode_agent or "")}
+                                    if crew_stamp_moves
+                                    else {}
+                                ),
+                            },
                         )
 
             try:
@@ -1202,6 +1256,13 @@ async def switch_slot_agent(
         # changes nothing the row could name, so it appends none.
         if caller.notice and agent_changed:
             await _append_session_switch_notice(slot, "agent", agent_name)
+    # Crew Mode is a chat on the conductor TEMPLATE. Landing on it puts the work-ledger
+    # board on a ROOT session's own page (its side panel Overview), so the board lives
+    # there and the per-turn [DASHBOARD] block names it. Only a page nothing was adopted
+    # on yet; leaving the conductor changes nothing on the page.
+    from kiro_crew.dashboard_agentic import adopt_crew_mode_board_on_switch
+
+    await adopt_crew_mode_board_on_switch(slot, agent_name, state)
     # The reset destroyed any eagerly created session; picking an agent is
     # itself a strong first-message intent signal (it also resets the
     # project), so re-arm the speculative spawn for the new bindings.

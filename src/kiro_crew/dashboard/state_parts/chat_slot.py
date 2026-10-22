@@ -63,6 +63,7 @@ class _ChatSlot:
         "title",
         "agent",
         "agent_kind",
+        "crew_mode_agent",
         "app_agent_owner",
         "model",
         "jev_route",
@@ -365,6 +366,7 @@ class _ChatSlot:
 
     # Initialised by state_parts/slot_session.py.
     agent_kind: str
+    crew_mode_agent: str
     app_agent_owner: str
     _welcomed_agent: str
     jev_route: bool

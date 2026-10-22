@@ -629,6 +629,7 @@ _BASE_SLOT_DEFAULTS: dict[str, tuple[str, str | None]] = {
     "_window_loader_thread": ("value", "None"),
     "agent": ("value", "''"),
     "agent_kind": ("value", "''"),
+    "crew_mode_agent": ("value", "''"),
     "app_agent_owner": ("value", "''"),
     "autocompact_pct": ("value", "None"),
     "channel_origin": ("value", "False"),

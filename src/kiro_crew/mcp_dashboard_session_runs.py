@@ -18,7 +18,9 @@ from urllib.parse import quote
 
 from kiro_crew.conductor_patrol import reply_line
 from kiro_crew.mcp_dashboard_caller_scope import (
+    CREW_MODE_FOLDER_NOTE,
     _caller_app_scope,
+    _caller_in_crew_tree,
     _refuse_tree_shaping_if_unverifiable,
 )
 from kiro_crew.mcp_dashboard_folder_tree import _chat_folder_paths
@@ -42,6 +44,7 @@ def _resolve_folder_for_new_session(
     folder_ref: str,
     verb: str,
     preflight: Callable[[str], str | None] | None = None,
+    crew_project: bool = False,
 ) -> tuple[str, str, str, str | None]:
     """``(folder_id, folder_label, made_note, error)`` for filing a NEW session.
 
@@ -82,6 +85,18 @@ def _resolve_folder_for_new_session(
     scope_rows, scope_err = _get_rows(ctx.client, "/api/chat/slots")
     if scope_err:
         return "", "", "", redact(f"Error: {scope_err}")
+    if _caller_in_crew_tree(gate_key, scope_rows):
+        # A Crew Mode chat's sessions live in its side panel, never in the person's
+        # folders: no path segment is created and the reply says so. With
+        # *crew_project* (``session_create`` only, whose server route files nothing
+        # for a Crew Mode caller) an EXISTING folder is still named, which gives the
+        # child that folder's project directory.
+        if not crew_project:
+            return "", "", CREW_MODE_FOLDER_NOTE, None
+        crew_folders, crew_err = _get_rows(ctx.client, "/api/chat/folders")
+        if crew_err:
+            return "", "", "", redact(f"Error: {crew_err}")
+        return _existing_folder(folder_ref, crew_folders) + (CREW_MODE_FOLDER_NOTE, None)
     if _caller_app_scope(gate_key, scope_rows):
         return (
             "",
@@ -109,6 +124,17 @@ def _resolve_folder_for_new_session(
         # DO persist and are reported in `made_note`.
         return "", "", made_note, redact(f"Error: {fld_err}{made_note}")
     return fld_id, _chat_folder_paths(chat_folders).get(fld_id, fld_id), made_note, None
+
+
+def _existing_folder(folder_ref: str, chat_folders: list[dict]) -> tuple[str, str]:
+    """``(folder_id, folder_path)`` of the folder *folder_ref* names, by id or by its
+    ``parent/child`` path, or ``("", "")`` when no folder has it. Creates nothing."""
+    paths = _chat_folder_paths(chat_folders)
+    ref = folder_ref.strip().strip("/")
+    for fid, path in paths.items():
+        if ref in (fid, path):
+            return fid, path
+    return "", ""
 
 
 def _summary_time(value: object) -> str:
@@ -217,6 +243,7 @@ def _run_session_create(args: dict[str, Any], ctx: ToolContext) -> str:
         str(args.get("folder") or ""),
         "filing a new session at creation",
         preflight=_preflight_create,
+        crew_project=True,
     )
     if fld_err:
         return fld_err

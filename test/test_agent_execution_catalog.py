@@ -551,3 +551,27 @@ async def test_catalog_sends_the_refused_backends(catalog):
         assert response.status == 200
         body = await response.json()
     assert body["markdown_refused_backends"] == agent_catalog._markdown_refused_backends()
+
+
+@pytest.mark.asyncio
+async def test_catalog_names_the_configured_crew_mode_agent_and_the_conductor_family(
+    catalog, request
+):
+    from types import SimpleNamespace
+
+    from kiro_crew import crew_mode
+
+    # The catalog read remembers the configured agent for config-less readers; put
+    # the default back so the next test in this worker does not inherit it.
+    request.addfinalizer(
+        lambda: crew_mode.remember(SimpleNamespace(agent=SimpleNamespace(crew_mode_agent="")))
+    )
+    catalog.config.agent.crew_mode_agent = "better-conductor"
+    async with TestClient(TestServer(catalog.app)) as client:
+        body = await (await client.get("/api/agents/catalog")).json()
+    assert body["crew_mode_agent"] == "better-conductor"
+    # Every conductor stays out of a normal chat's picker; Crew Mode itself is the
+    # configured agent alone once another one runs it.
+    assert "better-conductor" in body["conductor_agents"]
+    assert "kirocrew-pipeline-conductor" in body["conductor_agents"]
+    assert body["crew_mode_agents"] == ["better-conductor"]

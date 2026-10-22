@@ -183,6 +183,7 @@ if TYPE_CHECKING:  # every owner-defined name this module forwards, for type che
         _STOCK_WORKER_AGENT,
         _caller_member_workspace,
         _dispatching_crewmate,
+        _frame_parents,
         _inherited_pin_foreign_to_child,
         _model_pin_refusal,
         _record_spawn,
