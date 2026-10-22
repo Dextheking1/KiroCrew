@@ -38,6 +38,10 @@ interface MessageReactionBarProps {
  */
 const MessageReactionBar = memo(function MessageReactionBar({ active, onToggle, error, onClearError, className }: MessageReactionBarProps) {
   useLanguageGeneration() // memo() bails out of the provider-level repaint; subscribe directly so a language switch re-renders the labels
+  // While a reaction error is showing, keep every button visible even at rest:
+  // the notice says "try again", and the retry IS clicking the emoji, so the
+  // emoji must not be faded out when the notice is up (UX review).
+  const forceVisible = error != null
   const errorMessage = error
     ? error.kind === 'limit'
       ? i18nT('pages.chat.messageReactionBar.reaction_limit_reached')
@@ -90,7 +94,7 @@ const MessageReactionBar = memo(function MessageReactionBar({ active, onToggle, 
               aria-label={label}
               title={label}
               onClick={() => onToggle(emoji)}
-              className={`flex items-center justify-center w-6 h-6 rounded-md text-sm leading-none transition-colors bg-transparent border-none cursor-pointer [@media(hover:none)]:min-h-10 [@media(hover:none)]:min-w-10 ${isActive ? 'opacity-100 bg-accent-subtle ring-1 ring-accent/40' : 'opacity-0 transition-opacity duration-300 delay-100 group-hover/msg:opacity-100 group-hover/msg:delay-300 group-focus-within/msg:opacity-100 group-focus-within/msg:delay-300 [@media(hover:none)]:opacity-100 hover:bg-bg-hover'}`}
+              className={`flex items-center justify-center w-6 h-6 rounded-md text-sm leading-none transition-colors bg-transparent border-none cursor-pointer [@media(hover:none)]:min-h-10 [@media(hover:none)]:min-w-10 ${isActive ? 'opacity-100 bg-accent-subtle ring-1 ring-accent/70' : forceVisible ? 'opacity-100 hover:bg-bg-hover' : 'opacity-0 transition-opacity duration-300 delay-100 group-hover/msg:opacity-100 group-hover/msg:delay-300 group-focus-within/msg:opacity-100 group-focus-within/msg:delay-300 [@media(hover:none)]:opacity-100 hover:bg-bg-hover'}`}
             >
               <span aria-hidden="true">{emoji}</span>
             </button>

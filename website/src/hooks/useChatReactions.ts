@@ -1,73 +1,21 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { reactionsApi, type ChatReaction, type ReactMessageBody } from '../api/reactions'
 import { secureRandomId } from '../utils/secureId'
+import { reactionQueryKey, beginToggle, endToggle } from './reactionToggleLedger'
 
-const reactionQueryKey = (slotKey: string | undefined) => ['chat-reactions', slotKey] as const
-
-// How many reaction toggles are mid-flight per slot, shared across every
-// consumer in this tab (the hook AND the WebSocket frame router). A toggle
-// holds an optimistic entry in the ['chat-reactions', slot] cache until its
-// request settles; refetching that cache while the entry is pending drops it,
-// and a queued off-toggle then reads the identity as absent and sends POST
-// instead of DELETE — persisting the reaction the user ended OFF. The hook's
-// own settled refetch already waits for this to drain (see `settleWhenIdle`);
-// this module-level ledger extends the same guard to the `reactions_changed`
-// WebSocket invalidation, which lives in another module and would otherwise
-// bypass it entirely. Keyed by slot_key so a toggle on one slot never defers
-// another slot's refresh.
-const pendingToggles = new Map<string, number>()
-// A slot whose settled refetch must fire once its last toggle drains. Set by
-// the hook's own onSettled (it always wants the server truth once nothing is
-// pending) and by a `reactions_changed` frame that arrived mid-flight (a
-// concurrent-tab change that must still land). Either way the refetch is held
-// until the slot's pending count hits zero so it cannot drop a still-pending
-// optimistic entry, then fired exactly once.
-const refetchWhenDrained = new Set<string>()
-
-function beginToggle(slotKey: string): void {
-  pendingToggles.set(slotKey, (pendingToggles.get(slotKey) ?? 0) + 1)
-}
-
-function endToggle(slotKey: string, qc: QueryClient): void {
-  const next = Math.max(0, (pendingToggles.get(slotKey) ?? 0) - 1)
-  if (next > 0) {
-    pendingToggles.set(slotKey, next)
-    return
-  }
-  // Nothing pending for this slot now. Fire the single settled refetch — the
-  // server truth the hook always wants once its own toggles drain, and the
-  // flush of any WS refresh held back while a toggle was in flight.
-  pendingToggles.delete(slotKey)
-  refetchWhenDrained.delete(slotKey)
-  qc.invalidateQueries({ queryKey: reactionQueryKey(slotKey) })
-}
-
-/** True when a reaction toggle is still in flight for `slotKey`. The
- *  `reactions_changed` frame handler checks this so a cross-tab refetch never
- *  stomps an optimistic entry that a queued off-toggle still needs to read. */
-export function reactionTogglePending(slotKey: string): boolean {
-  return (pendingToggles.get(slotKey) ?? 0) > 0
-}
-
-/** Record that a `reactions_changed` refresh for `slotKey` was held back
- *  because a toggle was in flight; it is flushed when the last toggle settles. */
-export function deferReactionInvalidation(slotKey: string): void {
-  refetchWhenDrained.add(slotKey)
-}
-
-/** Test seam: drop all cross-consumer toggle state between cases. */
-export function __resetReactionToggleLedgerForTests(): void {
-  pendingToggles.clear()
-  refetchWhenDrained.clear()
-}
-
-/** Test seam: pin a slot's pending-toggle count so a WS-frame test can drive
- *  the deferral branch without standing up real mutations. */
-export function __setReactionTogglePendingForTests(slotKey: string, count: number): void {
-  if (count <= 0) pendingToggles.delete(slotKey)
-  else pendingToggles.set(slotKey, count)
-}
+// The cross-consumer in-flight ledger lives in `./reactionToggleLedger` (no
+// React imports) so the hook, the `reactions_changed` frame router and the
+// reconnect reconcile can share ONE singleton. Re-exported here so existing
+// importers keep their path.
+export {
+  reactionTogglePending,
+  deferReactionInvalidation,
+  invalidateReactionsForSlot,
+  reconcileReactionsOnReconnect,
+  __resetReactionToggleLedgerForTests,
+  __setReactionTogglePendingForTests,
+} from './reactionToggleLedger'
 
 /** A failed reaction, scoped to the message it happened on so only that row's
  *  bar shows the notice rather than every bar on the page. */

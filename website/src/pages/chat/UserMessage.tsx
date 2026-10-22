@@ -771,12 +771,16 @@ const UserMessage = memo(function UserMessage({ content, meta, timestamp, timest
           collapsed to zero height until the message is hovered or focused, so
           the row costs no transcript density at rest. */}
       {messageTs && onToggleReaction && (
+        // Tight UNDER the user bubble (no top margin) with a gap BELOW, so the
+        // right-aligned row reads as belonging to the question above it, not
+        // the reply below. A top margin placed it midway between the two and a
+        // reader could not tell which message it reacted to (UX review).
         <MessageReactionBar
           active={activeReactions ?? EMPTY_REACTIONS}
           onToggle={onToggleReaction}
           error={reactionError}
           onClearError={onClearReactionError}
-          className={`mt-0.5 ${HOVER_NONE_ACTIONS_ROW_CLS}`}
+          className={`mb-2 ${HOVER_NONE_ACTIONS_ROW_CLS}`}
         />
       )}
       {/* No hand-off: the row's own inline editor and the composer draft are
