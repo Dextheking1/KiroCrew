@@ -145,7 +145,7 @@ if TYPE_CHECKING:
         _UNREADABLE_SPEC_WARNED,
         _UNREADABLE_SPEC_WARNED_MAX,
         HONOUR_TOOL_REFS_KEY,
-        INCLUDE_LIST_SERVER,
+        INCLUDE_LIST_SERVERS,
         POLICY_INCLUDE_KEY,
         ManagedToolPolicyUnreadable,
         _ambiguous_spec_reason,
