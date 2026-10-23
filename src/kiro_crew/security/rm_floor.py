@@ -25,12 +25,27 @@ _RM_FLOOR_BY_KIND: dict[str, tuple[str, str]] = {
 _RM_FLOOR_NOTE = "Matched on the rm flags and target, not the pattern text: recursive and force against this directory itself."
 _RM_FLOOR_UNREAD_NOTE = "Refused because the rm check could not read this command. Simplify it."
 _CAN_FIRE_RE = re.compile(r"r[^\w\s]*m")  # a literal rm, quote splices allowed
+_RM_WORD_RE = re.compile(r"(?<![\w.-])r[^\w\s/]*m(?![\w.-])")  # rm as its own word
 _HOME_WORDS = frozenset({"~", "$HOME", "${HOME}"})
 _CUT_CHARS = frozenset(";&|\n`()")
 
 
 def _can_fire(command: str) -> bool:
     return bool(_CAN_FIRE_RE.search(command))
+
+
+def _names_rm_word(command: str) -> bool:
+    """``rm`` as its own word in *command*, or once ``${X:-…}`` defaults are resolved."""
+    resolved = _shell._resolve_param_defaults(command)
+    return bool(_RM_WORD_RE.search(command) or _RM_WORD_RE.search(resolved))
+
+
+def _backtick_close(text: str, start: int) -> int:
+    """Offset past the unescaped backtick closing a body at *start*, else ``len(text)``."""
+    pos = start
+    while pos < len(text) and text[pos] != "`":
+        pos += 2 if text[pos] == "\\" else 1
+    return min(pos + 1, len(text))
 
 
 def _target_kind(word: str) -> "str | None":
@@ -64,9 +79,19 @@ def _segments(command: str) -> "list[str]":
                 seg.append("\0")
                 resume, resume_state = pos + step.offset + 2 + close, 2
                 break
+            if step.state == 2 and step.char == "`" and len(step.text) == 1:
+                # a backtick body in double quotes is read on its own, then the quote resumes
+                end = _backtick_close(text, step.offset + 1)
+                closed = text[end - 1 : end] == "`" and end > step.offset + 1
+                out.extend(_segments(text[step.offset + 1 : end - closed]))
+                seg.append("\0")
+                resume, resume_state = pos + end, 2
+                break
             if step.active and step.char in _CUT_CHARS:
                 out.append("".join(seg))
                 seg = []
+            elif step.active and step.char in "<>":
+                seg.append(" " + step.text)  # a live redirection starts its own word
             elif step.char in "$~" and (
                 len(step.text) == 2 or step.state == 1 or (step.char == "~" and step.state)
             ):
