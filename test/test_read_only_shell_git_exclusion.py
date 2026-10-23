@@ -121,6 +121,7 @@ class _RecordingProvider:
     def __init__(self) -> None:
         self.approved: list[str] = []
         self.rejected: list[str] = []
+        self.deny_reasons: list[str] = []
 
     async def approve_tool(self, request_id: str) -> None:
         self.approved.append(request_id)
@@ -147,6 +148,12 @@ async def _resolve_headless(command: str, approver: object = None) -> _Recording
         return None
 
     provider = _RecordingProvider()
+
+    async def _record_deny(_provider: object, _event: object, reason: str, **_kw: object) -> None:
+        provider.deny_reasons.append(reason)
+
+    import kiro_crew.llm_helpers as llm_helpers_mod
+
     event = LLMEvent(
         kind=EVENT_PERMISSION_REQUEST,
         title=f"Running: {command}",
@@ -157,6 +164,7 @@ async def _resolve_headless(command: str, approver: object = None) -> _Recording
     with (
         patch.object(sel_mod, "sel", lambda: MagicMock()),
         patch.object(name_grant, "refusal_for_event", _clean),
+        patch.object(llm_helpers_mod, "_steer_host_deny", _record_deny),
     ):
         await _resolve_permission(
             provider,  # type: ignore[arg-type]
@@ -175,6 +183,45 @@ async def test_a_git_read_is_refused_where_no_approver_exists(command: str) -> N
     git unchecked; it is refused instead."""
     provider = await _resolve_headless(command)
     assert (provider.approved, provider.rejected) == ([], ["r1"])
+    assert provider.deny_reasons == [_NO_APPROVER_GIT_REASON]
+
+
+#: The refusal the no-approver git branch sends, so a test can tell it from a hook deny.
+_NO_APPROVER_GIT_REASON = (
+    "a git command is never run without an approval (git runs programs "
+    "its repository config names) and this surface has no approver"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    ["git commit -m wip", "git checkout -b topic", "make && git add -A", "env git merge topic"],
+)
+async def test_a_git_write_is_refused_where_no_approver_exists(command: str) -> None:
+    """A git command that is not a read runs repository-configured programs too
+    (hooks), so with no approver it is refused like a git read."""
+    assert is_read_only_bash(command) is False
+    provider = await _resolve_headless(command)
+    assert (provider.approved, provider.rejected) == ([], ["r1"])
+    assert provider.deny_reasons == [_NO_APPROVER_GIT_REASON]
+
+
+@pytest.mark.asyncio
+async def test_a_git_write_still_reaches_an_approver_that_exists() -> None:
+    async def _approve(_event: object) -> bool:
+        return True
+
+    provider = await _resolve_headless("git commit -m wip", _approve)
+    assert (provider.approved, provider.rejected) == (["r1"], [])
+
+
+@pytest.mark.asyncio
+async def test_a_non_git_write_keeps_the_hook_based_default_where_no_approver_exists() -> None:
+    """Only git is refused: a non-git command the hook allows keeps the surface's
+    default, so the refusal is scoped to what runs repository-configured programs."""
+    provider = await _resolve_headless("touch notes.txt")
+    assert (provider.approved, provider.rejected) == (["r1"], [])
 
 
 @pytest.mark.asyncio
