@@ -11997,6 +11997,21 @@
         "outcome_discarded": "破棄しました。ライブページは変わっていません。",
         "outcome_closed": "プレビューは終わりました。これが今のライブページです。",
         "outcome_undo": "元に戻すには、{{name}} に前のダッシュボードに戻すよう頼んでね。"
+      },
+      "elicitationCard": {
+        "answer_failed": "回答を送信できませんでした。もう一度お試しください。",
+        "choose": "選択…",
+        "decline": "拒否",
+        "done": "完了しました",
+        "no_longer_pending": "この質問はもう回答を待っていません。",
+        "required_missing": "{{field}} は必須です。",
+        "resolved_accept": "回答済み",
+        "resolved_cancel": "未回答",
+        "resolved_decline": "拒否済み",
+        "sending": "送信中…",
+        "submit": "送信",
+        "title": "ツールからの質問です",
+        "url_hint": "リンクを開いてそこで完了し、戻ってきて確認してください。"
       }
     },
     "chatPage": {

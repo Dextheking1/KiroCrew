@@ -11,6 +11,7 @@ import { createTranscriptRenderers } from '../transcriptRenderers'
 import { api, type PlanStepInput } from '../../../api/client'
 import type { FileChangeEntry } from '../../../components/FileChangeChips'
 import CollapsibleToolGroup from '../CollapsibleToolGroup'
+import ElicitationCard from '../ElicitationCard'
 import { isSystemNoticeRow } from '../CompactionCard'
 import { decisionStripFieldOf } from '../decisionRecord'
 import type { TurnItem, DisplayItem } from '../types'
@@ -394,6 +395,14 @@ export function useTranscriptRendering({
         id: 'permission',
         roles: ['permission'],
         render: () => null,
+      },
+      {
+        // An MCP server's own question to the person (a form or a link), a
+        // standalone card: it is answered on this slot, so the page's renderer
+        // supplies the slot the SDK default cannot know.
+        id: 'elicitation',
+        roles: ['elicitation'],
+        render: (m, ctx) => ctx.row(<ElicitationCard message={m} slot={activeSlot} />),
       },
       {
         // The page's undrawn set is NARROWER than the SDK default's: reasoning

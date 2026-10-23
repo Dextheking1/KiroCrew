@@ -376,6 +376,9 @@ async def _run_turn(
     self._native_child_tool_call_ids.clear()
     self._permission_options.clear()
     self._permission_gate_events.clear()
+    # An elicitation the last turn left unanswered holds its tool call open on
+    # the engine; it is answered ``cancel`` rather than merely forgotten.
+    await self.cancel_pending_elicitations()
     # Per-turn reset (parity with kiro-cli's authoritative full subagent_list
     # each turn): otherwise a completed sub-agent from a prior turn stays in
     # the roster and is re-emitted in the next turn's EVENT_SUBAGENT_LIST,

@@ -239,6 +239,7 @@ from kiro_crew.dashboard.chat_turn.eager_spawn import (
     schedule_eager_spawn,
     stop_eager_spawns,
 )
+from kiro_crew.dashboard.chat_turn.elicitation_prompt import _on_elicitation_request
 from kiro_crew.dashboard.chat_turn.file_changes import (  # noqa: F401
     _MAX_RECONSTRUCT_BYTES,
     _PATH_TRUNCATION_MARKER,
@@ -790,6 +791,7 @@ from kiro_crew.permission_floor import OUTCOME_REJECTED_TRANSPORT_FLOOR
 from kiro_crew.platform import redact_log_via_context, redact_via_context
 from kiro_crew.providers.base import (
     EVENT_COMPLETE,
+    EVENT_ELICITATION_REQUEST,
     EVENT_PERMISSION_REQUEST,
     EVENT_SUBAGENT_ACTIVITY,
     EVENT_SUBAGENT_LIST,
@@ -2472,6 +2474,12 @@ async def _run_chat(
                     break
                 if _flow is _Flow.CONTINUE:
                     continue
+            elif event.kind == EVENT_ELICITATION_REQUEST:
+                # An MCP server's own human-in-the-loop ask, put to the person
+                # as a card. No trust tier answers it: the server declared the
+                # requirement, so only a person (or the window running out) does.
+                await _on_elicitation_request(turn, event)
+                continue
             elif event.kind == EVENT_STEER_CONSUMED:
                 _had_person_steer = bool(getattr(slot, "_pending_steers", None))
                 _settle_consumed_steers(slot, event.text or "", state)
@@ -7206,6 +7214,12 @@ async def _run_chat(
         # handle-level fail-close choke point.
         try:
             setattr(client, "child_fidelity_aware", False)
+        except Exception:
+            pass
+        # The elicitation opt-in is the same promise (to render the card) and
+        # ends with the turn for the same reason.
+        try:
+            setattr(client, "accepts_elicitation", False)
         except Exception:
             pass
         # Ensure file changes always surface, even on cancel/error. Wrapped so

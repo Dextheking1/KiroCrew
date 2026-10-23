@@ -12363,6 +12363,21 @@
         "outcome_discarded": "Supprimé. La page en ligne n’a pas changé.",
         "outcome_closed": "Aperçu terminé. C’est maintenant la page en ligne.",
         "outcome_undo": "Pour annuler, demande à {{name}} de remettre le tableau de bord précédent."
+      },
+      "elicitationCard": {
+        "answer_failed": "Votre réponse n'a pas pu être envoyée. Réessayez.",
+        "choose": "Choisir…",
+        "decline": "Refuser",
+        "done": "C'est fait",
+        "no_longer_pending": "Cette question n'attend plus de réponse.",
+        "required_missing": "{{field}} est obligatoire.",
+        "resolved_accept": "Répondu",
+        "resolved_cancel": "Sans réponse",
+        "resolved_decline": "Refusé",
+        "sending": "Envoi…",
+        "submit": "Envoyer",
+        "title": "Un outil vous pose une question",
+        "url_hint": "Ouvrez le lien, terminez là-bas, puis revenez confirmer."
       }
     },
     "chatPage": {

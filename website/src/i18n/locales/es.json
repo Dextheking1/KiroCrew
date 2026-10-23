@@ -12363,6 +12363,21 @@
         "outcome_discarded": "Descartada. La página activa no cambió.",
         "outcome_closed": "Vista previa terminada. Esta es la página activa ahora.",
         "outcome_undo": "Para deshacerlo, pídele a {{name}} que restaure el panel anterior."
+      },
+      "elicitationCard": {
+        "answer_failed": "No se pudo enviar tu respuesta. Inténtalo de nuevo.",
+        "choose": "Elegir…",
+        "decline": "Rechazar",
+        "done": "Ya lo hice",
+        "no_longer_pending": "Esta pregunta ya no espera respuesta.",
+        "required_missing": "{{field}} es obligatorio.",
+        "resolved_accept": "Respondido",
+        "resolved_cancel": "Sin responder",
+        "resolved_decline": "Rechazado",
+        "sending": "Enviando…",
+        "submit": "Enviar",
+        "title": "Una herramienta te pregunta",
+        "url_hint": "Abre el enlace, termina allí y vuelve para confirmar."
       }
     },
     "chatPage": {

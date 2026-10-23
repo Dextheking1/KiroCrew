@@ -2356,6 +2356,7 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # flushes, spec-hook notices, the stats footer). Their output reaches the runner's surfaces.
         "dashboard/chat_turn/deny_chokepoints.py",
         "dashboard/chat_turn/eager_spawn.py",
+        "dashboard/chat_turn/elicitation_prompt.py",
         "dashboard/chat_turn/file_changes.py",
         "dashboard/chat_turn/mcp_session.py",
         "dashboard/chat_turn/model_fallback.py",

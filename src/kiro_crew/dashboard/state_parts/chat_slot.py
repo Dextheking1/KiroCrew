@@ -1097,6 +1097,7 @@ class _ChatSlot:
     approval_instance = _slot_turns.approval_instance
     unregister_approval = _slot_turns.unregister_approval
     mark_permission_resolved = _slot_turns.mark_permission_resolved
+    mark_elicitation_resolved = _slot_turns.mark_elicitation_resolved
     queue_append = _slot_turns.queue_append
     _note_enqueue = _slot_turns._note_enqueue
     queue_insert = _slot_turns.queue_insert

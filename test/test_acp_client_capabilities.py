@@ -7,23 +7,46 @@ agent assumed the all-false default.
 
 from pathlib import Path
 
-from kiro_crew.acp.types import ACP_CLIENT_CAPABILITIES
+from kiro_crew.acp._dispatch import classify_notification
+from kiro_crew.acp.client_turn import _process_message
+from kiro_crew.acp.types import (
+    ACP_CLIENT_CAPABILITIES,
+    METHOD_ELICITATION_CREATE,
+    METHOD_KAS_MCP_ELICITATION,
+    JsonRpcMessage,
+)
 
 
-def test_elicitation_is_not_advertised_without_a_handler() -> None:
-    """Declaring `elicitation` with no handler is worse than declaring nothing.
+def test_elicitation_is_advertised_only_with_a_handler_on_both_drivers() -> None:
+    """`elicitation` is declared, and every driver classifies the method it invites.
 
-    It reads like a free forward-bet and is not one. A client that sees the
-    capability sends its human-in-the-loop prompts as `elicitation/create`
-    INSTEAD of falling back to `session/request_permission`; codex-acp gates on
-    `clientCapabilities.elicitation.form` exactly that way. We answer that method
-    with `-32601`, and the client turns the error into a cancellation of the tool
-    call the human was approving -- so the declaration does not wait quietly for
-    a handler, it breaks approval on every client that believes it.
-
-    Re-add the key in the same change that registers the handler.
+    The declaration is not a free forward-bet. A client that sees it sends its
+    human-in-the-loop prompts as `elicitation/create` INSTEAD of falling back to
+    `session/request_permission`; codex-acp gates on
+    `clientCapabilities.elicitation.form` exactly that way. If the method then
+    reached `_reject_unknown_server_request`, the `-32601` would cancel the tool
+    call the human was approving. So the two halves are pinned together: the
+    capability names both modes, and BOTH classifiers (the shared runtime's and
+    the single-session client's) route the standard method and KAS's spelling to
+    the `elicitation` action rather than to `server_request_unknown`.
     """
-    assert "elicitation" not in ACP_CLIENT_CAPABILITIES
+    assert ACP_CLIENT_CAPABILITIES["elicitation"] == {"form": {}, "url": {}}
+    for method in (METHOD_ELICITATION_CREATE, METHOD_KAS_MCP_ELICITATION):
+        msg = JsonRpcMessage(id=7, method=method, params={"sessionId": "s"})
+        assert classify_notification(msg) == "elicitation", method
+        assert _process_message(_ClassifierHost(), msg, req_id=1) == "elicitation", method
+
+
+class _ClassifierHost:
+    """The slice of ``AcpClient`` ``_process_message`` reads before its method checks."""
+
+    _steer_turn = None
+
+    def _note_active_run(self, msg: JsonRpcMessage) -> None:
+        raise AssertionError("an elicitation request is not a session update")
+
+    def _settle_steer_answer(self, msg: JsonRpcMessage) -> bool:
+        return False
 
 
 def test_fs_and_terminal_stay_false() -> None:

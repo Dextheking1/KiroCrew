@@ -11,8 +11,8 @@ Instance fields written: ``_abandoned_steering``, ``_awaited_responses``,
 ``_cancel_grace_secs``, ``_cancel_ts``, ``_cancelled``, ``_ingress_seq``,
 ``_session_key``, ``_stale_probe``, ``_steering_answers``.
 
-Instance fields read: ``_prompt_or_tool_seen``, ``_queue``, ``_runtime``,
-``_session_id``, ``_steering_settled``, ``keep_transcript``, ``memory_mode``.
+Instance fields read: ``_pending_elicitations``, ``_prompt_or_tool_seen``, ``_queue``,
+``_runtime``, ``_session_id``, ``_steering_settled``, ``keep_transcript``, ``memory_mode``.
 """
 
 from __future__ import annotations
@@ -271,6 +271,10 @@ async def destroy(self: AcpSessionHandle) -> None:
     for _flag in list(getattr(self, "_steering_settled", {}).values()):
         if not _flag.done():
             _flag.set_result(False)
+    # An elicitation nobody answered is cancelled on the wire before the
+    # session goes: the engine is otherwise left holding its tool call open.
+    if getattr(self, "_pending_elicitations", None):
+        await self.cancel_pending_elicitations()
     try:
         await self._runtime.terminate_session(self._session_id)
     finally:

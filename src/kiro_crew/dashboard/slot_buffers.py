@@ -829,14 +829,28 @@ class SlotBufferCoordinator:
         return written
 
     @staticmethod
-    def mark_permission_resolved(slot: Any, approval_id: str, decision: str) -> None:
+    def mark_permission_resolved(
+        slot: Any,
+        approval_id: str,
+        decision: str,
+        *,
+        role: str = "permission",
+        answer: dict | None = None,
+    ) -> None:
+        """Stamp the decision on the stored row of *role* that carries *approval_id*.
+
+        ``answer`` is the content an accepted elicitation form carried, kept on
+        the row so the resolved card can show what was sent.
+        """
         for message in slot.messages:
-            if message.get("role") != "permission":
+            if message.get("role") != role:
                 continue
             try:
                 cls_data = json.loads(message.get("cls", ""))
                 if isinstance(cls_data, dict) and cls_data.get("request_id") == approval_id:
                     cls_data["resolved"] = decision
+                    if answer is not None:
+                        cls_data["answer"] = answer
                     message["cls"] = json.dumps(cls_data)
                     return
             except (json.JSONDecodeError, TypeError):

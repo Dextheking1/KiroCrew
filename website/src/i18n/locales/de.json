@@ -12180,6 +12180,21 @@
         "outcome_discarded": "Verworfen. Die Live-Seite hat sich nicht geändert.",
         "outcome_closed": "Vorschau beendet. Das ist jetzt die Live-Seite.",
         "outcome_undo": "Zum Rückgängigmachen bitte {{name}}, das vorherige Dashboard wiederherzustellen."
+      },
+      "elicitationCard": {
+        "answer_failed": "Deine Antwort konnte nicht gesendet werden. Versuche es erneut.",
+        "choose": "Auswählen…",
+        "decline": "Ablehnen",
+        "done": "Ich habe das erledigt",
+        "no_longer_pending": "Diese Frage wartet nicht mehr auf eine Antwort.",
+        "required_missing": "{{field}} ist erforderlich.",
+        "resolved_accept": "Beantwortet",
+        "resolved_cancel": "Nicht beantwortet",
+        "resolved_decline": "Abgelehnt",
+        "sending": "Wird gesendet…",
+        "submit": "Absenden",
+        "title": "Ein Tool fragt dich",
+        "url_hint": "Öffne den Link, erledige es dort und bestätige dann hier."
       }
     },
     "chatPage": {

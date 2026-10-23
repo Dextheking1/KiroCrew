@@ -655,6 +655,19 @@ def mark_permission_resolved(self: _ChatSlot, approval_id: str, decision: str = 
     self._buffers.mark_permission_resolved(self, approval_id, decision)
 
 
+def mark_elicitation_resolved(
+    self: _ChatSlot, request_id: str, decision: str, answer: dict | None = None
+) -> None:
+    """Update the matching stored elicitation row without marking it dirty.
+
+    *decision* is the elicitation action sent (``accept`` / ``decline`` /
+    ``cancel``); *answer* is an accepted form's content, shown on the card.
+    """
+    self._buffers.mark_permission_resolved(
+        self, request_id, decision, role="elicitation", answer=answer
+    )
+
+
 # ── Queue helpers (dict-based queue items) ──
 
 

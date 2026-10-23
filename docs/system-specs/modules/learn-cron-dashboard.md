@@ -2118,6 +2118,7 @@ names:
 | `model_fallback` | session model default and settle, served-model sync, fallback chain, swap and restore probe, refusal fallback hop, the canonical-model backfill and the pinned-model verdict |
 | `tool_approval` | PreToolUse block reasons, spec-hook notices, credential hints, trust and auto-approve policy, name-grant refusals, and the permission arm's own answers (`_on_permission_request`): the hooks, the trust reads, the grants and auto-approve |
 | `permission_prompt` | a permission request put to the user (`_on_permission_prompt`): the batch-rejection cascade's auto-reject, the approval card, the wait and what the answer does |
+| `elicitation_prompt` | an MCP server's own question put to the user (`_on_elicitation_request`): the elicitation card row, the wait in the slot's approval registry, and the answer sent back (`read_elicitation_answer` maps a Stop or the generic approve onto an elicitation action); no trust tier answers it |
 | `mcp_session` | session MCP report, the session-init OAuth drain and the MCP OAuth banner lifecycle (`_emit_mcp_oauth_request`, its supersede and completion) and the scrub of the ACP strings it shows |
 | `file_changes` | pre-write snapshots, `str_replace` reconstruction, the per-turn snapshot budget, line changes, the end-of-turn file-change flush |
 | `turn_stats` | the per-turn stats footer, its first-token clock and the context meter payload, the turn outcome, the turn metric and the recovery-outcome counter |
