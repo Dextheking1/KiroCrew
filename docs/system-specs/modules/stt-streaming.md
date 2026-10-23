@@ -1415,12 +1415,12 @@ A composed edition can add STT providers through the `speech` slot on `PlatformC
 
 ### The capability `providers` list
 
-`GET /api/config/stt` serves `providers`, one entry per selectable provider, in `valid_stt_providers()` order: built-ins first in their usual order, then registered ones in registration order, with `off` last. Each entry is:
+`GET /api/config/stt` serves `providers`, one entry per selectable provider, in `valid_stt_providers()` order: built-ins first in their usual order, then registered ones in registration order, with `off` last. A built-in entry is `{name, builtin: true}` and runs no probe; the dashboard reads built-in availability from its existing badge. A registered entry is:
 
 | Field | Type | Meaning |
 |---|---|---|
 | `name` | string | The `stt.provider` value. |
-| `label` | string | Display label. The dashboard labels built-ins from its own catalog and shows this only for a registered provider. |
+| `label` | string | Display label. |
 | `builtin` | bool | Whether core ships it. |
 | `available` | bool | Whether it can run now, from the provider's `check()`. |
 | `reason` | string or null | Why it cannot run, in the provider's words. |

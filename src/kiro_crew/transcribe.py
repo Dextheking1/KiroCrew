@@ -206,6 +206,8 @@ CODE_DISABLED = "stt_disabled"
 #: (every config read here is inside a function, off the event loop).
 #: ``test_stt_provider_off`` pins it equal to ``config.sections.STT_PROVIDER_OFF``.
 STT_PROVIDER_OFF = "off"
+#: ``config.sections.STT_PROVIDER_LOCAL``, spelled here for the same reason.
+_STT_PROVIDER_LOCAL = "local"
 
 
 def _registered_provider(provider: object) -> Any:
@@ -437,14 +439,10 @@ async def transcribe_audio(audio_path: str, stt_config=None) -> str | None:  # t
         result = await _transcribe_apple(audio_path, stt_config)
     elif (registered := _registered_provider(provider)) is not None:
         # An edition-registered provider. Same contract as every branch here:
-        # text, "" for silence, or None -- never an exception. On the owner loop,
-        # where the provider's check() runs too, so a loop-bound client works.
-        from kiro_crew import speech_providers
-
+        # text, "" for silence, or None -- never an exception. Called on this
+        # loop; the provider contract allows no loop-bound state across calls.
         try:
-            result = await speech_providers.run_on_owner(
-                lambda: registered.transcribe_file(audio_path, stt_config)
-            )
+            result = await registered.transcribe_file(audio_path, stt_config)
         except Exception:
             logger.warning("STT provider %r failed to transcribe", provider, exc_info=True)
             return None
@@ -480,7 +478,12 @@ def batch_duration_cap_secs(stt_config=None) -> int | None:  # type: ignore[no-u
     """
     if stt_config is None:
         stt_config = _load_stt_config()
-    if stt_config.provider == "transcribe":
+    # AWS fails loudly, and a provider an edition registered handles its own
+    # length, so neither gets the local decoder's cap (or its duration probe).
+    # Any other name, an unrecognised one included, lands on a built-in decoder
+    # and keeps the ceiling.
+    provider = stt_config.provider
+    if provider == "transcribe" or _registered_provider(provider) is not None:
         return None
     return _MAX_AUDIO_SECS
 
@@ -504,9 +507,13 @@ def provider_splits_oversized(stt_config) -> bool:  # type: ignore[no-untyped-de
     argument (the one production caller always has it in hand, from the same
     snapshot the readiness/cap/transcribe calls share); it never reads config
     itself, so there is no window for the three answers to describe different
-    providers.
+    providers. An unrecognised name lands on the local decoder, so it splits
+    too; a provider an edition registered handles its own length and does not.
     """
-    return stt_config.provider not in ("transcribe", "apple")
+    provider = stt_config.provider
+    if provider in ("transcribe", "apple"):
+        return False
+    return _registered_provider(provider) is None
 
 
 def _wav_duration_secs(audio_path: str) -> float | None:
