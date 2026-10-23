@@ -203,10 +203,10 @@ _CREDENTIAL_PATTERNS = re.compile(
     # its trailing period. The 3-to-5-segment alternative (`credential_patterns.JWT_MULTI_SEGMENT`,
     # `*` on post-header segments so an empty JWE segment matches) consumes such a period too, an
     # accepted over-redaction cost. The 2-segment alternative therefore carries a left boundary
-    # (`(?<![A-Za-z0-9_.-])`: base64url's `-`/`_` plus `.` so `obj.eyJ…` is excluded too;
-    # `_BARE_SECRET_RUN_RE` uses `(?<![A-Za-z0-9+/])`) and per-segment lengths taken from
-    # the generator, not from guesswork, because a length FLOOR alone is beatable by a
-    # sufficiently verbose identifier: at `{40,}` the 40-char
+    # (`(?<![A-Za-z0-9_-])`, a word character before `eyJ` as in `keyJson`, not `.`: a token
+    # after a `.` matches as at the start, and `obj.eyJ…` code is kept by the lengths below)
+    # and per-segment lengths taken from the generator, not from guesswork, because a length
+    # FLOOR alone is beatable by a verbose identifier: at `{40,}` the 40-char
     # `eyJsonSerializerConfigurationFactoryBuilder.deserializeFromStringValue` matched.
     #
     # `token_auth._sign` is HMAC-SHA256 base64url-unpadded, so the signature is
@@ -258,7 +258,7 @@ _CREDENTIAL_PATTERNS = re.compile(
     # Bearer header carrying a JWT redacts as one match (the Bearer class subsumes
     # the JWT); a bare JWT is still caught independently (defense in depth).
     f"|{JWT_MULTI_SEGMENT}"  # JWS (3-seg) / JWE (5-seg incl. dir/ECDH-ES), shared spelling
-    r"|(?<![A-Za-z0-9_.-])eyJ[A-Za-z0-9_-]{96,}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])"  # 2-seg link token
+    r"|(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{96,}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])"  # 2-seg link token
     r"|(?i:Authorization)[\"\']?\s*[:=]\s*[\"\']?(?i:Bearer)\s+[A-Za-z0-9._~+/-]+=*"  # HTTP/JSON bearer
     r")",
 )

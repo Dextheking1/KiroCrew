@@ -30,8 +30,8 @@ _SECRET_RE = re.compile(
     # points that matter: the signature width is PINNED (`{43}`, a property of the
     # HMAC-SHA256 digest), the payload bound is a generator-derived floor rather
     # than a guess (a guessed floor is beatable by a verbose identifier), and the
-    # left boundary (incl. `.`, so attribute access is excluded) keeps ordinary
-    # dotted code intact.
+    # left boundary (letters, digits and `-`/`_`, not `.`) keeps `eyJ` inside a
+    # longer word from matching while the lengths keep dotted code intact.
     #
     # Placing it after the three-segment alternative is defensive, not
     # load-bearing for real tokens: a conventional JWS header is only 33 chars
@@ -40,7 +40,7 @@ _SECRET_RE = re.compile(
     # clears that floor AND whose payload is exactly 43 chars, since the right
     # boundary is satisfied by a `.` and would leave `.signature` in the printed
     # log. That shape is covered by a test.
-    r"|(?<![A-Za-z0-9_.-])eyJ[A-Za-z0-9_-]{96,}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])"
+    r"|(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{96,}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])"
     r"|-----BEGIN[A-Z ]*PRIVATE KEY-----)"
 )
 _KV_RE = re.compile(
