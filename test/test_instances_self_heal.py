@@ -525,13 +525,14 @@ class TestSelfHealRefreshRestart:
         assert "post-quantum" not in t.status.error.lower()
 
     @staticmethod
-    async def _timeout_error_for_live_child(**kwargs):
+    async def _timeout_error_for_live_child(*, tunable=True, **kwargs):
         from kiro_crew.instances.ssh_tunnel_manager import _SshTunnel
 
         class _LiveProc:
             returncode = None  # never exits: still connecting at the deadline
 
         t = _SshTunnel("cd-1", "cd-1-alias", 53992, 7777, connect_timeout_secs=0.05, **kwargs)
+        t._timeout_tunable = tunable
         t._proc = _LiveProc()
 
         async def never_reachable():
@@ -577,11 +578,40 @@ class TestSelfHealRefreshRestart:
         t = _SshTunnel(
             "cd-1", "cd-1-alias", 53994, 7777, connect_timeout_secs=CONNECT_TIMEOUT_CEILING_SECS
         )
+        t._timeout_tunable = True
         t._proc = _LiveProc()
         err = t._ready_timeout_error().lower()
         assert "already at its maximum" in err
         assert "reachable" in err
         assert "instances.connect_timeout_secs" not in err
+
+    @pytest.mark.parametrize("kwargs", [{}, {"transport": "ssm", "ssm_target": "i-0abc"}])
+    @pytest.mark.asyncio
+    async def test_ready_timeout_on_an_untunable_tunnel_names_no_setting(self, kwargs):
+        # A tunnel whose budget does not come from instances.connect_timeout_secs
+        # (the desktop tunnel keeper's) keeps the cause text but never tells the
+        # user to raise a setting that would change nothing.
+        err = await self._timeout_error_for_live_child(tunable=False, **kwargs)
+        assert "timed out after 0.05s" in err
+        assert "reachable" in err
+        assert "instances.connect_timeout_secs" not in err
+        assert "kirocrew config set" not in err
+
+    @pytest.mark.asyncio
+    async def test_a_bare_tunnel_is_untunable_and_the_manager_marks_its_own(self, tmp_path):
+        # The default is off, so a tunnel built outside the manager (tunnel_keeper's
+        # make_tunnel) names no setting. The manager reads the setting into the
+        # budget, so connect() and a self-heal rebuild both turn it on.
+        from kiro_crew.instances.ssh_tunnel_manager import TunnelState, _SshTunnel
+
+        assert _SshTunnel("cd-1", "cd-1-alias", 53995, 7777)._timeout_tunable is False
+        reg, mgr = self._mgr(tmp_path)
+        reg.add(name="CD", ssh_host="cd-1-alias", instance_id="cd-1")
+        await mgr.connect("cd-1")
+        assert mgr._tunnels["cd-1"]._timeout_tunable is True
+        mgr._tunnels["cd-1"].status.state = TunnelState.ERROR
+        await mgr._recover("cd-1")
+        assert mgr._tunnels["cd-1"]._timeout_tunable is True
 
     @pytest.mark.asyncio
     async def test_wait_until_ready_timeout_with_dead_child_stays_generic(self):

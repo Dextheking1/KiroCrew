@@ -205,6 +205,12 @@ class _SshTunnel:
         # (instance_id) on a proven end-to-end probe success so the manager can
         # clear the self-heal attempt counter once the forward is verified live.
         self._on_healthy: Callable[[str], None] | None = None
+        # Optional seam, assigned the same way: True only when the owner reads
+        # ``instances.connect_timeout_secs`` into this tunnel's budget, so a
+        # readiness timeout may tell the user to raise it. A tunnel built
+        # without that setting (the desktop client-only tunnel keeper) leaves it
+        # False, and its timeout message never names a setting it ignores.
+        self._timeout_tunable = False
         self._transport = transport  # "ssh" or "ssm"
         self._ssm_target = ssm_target
         self._aws_profile = aws_profile
@@ -490,12 +496,17 @@ class _SshTunnel:
         generic wording because no stderr classification ran against it. A
         budget already at ``CONNECT_TIMEOUT_CEILING_SECS`` cannot be raised, so
         that message points at the host's reachability instead of the tunable.
+        So does a tunnel whose owner never set ``_timeout_tunable``: its budget
+        does not come from ``instances.connect_timeout_secs``, so raising that
+        setting would change nothing.
         """
         timeout = self._connect_timeout
         proc = self._proc
         if proc is None or proc.returncode is not None:
             return f"timed out after {timeout}s waiting for forward"
-        if timeout >= _CONNECT_TIMEOUT_CEILING_SECS:
+        if not self._timeout_tunable:
+            knob = "Check that the host is reachable and connect again."
+        elif timeout >= _CONNECT_TIMEOUT_CEILING_SECS:
             knob = (
                 "This budget is already at its maximum, so check that the host is "
                 "reachable rather than raising it."
