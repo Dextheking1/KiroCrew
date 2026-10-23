@@ -33,6 +33,7 @@ import { timeAgo } from '../../utils/timeAgo'
 import { sessionDisplayTitle } from '../../utils/sessionDisplayTitle'
 import CrewProfilePanel, { type ProfileTab } from './CrewProfilePanel'
 import CrewGoalsPane, { useMemberGoals } from './CrewGoals'
+import CrewHeartbeatRow from './CrewHeartbeat'
 import { sendTurn } from '../../chat-core/transport/sendTurn'
 import { createPortal } from 'react-dom'
 import { useConfirm } from '../../components/ConfirmDialog'
@@ -638,16 +639,16 @@ export function MembersPageProfileCard({
   // The profile card (crewmate-panel IA): the pill's surface. Notes,
   // Schedules and the work log are ITS tabs/pages now, so the three
   // bodies above mount here instead of on the side panel's strip.
-  // The Goals tab's "Track something in chat": the user's own message in
+  // The Goals tab's New goal modal: the opening message as the user's own in
   // this crewmate's thread, through the ordinary send path, so it shows in
   // the transcript like anything they typed. A card floating over the
   // thread closes so the reply is in view; a docked column stays.
-  const trackInChat = async (message: string) => {
+  const sendToChat = async (message: string) => {
     if (!confirmedSlot) return 'refused' as const
     return (await sendTurn({ slot: confirmedSlot, message })).status
   }
-  const onTracked = () => {
-    // CrewGoals clears its delivered draft and busy flag before this exit.
+  const onSent = () => {
+    // CrewGoals closes its modal and clears its busy flag before this exit.
     if (!profileDocked) requestCloseProfile()
   }
   const profilePanel = activeView && profile ? (
@@ -676,6 +677,7 @@ export function MembersPageProfileCard({
       onOpenSchedule={() => { const destination = '/schedule'; leave(() => navigate(destination), destination) }}
       onOpenScheduleJob={(id) => { const destination = `/schedule?job=${encodeURIComponent(id)}`; leave(() => navigate(destination), destination) }}
       newScheduleBody={schedulesBody}
+      heartbeatBody={activeSlug && activeMemberName ? <CrewHeartbeatRow slug={activeSlug} member={activeMemberName} /> : null}
       sessionsBody={sessionsBody}
       notesBody={notesBody}
       goalsBody={activeSlug && activeMemberName ? (
@@ -683,8 +685,8 @@ export function MembersPageProfileCard({
           slug={activeSlug}
           member={activeMemberName}
           name={crewDisplayName(activeView ?? active)}
-          onTrackInChat={confirmedSlot ? trackInChat : undefined}
-          onTracked={onTracked}
+          onSendToChat={confirmedSlot ? sendToChat : undefined}
+          onSent={onSent}
           onDraftStateChange={onGoalsDraftChange}
           onRequestLeave={requestProfileBack}
         />
