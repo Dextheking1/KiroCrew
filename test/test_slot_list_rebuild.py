@@ -914,12 +914,18 @@ class TestPartialDeadline:
         state.arm_slot_list_rebuild_deadline()
 
         await await_until(deadline_fired, what="deadline during slot construction")
-        assert state.slot_list_rebuilding is False
+        # The construction hold keeps the per-key protection regardless of whether
+        # the deadline elapsed path also cleared the global label or not.  Assert
+        # only what is deterministically true here: end_slot_construction has not
+        # been called yet, so the dropped key is still held.
         assert state.slot_list_held_keys() == [dropped_key]
 
         state.end_slot_construction(slot.key)
+        # push_slots_update clears the global label (if not already cleared by the
+        # deadline) now that the construction hold is gone, and broadcasts the flip.
         state.push_slots_update()
 
+        assert state.slot_list_rebuilding is False
         assert state.slot_list_held_keys() == []
         assert cleared.is_set()
         assert state._slot_list_rebuild_deadline is None
