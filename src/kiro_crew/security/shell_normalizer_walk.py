@@ -276,7 +276,11 @@ def _substitution_bodies(text: str) -> "list[str]":
         # substitution does -- ``cat <(kirocrew token)`` executes the inner command and
         # feeds its output through a pipe.  Same paren-nesting walk.
         if text.startswith(("<(", ">(", "$("), i):
-            end, proven = _matching_close_paren(text, i + 2)
+            # bash parses the body in a fresh quoting context -- a ``$(`` inside
+            # double quotes opens a new command line -- so the span is proven
+            # from the slice at neutral state.
+            rel, proven = _matching_close_paren(text[i + 2 :], 0)
+            end = i + 2 + rel
             bodies.append(text[i + 2 : end - 1] if proven else text[i + 2 :])
             i = end
             continue
@@ -448,6 +452,44 @@ def _redirect_consumes_next(token: str) -> "tuple[bool, bool]":
     return (True, token[cut:].lstrip("<>&") == "")
 
 
+#: A named file-descriptor prefix (``{fd}>file``): bash allocates the descriptor
+#: and stores it in the variable, so the braces belong to the redirection.
+_NAMED_FD_PREFIX_RE = re.compile(r"\{[a-z_][a-z0-9_]*\}\Z")
+
+
+#: A word made only of literal characters: no expansion, quoting, glob or brace
+#: syntax, so the text is exactly the argv word bash passes.
+_LITERAL_WORD_RE = re.compile(r"[a-z0-9_./:@%+=,-]+\Z", re.IGNORECASE)
+
+
+def _redirect_word_prefix(token: str) -> str:
+    """The argv word in front of a redirection glued to it, else ``""``.
+
+    A redirection needs no whitespace before it, so ``restart>/tmp/log`` is the
+    word ``restart`` followed by the redirection ``>/tmp/log``: bash passes
+    ``restart`` in argv and removes the rest. :func:`_redirect_consumes_next`
+    classifies the whole token as a redirection; this returns the word the
+    shell still passes, so an operand reader keeps it.
+
+    ``""`` is returned when the prefix is empty, all digits (a file descriptor,
+    ``2>err``) or a named descriptor (``{fd}>err``), all of which belong to the
+    redirection; when the operator opens a process substitution (``x<(cmd)``);
+    and when the prefix is not a plain literal word (:data:`_LITERAL_WORD_RE`),
+    because an expansion or glob in it decides at run time what bash passes. A
+    trailing ``&`` is the first character of the ``&>`` operator, not part of
+    the word.
+    """
+    cut = min((token.find(c) for c in "<>" if c in token), default=-1)
+    if cut <= 0 or token.startswith("(", cut + 1):
+        return ""
+    head = token[:cut]
+    if head.endswith("&") and token.startswith(">", cut):
+        head = head[:-1]
+    if not head or head.isdigit() or _NAMED_FD_PREFIX_RE.match(head):
+        return ""
+    return head if _LITERAL_WORD_RE.match(head) else ""
+
+
 # ── Feature-branch push gate ──
 # ``_is_git_publish`` only detects that a command IS a ``git push``.  The
 # decision of whether to ALLOW it is made by ``_is_push_to_protected_branch``
@@ -561,6 +603,118 @@ def _iter_shell_chars(text: str, state: int = 0, ansi: bool = False) -> "Iterato
         dollar_run = dollar_run + 1 if was_unquoted and ch == "$" else 0
         yield _ShellChar(i, ch, ch, was_unquoted, state, ansi, False)
         i += 1
+
+
+#: Characters that make a heredoc operator's line too dynamic for
+#: :func:`_quoted_heredoc_bodies` to place the body: an expansion, a
+#: substitution or arithmetic context, a subshell or group, or a comment.
+_HEREDOC_LINE_DYNAMIC_CHARS = frozenset("$`()#")
+
+
+#: Characters that end a heredoc delimiter word.
+_HEREDOC_DELIMITER_STOP = frozenset(" \t\n;&|<>()")
+
+
+def _heredoc_delimiter(text: str, p: int) -> "tuple[str, bool, int] | None":
+    """Read the delimiter word starting at *p*: ``(word, quoted, end)``, else None.
+
+    The word is returned with its quoting removed. *quoted* is True when any
+    part of it is quoted or backslash-escaped, which is what makes bash read the
+    body literally. None for an empty word or an unclosed quote.
+    """
+    n = len(text)
+    while p < n and text[p] in " \t":
+        p += 1
+    word: "list[str]" = []
+    quoted = False
+    while p < n and text[p] not in _HEREDOC_DELIMITER_STOP:
+        ch = text[p]
+        if ch in "'\"":
+            close = text.find(ch, p + 1)
+            if close == -1:
+                return None
+            word.append(text[p + 1 : close])
+            quoted = True
+            p = close + 1
+        elif ch == "\\":
+            if p + 1 >= n:
+                return None
+            word.append(text[p + 1])
+            quoted = True
+            p += 2
+        else:
+            word.append(ch)
+            p += 1
+    if not word or not "".join(word):
+        return None
+    return ("".join(word), quoted, p)
+
+
+def _quoted_heredoc_bodies(text: str) -> "list[tuple[int, int]]":
+    """``(start, end)`` spans of every heredoc body in *text*, when all are literal.
+
+    A body starts after the newline that ends its operator's line and ``end`` is
+    past the line that holds the delimiter alone (leading tabs stripped for
+    ``<<-``). Bodies on one line follow each other in operator order. A span
+    covers only text bash reads as stdin data, never as commands.
+
+    Returns ``[]`` -- no spans at all -- unless every heredoc operator in *text*
+    is read with certainty: each delimiter is quoted (so the body is not
+    expanded), each body is terminated, and no operator line carries a
+    character in :data:`_HEREDOC_LINE_DYNAMIC_CHARS`. Arithmetic shifts
+    (``((1<<n))``) and here-strings (``<<<``) are not heredoc operators.
+    """
+    spans: "list[tuple[int, int]]" = []
+    pending: "list[tuple[str, bool]]" = []
+    n = len(text)
+    i = 0
+    while i < n:
+        restart: "int | None" = None
+        for step in _iter_shell_chars(text[i:]):
+            off = i + step.offset
+            if not step.active:
+                continue
+            if (
+                step.char == "<"
+                and text.startswith("<<", off)
+                and not text.startswith("<<<", off)
+                and (off == 0 or text[off - 1] != "<")
+            ):
+                line_start = text.rfind("\n", 0, off) + 1
+                line_end = text.find("\n", off)
+                line = text[line_start : n if line_end == -1 else line_end]
+                if _HEREDOC_LINE_DYNAMIC_CHARS.intersection(line):
+                    return []
+                strip_tabs = text.startswith("<<-", off)
+                parsed = _heredoc_delimiter(text, off + (3 if strip_tabs else 2))
+                if parsed is None or not parsed[1]:
+                    return []
+                pending.append((parsed[0], strip_tabs))
+                restart = parsed[2]
+                break
+            if step.char == "\n" and pending:
+                pos = off + 1
+                for delimiter, strip_tabs in pending:
+                    start = pos
+                    while True:
+                        if pos >= n:
+                            return []
+                        nl = text.find("\n", pos)
+                        line_stop = n if nl == -1 else nl
+                        line = text[pos:line_stop]
+                        pos = n if nl == -1 else nl + 1
+                        if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                            break
+                    spans.append((start, pos))
+                pending = []
+                restart = pos
+                break
+        if restart is None:
+            break
+        i = restart
+    if pending:
+        return []
+    return spans
 
 
 # Where one shell WORD ends and the next begins, for the reserved words and the

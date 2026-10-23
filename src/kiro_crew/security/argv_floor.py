@@ -203,6 +203,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _SelfModuleScan,
         _shell_payload_sources,
         _static_substitution_output,
+        _static_substitution_words,
     )
     from kiro_crew.security.argv_floor_ssh import (  # noqa: F401
         _ARITH_INT_LITERAL_RE,
@@ -300,6 +301,7 @@ if TYPE_CHECKING:  # names it serves from outside its owners, from their homes
         _push_token_redirection,
         _push_token_shell_read,
         _redirect_consumes_next,
+        _redirect_word_prefix,
         _resolve_param_defaults,
         _shell_join_continuations,
         _shell_payload_walk,

@@ -1641,7 +1641,7 @@ only the identity-free security floor without counting it. See acp-client.md
 
 **Destructive operation blocks**: `rm -rf`, protected or ambiguous `git push` targets (including force pushes to those targets), `aws * delete-*`, `aws ec2 terminate-instances`, `cdk destroy`, `terraform destroy`, etc. Force-pushing an explicit feature branch remains allowed.
 
-**Self-protection global options**: the `restart`, `update`, `cloud` lifecycle, and `gateway restart` self-management commands are enforced by the argv-structural floor alone (`_matches_self_subcommand`), which reads the CLI's leading operand words after any interposed top-level options and handles shell quoting for both flags and subcommands. The regex rows that once sat beside these floors (`.*kiro.?crew(?:<flag-run>)*\s+restart.*` and siblings) were deleted, not narrowed: each opened with an unbounded any-run before the product name, so the name in a worktree path plus the verb word anywhere later matched (`ls ~/kirocrew-wt/restart.log`), and a row that fires on the product's name appearing anywhere adds nothing to a predicate that requires the product to be the argv's own program. The floor covers the repeatable verbosity spellings (`-v`, `-vv`, `--verbose`) and `--no-jail`; adding or quoting a valid global option or subcommand must not turn a denied self-management command into an allowed one. The one self-management subcommand row that KEEPS a regex is `self-protection-cron-adopt`: it has no floor twin, and the ownership grab it refuses is real.
+**Self-protection global options**: the `restart`, `update`, `cloud` lifecycle, and `gateway restart` self-management commands are enforced by the argv-structural floor alone (`_matches_self_subcommand`), which reads the CLI's leading operand words after any interposed top-level options and handles shell quoting for both flags and subcommands. The regex rows that once sat beside these floors (`.*kiro.?crew(?:<flag-run>)*\s+restart.*` and siblings) were deleted, not narrowed: each opened with an unbounded any-run before the product name, so the name in a worktree path plus the verb word anywhere later matched (`ls ~/kirocrew-wt/restart.log`), and a row that fires on the product's name appearing anywhere adds nothing to a predicate that requires the product to be the argv's own program. The floor covers the repeatable verbosity spellings (`-v`, `-vv`, `--verbose`) and `--no-jail`; adding or quoting a valid global option or subcommand must not turn a denied self-management command into an allowed one. A redirection glued to an operand word (`kirocrew restart>/tmp/log`) is split by `_self_cli_operands` the way bash splits it: `_redirect_word_prefix` returns the word in front of the operator (`restart`), which stays an operand, while a file-descriptor prefix (`2>`, `{fd}>`) belongs to the redirection. The one self-management subcommand row that KEEPS a regex is `self-protection-cron-adopt`: it has no floor twin, and the ownership grab it refuses is real.
 
 **Command-ending newlines**: `_self_tokens` preserves unquoted newlines as
 separators before `shlex` tokenization, using the shared `_iter_shell_chars`
@@ -1653,6 +1653,20 @@ newlines remain inside their operand, and escaped continuations still join the
 command. Local assignments remain available across the preserved separators.
 The existing deny catalog, nested-payload checks and real self-kill checks
 continue to apply.
+
+**Quoted heredoc bodies**: before that newline split, `_self_tokens` removes the
+bodies of quoted-delimiter heredocs (`cat > notes <<'EOF'`, `<<\EOF`, `<<-'EOF'`)
+when `_without_inert_heredoc_bodies` can show no program in the frame reads them as
+a script: every heredoc in the frame is quoted and terminated
+(`_quoted_heredoc_bodies`), no operator line or remaining text carries `$`, a
+backtick, a paren or `#`, nothing pipes into an evaluator, and every command left
+is a data consumer other than `sed`/`awk`. Otherwise every body line is still read
+as a command (`bash <<'EOF'`, `cat <<'EOF' | sh`, an unquoted delimiter, a later
+`sh notes`). `_substitution_bodies` proves a `$(`/`<(`/`>(` span from the body at
+neutral quoting state, as bash parses it, so a substitution inside double quotes
+(`git commit -m "$(cat <<'EOF' … EOF)"`) yields its own body rather than the whole
+remainder. Single-quoted text containing `$(`/backticks is still read as a command
+body: a program the reader does not model may run its argument.
 
 **Recursive-force `rm` floor (`rm_floor.py`)**: a small seatbelt, not a parser. The two `local-destructive-rm-rf-*` rows match one contiguous spelling; this also refuses the common respellings. It cuts the text where the shared `_iter_shell_chars` marks `;` `&` `|` newline backtick or paren live (so quoted text stays one word) skips a `#` comment to its newline and restarts unquoted there, reads a `$(…)` inside double quotes on its own from an unquoted start (span from the shared `_matching_close_paren`) and resumes the double quote after it, keeps an escaped or single-quoted `$` and any quoted `~` literal, and stops at a live `<<` (heredoc bodies are data), reads each segment's words with `_shell_tokens` (quotes off, nothing expanded), skips leading `VAR=val` words, and denies when the program basename is `rm`, the flags hold recursive (`r`, `R`, `--recursive`) AND force (`f`, `--force`), and an operand is exactly root (`/`, `//`, `/*`) or home (`~`, `$HOME`, `${HOME}`, any quoting, with an optional trailing `/` or `/*`). It runs only when the text holds a literal `rm` (quote splices allowed); a floor error fails closed with `_RM_FLOOR_UNREAD_NOTE`. A refusal names the row and carries the `argv-floor` component. It runs only after every regex view cleared, and each target only while its row is enabled. Out of scope by design, left to the rows and the OS sandbox: descendants (`rm -fr /tmp/x` and `rm -rf $HOME/.cache` stay allowed), heredocs, arrays, arithmetic, redirections glued to an operand, `sudo` and other wrappers, `bash -c` payloads and parameter-expansion defaults. Some contrived shapes are over-refused (a variable named `rm`, a quoted `'/*'`); that is accepted rather than read further.
 
@@ -2256,10 +2270,15 @@ rather than gated beside — a token that only de-quotes to the verb
 (`perm_verb_mention._deglues_to_perm_verb`, pre-filtered on the characters that permit a
 de-glue at all) enters the same per-token loop as one that spells it. That is what
 covers the pass-through wrappers: `command`, `env`, `exec`, `nohup`, `time`, `nice`,
-`sudo`, `xargs` and `find -exec` each leave the verb at an ARGUMENT position, where the
-frame's program is the wrapper and no wrapper is an accepted data consumer, so they are
-refused by the gate that already exists instead of by a hand-kept wrapper list; each of
-those spellings really changes a file's mode, so admitting it would be a bypass.
+`sudo`, `xargs` and `find -exec` each leave the verb at an ARGUMENT position of a
+wrapper, and the frame is refused by the gate that already exists instead of by a
+hand-kept wrapper list: the frame's program is the wrapper, which is not an accepted
+data consumer, or, where `_argv_programs` resolves the program the wrapper runs
+(`_launched_consumer`, which models `command`, `env`, `exec`, `nice`, `nohup`, `sudo`,
+`time`, `timeout` and `git grep` with no pager option), the frame is labelled with the
+verb itself, which is excluded from the accepted set. Each of those spellings really
+changes a file's mode, so admitting it would be a bypass. A wrapper in front of an
+accepted consumer (`sudo grep -n chmod src/`) is labelled with that consumer.
 
 **Fail-closed is the whole posture.** Every gate in the walk is a REFUSAL, so a
 construct the walk cannot read keeps the deny. Concretely it refuses: any frame that

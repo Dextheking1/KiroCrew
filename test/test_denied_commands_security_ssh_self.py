@@ -676,6 +676,40 @@ class TestSandboxEscapeSshSelf:
         assert _denied_by("ssh local$(printf host) id") == self._RULE
         assert _denied_by("ssh $(printf remote.example.com) id") is None
 
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "$(echo ssh localhost id)",
+            "$(echo -n ssh localhost)",
+            "`echo ssh localhost id`",
+            "`printf 'ssh localhost'`",
+            "ssh $(echo -l root localhost)",
+        ],
+    )
+    def test_static_substitution_output_in_program_position_is_read_as_argv(self, cmd):
+        # An unquoted literal ``echo``/``printf`` substitution expands to every
+        # word it prints, so the whole printed line is the argv the shell runs.
+        assert _denied_by(cmd) == self._RULE
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "$(echo ssh remote.example.com id)",
+            "echo $(echo ssh localhost id)",
+            "sudo grep ssh localhost id",
+        ],
+    )
+    def test_static_substitution_output_to_another_host_stays_allowed(self, cmd):
+        assert _denied_by(cmd) is None, cmd
+
+    def test_static_substitution_words(self):
+        assert security._static_substitution_words("echo ssh localhost id") == "ssh localhost id"
+        assert security._static_substitution_words("echo -n ssh  localhost") == "ssh localhost"
+        assert security._static_substitution_words("printf 'ssh localhost'") == "ssh localhost"
+        assert security._static_substitution_words("printf '%s' ssh") is None
+        assert security._static_substitution_words("echo a; b") is None
+        assert security._static_substitution_words("hostname") is None
+
     def test_here_string_fed_xargs_is_judged_as_the_rebuilt_command(self):
         # round-35 (GPT): bash strips ``<<< word`` from argv and delivers the
         # word on stdin, and xargs turns stdin into ARGUMENTS for the verb it

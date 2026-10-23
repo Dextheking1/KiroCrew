@@ -74,6 +74,7 @@ from .shell_normalizer_walk import (  # noqa: F401  (also re-exported for import
     _CONTROL_OPERATOR_RE,
     _EMPTY_QUOTE_RE,
     _EMPTY_SUBST_RE,
+    _HEREDOC_LINE_DYNAMIC_CHARS,
     _HOME_VAR_RE,
     _KEEPS_COMMAND_POSITION,
     _LEADING_SUBSTITUTION_RE,
@@ -99,7 +100,9 @@ from .shell_normalizer_walk import (  # noqa: F401  (also re-exported for import
     _push_option_matches,
     _push_token_redirection,
     _push_token_shell_read,
+    _quoted_heredoc_bodies,
     _redirect_consumes_next,
+    _redirect_word_prefix,
     _resolve_param_defaults,
     _resolved_word_view,
     _shell_join_continuations,
@@ -661,19 +664,127 @@ def _argv_programs(tokens: "list[str]") -> "list[str]":
     leading ``VAR=value`` assignments, which precede the program rather than being
     it.  Asks "what command is this name an argument OF?" -- the difference
     between ``echo <name> <verb>`` (data) and ``ssh host <name> <verb>`` (executed).
+
+    A command whose program is a transparent launcher (``sudo grep …``,
+    ``time grep …``) or ``git grep`` is labelled with the data consumer it runs,
+    when :func:`_launched_consumer` resolves one; every other command keeps its
+    own program name, so a launcher in front of anything else (``sudo <name>
+    <verb>``) is still read as running its arguments.
     """
     programs: list[str] = []
     current = ""
     expect_program = True
-    for token in tokens:
+    start = 0
+    program_index: "int | None" = None
+    for index, token in enumerate(tokens):
         if expect_program and token and not ENV_ASSIGNMENT_RE.match(token):
             current = _program_basename(token)
+            program_index = index
             expect_program = False
         programs.append(current)
         if _ends_argv(token):
+            _relabel_launched_consumer(tokens, programs, start, program_index, index + 1)
             current = ""
             expect_program = True
+            start = index + 1
+            program_index = None
+    _relabel_launched_consumer(tokens, programs, start, program_index, len(tokens))
     return programs
+
+
+def _relabel_launched_consumer(
+    tokens: "list[str]",
+    programs: "list[str]",
+    start: int,
+    program_index: "int | None",
+    stop: int,
+) -> None:
+    """Label ``tokens[start:stop]`` with the consumer its launcher runs, if any."""
+    if program_index is None or programs[program_index] not in _CONSUMER_LAUNCHERS:
+        return
+    consumer = _launched_consumer(tokens, program_index, stop)
+    if consumer is not None:
+        programs[start:stop] = [consumer] * (stop - start)
+
+
+#: Programs :func:`_launched_consumer` looks through: launchers that exec the
+#: argv after their own options unchanged, plus ``git`` for ``git grep``.
+_CONSUMER_LAUNCHERS = frozenset(
+    {"command", "env", "exec", "git", "nice", "nohup", "sudo", "time", "timeout"}
+)
+
+
+#: A ``timeout`` duration operand: a number with an optional unit suffix.
+_TIMEOUT_DURATION_RE = re.compile(r"\d+(?:\.\d+)?[smhd]?\Z")
+
+
+#: A ``nice`` adjustment written as one word: ``-10``, ``-n10``, ``-n-5``.
+_NICE_GLUED_ADJUSTMENT_RE = re.compile(r"-n?-?\d+\Z")
+
+
+def _git_grep_runs_no_pager(tokens: "list[str]", start: int, stop: int) -> bool:
+    """True if no word in ``tokens[start:stop]`` can be ``git grep``'s pager option.
+
+    ``git grep -O<pager>`` / ``--open-files-in-pager=<pager>`` runs a program on
+    the matching files. Short options bundle and long options abbreviate, so any
+    single-dash word carrying an ``o`` and any ``--o…`` word counts as that option.
+    Words reach here lowercased, so ``-o`` (``--only-matching``) is counted too.
+    """
+    for token in tokens[start:stop]:
+        word = _normalize_operand(token)
+        if word.startswith("--o") or (
+            word.startswith("-") and not word.startswith("--") and "o" in word
+        ):
+            return False
+    return True
+
+
+def _launched_consumer(tokens: "list[str]", index: int, stop: int) -> "str | None":
+    """The data consumer the launcher at ``tokens[index]`` runs, else None.
+
+    Steps through a chain of launchers in :data:`_CONSUMER_LAUNCHERS`, each with
+    only the option forms modelled here: ``time -p``, ``nice -n N`` (or the one-word
+    adjustment), ``timeout DURATION``, and ``VAR=value`` words after ``env`` or
+    ``sudo``. Any other option word after a launcher returns None, because its
+    arity is not modelled and it could consume the word that follows it. ``git``
+    resolves only as ``git grep`` with the subcommand right after ``git`` and no
+    pager option (:func:`_git_grep_runs_no_pager`), and is labelled ``grep``.
+
+    Returns the resolved program only when it is in ``_DATA_CONSUMER_PROGRAMS``.
+    """
+    j = index
+    while j < stop:
+        name = _program_basename(tokens[j])
+        if name == "git":
+            if (
+                j + 1 < stop
+                and _normalize_operand(tokens[j + 1]) == "grep"
+                and _git_grep_runs_no_pager(tokens, j + 2, stop)
+            ):
+                return "grep"
+            return None
+        if name not in _CONSUMER_LAUNCHERS:
+            return name if name in _DATA_CONSUMER_PROGRAMS else None
+        j += 1
+        word = _normalize_operand(tokens[j]) if j < stop else ""
+        if name == "time" and word == "-p":
+            j += 1
+        elif name == "nice" and word == "-n":
+            if j + 1 >= stop or not _normalize_operand(tokens[j + 1]).lstrip("-").isdigit():
+                return None
+            j += 2
+        elif name == "nice" and _NICE_GLUED_ADJUSTMENT_RE.match(word):
+            j += 1
+        elif name == "timeout":
+            if not _TIMEOUT_DURATION_RE.match(word):
+                return None
+            j += 1
+        elif name in ("env", "sudo"):
+            while j < stop and ENV_ASSIGNMENT_RE.match(tokens[j]):
+                j += 1
+        if j < stop and _normalize_operand(tokens[j]).startswith("-"):
+            return None
+    return None
 
 
 def _is_shell_command_flag(token: str) -> bool:
@@ -887,16 +998,68 @@ def _self_tokens(text_lower: str) -> "list[str]":
         # commands into one argv. Preserve those boundaries after folding
         # continuations; quoted newlines remain part of their operand.
         command = _fold_line_continuations(text_lower)
-        if "\n" in command:
-            command = "".join(
-                " ; " if step.active and step.char == "\n" else step.text
-                for step in _iter_shell_chars(command)
-            )
-        return _resolve_function_aliases(
-            _resolve_local_assignments(normalize_shell_command(command))
-        )
+        if "<<" in command:
+            command = _without_inert_heredoc_bodies(command)
+        return _frame_tokens(command)
     except Exception:
         return []
+
+
+def _frame_tokens(command: str) -> "list[str]":
+    """Tokenize an already-folded command, keeping unquoted newlines as boundaries."""
+    if "\n" in command:
+        command = "".join(
+            " ; " if step.active and step.char == "\n" else step.text
+            for step in _iter_shell_chars(command)
+        )
+    return _resolve_function_aliases(_resolve_local_assignments(normalize_shell_command(command)))
+
+
+def _without_inert_heredoc_bodies(command: str) -> str:
+    """*command* with its literal heredoc bodies removed, when they are stdin data.
+
+    A quoted-delimiter heredoc (``cat > notes <<'EOF'`` … ``EOF``) hands its body
+    to the command's stdin unexpanded, so the body's lines are not commands. The
+    bodies (and their delimiter lines) are cut out only when the remaining frame
+    carries no expansion, substitution, subshell or comment character
+    (:data:`_HEREDOC_LINE_DYNAMIC_CHARS`), nothing in it pipes into an
+    evaluator, and EVERY command in it is a data consumer that does not read a
+    script of its own (:data:`_SCRIPT_READING_CONSUMERS`): then no program in
+    the frame reads that stdin as a program. In any other frame --
+    ``bash <<'EOF'``, ``cat <<'EOF' | sh``, ``sed -f - <<'EOF'``, a later
+    ``sh notes``, an unquoted delimiter, an operator line
+    :func:`_quoted_heredoc_bodies` cannot place -- *command* is returned
+    unchanged and every body line is read as a command.
+    """
+    spans = _quoted_heredoc_bodies(command)
+    if not spans:
+        return command
+    pieces: "list[str]" = []
+    cursor = 0
+    for start, end in spans:
+        pieces.append(command[cursor:start])
+        cursor = end
+    pieces.append(command[cursor:])
+    stripped = "".join(pieces)
+    if _HEREDOC_LINE_DYNAMIC_CHARS.intersection(stripped):
+        return command
+    tokens = _frame_tokens(stripped)
+    if not tokens or _data_consumer_command_disqualified(tokens):
+        return command
+    programs = _argv_programs(tokens)
+    for token, program in zip(tokens, programs):
+        if not token.strip(";&| "):
+            continue
+        if program not in _DATA_CONSUMER_PROGRAMS or program in _SCRIPT_READING_CONSUMERS:
+            return command
+    return stripped
+
+
+#: Data consumers that can read their own SCRIPT from a file or stdin
+#: (``sed -f -``, ``awk -f -``), and whose script can run a command. A heredoc
+#: body handed to one of them may be a program, so
+#: :func:`_without_inert_heredoc_bodies` keeps the body in any frame that runs one.
+_SCRIPT_READING_CONSUMERS = frozenset({"sed", "awk"})
 
 
 def _protected_name_in_substitution(tokens: "list[str]", start: int) -> str:

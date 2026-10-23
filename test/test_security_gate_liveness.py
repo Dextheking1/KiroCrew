@@ -463,7 +463,17 @@ def _url_payload_command(n: int) -> str:
 #: exemption. No pass widened, no threshold moved, and the exfil URL scan is unchanged.
 #: Six more for its ``keep_sri_digests=False`` switch: a streamed segment whose delta
 #: boundary split an SRI value saves main's verdict on the digest, not the notice.
-_PACKAGE_LINE_BUDGET = 32_188
+#:
+#: Raised again, from 32,188, by 401 lines for the shared shell reader the argv floors
+#: read: ``_redirect_word_prefix`` (the word in front of a glued redirection stays an
+#: operand), ``_static_substitution_words`` (a literal ``echo``/``printf`` substitution
+#: expands to every word it prints), ``_launched_consumer`` (a launcher or ``git grep``
+#: in front of a data consumer is labelled with that consumer), the quoted-heredoc body
+#: reader (``_quoted_heredoc_bodies`` and ``_without_inert_heredoc_bodies``), and the
+#: neutral-state span proof in ``_substitution_bodies``. Most of the lines are the
+#: conditions under which each reading falls back to the fail-closed one, and their
+#: docstrings.
+_PACKAGE_LINE_BUDGET = 32_589
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
