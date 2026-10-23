@@ -88,6 +88,16 @@ installed against:
 - **A command carrying a path** (absolute or relative) is never rewritten. If it
   does not point at a runnable file at registration time, a warning naming the
   app, server, and command is logged — the entry is still written.
+- **An app's own `.py` launcher** (a stdio server whose `command` is a bare
+  `python`, `python3` or `py`, and whose launch target is a relative path ending in
+  `.py`, given in `args` and relative to the app root) is resolved to its absolute
+  path under the app root, so a staged app whose package is not pip-installed can
+  start. A `command` carrying a path, such as `.venv/bin/python`, is not covered:
+  its launcher operand is left as written. Only that one operand is touched; `-m`, `-c`, and every
+  argument after the script are left as written. The rewrite applies only when the
+  operand resolves (links followed) to an existing file inside the app root; an
+  absolute path, or a relative one that is not such a file, is left as written. A
+  relative path in `command` itself is still never rewritten.
 - The host CLI name `kirocrew` is pinned to the running gateway before any of
   the above applies.
 
@@ -930,9 +940,12 @@ API: `apps/spawn_sdk.py` — `SpawnSDK`, `build_spawn_impl`, `build_done_probe`,
 > **Not an in-process sandbox.** Most fields remain advisory for app code loaded
 > inside the gateway. The validator functions in `apps/permissions.py`
 > (`validate_permissions`, `format_permissions_summary`) are still **not wired
-> into the install or runtime path** -- they are only exercised by unit tests, so
-> they carry no `sessionApproval` text. `permissions.sessionApproval` is shown on the app detail
-> page and in the install or enable consent dialog. It is enforced for app-token
+> into the install or runtime path**; `format_permissions_summary` only feeds the
+> `kirocrew app enable` refusal below. `permissions.sessionApproval` is shown on the app detail
+> page and in the install or enable consent dialog, and only the dashboard grants it.
+> `kirocrew app enable` has no consent flag or prompt: for an app whose consent is
+> pending it prints what the app asks for and the app's dashboard link, exits 1 and
+> leaves the app off. It is enforced for app-token
 > user-session calls, in addition to `permissions.api`. The app must be enabled.
 > The grant reaches existing local user-owned sessions only; cron, system, remote,
 > member-mode, and other apps' sessions are denied. Apps retain their pre-existing
@@ -1301,8 +1314,10 @@ before it runs your command, which is the same silent failure:
   and `..` traversal are rejected (canonical resolve + containment when the app dir
   is known). `backend.hooks.*` are format-checked (`module.path:callable`, which
   cannot express traversal) and containment-checked again at load time.
-  `mcpServers` entries use `command`/`args`/`url`/`env` (not app-relative file paths)
-  and are not path-checked.
+  `mcpServers` entries use `command`/`args`/`url`/`env`. They are not path-checked at
+  manifest load; at registration, when `command` is a bare `python`, `python3` or
+  `py`, a relative `.py` launch target is resolved against the app root when it is
+  a file inside it (see "An app's own `.py` launcher" above).
 - All required fields must be non-empty strings
 - `config_keys` must be an array of at most 200 non-empty strings, each at most
   200 characters long

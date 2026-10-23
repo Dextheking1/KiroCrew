@@ -446,7 +446,9 @@ DASHBOARD_SAVE_SCHEMA = ToolSchema(
         # and a restatement goes stale the day the catalog grows.
         FieldSpec("model", dict, required=True),
         FieldSpec("view", dict, required=True),
-        FieldSpec("theme", dict, required=True),
+        # Optional: a client can drop an empty object, and the package store reads a
+        # missing theme as ``{"tokens": {}}``.
+        FieldSpec("theme", dict),
     ],
 )
 
@@ -677,6 +679,10 @@ MCP_MATE_SCHEMAS: dict[str, ToolSchema] = {
             FieldSpec("reason", str, max_len=500),
         ],
     ),
+    "offer_dashboard_page": ToolSchema(
+        tool_name="offer_dashboard_page",
+        fields=[FieldSpec("reason", str, max_len=500)],
+    ),
     "key_result_progress": ToolSchema(
         tool_name="key_result_progress",
         fields=[
@@ -691,7 +697,9 @@ MCP_MATE_SCHEMAS: dict[str, ToolSchema] = {
                 "kind", str, required=True, max_len=8, allowed=frozenset({"weekly", "monthly"})
             ),
             FieldSpec("title", str, required=True, max_len=_goals.REPORT_TITLE_MAX_CHARS),
-            FieldSpec("markdown", str, required=True, max_len=_goals.REPORT_MAX_CHARS),
+            # One of the two; the server refuses both or neither.
+            FieldSpec("markdown", str, max_len=_goals.REPORT_MAX_CHARS),
+            FieldSpec("html", str, max_len=_goals.REPORT_HTML_MAX_BYTES),
         ],
     ),
 }

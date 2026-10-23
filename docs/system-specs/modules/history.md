@@ -430,7 +430,8 @@ mode, so a restricted transcript is cached and paged like any other.
 
 A return-triggered task summary stores one hidden `notice` claim followed by
 ordinary `assistant` rows. `warm_task_brief_claim` contains only the fingerprint
-and is suppressed by transcript renderers. The deterministic opener row and
+and is suppressed by transcript renderers. Its `ts` also counts as owner
+presence when the next return measures time away. The deterministic opener row and
 the model-written result carry normal mate message roles and classes; the
 result is one short first-person prose message, with no headings or lists.
 Their metadata marks them only for fingerprint and model-input
@@ -513,13 +514,65 @@ temporary session is listed, searched and filtered like any other (see
 The row reads memory mode only to draw its incognito or temporary glyph, and a
 restricted session cannot be dropped into the composer as a reference.
 
+Messages that name one session name an untitled one "Untitled session", never its
+key: the could-not-delete sentence (`utils/historyDeleteRefusal.ts`) and the
+auto-title error notice (`chat-sidebar/rename.ts`). A bulk "Delete all" refusal can
+name several untitled sessions, so each named line keeps the key beside the label.
+A session chip's tooltip (`utils/sessionRoster.ts`) names an untitled session
+"Untitled session"; the chip's own text already shows the key. The chat page and a
+crewmate DM rebuild that roster on a language switch, so the label follows the
+active language. The editable session
+title in a split-view pane header and in the main chat header
+(`pages/chat/SessionTitleControl.tsx`) shows and announces "Untitled session" for an
+untitled session, and its rename editor opens empty, so neither the key nor the
+label is saved as a name; rename, Auto-title and Undo still act on the key.
+The same holds for the refused-fork notice (`hooks/useSessionActions.ts`,
+`components/SessionGridView.tsx`, which also names the Fork button's tooltip), the
+refused-close notice (`chat-sidebar/SearchDock.tsx`, from the title `store/chatSlice.ts`
+records, or null for an untitled session), the moved-to-folder Undo bar
+(`chat-sidebar/dnd/useSidebarDrag.ts`), the microphone-in-use notice and its jump
+button (`components/chat-input/voice.ts`), and the OS notifications for a finished
+turn and an approval request (`hooks/websocket/turnCompletion.ts`,
+`hooks/websocket/chatStream.ts`); the jump and each notification's tag still use the key,
+and a session missing from the slot list keeps its key, since its title is unknown.
+
 An untitled session (no title, or a title equal to its key) reads "Untitled
 session" in an Older Sessions row's text and hover title, in the session grid's
 picker rows (`components/SessionGridView.tsx`) and in the Sessions page rows
-(`pages/SessionsPage.tsx`), never its slot key. All three read
+(`pages/SessionsPage.tsx`), never its slot key. The same holds for the
+palette's recent rows, live and older (`commandPalette/providers/recentsProvider.ts`),
+its session search rows (`commandPalette/providers/sessionsProvider.ts`) and the
+composer's "Continue a previous chat" suggestions
+(`pages/chat/page/ComposerDockView.tsx`). All of them read
 `utils/sessionDisplayTitle.ts`. Only the shown label changes. Each surface's
 search reads the same fields as before, a pick or click opens the key, and
-resume sends the key with the same payload title as before.
+resume, open and copy send the key with the same payload title as before. Session
+search still ranks an untitled row by its key, and its highlights index the
+shown label. Where nothing else on the row tells untitled sessions apart, the
+key leads the row's second line, never its name: a session search hit with no
+body snippet (the query highlighted there) and a "Continue a previous chat"
+suggestion (beside its date).
+
+The live session list follows the same rule: a sidebar row
+(`chat-sidebar/SessionRow.tsx`) and its drag preview (`chat-sidebar/dnd/targets.tsx`)
+read "Untitled session", and so does a session tab (`components/SessionTabStrip.tsx`).
+A row or tab has no second line, so its hover title carries the key instead
+(`Untitled session · <key>`); a crewmate's own thread keeps the crewmate's name.
+The System → Sessions table names an untitled row "Untitled session" beside its
+slot key (`pages/system/sessionRows.ts`), in place of the backend's
+`New Session…` placeholder. A single-session message names it "Untitled session"
+with no key: the could-not-open notice (`pages/chat/page/ChatPaneNotices.tsx`) and
+the Memory tab's failed-consolidation line (`pages/overview/MemoryTab.tsx`).
+Other on-screen names read "Untitled session" too: a pane's fork-of tag
+(`components/ChatPane.tsx`) and an embedded tab (`components/EmbedTabStrip.tsx`),
+whose hover titles keep the key; the scene agent list (`hooks/useAgentSync.ts`);
+the Prompts tab's "Send to…" rows after the agent name, with the key on a muted second
+line (`pages/overview/PromptsTab.tsx`);
+the computer-use view's session name (`hooks/useComputerUseFrame.ts`); and a
+closed-session chip's name (`components/markdown/linkTargets.ts`), localized at
+render from the raw row it caches. A session missing from the slot list has an
+unknown title, so the fork-of tag and the embedded tab keep its key. Resuming a
+closed session still sends its raw title, or its key when untitled, never the label.
 
 `ChatSidebar.tsx` is a facade over owners that each hold one responsibility. It
 calls each owner hook where that block used to sit, so React runs the effects in

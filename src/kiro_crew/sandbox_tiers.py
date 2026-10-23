@@ -27,7 +27,6 @@ from kiro_crew.sandbox_leaves import (
     _CREW_HOME_DEFAULT,
     _CREW_HOME_PREFIXES,
     _MD_NOTEBOOK_STAGING_LEAF,
-    _MD_NOTEBOOK_STATE_LEAVES,
     _POLICY_CACHE_LEAF,
     _RELOCATED_CREW_HIDDEN_LEAVES,
     MD_NOTEBOOK_APP_NAME,
@@ -193,10 +192,9 @@ _APP_BACKEND_OWNED_LEAVES: dict[str, tuple[str, ...]] = {
     # the gateway execs next. The pointer stays masked; Dev Fleet moves the cutover to a
     # gateway-process route instead (``dev_fleet/gateway_routes.py``).
     MD_NOTEBOOK_APP_NAME: (
-        *_MD_NOTEBOOK_STATE_LEAVES,
-        # The writers stage here and rename onto the leaves above, so the backend needs
-        # this directory back too — carving out only the three targets would leave every
-        # state write failing on the masked staging dir instead of the masked leaf.
+        # The whole state directory, handed back as one unit: the state files, their staged
+        # temps and the migration marker all live inside it, so the publish rename stays on
+        # one mount. The retired bare spellings are NOT here; the backend never reads them.
         _MD_NOTEBOOK_STAGING_LEAF,
     ),
 }
@@ -1057,7 +1055,7 @@ def configured_sandbox_mode() -> str:
 # Kiro Crew namespace sandbox. Deny-by-default: the gate keys ONLY on the
 # explicit, single-purpose ``KIROCREW_SANDBOX_ACTIVE``, which is exported at
 # exactly one site — the namespace launcher's ``scrub_env`` stage
-# (``sandbox_launcher_program``, which ``_build_launcher_script`` renders). We
+# (``sandbox_launcher_parts/exec_lockdown.py``, which ``_build_launcher_script`` renders). We
 # deliberately do NOT key on ``KIROCREW_HOST_PID``:
 # it is dual-purpose session-identity plumbing, and gating a security-relevant
 # passthrough on a variable set for other reasons is a latent bypass. Since the

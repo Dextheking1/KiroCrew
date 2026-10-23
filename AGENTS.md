@@ -286,6 +286,10 @@ bounded worker count; the full suite is CI's job and never runs locally unless a
 human passes `--full`. See
 [kirocrew-prepare-pr](src/kiro_crew/builtin_skills/kirocrew-dev/kirocrew-prepare-pr/references/gate-floor.md).
 
+To run the cheap CI gates in one go and record that you did, use the optional
+[pre-push gate](src/kiro_crew/builtin_skills/kirocrew-dev/kirocrew-prepare-pr/references/pre-push-gate.md).
+It is advisory: nothing refuses a push without it.
+
 - **On macOS, run `mypy --platform linux src/kiro_crew`.** Without it a local run
   reports errors you did not cause and MISSES the Linux-only errors CI fails on, so
   a clean local run is a false green.
@@ -323,8 +327,9 @@ job's `semgrep/test-determinism.yaml` refuses the commonest on a new line, and
 `test/test_flake_pattern_ratchet.py` counts per file the clock, wait, port, environment
 and module-cache shapes those patterns miss, failing a change that adds one to a file
 (measured against its merge-base; a deliberate one carries `# flake-ok: <reason>`).
-It is a local, pre-push gate (why: testing-conventions.md "Determinism contract"):
-run `python -m pytest -n0 test/test_flake_pattern_ratchet.py` before pushing.
+Fast Gate's `flake-pattern-ratchet` job runs it on every pull request and fails when it
+compares nothing (why: testing-conventions.md "Determinism contract"); run
+`python -m pytest -n0 test/test_flake_pattern_ratchet.py` before pushing to see it first.
 Contract:
 [testing-conventions § Determinism contract](docs/system-specs/common/testing-conventions.md#determinism-contract-read-this-first).
 

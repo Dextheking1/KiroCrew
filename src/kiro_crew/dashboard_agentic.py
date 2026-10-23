@@ -981,13 +981,81 @@ def shows_suggestions(slug: str, record: Any, *, package_slug: str) -> bool:
     return str(getattr(record, "template_id", "") or "") != slug
 
 
+def tab_shows_suggestions(slug: str) -> bool:
+    """Whether crewmate *slug*'s Dashboard tab shows the suggestions page right now.
+
+    The answer :func:`turn_block` gives, for a caller that only needs the yes or no:
+    the stored instance record, no template page in force, no package on screen
+    (none under a lock), and :func:`shows_suggestions` on that. A template page in
+    force, a page named for the crewmate, or a package the tab draws is ``False``.
+    TOTAL: a dashboard that cannot be read answers ``False``, so nothing is asked of
+    a crewmate whose page might be there. Blocking IO.
+    """
+    try:
+        record, manifest, locked_line = _read_page(slug)
+    except Exception:
+        logger.debug("dashboard: %r's page could not be read", slug, exc_info=True)
+        return False
+    if record is None or manifest is not None:
+        return False
+    package_slug = "" if locked_line else package_on_screen(slug)
+    return shows_suggestions(slug, record, package_slug=package_slug)
+
+
+def page_offer_target(slug: str) -> dict[str, str] | None:
+    """What a page crewmate *slug* writes for itself would replace, or ``None``.
+
+    ``{"replaces": <title>, "template_id": <id>}`` while a template page is in force,
+    whether the person adopted it or it is the page named for the crewmate. ``None``
+    for the suggestions page (that crewmate writes its page with no card), once the
+    crewmate has a page of its own (a package on screen, or one bound to it), or when
+    the tab cannot be read. The read route's own answers, so the card
+    names the page the person actually sees. TOTAL. Blocking IO.
+    """
+    try:
+        if bound_package(slug):
+            return None
+        record, manifest, _locked = _read_page(slug)
+        if record is None:
+            return None
+        if manifest is None:
+            return None
+        if manifest.id == _package_manifest_id() or str(getattr(record, "package_slug", "")):
+            return None
+        return {"replaces": str(manifest.title or manifest.id), "template_id": str(manifest.id)}
+    except Exception:
+        logger.debug("dashboard: %r's page offer target is unreadable", slug, exc_info=True)
+        return None
+
+
 #: The block for a crewmate whose tab shows the suggestions page. No fields and no
 #: upkeep pointer: with no page in force there is nothing to write.
-SUGGESTIONS_LINE: str = (
-    "Your Dashboard tab shows the suggestions page: no page is adopted yet, so there "
-    "are no fields to keep up. To give it a page, dashboard_apply a template_id from "
-    "dashboard_templates, or dashboard_save your own page and then dashboard_apply it."
+#: What a crewmate's turn says while its tab shows the suggestions page. It rides EVERY
+#: turn, so it states where the page stands and never asks for one: building a page is
+#: the job of the gated build line (``goal_reminder.DASHBOARD_BUILD_LINE``) or of a user
+#: who asks.
+SUGGESTIONS_STATE: str = (
+    "Your Dashboard tab shows the suggestions page: you have no page of your own yet, "
+    "so there are no fields to keep up, and a dashboard_write lands on a page nobody "
+    "sees."
 )
+SUGGESTIONS_LINE: str = (
+    SUGGESTIONS_STATE + " Your progress belongs on a page of your own, not in chat: when "
+    "you have work to report, build your page with the dashboard skill "
+    "(dashboard_save, then dashboard_apply) instead of posting it here."
+)
+
+
+def _crew_panel_on() -> bool:
+    """Whether member sessions mount ``kirocrew-panel``; ``False`` on any read failure,
+    so a block that cannot tell asks for no page. TOTAL."""
+    try:
+        from kiro_crew.members import crew_panel_enabled
+
+        return bool(crew_panel_enabled())
+    except Exception:
+        logger.debug("dashboard: the crew panel switch is unreadable", exc_info=True)
+        return False
 
 
 def turn_block(slug: str) -> str:
@@ -1010,8 +1078,15 @@ def turn_block(slug: str) -> str:
         # `locked_line` already is.
         package_slug = "" if locked_line else package_on_screen(slug)
         if shows_suggestions(slug, record, package_slug=package_slug):
-            lock = f"\n{locked_line}" if locked_line else ""
-            return "[DASHBOARD]\n" + SUGGESTIONS_LINE + lock
+            if locked_line:
+                # Locked: the store's own refusal is the whole instruction, so no line
+                # here can read as "write one".
+                return f"[DASHBOARD]\n{SUGGESTIONS_STATE}\n{locked_line}"
+            if not _crew_panel_on():
+                # ``agent.crew_panel`` off: no kirocrew-panel, so no dashboard_save to
+                # build a page with. Where the tab stands, and nothing to act on.
+                return "[DASHBOARD]\n" + SUGGESTIONS_STATE
+            return "[DASHBOARD]\n" + SUGGESTIONS_LINE
         if package_slug:
             # An older record's bound page, which the tab draws: named from the Model
             # a write is checked against, so the block, the tab and the write agree.

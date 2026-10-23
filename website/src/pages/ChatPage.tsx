@@ -78,6 +78,7 @@ import { TOGGLE_RECT } from './chat/SessionFlyout'
 import type { ParsedSubagentCompletion } from './chat/subagentCompletion'
 import { useLabelTip } from '../components/InstantTip'
 import { sessionTitleRoster } from '../utils/sessionRoster'
+import { useLanguageGeneration } from '../i18n/useLanguageGeneration'
 
 
 import { i18nT } from '../i18n/t'
@@ -127,7 +128,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     dispatch, moveSlotToFolder, navigate, navigationType, location, queryClient, provider, deleteTerminalSessionRef, searchParams, setSearchParams, isMobile, isTouch, topbarSlot, topbarTrailSlot,
     mobileNavRail, titleInTopbar, langGen, vv, keyboardInset, slots, switchSlotGone, filteredSlots, filteredSlotsRef, surfaceUnreadSlots, refreshTrigger, connected, creatingSlot, foregroundCreateId,
     foregroundCreateIdRef, lastCreatedActivationRef, unresumableResume, undeletableHistory, activeSlot, boundStore, voiceRecoverySlot, setVoiceRecoverySlot, appToolCallIds, mcpAppPanel,
-    autoOpenGitPanel, autoOpenGitPanelKnown,
+    autoOpenGitPanel, autoOpenGitPanelKnown, sidePanelAlwaysOpen, sidePanelAlwaysOpenKnown, sidePanelPinSummary,
   } = useChatPageEnvironment({
     embedded, embedMode, popout,
   })
@@ -460,10 +461,13 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   // its chips navigate here, so the two must agree on which slots may chip.
   // Signature because heartbeats remint slot objects.
   const sessionTitleSig = JSON.stringify(filteredSlots.map(s => [s.key, s.title || s.key]))
+  // The roster's "Untitled session" label is localized, so a language switch
+  // must rebuild it even when no slot changed (#23059).
+  const languageGeneration = useLanguageGeneration()
   const sessionTitles = useMemo(
     () => sessionTitleRoster(filteredSlots),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the value-equal pair signature, not the slot objects (see above)
-    [sessionTitleSig],
+    [sessionTitleSig, languageGeneration],
   )
   const {
     handleFork, forkDirectionChoice,
@@ -545,6 +549,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     setAppSlotLaunch,
     closeSessionTab,
     drawerPopRef,
+    ensureSlotTab,
     handleResumeSession,
     highlightTs,
     initialMidRef,
@@ -749,7 +754,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     sidebarPinned, setSidebarPinned, sidebarPinnedRef, sidebarAutoHidden, sidePanelDock, sidePanelDockAnim, sidebarWidth, setSidebarWidth, sidebarDragging, setSidebarDragging, setEditingTitleSlot,
     editingTitle, enterSplit, splitAnchorForActive, activeIsSplitAnchor,
   } = usePaneLayoutState({
-    embedMode, dispatch, slots, activeSlot, autoOpenGitPanel, autoOpenGitPanelKnown, setSplitMode, splitMode, setSplitAnchor, tabsCtl, splitFeatureEnabled, _slotProject, projectGit, projectGitError,
+    embedMode, dispatch, slots, activeSlot, autoOpenGitPanel, autoOpenGitPanelKnown, setSplitMode, splitMode, setSplitAnchor, tabsCtl, splitFeatureEnabled, _slotProject, projectGit, projectGitError, embedded, popout, isMobile, sidePanelAlwaysOpen, sidePanelAlwaysOpenKnown, activityOpen,
   })
   const {
     lastTextIdx, regenerating, setRegenerating, handleRegenerate,
@@ -908,13 +913,23 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     hasLiveAppTab, jiraSourceHostsRef, bitbucketServerSourceHostsRef, search, selectSource, setRevealedSources, sourceHostsRef, tabsCtl, drawerPopRef, chatFolders, setSidebarPinned, sidebarPinned, sidebarPinnedRef,
     sidebarAutoHidden, toggleAct,
   })
+  // "Open Sidebar Sessions in a Session Tab" (Settings > Chat > Sessions). A
+  // sidebar row's click, Enter/Space and source chip all call `onSelectSlot`
+  // after their `switchSlot`, so one handler covers each; the flyout below is
+  // the same list while the sidebar is collapsed.
+  const sidebarClickOpensTab = chatConfig.sidebarClickOpensTab
+  const selectFromSidebar = useCallback((key: string) => {
+    clearSplitOnSelect()
+    if (sidebarClickOpensTab) ensureSlotTab(key)
+  }, [clearSplitOnSelect, sidebarClickOpensTab, ensureSlotTab])
   const flyoutSwitch = useCallback((key: string) => {
     // User gesture on a listed session row (collapsed-sidebar flyout): the
     // announced class, same as the expanded sidebar's own rows.
     dispatch(switchSlot({ key, announceOnMissing: true }))
     setSplitMode(false)
+    if (sidebarClickOpensTab) ensureSlotTab(key)
     flyout.close()
-  }, [dispatch, flyout, setSplitMode])
+  }, [dispatch, flyout, setSplitMode, sidebarClickOpensTab, ensureSlotTab])
   const {
     flyoutNew, panelReserve, panelMaximized, panelFillWidth, mobileSessionsToggle, topbarSessionsToggle, mobileNewSessionItem, switchMemoryMode, showComposerMemoryChip, memorySwitching, composerOptimizing, handleOptimizingChange,
   } = usePanelLayout({
@@ -950,7 +965,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
       <SessionsSidebarChrome
         embedMode={embedMode} mode={mode} activeSlot={activeSlot} connected={connected} creatingSlot={creatingSlot} dispatch={dispatch} filteredSlots={filteredSlots} isMobile={isMobile}
         keyboardInset={keyboardInset} mobileNavRail={mobileNavRail} surfaceUnreadSlots={surfaceUnreadSlots} titleInTopbar={titleInTopbar} topbarSlot={topbarSlot} topbarTrailSlot={topbarTrailSlot}
-        vv={vv} activityOpen={activityOpen} clearSplitOnSelect={clearSplitOnSelect} history={history} historyHasMore={historyHasMore} navigateToEmbeddedSlot={navigateToEmbeddedSlot}
+        vv={vv} activityOpen={activityOpen} selectFromSidebar={selectFromSidebar} history={history} historyHasMore={historyHasMore} navigateToEmbeddedSlot={navigateToEmbeddedSlot}
         openEmbeddedCrewWindow={openEmbeddedCrewWindow} splitMode={splitMode} defaultAgent={defaultAgent} installedAgents={installedAgents} sidebarAgents={sidebarAgents} sidebarChoices={sidebarChoices}
         setActionError={setActionError} showActionError={showActionError} canStageSessionRef={canStageSessionRef} chatPaneEl={chatPaneEl} stageSessionRef={stageSessionRef}
         openSlotInNewTab={openSlotInNewTab} ownsSessionTabs={ownsSessionTabs} activePoppedOut={activePoppedOut} focusActivePopout={focusActivePopout} openActivePopout={openActivePopout}
@@ -966,7 +981,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
 
       {/* Chat pane */}
       {embedMode !== 'sessions' && (
-      <div ref={setChatPaneEl} className={`relative flex flex-col bg-bg min-w-0 min-h-0 h-full overflow-hidden ${(activityOpen && !activitySlot) || search.isOpen ? 'flex-[1_1_60%]' : 'flex-1'}`} style={{ transition: 'flex 0.2s', ...(!sidebarOpen && !isMobile ? { marginLeft: -COLLAPSED_PANE_RECLAIM_PX } : {}), '--mc-content-width': scaleContentWidth(CONTENT_WIDTH[chatConfig.contentWidth], chatConfig.contentWidth, chatConfig.messageFontSize).messages, '--mc-input-width': scaleContentWidth(CONTENT_WIDTH[chatConfig.contentWidth], chatConfig.contentWidth, chatConfig.messageFontSize).input } as React.CSSProperties}>
+      <div ref={setChatPaneEl} className={`relative flex flex-col ${embedded || popout ? 'bg-bg ' : ''}min-w-0 min-h-0 h-full overflow-hidden ${(activityOpen && !activitySlot) || search.isOpen ? 'flex-[1_1_60%]' : 'flex-1'}`} style={{ transition: 'flex 0.2s', ...(!sidebarOpen && !isMobile ? { marginLeft: -COLLAPSED_PANE_RECLAIM_PX } : {}), '--mc-content-width': scaleContentWidth(CONTENT_WIDTH[chatConfig.contentWidth], chatConfig.contentWidth, chatConfig.messageFontSize).messages, '--mc-input-width': scaleContentWidth(CONTENT_WIDTH[chatConfig.contentWidth], chatConfig.contentWidth, chatConfig.messageFontSize).input } as React.CSSProperties}>
         <ChatPaneChrome
           embedded={embedded} activeSlot={activeSlot} connected={connected} dispatch={dispatch} isMobile={isMobile} navigate={navigate} provider={provider} setVoiceRecoverySlot={setVoiceRecoverySlot}
           switchSlotGone={switchSlotGone} titleInTopbar={titleInTopbar} undeletableHistory={undeletableHistory} unresumableResume={unresumableResume} crewWindow={crewWindow} messages={messages}
@@ -1085,6 +1100,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
         chatNav={chatNav} chatPins={chatPins} chatPinsLoading={chatPinsLoading} handleJumpToPin={handleJumpToPin} handleUnpinById={handleUnpinById} jumpToSearchResult={jumpToSearchResult}
         activeSlotTitle={activeSlotTitle} activitySlot={activitySlot} hasTaskDashboard={hasTaskDashboard} sidebarOpen={sidebarOpen} sideOverlayPanelRef={sideOverlayPanelRef}
         sideOverlayPhase={sideOverlayPhase} sideOverlayX={sideOverlayX} panelFillWidth={panelFillWidth} panelMaximized={panelMaximized} panelReserve={panelReserve}
+        pinSummary={sidePanelPinSummary}
       />
     </ChatPageFrame>
   )

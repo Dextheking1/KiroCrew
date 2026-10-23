@@ -438,7 +438,32 @@ def _url_payload_command(n: int) -> str:
 #: Raised again, from 32,060, by 37 lines for ``exfil_url_rules._heavy_percent_encoding``
 #: and its manifest entry: words percent-encoded in a URL path (a Chinese headline) do not trip the heavy
 #: percent-encoding rule. It is new rule logic, not glue; nothing else moved.
-_PACKAGE_LINE_BUDGET = 32_097
+#:
+#: Raised by 14, from 32,097, for each harness's own permission files on the write
+#: tier: the leaf splice and the project-file matcher alias in ``paths_lists``; the
+#: leaves joining the override arm, and the resolved-root list it reads, in
+#: ``paths_targets``; and one ``or`` clause, its import and three ``TYPE_CHECKING``
+#: lines in ``paths``. The registry lives in ``agent_sdk``.
+#:
+#: Raised again, from 32,111, for the host-set snapshot on
+#: ``exfil.redact_exfiltration_urls_with_records`` and its two-tuple wrapper: one
+#: optional ``exempt_hosts`` keyword that REPLACES the live platform read and the
+#: scoped override when a caller supplies the set it keyed a cache on, so the display
+#: cache stores output computed under exactly the set its key names. Fourteen lines:
+#: the keyword on both signatures, a two-branch read and the docstrings saying why.
+#: No rule widened or narrowed; the default path is the live read.
+#:
+#: Raised again, from 32,125, for ``redaction._SRI_INTEGRITY_RE``: pass 3 skips a run
+#: that is the whole digest of a Subresource Integrity value (``sha256-<43>=``,
+#: ``sha384-<64>``, ``sha512-<86>==``), because a digest is random base64 and a window
+#: inside it clears every gate. The shape is closed: the lowercase algorithm name after
+#: a non-run character, exactly that algorithm's digest length, exactly its padding,
+#: and nothing glued after. One regex of three fixed-width alternatives, a helper that
+#: returns the digest spans, their comment, and the one clause beside the document-link
+#: exemption. No pass widened, no threshold moved, and the exfil URL scan is unchanged.
+#: Six more for its ``keep_sri_digests=False`` switch: a streamed segment whose delta
+#: boundary split an SRI value saves main's verdict on the digest, not the notice.
+_PACKAGE_LINE_BUDGET = 32_188
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

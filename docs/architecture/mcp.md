@@ -1813,8 +1813,9 @@ compare-and-set; a goal card adds a goal, or replaces one by `goal_id`, and the
 Undo of an added goal removes exactly that one). `goal_read`, `key_result_progress` and `save_goal_report`
 are direct reads and writes through `/api/member/self/goals/*`
 (`dashboard/handlers/member_goals.py`). `save_goal_report` files a weekly
-report or monthly review as a Markdown artifact under `Crewmates/<name>/Reports`
-and sends one notification linking it. These goal operations are deliberately
+report or monthly review under `Crewmates/<name>/Reports`, as `markdown` or as
+`html` (one self-contained printable page, one of the two), and sends one
+notification linking it. These goal operations are deliberately
 NOT in `_USER_TURN_OPERATIONS`: the check-in turns of
 `dashboard/goal_reminder.py` are gateway-authored hidden turns in the
 mate's own thread, and recording readings and filing reports is what they
@@ -2229,6 +2230,16 @@ names only (`history.md`, "Card rows"). Every owner
 mutation through the hooked routes, card or manual, appends one names-only line
 to Global memory history.
 
+`kiro_crew/change_card_catalog.py` keeps the evidence, undo and result code
+(`extract_evidence`, `build_undo`, `result_summary`) and the manual-change memory
+lines (`describe_manual_change`, `HOOKED_ROUTES`, `MEMORY_ROUTES`), and is a mirror
+facade (`kiro_crew._facade_mirror`) over two sibling owners, so every other name
+still reads and patches as `change_card_catalog.<name>`. New work goes to the owner
+of its responsibility: `change_card_catalog_kinds.py` (the kind ids, the `KINDS`
+table, the risk and limit constants and the parameter validation) and
+`change_card_catalog_plans.py` (the plan steps and fills, the stores and dashboard
+setting tables, the display helpers and `build_preview`).
+
 `kirocrew-panel` is opt-in and reaches a crew member's DM session the way
 `kirocrew-dashboard` does: as a session-level `mcpServers` entry carrying that
 session's identity (`members.member_panel_session_server`), plus
@@ -2252,7 +2263,7 @@ organization has the session verbs too. Whether they prompt depends on how the g
 is spelled — `_mcp_pattern` maps a bare `@kirocrew-dashboard` entry to a one-level
 glob, so it auto-approves every tool the server advertises, while naming tools individually leaves the rest
 to `hooks.on_tool_call`. `_CONDUCTOR_DASHBOARD_GRANTS` and
-`_MEMBER_DASHBOARD_GRANTS` (`agent.py`) are the shipped examples of the individual
+`_MEMBER_DASHBOARD_GRANTS` (`agent_parts/spec_grants.py`) are the shipped examples of the individual
 form, and they differ from each other on exactly this axis: the member's list
 includes `session_send`, `session_broadcast`, `session_stop` and `session_retry` because `authorize_target` refuses a
 member caller on any session it did not create, and the conductor's withholds them

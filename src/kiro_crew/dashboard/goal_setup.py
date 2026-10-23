@@ -58,14 +58,20 @@ def changed_enough(before: str, after: str) -> bool:
 
 
 def kickoff_prompt(
-    rec: dict[str, Any], goal_id: str = "", *, has_mate_tools: bool = True
+    rec: dict[str, Any],
+    goal_id: str = "",
+    *,
+    has_mate_tools: bool = True,
+    dashboard_line: str = "",
 ) -> str | None:
     """The hidden turn's text, built from the goal record as stored.
 
     Names the goal *goal_id* that was just added or changed (``None`` when it is
     gone by the time the turn would run) and shows the whole list. Without the
     ``kirocrew-mate`` tools (*has_mate_tools*) the milestones are written in
-    the chat for the user to add on the Goals tab.
+    the chat for the user to add on the Goals tab. *dashboard_line* is
+    ``goal_reminder.dashboard_line`` (the build line on an empty tab, or the one-time
+    page offer on a template page), added last.
     """
     numbers = member_goals.goal_numbers(rec)
     if goal_id not in numbers:
@@ -124,6 +130,8 @@ def kickoff_prompt(
         "user decides."
     )
     lines.append("Ask the user about one thing at a time.")
+    if dashboard_line:
+        lines.extend(["", dashboard_line])
     return "\n".join(lines)
 
 
@@ -157,7 +165,8 @@ async def _wait_and_send(state: Any, slug: str, member: str, build: Build) -> st
             from kiro_crew.member_mate_tools import member_has_mate_tools
 
             has_tools = await asyncio.to_thread(member_has_mate_tools, member)
-            prompt = build(rec, has_tools)
+            # Off the loop: the goal-setup build reads the crewmate's dashboard binding.
+            prompt = await asyncio.to_thread(build, rec, has_tools)
             if prompt is None:
                 return "skipped: nothing left to talk about"
             # The read ran off the loop: a turn may have started meanwhile.
@@ -170,8 +179,18 @@ async def _wait_and_send(state: Any, slug: str, member: str, build: Build) -> st
         await asyncio.sleep(POLL_SECS)
 
 
-def _goal_prompt(goal_id: str) -> Build:
-    return lambda rec, tools: kickoff_prompt(rec, goal_id, has_mate_tools=tools)
+def _goal_prompt(goal_id: str, slug: str = "") -> Build:
+    def build(rec: dict[str, Any], tools: bool) -> str | None:
+        from kiro_crew.dashboard.goal_reminder import dashboard_line
+
+        return kickoff_prompt(
+            rec,
+            goal_id,
+            has_mate_tools=tools,
+            dashboard_line=dashboard_line(slug, rec, has_mate_tools=tools),
+        )
+
+    return build
 
 
 #: The Heartbeat in the check-ins offer. It is off by default and only a check-ins
@@ -183,11 +202,16 @@ _HEARTBEAT_OFFER = (
 )
 
 
-def milestones_prompt(rec: dict[str, Any], *, has_mate_tools: bool = True) -> str | None:
+def milestones_prompt(
+    rec: dict[str, Any], *, has_mate_tools: bool = True, dashboard_line: str = ""
+) -> str | None:
     """The hidden turn after the user confirms the crewmate's milestones card.
 
     Without the ``kirocrew-mate`` tools (*has_mate_tools*) the check-ins are
     described and left to the user's Goals tab instead of ``set_check_ins``.
+    *dashboard_line* is ``goal_reminder.dashboard_line`` (the build line or the
+    one-time page offer), added last: confirming the milestones is the moment a crewmate first knows what
+    its page would be about.
     """
     krs = rec.get("key_results") or []
     if not krs:
@@ -227,6 +251,8 @@ def milestones_prompt(rec: dict[str, Any], *, has_mate_tools: bool = True) -> st
             + " Suggest the ones that fit this goal, and tell the user they turn them on "
             "on your Goals tab."
         )
+    if dashboard_line:
+        lines.extend(["", dashboard_line])
     return "\n".join(lines)
 
 
@@ -237,7 +263,17 @@ def _schedule(
     member: str,
     build: Build,
     what: str,
+    on_dropped: "Callable[[str], None] | None" = None,
+    on_started: "Callable[[], None] | None" = None,
 ) -> None:
+    """Send *build*'s turn to *member* once its thread is idle, one waiting per *key*.
+
+    *on_dropped*, when given, runs off the loop with the outcome when the turn was
+    never started (the wait timed out, the thread closed, the read failed), so a
+    caller that promised a wake can take that promise back. *on_started*, when
+    given, runs off the loop once the turn was started, so a caller that kept a
+    durable mark of the promise can clear it.
+    """
     if state is None:
         return
     tasks = _tasks(state)
@@ -249,6 +285,11 @@ def _schedule(
         try:
             outcome = await _wait_and_send(state, slug, member, build)
             logger.info("%s nudge for %s: %s", what, slug, outcome)
+            if outcome == "started":
+                if on_started is not None:
+                    await asyncio.to_thread(on_started)
+            elif on_dropped is not None:
+                await asyncio.to_thread(on_dropped, outcome)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -267,7 +308,7 @@ def schedule_nudge(state: Any, slug: str, member: str, goal_id: str) -> None:
     One waiting nudge per crewmate: a newer save, of this goal or another,
     replaces it.
     """
-    _schedule(state, slug, slug, member, _goal_prompt(goal_id), "goal setup")
+    _schedule(state, slug, slug, member, _goal_prompt(goal_id, slug), "goal setup")
 
 
 def schedule_milestones_nudge(state: Any, slug: str, member: str) -> None:
@@ -277,9 +318,22 @@ def schedule_milestones_nudge(state: Any, slug: str, member: str) -> None:
         f"{slug}:milestones",
         slug,
         member,
-        lambda rec, tools: milestones_prompt(rec, has_mate_tools=tools),
+        _milestones_build(slug),
         "milestones confirmed",
     )
+
+
+def _milestones_build(slug: str) -> Build:
+    def build(rec: dict[str, Any], tools: bool) -> str | None:
+        from kiro_crew.dashboard.goal_reminder import dashboard_line
+
+        return milestones_prompt(
+            rec,
+            has_mate_tools=tools,
+            dashboard_line=dashboard_line(slug, rec, has_mate_tools=tools),
+        )
+
+    return build
 
 
 def removed_prompt(rec: dict[str, Any], goal_id: str, *, has_mate_tools: bool = True) -> str | None:

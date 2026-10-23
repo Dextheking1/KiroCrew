@@ -749,14 +749,16 @@ _BASE_SURFACE: dict[str, tuple[tuple[str, str, str], ...]] = {
         (
             "_redact_segment_text",
             "function",
-            "(slot: '_ChatSlot', text: 'str') -> 'tuple[str, list[dict], list[dict]]'",
+            # keep_sri_digests: defaulted, so every old caller keeps its shape.
+            "(slot: '_ChatSlot', text: 'str', keep_sri_digests: 'bool' = True)"
+            " -> 'tuple[str, list[dict], list[dict]]'",
         ),
         ("_append_command_reply", "function", "(slot: '_ChatSlot', text: 'str') -> 'None'"),
         ("_TOOL_GROUP_ROLES", "value", "frozenset"),
         (
             "_flush_segment",
             "function",
-            "(state: 'DashboardState', slot: '_ChatSlot', assistant_text: 'str', *, broadcast: 'bool' = True, quiet_persist: 'bool' = False, interrupted: 'bool' = False) -> 'None'",
+            "(state: 'DashboardState', slot: '_ChatSlot', assistant_text: 'str', *, broadcast: 'bool' = True, quiet_persist: 'bool' = False, interrupted: 'bool' = False) -> 'dict[str, Any]'",
         ),
         (
             "_schedule_widget_registration",
@@ -808,11 +810,6 @@ _BASE_SURFACE: dict[str, tuple[tuple[str, str, str], ...]] = {
     ),
     "app_agent_binding": (
         ("app_agent_binding_applies", "function", "(slot: \"'_ChatSlot'\") -> 'bool'"),
-        (
-            "_app_agent_start_dirs",
-            "function",
-            "(state: \"'DashboardState'\", session_key: 'str', project: 'str | None') -> 'tuple[str | None, ...]'",
-        ),
         (
             "_retire_app_agent_session",
             "async function",

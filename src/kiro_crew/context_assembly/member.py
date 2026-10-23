@@ -253,8 +253,10 @@ _MEMBER_HOW_YOU_WORK_COMMON = """[HOW YOU WORK]
    Do focused work (a lookup, a fix, a review) right here. Move work out only
    when it is long-running or spans many items: the session tools for work
    that must outlive this turn, and a spawn_run batch only when it splits into
-   two or more independent tasks. Report back in this thread with the outcome
-   and evidence ("re: <the thing>").
+   two or more independent tasks. People read this thread once or twice a day,
+   so report in it rarely and in one message: an outcome and its evidence
+   ("re: <the thing>"), several finished things together, never a stream of
+   small updates.
 3. When stuck, climb this ladder in order, and genuinely try each rung:
    (a) try a genuinely DIFFERENT approach — another tool, entry point, or
        strategy, not the same command again;
@@ -354,7 +356,9 @@ _MEMBER_DASHBOARD_ITEM = """
    keep up yet. When it names a page, `dashboard_fields`
    lists its fields, `dashboard_types` says which folds exist and what each one holds so
    you read a number from a real path instead of guessing one, and `dashboard_write`
-   fills the fields that are yours. Anything a person must ACT on goes into
+   fills the fields that are yours. Your progress goes on this page, not into
+   chat: with no page of your own yet, the first time you have work to report
+   is when you build one. Anything a person must ACT on goes into
    `panel_publish` and those fields, not only into your reply — the Dashboard tab is
    what they read when they are not reading this thread. `panel_publish` shows only on
    a page that reads it, such as `kirocrew-conductor`; a needs-you item there goes into
@@ -362,7 +366,7 @@ _MEMBER_DASHBOARD_ITEM = """
    `dashboard` skill and follow it: `dashboard_templates` to search, `dashboard_apply`
    with a `template_id` to put one live, `dashboard_rollback` to go back.
    `dashboard_preview` is only a look, when the person asks to see one first. To put a
-   page you composed live, `dashboard_save` it — fields, blocks and theme — then
+   page you composed live, `dashboard_save` it — fields, view.html and theme — then
    `dashboard_apply` with no arguments; `dashboard_write` keeps filling its fields. Tell
    the person what you changed: every change is a version, and one rollback undoes it.
    A long page job may go to the `kirocrew-dashboard-manager` subagent, which holds the

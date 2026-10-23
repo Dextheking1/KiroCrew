@@ -286,7 +286,7 @@ export interface ChatSlot extends TurnIdentityFields {
   /** Metadata for kind="webapp" artifacts (deploy state, architecture, costs). */
   webapp_metadata?: WebAppMetadata
   // Board fields
-  has_options?: boolean; options_ts?: string; options?: string[]; pending_approval_info?: PendingApproval | null; last_activity_ts?: string; waiting_for_input?: boolean; prompt_preview?: string; subagents_running?: boolean
+  has_options?: boolean; options_ts?: string; options?: string[]; pending_approval_info?: PendingApproval | null; last_activity_ts?: string; last_agent_ts?: string; waiting_for_input?: boolean; prompt_preview?: string; subagents_running?: boolean
   /** The sub-agent queued depth the gateway last published for this session —
    * the same value as its newest `subagent_queued` frame. Read only to
    * reconcile `chat.subagentQueued` on a `slots` push; absent from a
@@ -578,6 +578,8 @@ export interface Notification {
   kind: string; title: string; body: string; ts: string
   acked?: boolean; job_id?: string; task_id?: string; approval_id?: string
   slot?: string; session_key?: string; slack_link?: string
+  /** Transcript identity used to resume a closed slot; the slot name alone may name no history. */
+  history_key?: string
   // RFC Phase 3: schema-v2 routing + per-channel settings stamps
   source?: string; channel?: string; priority?: string; silenced?: boolean
   // RFC Phase 4: inline actions, stacking, dashboard-internal deep link

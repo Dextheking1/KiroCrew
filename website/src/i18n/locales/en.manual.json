@@ -2145,7 +2145,7 @@
     },
     "chatPane": {
       "crewmate_quiet": "{{name}} hasn't said anything to you yet.",
-      "crewmate_quiet_where": "See the sessions it is driving.",
+      "crewmate_quiet_where": "See what it is working on.",
       "earlier_messages_load_failed": "Couldn't load earlier messages. Scroll to the top of the session to try again.",
       "earlier_messages_open_session": "Earlier messages — open full session (closes split)",
       "earlier_messages_unavailable": "Earlier messages are no longer available in this session's history.",
@@ -2178,6 +2178,11 @@
       "use_starting_directory_hint": "Opens a new shell in the server's configured terminal directory (dashboard.terminal.cwd, otherwise the server's home directory). The failed command is not sent again."
     },
     "codeBlock": {
+      "add_comment": "Add comment",
+      "comment_on_lines": "Comment on lines {{start}}–{{end}}",
+      "comment_thread": "Comment thread ({{count}})",
+      "comment_thread_selected": "Comment thread ({{count}}, selected)",
+      "comment_thread_unread": "Comment thread ({{count}}, unread)",
       "copied": "Copied!",
       "copy": "Copy"
     },
@@ -2570,7 +2575,10 @@
       "chat_folder_retry": "Retry",
       "chat_folder_retrying": "Retrying…",
       "chat_folder_none_yet": "No folders yet. Save this job now; create a folder in the chat sidebar, then reopen the job to pick it.",
-      "chat_folder_was_deleted": "The folder this job filed into was deleted. Pick another, or save to leave runs unfiled."
+      "chat_folder_was_deleted": "The folder this job filed into was deleted. Pick another, or save to leave runs unfiled.",
+      "auto_pause_after_failures": "Auto-pause after N failures in a row",
+      "auto_pause_after_failures_description": "0 means never pause. From the 5th failure in a row, a job set to 0 or above 5 waits 5 minutes before its next run, doubling up to an hour.",
+      "auto_pause_after_failures_invalid": "The auto-pause limit must be a whole number from 0 to 10000."
     },
     "jobLogsView": {
       "failed_to_load_history": "Failed to load history"
@@ -2628,7 +2636,7 @@
       "loopback_slow_hint": "Taking a while? If the sign-in page can't reach this computer, switch to a code — it works from any device.",
       "loopback_fell_back": "The sign-in couldn't come back to this computer directly, so here's a code instead.",
       "cancel_unsettled": "Couldn’t cancel the sign-in. It is still active — press the same option again to retry.",
-      "card_intro": "Used only by the KAS (kiro-agent) backend: its agents run as this Kiro account. Kiro CLI keeps its own kiro-cli login, so signing in here does not change it.",
+      "card_intro": "Used only by the Kiro Agent backend: its agents run as this Kiro account. Kiro CLI keeps its own kiro-cli login, so signing in here does not change it.",
       "previous_sign_in_not_removed": "Signed in, but the previous sign-in could not be removed",
       "previous_sign_in_not_removed_body": "The new account is stored, but the one you were switching away from is still there and takes precedence. Sign out of it, then check the sign-in shown here."
     },
@@ -2667,7 +2675,6 @@
       "remedy_spec_rejected_update": "Update {{productName}}. This is the fix when Kiro CLI has moved to a spec format this version does not know how to write.",
       "remedy_userns_denied": "The kernel refused to create the user namespace. On Debian-family hosts check this legacy knob, and persist the value in /etc/sysctl.d/ so it survives a reboot. Inside a container it is usually the container's own seccomp filter denying unshare, which is fixed with container run flags rather than host settings.",
       "repair_rewrites_the_specs_kiro_crew_owns": "Check again asks Kiro CLI to load the specs again. It does not rewrite them, because overwriting a spec that is already on disk would discard any MCP tool access you have changed. If re-checking does not clear this, one of the two remedies below will.",
-      "required": "Required",
       "run_kirocrew_doctor_on_the_gateway_host_for_a_ful": "Run this on the gateway host for a full prerequisite report, including which sandbox step failed.",
       "sandbox_unavailable": "Sandbox unavailable",
       "agent_host_cannot_sandbox": "Host can't sandbox",
@@ -2696,7 +2703,6 @@
       "update_kiro_cli": "Update Kiro CLI",
       "update_kiro_cli_runs_on_host": "Runs <0>{{command}}</0> on the gateway host for you.",
       "updating_kiro_cli": "Updating Kiro CLI…",
-      "waiting": "Waiting",
       "your_kiro_cli_is_out_of_date": "Your Kiro CLI is out of date",
       "attempt_failed_remedy": "Fix the cause named above (often a permissions or install problem), then press {{action}} to try again. If it keeps failing, reinstall Kiro CLI.",
       "kiro_cli_is_not_installed_yet": "Kiro CLI is the default agent and isn't installed on this host yet.",
@@ -4195,6 +4201,8 @@
       "kind_crewmate_key_results": "Milestones",
       "primary_crewmate_key_results": "Use these milestones",
       "kind_crewmate_check_ins": "Check-ins",
+      "kind_crewmate_dashboard_page": "Dashboard page",
+      "primary_crewmate_dashboard_page": "Yes, build my page",
       "primary_crewmate_check_ins": "Turn on these check-ins",
       "field_key_results": "Milestones"
     },
@@ -7618,6 +7626,8 @@
         "default_auto": "Default (auto)",
         "double_click_to_edit": "Double-click to edit your messages",
         "double_click_to_edit_desc": "When off, a double-click on your message selects a word as in any text.",
+        "sidebar_click_opens_tab": "Open Sidebar Sessions in a Session Tab",
+        "sidebar_click_opens_tab_desc": "A click opens the session in its own session tab instead of replacing the active tab's session.",
         "failed_to_save_selectable_models": "Failed to save selectable models",
         "model_picker_all_models": "All models ({{count}})",
         "model_picker_selected_models": "Selected {{selected}} / {{total}}",

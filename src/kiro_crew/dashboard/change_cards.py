@@ -369,6 +369,23 @@ class CardStore:
             out.append(self.public(rec))
         return out
 
+    def last_finished_at(self, slot_key: str, statuses: "frozenset[str]") -> float:
+        """When a card of *slot_key* last finished in one of *statuses*, else ``0.0``.
+
+        Read over every stored card, a dismissed one and one past its display TTL
+        included: :meth:`pending` hides both, but a press still answered the question
+        it was raised for.
+        """
+        self._ensure_loaded()
+        newest = 0.0
+        for rec in self._cards.values():
+            if rec["slot_key"] != slot_key or rec.get("status") not in statuses:
+                continue
+            finished = rec.get("finished_at")
+            if isinstance(finished, (int, float)):
+                newest = max(newest, float(finished))
+        return newest
+
     def status_for_caller(self, slot_key: str, card_id: str | None) -> dict[str, Any]:
         self._ensure_loaded()
         if card_id:
@@ -967,6 +984,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _capability_service,
         _capability_state,
         _connection_grant_fingerprint,
+        _crewmate_identity,
         _crewmate_key,
         _crewmate_label,
         _crewmate_revision,
@@ -980,6 +998,8 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _mcp_scopes,
         _mcp_undo_names,
         _mcp_value_key,
+        _page_offer_context,
+        _page_offer_snapshot,
         _revision_digest,
         _secret_revision,
         _server_reach,
